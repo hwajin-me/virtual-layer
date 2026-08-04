@@ -121,17 +121,17 @@ async def _async_load_json(file_name):
         async with aiofiles.open(file_name, 'r') as state_file:
             contents = await state_file.read()
             return json.loads(contents)
-    except Exception as e:
+    except (OSError, json.JSONDecodeError) as err:
+        _LOGGER.debug("Unable to load deprecated tracker state %s: %s", file_name, err)
         return {}
 
 
 def _write_state():
-    global tracker_states
     try:
         with open(STATE_FILE, 'w') as f:
             json.dump(tracker_states, f)
-    except:
-        pass
+    except OSError as err:
+        _LOGGER.warning("Unable to save deprecated tracker state %s: %s", STATE_FILE, err)
 
 def _state_changed(event):
     entity_id = event.data.get('entity_id', None)
@@ -142,7 +142,6 @@ def _state_changed(event):
 
     # update database
     _LOGGER.info(f"moving {entity_id} to {new_state.state}")
-    global tracker_states
     tracker_states[entity_id] = new_state.state
     _write_state()
 

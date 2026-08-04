@@ -3,6 +3,7 @@ This component provides support for virtual components.
 
 """
 
+import asyncio
 from collections.abc import Mapping
 from datetime import timedelta
 import logging
@@ -18,9 +19,7 @@ from homeassistant.helpers.event import (
     async_track_template_result,
     async_track_time_interval,
 )
-from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.service import verify_domain_control
-from homeassistant.helpers.typing import ConfigType
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import (
@@ -41,7 +40,7 @@ from .cfg import (
 )
 
 
-__version__ = '1.0.1'
+__version__ = '1.0.2'
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,6 +89,7 @@ SERVICE_RESTORE_DEVICES_SCHEMA = vol.Schema({
 
 VIRTUAL_PLATFORMS = VIRTUAL_ENTITY_DOMAINS
 _STATE_ONLY_TEMPLATE_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_state_only_template_listeners"
+_ENTITY_ID_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_entity_id_guard_listeners"
 
 
 def _entry_platforms_from_entities(entities):
@@ -136,6 +136,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug(f"creating new cfg")
     vcfg = BlendedCfg(hass, entry.data, entry.options, entry)
     await vcfg.async_load()
+    _async_remove_orphaned_diagnostic_registry_entries(hass, entry, vcfg.entities)
 
     # create the devices.
     _LOGGER.debug("creating the devices")
@@ -161,6 +162,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     })
     _LOGGER.debug(f"update hass data {hass.data[COMPONENT_DOMAIN]}")
     _async_setup_state_only_entities(hass, entry, vcfg.entities)
+    _async_setup_entity_id_guard(hass, entry, vcfg.entities)
 
     # Create the entities.
     _LOGGER.debug("creating the entities")
@@ -185,6 +187,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
     if unload_ok:
         _LOGGER.debug("unloaded ok")
+        _async_remove_entity_id_guard(hass, entry.entry_id)
         _async_unload_state_only_entities(hass, entry, group_data.get(ATTR_ENTITIES, {}))
         hass.data[COMPONENT_DOMAIN].pop(entry.data[ATTR_GROUP_NAME], None)
         # _LOGGER.debug(f"ocfg={ocfg}")
@@ -199,6 +202,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     _LOGGER.debug("removing virtual group %s", group_name)
 
     group_data = hass.data.get(COMPONENT_DOMAIN, {}).get(group_name, {})
+    _async_remove_entity_id_guard(hass, entry.entry_id)
     _async_unload_state_only_entities(hass, entry, group_data.get(ATTR_ENTITIES, {}))
     _async_remove_entry_registry_entries(hass, entry)
 
@@ -218,6 +222,101 @@ def _async_remove_entry_registry_entries(hass: HomeAssistant, entry: ConfigEntry
         if len(device_entry.config_entries) <= 1:
             device_registry.async_remove_device(device_entry.id)
     device_registry.async_clear_config_entry(entry.entry_id)
+
+
+@callback
+def _async_remove_orphaned_diagnostic_registry_entries(hass, entry, entities) -> None:
+    """Remove diagnostics whose parent virtual entity was deleted or renamed."""
+    active_unique_ids = {
+        entity.get(ATTR_UNIQUE_ID)
+        for entity in entities.get("sensor", [])
+        if isinstance(entity, Mapping)
+        and isinstance(entity.get(ATTR_UNIQUE_ID), str)
+        and DIAGNOSTIC_UNIQUE_ID_MARKER in entity[ATTR_UNIQUE_ID]
+    }
+    entity_registry = er.async_get(hass)
+    for entity_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        if (
+            DIAGNOSTIC_UNIQUE_ID_MARKER in entity_entry.unique_id
+            and entity_entry.unique_id not in active_unique_ids
+        ):
+            entity_registry.async_remove(entity_entry.entity_id)
+
+
+@callback
+def _async_remove_entity_id_guard(hass, entry_id) -> None:
+    listeners = hass.data.get(_ENTITY_ID_GUARD_LISTENERS_DATA)
+    if listeners is None:
+        return
+    remove_listener = listeners.pop(entry_id, None)
+    if remove_listener is not None:
+        remove_listener()
+    if not listeners:
+        hass.data.pop(_ENTITY_ID_GUARD_LISTENERS_DATA, None)
+
+
+@callback
+def _async_setup_entity_id_guard(hass, entry, entities) -> None:
+    """Keep configured Virtual Layer entity IDs fixed after registry renames."""
+    _async_remove_entity_id_guard(hass, entry.entry_id)
+    if not isinstance(entities, Mapping):
+        return
+    desired_entity_ids = {
+        entity[ATTR_UNIQUE_ID]: entity[ATTR_ENTITY_ID]
+        for platform_entities in entities.values()
+        if isinstance(platform_entities, list)
+        for entity in platform_entities
+        if isinstance(entity, Mapping)
+        and isinstance(entity.get(ATTR_UNIQUE_ID), str)
+        and isinstance(entity.get(ATTR_ENTITY_ID), str)
+    }
+    if not desired_entity_ids:
+        return
+
+    entity_registry = er.async_get(hass)
+
+    async def _async_restore_configured_entity_id(current_entity_id) -> None:
+        # Let the entity platform complete its rename first so the old state ID
+        # is released before the registry moves the entity back.
+        await asyncio.sleep(0)
+        entity_entry = entity_registry.async_get(current_entity_id)
+        if (
+            entity_entry is None
+            or entity_entry.config_entry_id != entry.entry_id
+        ):
+            return
+        configured_entity_id = desired_entity_ids.get(entity_entry.unique_id)
+        if not configured_entity_id or configured_entity_id == current_entity_id:
+            return
+        try:
+            entity_registry.async_update_entity(
+                current_entity_id,
+                new_entity_id=configured_entity_id,
+            )
+        except ValueError as err:
+            _LOGGER.warning(
+                "Unable to restore configured entity id %s for %s: %s",
+                configured_entity_id,
+                current_entity_id,
+                err,
+            )
+
+    @callback
+    def _async_handle_registry_update(event) -> None:
+        if (
+            event.data.get("action") != "update"
+            or "old_entity_id" not in event.data
+        ):
+            return
+        hass.async_create_task(
+            _async_restore_configured_entity_id(event.data[ATTR_ENTITY_ID])
+        )
+
+    listeners = hass.data.setdefault(_ENTITY_ID_GUARD_LISTENERS_DATA, {})
+    listeners[entry.entry_id] = hass.bus.async_listen(
+        er.EVENT_ENTITY_REGISTRY_UPDATED,
+        _async_handle_registry_update,
+    )
 
 
 def get_entity_configs(hass, group_name, domain):

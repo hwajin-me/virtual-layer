@@ -122,11 +122,8 @@ class VirtualEntity(RestoreEntity):
 
             self.entity_id = config.get(ATTR_ENTITY_ID)
             if self.entity_id == "NOTYET":
-                if self._attr_name.startswith("+"):
-                    self._attr_name = self._attr_name[1:]
-                    self.entity_id = f'{domain}.{COMPONENT_DOMAIN}_{slugify(self._attr_name)}'
-                else:
-                    self.entity_id = f'{domain}.{slugify(self._attr_name)}'
+                self._attr_name = self._attr_name.removeprefix("+")
+                self.entity_id = f'{domain}.{slugify(self._attr_name)}'
 
             self._attr_unique_id = config.get(ATTR_UNIQUE_ID, None)
             if self._attr_unique_id == "NOTYET":
@@ -335,7 +332,7 @@ class VirtualEntity(RestoreEntity):
         return Template(str(template), self.hass).async_render(variables=variables, parse_result=False)
 
     def _template_variables(self):
-        variables = {}
+        variables = {"this": self.hass.states.get(self.entity_id)}
         for name, source in self._template_sources.items():
             entity_id = source.get(ATTR_ENTITY_ID)
             attribute = source.get(CONF_ATTRIBUTE)

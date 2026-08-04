@@ -4,18 +4,16 @@ This component provides support for a virtual sensor.
 """
 
 import logging
-import voluptuous as vol
 from collections.abc import Callable
 
 import homeassistant.helpers.config_validation as cv
-from homeassistant.components.sensor import (
-    DOMAIN as PLATFORM_DOMAIN,
-    SensorDeviceClass
-)
+import voluptuous as vol
+from homeassistant.components.sensor import DOMAIN as PLATFORM_DOMAIN
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    ATTR_ENTITY_ID,
     ATTR_DEVICE_CLASS,
+    ATTR_ENTITY_ID,
     ATTR_UNIT_OF_MEASUREMENT,
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     CONCENTRATION_PARTS_PER_MILLION,
@@ -39,10 +37,9 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from . import _assert_managed_virtual_entity, get_entity_from_domain, get_entity_configs
+from . import _assert_managed_virtual_entity, get_entity_configs, get_entity_from_domain
 from .const import *
 from .entity import VirtualEntity, virtual_schema
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,10 +49,12 @@ DEFAULT_SENSOR_VALUE = "0"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(virtual_schema(DEFAULT_SENSOR_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
+    vol.Optional(CONF_DIAGNOSTIC_SOURCE_ENTITY): cv.entity_id,
     vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
 }))
 SENSOR_SCHEMA = vol.Schema(virtual_schema(DEFAULT_SENSOR_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
+    vol.Optional(CONF_DIAGNOSTIC_SOURCE_ENTITY): cv.entity_id,
     vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
 }))
 
@@ -131,7 +130,10 @@ async def async_setup_entry(
     entities = []
     for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN):
         entity = SENSOR_SCHEMA(entity)
-        entities.append(VirtualSensor(entity, False))
+        if entity.get(CONF_DIAGNOSTIC_SOURCE_ENTITY):
+            entities.append(VirtualDiagnosticSensor(entity, False))
+        else:
+            entities.append(VirtualSensor(entity, False))
     async_add_entities(entities)
     setup_services(hass)
 
@@ -147,7 +149,7 @@ class VirtualSensor(VirtualEntity, Entity):
 
         # Set unit of measurement
         self._attr_unit_of_measurement = config.get(CONF_UNIT_OF_MEASUREMENT)
-        if not self._attr_unit_of_measurement and self._attr_device_class in UNITS_OF_MEASUREMENT.keys():
+        if not self._attr_unit_of_measurement and self._attr_device_class in UNITS_OF_MEASUREMENT:
             self._attr_unit_of_measurement = UNITS_OF_MEASUREMENT[self._attr_device_class]
 
         _LOGGER.info(f"VirtualSensor: {self.name} created")
@@ -178,6 +180,28 @@ class VirtualSensor(VirtualEntity, Entity):
 
     def set_state(self, value) -> None:
         self.set(value)
+
+
+class VirtualDiagnosticSensor(VirtualSensor):
+    """Expose a source entity's current state and attributes for diagnostics."""
+
+    def __init__(self, config, old_style: bool):
+        self._diagnostic_source_entity = config[CONF_DIAGNOSTIC_SOURCE_ENTITY]
+        super().__init__(config, old_style)
+
+    def _update_attributes(self):
+        super()._update_attributes()
+        source_state = self.hass.states.get(self._diagnostic_source_entity)
+        if source_state is None:
+            self._attr_extra_state_attributes.update({
+                "source_state": None,
+                "source_attributes": {},
+            })
+            return
+        self._attr_extra_state_attributes.update({
+            "source_state": source_state.state,
+            "source_attributes": dict(source_state.attributes),
+        })
 
 
 async def async_virtual_set_service(hass, call):

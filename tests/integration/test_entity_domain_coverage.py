@@ -140,8 +140,9 @@ async def test_config_entry_setup_loads_string_only_entity_domains(hass, tmp_pat
     await hass.async_block_till_done()
 
     for domain in string_only_domains:
-        assert hass.states.get(f"{domain}.{domain}_entity") is not None
-        entity_entry = er.async_get(hass).async_get(f"{domain}.{domain}_entity")
+        entity_id = f"{domain}.{domain}_entity"
+        assert hass.states.get(entity_id) is not None
+        entity_entry = er.async_get(hass).async_get(entity_id)
         assert entity_entry is not None
         assert entity_entry.platform == COMPONENT_DOMAIN
         assert entity_entry.device_id is not None

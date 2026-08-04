@@ -42,6 +42,7 @@ CONF_ATTRIBUTES = "attributes"
 CONF_AUTO_HELPER = "auto_helper"
 CONF_ATTRIBUTE_TEMPLATES = "attribute_templates"
 CONF_AVAILABILITY_TEMPLATE = "availability_template"
+CONF_DIAGNOSTIC_SOURCE_ENTITY = "diagnostic_source_entity"
 CONF_INITIAL_VALUE = "initial_value"
 CONF_LOCATION_HELPER = "location_helper"
 CONF_MAX = "max"
@@ -106,6 +107,7 @@ def generic_entity_options(config: Mapping) -> dict:
 
 DEFAULT_AVAILABILITY = True
 DEFAULT_PERSISTENT = True
+DIAGNOSTIC_UNIQUE_ID_MARKER = ".virtual_layer_diagnostic."
 
 IMPORTED_GROUP_NAME = "imported"
 

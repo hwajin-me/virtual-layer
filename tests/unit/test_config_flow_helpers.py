@@ -1,17 +1,21 @@
 """Unit tests for Virtual Layer config flow helpers."""
 
 import json
-from types import MappingProxyType
+from datetime import timedelta
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
-
 from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME, CONF_PLATFORM
+from homeassistant.helpers.template import Template
+from homeassistant.util import dt as dt_util
 
-from custom_components.virtual_layer import _merge_device_sets as _service_merge_device_sets
+from custom_components.virtual_layer import (
+    _merge_device_sets as _service_merge_device_sets,
+)
 from custom_components.virtual_layer.config_flow import (
     CONF_ATTRIBUTE_SOURCES_JSON,
-    CONF_ATTRIBUTES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
+    CONF_ATTRIBUTES_JSON,
     CONF_DEVICE_HW_VERSION,
     CONF_DEVICE_ID,
     CONF_DEVICE_MANUFACTURER,
@@ -24,8 +28,8 @@ from custom_components.virtual_layer.config_flow import (
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
     InvalidDomainOptions,
-    InvalidEntityReference,
     InvalidEntityId,
+    InvalidEntityReference,
     InvalidJson,
     _append_ui_entity,
     _auto_helper_profile,
@@ -36,13 +40,14 @@ from custom_components.virtual_layer.config_flow import (
     _entity_form_defaults,
     _entity_key,
     _entity_key_from_stable_key,
-    _find_entity_by_selection_key,
+    _entity_schema,
     _find_backup_group_for_entry,
+    _find_entity_by_selection_key,
     _merge_device_attributes,
     _merge_device_sets,
     _options_schema,
-    _reference_entity_defaults,
     _reference_edit_defaults,
+    _reference_entity_defaults,
     _replace_ui_entity,
     _set_auto_helper_profile,
 )
@@ -57,10 +62,11 @@ from custom_components.virtual_layer.const import (
     CONF_ATTRIBUTE_TEMPLATES,
     CONF_ATTRIBUTES,
     CONF_AVAILABILITY_TEMPLATE,
+    CONF_CLASS,
+    CONF_HW_VERSION,
     CONF_INITIAL_AVAILABILITY,
     CONF_INITIAL_VALUE,
     CONF_LOCATION_HELPER,
-    CONF_HW_VERSION,
     CONF_MANUFACTURER,
     CONF_MAX,
     CONF_MIN,
@@ -74,7 +80,6 @@ from custom_components.virtual_layer.const import (
     CONF_VALUE_TEMPLATE,
     VIRTUAL_ENTITY_DOMAINS,
 )
-
 
 pytestmark = pytest.mark.unit
 
@@ -106,6 +111,25 @@ def _entity_input(overrides=None):
     }
     data.update(overrides or {})
     return data
+
+
+def test_entity_form_defaults_to_the_selected_domain_prefix():
+    defaults = _entity_schema({
+        CONF_PLATFORM: "sensor",
+        CONF_ENTITY_NAME: "Washer Phase",
+    })({})
+
+    assert defaults[ATTR_ENTITY_ID] == "sensor.washer_phase"
+
+
+def test_entity_form_preserves_an_existing_entity_id():
+    defaults = _entity_schema({
+        CONF_PLATFORM: "sensor",
+        CONF_ENTITY_NAME: "Washer Phase",
+        ATTR_ENTITY_ID: "sensor.custom_washer_phase",
+    })({})
+
+    assert defaults[ATTR_ENTITY_ID] == "sensor.custom_washer_phase"
 
 
 def test_build_entity_config_supports_composite_templates_and_attributes():
@@ -249,6 +273,84 @@ def test_reference_entity_defaults_combines_boolean_sources_with_and_template(ha
     assert " and " in defaults[CONF_VALUE_TEMPLATE]
     assert "front_door | lower" in defaults[CONF_VALUE_TEMPLATE]
     assert "alarm_ready | lower" in defaults[CONF_VALUE_TEMPLATE]
+
+
+def test_presence_motion_helper_uses_majority_and_delayed_all_off_clear(hass, monkeypatch):
+    source_ids = [
+        "binary_sensor.hall_motion",
+        "binary_sensor.kitchen_motion",
+        "binary_sensor.garage_motion",
+    ]
+    for entity_id, state in zip(source_ids, ("on", "on", "off"), strict=True):
+        hass.states.async_set(entity_id, state, {"device_class": "motion"})
+
+    defaults = _reference_entity_defaults(hass, source_ids)
+
+    assert defaults[CONF_PLATFORM] == "binary_sensor"
+    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {CONF_CLASS: "motion"}
+    assert "(active | count) > 3 / 2" in defaults[CONF_VALUE_TEMPLATE]
+    assert "all_off" in defaults[CONF_VALUE_TEMPLATE]
+    assert "this.state == 'on'" in defaults[CONF_VALUE_TEMPLATE]
+    assert "< 300" in defaults[CONF_VALUE_TEMPLATE]
+
+    single_source_defaults = _reference_entity_defaults(hass, source_ids[:1])
+    assert json.loads(single_source_defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+        CONF_CLASS: "motion",
+    }
+    assert "this.state == 'on'" in single_source_defaults[CONF_VALUE_TEMPLATE]
+
+    hass.states.async_set("binary_sensor.combined_motion", "on")
+    template = Template(defaults[CONF_VALUE_TEMPLATE], hass)
+    template_sources = json.loads(defaults[CONF_TEMPLATE_SOURCES_JSON])
+
+    def render_template():
+        variables = {
+            "this": hass.states.get("binary_sensor.combined_motion"),
+            **{
+                name: hass.states.get(entity_id).state
+                for name, entity_id in template_sources.items()
+            },
+        }
+        return template.async_render(variables=variables, parse_result=False).strip()
+
+    # A minority is still enough to keep a detected aggregate on until every
+    # source has reported off.
+    hass.states.async_set(source_ids[0], "off", {"device_class": "motion"})
+    future = dt_util.now() + timedelta(minutes=10)
+    monkeypatch.setattr(
+        "homeassistant.helpers.template.extensions.datetime.dt_util.now",
+        lambda: future,
+    )
+    assert render_template() == "true"
+
+    hass.states.async_set(source_ids[1], "off", {"device_class": "motion"})
+    cleared_at = hass.states.get(source_ids[1]).last_changed
+    monkeypatch.setattr(
+        "homeassistant.helpers.template.extensions.datetime.dt_util.now",
+        lambda: dt_util.as_local(cleared_at + timedelta(seconds=299)),
+    )
+    assert render_template() == "true"
+
+    monkeypatch.setattr(
+        "homeassistant.helpers.template.extensions.datetime.dt_util.now",
+        lambda: dt_util.as_local(cleared_at + timedelta(seconds=301)),
+    )
+    assert render_template() == "false"
+
+
+def test_presence_motion_helper_requires_binary_sensor_sources(hass):
+    hass.states.async_set("light.invalid_motion_source", "on", {"device_class": "motion"})
+    hass.states.async_set("switch.invalid_motion_source", "on", {"device_class": "motion"})
+
+    defaults = _reference_entity_defaults(
+        hass,
+        ["light.invalid_motion_source", "switch.invalid_motion_source"],
+    )
+
+    assert defaults[CONF_PLATFORM] == "binary_sensor"
+    assert "this.state == 'on'" not in defaults[CONF_VALUE_TEMPLATE]
+    assert CONF_DOMAIN_OPTIONS_JSON not in defaults
 
 
 def test_reference_entity_defaults_combines_number_sources_with_average_template(hass):
@@ -1338,12 +1440,9 @@ def test_merge_device_attributes_restored_metadata_wins():
 
 
 def test_find_backup_group_prefers_matching_group_when_multiple_exist():
-    class Entry:
-        data = {ATTR_GROUP_NAME: "second"}
-
     backup_group = _find_backup_group_for_entry([
         {ATTR_GROUP_NAME: "first", ATTR_DEVICES: {}},
         {ATTR_GROUP_NAME: "second", ATTR_DEVICES: {"Device": []}},
-    ], Entry())
+    ], SimpleNamespace(data={ATTR_GROUP_NAME: "second"}))
 
     assert backup_group == {ATTR_GROUP_NAME: "second", ATTR_DEVICES: {"Device": []}}

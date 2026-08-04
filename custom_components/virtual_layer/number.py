@@ -14,7 +14,6 @@ from homeassistant.components.number import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    ATTR_ENTITY_ID,
     ATTR_DEVICE_CLASS,
     ATTR_UNIT_OF_MEASUREMENT,
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
@@ -39,7 +38,7 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from . import get_entity_from_domain, get_entity_configs
+from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
 

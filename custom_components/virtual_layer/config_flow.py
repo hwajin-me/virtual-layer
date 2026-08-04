@@ -127,9 +127,14 @@ ENTITY_SELECTOR = selector.EntitySelector(
 )
 
 
-REFERENCE_ENTITY_SCHEMA = vol.Schema({
-    vol.Optional(CONF_REFERENCE_ENTITY_ID): ENTITY_SELECTOR,
-})
+def _reference_entity_schema(entity_ids: list[str] | None = None) -> vol.Schema:
+    """Build the copy-source selector with the entity's current sources."""
+    return vol.Schema({
+        vol.Optional(
+            CONF_REFERENCE_ENTITY_ID,
+            default=entity_ids or [],
+        ): ENTITY_SELECTOR,
+    })
 
 BOOLEAN_SOURCE_DOMAINS = {
     "binary_sensor",
@@ -148,6 +153,8 @@ ENUM_SOURCE_DOMAINS = {"input_select", "select"}
 LOCATION_SOURCE_DOMAINS = {"device_tracker", "geolocation", "person"}
 LOCATION_HELPER_DISTANCE_METERS = 300
 LOCATION_HELPER_PRIORITY_WINDOW_SECONDS = 30 * 60
+PRESENCE_MOTION_CLEAR_DELAY_SECONDS = 5 * 60
+PRESENCE_MOTION_DEVICE_CLASSES = frozenset({"motion", "presence"})
 UNKNOWN_STATES = {"", "none", "unknown", "unavailable"}
 TEMPLATE_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 JINJA_RESERVED_VARIABLE_NAMES = {
@@ -226,6 +233,12 @@ def _setup_schema(defaults: dict[str, Any], include_entity_toggle: bool = True) 
 
 def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     defaults = defaults or {}
+    platform = defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
+    entity_name = defaults.get(CONF_ENTITY_NAME, "Virtual Entity")
+    default_entity_id = defaults.get(ATTR_ENTITY_ID) or _default_virtual_entity_id(
+        platform,
+        entity_name,
+    )
     return vol.Schema({
         vol.Required(CONF_DEVICE_NAME, default=defaults.get(CONF_DEVICE_NAME, "Virtual Device")): str,
         vol.Optional(CONF_DEVICE_ID, default=defaults.get(CONF_DEVICE_ID, "")): str,
@@ -235,7 +248,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         vol.Optional(CONF_DEVICE_HW_VERSION, default=defaults.get(CONF_DEVICE_HW_VERSION, "")): str,
         vol.Optional(CONF_DEVICE_SERIAL_NUMBER, default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, "")): str,
         vol.Required(CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")): str,
-        vol.Optional(ATTR_ENTITY_ID, default=defaults.get(ATTR_ENTITY_ID, "")): str,
+        vol.Optional(ATTR_ENTITY_ID, default=default_entity_id): str,
         vol.Required(CONF_PLATFORM, default=defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)): vol.In(VIRTUAL_ENTITY_DOMAINS),
         vol.Required(CONF_INITIAL_VALUE, default=defaults.get(CONF_INITIAL_VALUE, DEFAULT_ENTITY_VALUE)): str,
         vol.Optional(CONF_INITIAL_AVAILABILITY, default=defaults.get(CONF_INITIAL_AVAILABILITY, True)): cv.boolean,
@@ -250,6 +263,16 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         vol.Optional(CONF_ATTRIBUTE_TEMPLATES_JSON, default=defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "")): MULTILINE_TEXT_SELECTOR,
         vol.Optional(CONF_DOMAIN_OPTIONS_JSON, default=defaults.get(CONF_DOMAIN_OPTIONS_JSON, "")): MULTILINE_TEXT_SELECTOR,
     })
+
+
+def _default_virtual_entity_id(platform: str, entity_name: str) -> str:
+    """Return an entity id with the selected Home Assistant domain prefix."""
+    if platform not in VIRTUAL_ENTITY_DOMAINS:
+        return ""
+    object_id = slugify(str(entity_name).removeprefix("+"))
+    if not object_id:
+        return ""
+    return f"{platform}.{object_id}"
 
 
 def _parse_json_object(value: str, field_name: str) -> dict[str, Any]:
@@ -424,9 +447,7 @@ def _virtual_entity_id(entity: Mapping) -> str | None:
     name = entity.get(CONF_NAME)
     if not isinstance(name, str) or not name:
         return None
-    if name.startswith("+"):
-        return f"{platform}.{COMPONENT_DOMAIN}_{slugify(name[1:])}"
-    return f"{platform}.{slugify(name)}"
+    return _default_virtual_entity_id(platform, name)
 
 
 def _entity_dependency_sources(entity: Mapping) -> dict[str, str]:
@@ -1026,6 +1047,50 @@ def _source_state_is_true(state) -> bool:
     return str(state.state).lower() in BOOLEAN_TRUE_STATES
 
 
+def _presence_or_motion_device_class(entity_ids: list[str], states: list) -> str | None:
+    """Return the virtual class when every source is a motion/presence sensor."""
+    if not all(entity_id.startswith("binary_sensor.") for entity_id in entity_ids):
+        return None
+    device_classes = {
+        str(state.attributes.get("device_class", "")).lower()
+        for state in states
+    }
+    if not device_classes or not device_classes <= PRESENCE_MOTION_DEVICE_CLASSES:
+        return None
+    return "motion" if "motion" in device_classes else "presence"
+
+
+def _presence_motion_helper_template(
+    entity_ids: list[str],
+    variable_names: list[str],
+) -> str:
+    """Build a majority detector which clears after every source is off for 5 minutes."""
+    active_checks = ", ".join(
+        f"(({variable_name} | lower) in {sorted(BOOLEAN_TRUE_STATES)!r})"
+        for variable_name in variable_names
+    )
+    off_checks = ", ".join(
+        f"(({variable_name} | lower) == 'off')"
+        for variable_name in variable_names
+    )
+    last_changed_values = ", ".join(
+        f"as_timestamp(states[{entity_id!r}].last_changed)"
+        for entity_id in entity_ids
+    )
+    return (
+        "{% set active = [" + active_checks + "] | select | list %}"
+        "{% set all_off = ([" + off_checks + "] | select | list | count) == "
+        + str(len(variable_names)) + " %}"
+        "{% set all_off_since = [" + last_changed_values + "] | max %}"
+        "{% if (active | count) > " + str(len(variable_names)) + " / 2 %}true"
+        "{% elif this is not none and this.state == 'on' and "
+        "((active | count) > 0 or not all_off or "
+        "(as_timestamp(now()) - all_off_since) < "
+        + str(PRESENCE_MOTION_CLEAR_DELAY_SECONDS) + ") %}true"
+        "{% else %}false{% endif %}"
+    )
+
+
 def _source_state_is_number(entity_id: str, state) -> bool:
     domain = entity_id.split(".", 1)[0]
     if domain in BOOLEAN_SOURCE_DOMAINS:
@@ -1144,6 +1209,9 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     all_time = _all_source_domains(entity_ids, TIME_SOURCE_DOMAINS)
     all_enum = _all_source_domains(entity_ids, ENUM_SOURCE_DOMAINS)
     all_location = _all_source_domains(entity_ids, LOCATION_SOURCE_DOMAINS)
+    presence_or_motion_class = (
+        _presence_or_motion_device_class(entity_ids, states) if all_boolean else None
+    )
     if len(entity_ids) == 1 and source_domains[0] in VIRTUAL_ENTITY_DOMAINS:
         platform = source_domains[0]
     elif all_boolean:
@@ -1163,7 +1231,14 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
 
     first_state = states[0]
     if platform == "binary_sensor":
-        initial_value = "on" if all(_source_state_is_true(state) for state in states) else "off"
+        if presence_or_motion_class:
+            initial_value = (
+                "on"
+                if sum(_source_state_is_true(state) for state in states) > len(states) / 2
+                else "off"
+            )
+        else:
+            initial_value = "on" if all(_source_state_is_true(state) for state in states) else "off"
     elif len(states) == 1:
         initial_value = first_state.state
     elif all_number:
@@ -1204,7 +1279,15 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default({
             CAMERA_SOURCE_ENTITY_OPTION: entity_ids[0],
         })
-    if len(entity_ids) == 1:
+    if platform == "binary_sensor" and presence_or_motion_class:
+        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default({
+            CONF_CLASS: presence_or_motion_class,
+        })
+        defaults[CONF_VALUE_TEMPLATE] = _presence_motion_helper_template(
+            entity_ids,
+            variable_names,
+        )
+    elif len(entity_ids) == 1:
         defaults[CONF_VALUE_TEMPLATE] = f"{{{{ {variable_names[0]} }}}}"
     elif platform == "binary_sensor":
         boolean_checks = [
@@ -1517,7 +1600,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
 
         return self.async_show_form(
             step_id="entity_source",
-            data_schema=REFERENCE_ENTITY_SCHEMA,
+            data_schema=_reference_entity_schema(),
             errors=errors,
         )
 
@@ -1615,7 +1698,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
         return self.async_show_form(
             step_id="entity_source",
-            data_schema=REFERENCE_ENTITY_SCHEMA,
+            data_schema=_reference_entity_schema(),
             errors=errors,
         )
 
@@ -1754,7 +1837,11 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
         return self.async_show_form(
             step_id="edit_entity_source",
-            data_schema=REFERENCE_ENTITY_SCHEMA,
+            data_schema=_reference_entity_schema(
+                entity.get(CONF_SOURCE_ENTITIES, [])
+                if isinstance(entity.get(CONF_SOURCE_ENTITIES), list)
+                else [],
+            ),
             errors=errors,
         )
 

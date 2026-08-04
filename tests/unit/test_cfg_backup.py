@@ -3,10 +3,11 @@
 import json
 
 import pytest
+from homeassistant.const import ATTR_ENTITY_ID, CONF_PLATFORM
 
 from custom_components.virtual_layer.cfg import (
-    _async_save_json,
     BlendedCfg,
+    _async_save_json,
     _delete_meta_data,
     _make_entity_id,
     async_build_entry_backup,
@@ -23,34 +24,32 @@ from custom_components.virtual_layer.const import (
     ATTR_UNIQUE_ID,
     ATTR_VERSION,
     COMPONENT_DOMAIN,
-    CONF_INITIAL_AVAILABILITY,
-    CONF_INITIAL_VALUE,
-    CONF_ATTRIBUTES,
     CONF_ATTRIBUTE_SOURCES,
     CONF_ATTRIBUTE_TEMPLATES,
+    CONF_ATTRIBUTES,
     CONF_AVAILABILITY_TEMPLATE,
-    CONF_NAME,
+    CONF_INITIAL_AVAILABILITY,
+    CONF_INITIAL_VALUE,
     CONF_MAX,
     CONF_MIN,
+    CONF_NAME,
     CONF_PERSISTENT,
     CONF_PULL_INTERVAL,
     CONF_SOURCE_ENTITIES,
     CONF_TEMPLATE_SOURCES,
     CONF_VALUE_TEMPLATE,
 )
-from homeassistant.const import ATTR_ENTITY_ID, CONF_PLATFORM
-
 
 pytestmark = pytest.mark.unit
 
 
-def test_make_entity_id_uses_virtual_layer_prefix_for_prefixed_names():
+def test_make_entity_id_uses_the_domain_prefix_for_prefixed_names():
     assert _make_entity_id("sensor", "+Kitchen Temperature") == (
-        "sensor.virtual_layer_kitchen_temperature"
+        "sensor.kitchen_temperature"
     )
 
 
-def test_make_entity_id_uses_plain_slug_for_ui_names():
+def test_make_entity_id_uses_the_domain_prefix_for_ui_names():
     assert _make_entity_id("sensor", "Kitchen Temperature") == (
         "sensor.kitchen_temperature"
     )
@@ -59,22 +58,23 @@ def test_make_entity_id_uses_plain_slug_for_ui_names():
 @pytest.mark.asyncio
 async def test_entry_backup_contains_only_group_and_ui_devices():
     class Entry:
-        data = {ATTR_GROUP_NAME: "ui"}
-        options = {
-            ATTR_DEVICES: {
-                "Device": [{
-                    "platform": "weather",
-                    "temperature": 21.5,
-                    "forecast_provider": "virtual",
-                }],
-            },
-            ATTR_DEVICE_ATTRIBUTES: {
-                "Device": {
-                    ATTR_DEVICE_ID: "device-1",
-                    "name": "Device",
+        def __init__(self):
+            self.data = {ATTR_GROUP_NAME: "ui"}
+            self.options = {
+                ATTR_DEVICES: {
+                    "Device": [{
+                        "platform": "weather",
+                        "temperature": 21.5,
+                        "forecast_provider": "virtual",
+                    }],
                 },
-            },
-        }
+                ATTR_DEVICE_ATTRIBUTES: {
+                    "Device": {
+                        ATTR_DEVICE_ID: "device-1",
+                        "name": "Device",
+                    },
+                },
+            }
 
     backup = await async_build_entry_backup(Entry())
 

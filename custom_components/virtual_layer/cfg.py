@@ -386,10 +386,39 @@ def _entity_device_info(device_config):
 
 
 def _make_entity_id(platform, name):
-    if name.startswith("+"):
-        return f'{platform}.{COMPONENT_DOMAIN}_{slugify(name[1:])}'
-    else:
-        return f'{platform}.{slugify(name)}'
+    return f'{platform}.{slugify(name.removeprefix("+"))}'
+
+
+def _diagnostic_source_entities(entity):
+    """Collect every explicit external source used by a virtual entity."""
+    sources = []
+    for source_entity_id in entity.get(CONF_SOURCE_ENTITIES, []):
+        if isinstance(source_entity_id, str):
+            sources.append(source_entity_id)
+    for source_group in (CONF_TEMPLATE_SOURCES, CONF_ATTRIBUTE_SOURCES):
+        for source in _as_dict(entity.get(source_group), source_group).values():
+            if isinstance(source, Mapping) and isinstance(source.get(ATTR_ENTITY_ID), str):
+                sources.append(source[ATTR_ENTITY_ID])
+    source_entity_id = entity.get("source_entity")
+    if isinstance(source_entity_id, str):
+        sources.append(source_entity_id)
+    return list(dict.fromkeys(sources))
+
+
+def _diagnostic_configuration(entity, platform):
+    """Return a serializable summary of the virtual entity's configuration."""
+    return {
+        "platform": platform,
+        "initial_value": entity.get(CONF_INITIAL_VALUE),
+        "persistent": entity.get(CONF_PERSISTENT),
+        "value_template": entity.get(CONF_VALUE_TEMPLATE),
+        "availability_template": entity.get(CONF_AVAILABILITY_TEMPLATE),
+        "source_entities": _diagnostic_source_entities(entity),
+        "template_sources": copy.deepcopy(entity.get(CONF_TEMPLATE_SOURCES, {})),
+        "attribute_sources": copy.deepcopy(entity.get(CONF_ATTRIBUTE_SOURCES, {})),
+        "attribute_templates": copy.deepcopy(entity.get(CONF_ATTRIBUTE_TEMPLATES, {})),
+        "attributes": copy.deepcopy(entity.get(CONF_ATTRIBUTES, {})),
+    }
 
 
 def _make_unique_id():
@@ -525,6 +554,76 @@ class BlendedCfg:
             config_entry=self._config_entry,
         )
         return entity_entry.entity_id
+
+    def _append_diagnostic_sensors(self, entity, platform):
+        """Add runtime-only information and source-state sensors to its device."""
+        if self._config_entry is None:
+            return
+
+        entity_id = entity[ATTR_ENTITY_ID]
+        unique_id = entity[ATTR_UNIQUE_ID]
+        device_id = entity[ATTR_DEVICE_ID]
+        object_id = entity_id.split(".", 1)[1]
+        source_entities = _diagnostic_source_entities(entity)
+        configuration = _diagnostic_configuration(entity, platform)
+        diagnostics = [("info", entity_id, {
+            "virtual_entity_id": entity_id,
+            "virtual_entity_platform": platform,
+            "configured_source_entities": source_entities,
+            "configuration": configuration,
+        })]
+        diagnostics.extend(
+            (
+                f"debug{index}",
+                source_entity_id,
+                {
+                    "virtual_entity_id": entity_id,
+                    "source_entity_id": source_entity_id,
+                    "source_index": index,
+                },
+            )
+            for index, source_entity_id in enumerate(source_entities, start=1)
+        )
+
+        sensor_entities = self._entities.setdefault("sensor", [])
+        for suffix, source_entity_id, attributes in diagnostics:
+            diagnostic_unique_id = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}{suffix}"
+            diagnostic_entity_id = self._reserve_entity_id(
+                "sensor",
+                f"sensor.{object_id}_{suffix}",
+                diagnostic_unique_id,
+            )
+            sensor_entities.append({
+                CONF_NAME: f"{entity[CONF_NAME]} {suffix.title()}",
+                ATTR_ENTITY_ID: diagnostic_entity_id,
+                ATTR_UNIQUE_ID: diagnostic_unique_id,
+                ATTR_DEVICE_ID: device_id,
+                CONF_INITIAL_VALUE: "unknown",
+                CONF_INITIAL_AVAILABILITY: True,
+                CONF_PERSISTENT: False,
+                CONF_SOURCE_ENTITIES: [source_entity_id],
+                CONF_TEMPLATE_SOURCES: {
+                    "source": {
+                        ATTR_ENTITY_ID: source_entity_id,
+                        CONF_ATTRIBUTE: "state",
+                    },
+                },
+                CONF_VALUE_TEMPLATE: "{{ source }}",
+                CONF_ATTRIBUTES: attributes,
+                CONF_DIAGNOSTIC_SOURCE_ENTITY: source_entity_id,
+                **_entity_device_info({
+                    key: entity[key]
+                    for key in (
+                        ATTR_DEVICE_ID,
+                        CONF_MANUFACTURER,
+                        CONF_MODEL,
+                        CONF_SW_VERSION,
+                        CONF_HW_VERSION,
+                        CONF_SERIAL_NUMBER,
+                    )
+                    if key in entity
+                }),
+            })
 
     async def async_load(self):
         meta_data = await _load_meta_data(self._hass, self._group_name)
@@ -700,6 +799,7 @@ class BlendedCfg:
                 if platform not in self._entities:
                     self._entities[platform] = []
                 self._entities[platform].append(entity)
+                self._append_diagnostic_sensors(entity, platform)
                 self._meta_data.update({
                     entity_key: entity_meta
                 })
