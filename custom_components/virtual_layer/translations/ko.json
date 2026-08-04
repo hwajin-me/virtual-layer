@@ -1,0 +1,417 @@
+{
+  "title": "가상 장치",
+  "config": {
+    "abort": {
+      "import_not_supported": "파일 기반 설정은 지원하지 않습니다. 통합 구성 UI에서 가상 엔티티를 추가하세요."
+    },
+    "error": {
+      "group_name_used": "이미 사용 중인 장치 이름입니다. 다른 이름을 입력하세요.",
+      "invalid_json": "올바른 JSON 객체를 입력하세요.",
+      "invalid_entity_id": "올바른 엔티티 ID를 입력하세요."
+    },
+    "step": {
+      "user": {
+        "title": "가상 장치 만들기",
+        "description": "UI에서 관리할 가상 장치와 엔티티 모음을 만듭니다. 지금 엔티티를 추가하거나 나중에 구성 메뉴에서 추가할 수 있습니다.",
+        "data": {
+          "group_name": "장치",
+          "add_first_entity": "지금 엔티티 추가"
+        },
+        "data_description": {
+          "group_name": "장치 메타데이터와 엔티티 ID는 이 장치 모음에 속합니다."
+        }
+      },
+      "reconfigure": {
+        "title": "가상 장치 수정",
+        "description": "이 Virtual Layer 항목에서 사용하는 장치 이름을 변경합니다.",
+        "data": {
+          "group_name": "장치"
+        },
+        "data_description": {
+          "group_name": "장치 메타데이터와 엔티티 ID는 이 장치 모음에 속합니다."
+        }
+      },
+      "entity": {
+        "title": "가상 엔티티 추가",
+        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다.",
+        "data": {
+          "device_name": "장치 이름",
+          "device_id": "장치 ID",
+          "device_manufacturer": "장치 제조사",
+          "device_model": "장치 모델",
+          "device_sw_version": "장치 소프트웨어 버전",
+          "device_hw_version": "장치 하드웨어 버전",
+          "device_serial_number": "장치 일련번호",
+          "entity_name": "엔티티 이름",
+          "entity_id": "엔티티 ID",
+          "platform": "엔티티 도메인",
+          "initial_value": "초깃값",
+          "initial_availability": "처음부터 사용 가능",
+          "persistent": "이전 상태 복원",
+          "source_entities_text": "소스 엔티티",
+          "template_sources_json": "템플릿 소스 JSON",
+          "pull_interval": "가져오기 주기",
+          "value_template": "값 템플릿",
+          "availability_template": "사용 가능 여부 템플릿",
+          "attributes_json": "속성 JSON",
+          "attribute_sources_json": "속성 소스 JSON",
+          "attribute_templates_json": "속성 템플릿 JSON"
+        },
+        "data_description": {
+          "device_name": "장치 이름이 같은 엔티티는 하나의 Home Assistant 장치에 연결됩니다.",
+          "device_id": "Home Assistant 장치 레지스트리에서 사용할 고정 식별자입니다. 비워 두면 장치 이름을 사용합니다.",
+          "device_manufacturer": "Home Assistant 장치 레지스트리에 표시할 제조사입니다.",
+          "device_model": "Home Assistant 장치 레지스트리에 표시할 모델입니다.",
+          "device_sw_version": "Home Assistant 장치 레지스트리에 표시할 소프트웨어 버전입니다.",
+          "device_hw_version": "Home Assistant 장치 레지스트리에 표시할 하드웨어 버전입니다.",
+          "device_serial_number": "Home Assistant 장치 레지스트리에 표시할 일련번호입니다.",
+          "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
+          "entity_id": "선택 사항입니다. 비워 두면 엔티티 도메인과 이름으로 자동 생성합니다.",
+          "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
+          "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}",
+          "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
+          "attributes_json": "속성을 담은 JSON 객체입니다. 예: {\"battery_level\": 91}",
+          "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: {\"battery\": \"sensor.remote.battery_level\"}. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
+          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: {\"power\": \"{{ states('sensor.power') }}\"}"
+        }
+      },
+      "entity_source": {
+        "title": "기존 엔티티에서 가져오기",
+        "description": "하나 이상의 Home Assistant 엔티티를 선택할 수 있습니다. 여러 소스를 선택하면 시작용 템플릿을 자동으로 만듭니다.",
+        "data": {
+          "reference_entity_id": "기존 엔티티"
+        },
+        "data_description": {
+          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값, 위치는 모두 home인지 여부를 사용합니다."
+        }
+      }
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_json": "올바른 JSON 객체를 입력하세요.",
+      "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
+      "backup_group_not_found": "백업에서 일치하는 가상 장치를 찾지 못했습니다.",
+      "entity_not_found": "선택한 가상 엔티티를 찾지 못했습니다.",
+      "no_entities": "이 장치에는 수정할 가상 엔티티가 없습니다."
+    },
+    "step": {
+      "init": {
+        "title": "Virtual Layer 구성",
+        "description": "UI에서 관리하는 가상 장치와 엔티티를 추가, 수정, 백업 또는 복원합니다.",
+        "data": {
+          "action": "작업"
+        }
+      },
+      "select_entity": {
+        "title": "가상 엔티티 수정",
+        "description": "수정할 가상 엔티티를 선택하세요.",
+        "data": {
+          "entity_key": "가상 엔티티"
+        }
+      },
+      "delete_entities": {
+        "title": "가상 엔티티 삭제",
+        "description": "삭제할 가상 엔티티를 하나 이상 선택하세요.",
+        "data": {
+          "entity_keys": "가상 엔티티"
+        },
+        "data_description": {
+          "entity_keys": "남은 엔티티가 없는 장치는 이 구성에서 제거됩니다."
+        }
+      },
+      "edit_entity": {
+        "title": "가상 엔티티 수정",
+        "description": "가상 엔티티를 수정하고 새 구성을 저장합니다.",
+        "data": {
+          "device_name": "장치 이름",
+          "device_id": "장치 ID",
+          "device_manufacturer": "장치 제조사",
+          "device_model": "장치 모델",
+          "device_sw_version": "장치 소프트웨어 버전",
+          "device_hw_version": "장치 하드웨어 버전",
+          "device_serial_number": "장치 일련번호",
+          "entity_name": "엔티티 이름",
+          "entity_id": "엔티티 ID",
+          "platform": "엔티티 도메인",
+          "initial_value": "초깃값",
+          "initial_availability": "처음부터 사용 가능",
+          "persistent": "이전 상태 복원",
+          "source_entities_text": "소스 엔티티",
+          "template_sources_json": "템플릿 소스 JSON",
+          "pull_interval": "가져오기 주기",
+          "value_template": "값 템플릿",
+          "availability_template": "사용 가능 여부 템플릿",
+          "attributes_json": "속성 JSON",
+          "attribute_sources_json": "속성 소스 JSON",
+          "attribute_templates_json": "속성 템플릿 JSON"
+        },
+        "data_description": {
+          "device_name": "이 값을 바꾸면 엔티티를 다른 가상 장치로 이동합니다.",
+          "device_id": "Home Assistant 장치 레지스트리에서 사용할 고정 식별자입니다. 비워 두면 장치 이름을 사용합니다.",
+          "device_manufacturer": "Home Assistant 장치 레지스트리에 표시할 제조사입니다.",
+          "device_model": "Home Assistant 장치 레지스트리에 표시할 모델입니다.",
+          "device_sw_version": "Home Assistant 장치 레지스트리에 표시할 소프트웨어 버전입니다.",
+          "device_hw_version": "Home Assistant 장치 레지스트리에 표시할 하드웨어 버전입니다.",
+          "device_serial_number": "Home Assistant 장치 레지스트리에 표시할 일련번호입니다.",
+          "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
+          "entity_id": "선택 사항입니다. 비워 두면 엔티티 도메인과 이름으로 자동 생성합니다.",
+          "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
+          "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}",
+          "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
+          "attributes_json": "속성을 담은 JSON 객체입니다. 예: {\"battery_level\": 91}",
+          "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: {\"battery\": \"sensor.remote.battery_level\"}. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
+          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: {\"power\": \"{{ states('sensor.power') }}\"}"
+        }
+      },
+      "edit_entity_source": {
+        "title": "기존 엔티티에서 가져오기",
+        "description": "하나 이상의 Home Assistant 엔티티에서 수정 가능한 값과 시작용 템플릿을 가져올 수 있습니다.",
+        "data": {
+          "reference_entity_id": "기존 엔티티"
+        },
+        "data_description": {
+          "reference_entity_id": "현재 가상 엔티티 값을 유지하려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값, 위치는 모두 home인지 여부를 사용합니다."
+        }
+      },
+      "entity": {
+        "title": "가상 엔티티 추가",
+        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다.",
+        "data": {
+          "device_name": "장치 이름",
+          "device_id": "장치 ID",
+          "device_manufacturer": "장치 제조사",
+          "device_model": "장치 모델",
+          "device_sw_version": "장치 소프트웨어 버전",
+          "device_hw_version": "장치 하드웨어 버전",
+          "device_serial_number": "장치 일련번호",
+          "entity_name": "엔티티 이름",
+          "entity_id": "엔티티 ID",
+          "platform": "엔티티 도메인",
+          "initial_value": "초깃값",
+          "initial_availability": "처음부터 사용 가능",
+          "persistent": "이전 상태 복원",
+          "source_entities_text": "소스 엔티티",
+          "template_sources_json": "템플릿 소스 JSON",
+          "pull_interval": "가져오기 주기",
+          "value_template": "값 템플릿",
+          "availability_template": "사용 가능 여부 템플릿",
+          "attributes_json": "속성 JSON",
+          "attribute_sources_json": "속성 소스 JSON",
+          "attribute_templates_json": "속성 템플릿 JSON"
+        },
+        "data_description": {
+          "device_name": "장치 이름이 같은 엔티티는 하나의 Home Assistant 장치에 연결됩니다.",
+          "device_id": "Home Assistant 장치 레지스트리에서 사용할 고정 식별자입니다. 비워 두면 장치 이름을 사용합니다.",
+          "device_manufacturer": "Home Assistant 장치 레지스트리에 표시할 제조사입니다.",
+          "device_model": "Home Assistant 장치 레지스트리에 표시할 모델입니다.",
+          "device_sw_version": "Home Assistant 장치 레지스트리에 표시할 소프트웨어 버전입니다.",
+          "device_hw_version": "Home Assistant 장치 레지스트리에 표시할 하드웨어 버전입니다.",
+          "device_serial_number": "Home Assistant 장치 레지스트리에 표시할 일련번호입니다.",
+          "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
+          "entity_id": "선택 사항입니다. 비워 두면 엔티티 도메인과 이름으로 자동 생성합니다.",
+          "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
+          "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}",
+          "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
+          "attributes_json": "속성을 담은 JSON 객체입니다. 예: {\"battery_level\": 91}",
+          "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: {\"battery\": \"sensor.remote.battery_level\"}. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
+          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: {\"power\": \"{{ states('sensor.power') }}\"}"
+        }
+      },
+      "entity_source": {
+        "title": "기존 엔티티에서 가져오기",
+        "description": "하나 이상의 Home Assistant 엔티티를 선택할 수 있습니다. 여러 소스를 선택하면 시작용 템플릿을 자동으로 만듭니다.",
+        "data": {
+          "reference_entity_id": "기존 엔티티"
+        },
+        "data_description": {
+          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값, 위치는 모두 home인지 여부를 사용합니다."
+        }
+      },
+      "backup": {
+        "title": "가상 장치 백업",
+        "description": "이 가상 장치 모음을 JSON 백업 파일에 저장합니다.",
+        "data": {
+          "file_name": "백업 파일"
+        }
+      },
+      "restore": {
+        "title": "가상 장치 복원",
+        "description": "백업 파일에서 가상 장치를 복원합니다.",
+        "data": {
+          "file_name": "백업 파일",
+          "mode": "방식"
+        },
+        "data_description": {
+          "mode": "병합은 현재 장치를 유지하면서 복원한 장치를 추가합니다. 교체는 현재 장치 목록을 덮어씁니다."
+        }
+      }
+    }
+  },
+  "selector": {
+    "options_action": {
+      "options": {
+        "add_entity": "가상 엔티티 추가",
+        "edit_entity": "가상 엔티티 수정",
+        "delete_entity": "가상 엔티티 삭제",
+        "backup_devices": "장치 백업",
+        "restore_devices": "장치 복원",
+        "finish": "완료"
+      }
+    },
+    "restore_mode": {
+      "options": {
+        "merge": "병합",
+        "replace": "교체"
+      }
+    }
+  },
+  "services": {
+    "turn_on": {
+      "name": "켜기",
+      "description": "바이너리 센서를 켭니다.",
+      "fields": {
+        "entity_id": {
+          "name": "엔티티 ID",
+          "description": "상태를 설정할 엔티티"
+        }
+      }
+    },
+    "turn_off": {
+      "name": "끄기",
+      "description": "바이너리 센서를 끕니다.",
+      "fields": {
+        "entity_id": {
+          "name": "엔티티 ID",
+          "description": "상태를 설정할 엔티티"
+        }
+      }
+    },
+    "toggle": {
+      "name": "전환",
+      "description": "바이너리 센서의 상태를 전환합니다.",
+      "fields": {
+        "entity_id": {
+          "name": "엔티티 ID",
+          "description": "상태를 설정할 엔티티"
+        }
+      }
+    },
+    "set": {
+      "name": "설정",
+      "description": "센서 값을 설정합니다.",
+      "fields": {
+        "entity_id": {
+          "name": "엔티티 ID",
+          "description": "상태를 설정할 엔티티"
+        },
+        "value": {
+          "name": "값",
+          "description": "상태에 적용할 값입니다."
+        }
+      }
+    },
+    "set_available": {
+      "name": "사용 가능 여부 설정",
+      "description": "엔티티의 사용 가능 여부를 설정합니다.",
+      "fields": {
+        "value": {
+          "name": "값",
+          "description": "엔티티를 사용할 수 있는지 여부입니다."
+        }
+      }
+    },
+    "set_state": {
+      "name": "상태 설정",
+      "description": "가상 엔티티의 상태를 설정합니다.",
+      "fields": {
+        "entity_id": {
+          "name": "엔티티 ID",
+          "description": "상태를 설정할 엔티티"
+        },
+        "value": {
+          "name": "값",
+          "description": "상태에 적용할 값입니다."
+        }
+      }
+    },
+    "set_attributes": {
+      "name": "속성 설정",
+      "description": "가상 엔티티에 추가 상태 속성을 설정합니다.",
+      "fields": {
+        "entity_id": {
+          "name": "엔티티 ID",
+          "description": "속성을 설정할 엔티티"
+        },
+        "attributes": {
+          "name": "속성",
+          "description": "추가하거나 수정할 속성입니다."
+        }
+      }
+    },
+    "clear_attributes": {
+      "name": "속성 지우기",
+      "description": "가상 엔티티의 추가 상태 속성을 지웁니다.",
+      "fields": {
+        "entity_id": {
+          "name": "엔티티 ID",
+          "description": "속성을 지울 엔티티"
+        },
+        "attributes": {
+          "name": "속성",
+          "description": "지울 속성 이름입니다. 비워 두면 모든 추가 속성을 지웁니다."
+        }
+      }
+    },
+    "backup_devices": {
+      "name": "장치 백업",
+      "description": "하나 또는 모든 가상 장치 모음을 백업합니다.",
+      "fields": {
+        "file_name": {
+          "name": "파일",
+          "description": "백업 JSON 파일 경로입니다."
+        },
+        "group_name": {
+          "name": "장치",
+          "description": "선택할 장치 이름입니다. 비워 두면 모든 가상 장치 모음을 백업합니다."
+        }
+      }
+    },
+    "restore_devices": {
+      "name": "장치 복원",
+      "description": "백업 파일에서 가상 장치를 복원합니다.",
+      "fields": {
+        "file_name": {
+          "name": "파일",
+          "description": "백업 JSON 파일 경로입니다."
+        },
+        "group_name": {
+          "name": "장치",
+          "description": "대상 장치 이름입니다. 백업에 장치 모음이 하나뿐이면 이 장치 모음으로 복원할 수 있습니다."
+        },
+        "mode": {
+          "name": "방식",
+          "description": "UI에서 관리하는 기존 장치와 병합하거나 교체합니다."
+        }
+      }
+    },
+    "move": {
+      "name": "이동",
+      "description": "장치 추적기를 새 위치로 이동합니다.",
+      "fields": {
+        "location": {
+          "name": "위치",
+          "description": "장치 추적기를 이동할 위치 이름입니다."
+        },
+        "gps": {
+          "name": "GPS",
+          "description": "장치 추적기를 이동할 좌표입니다."
+        },
+        "gps_accuracy": {
+          "name": "GPS 정확도",
+          "description": "GPS 좌표의 정확도입니다."
+        }
+      }
+    }
+  }
+}

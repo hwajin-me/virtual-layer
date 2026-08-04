@@ -1,0 +1,22 @@
+{
+  "services": {
+    "set_available": {
+      "service": "mdi:power-plug-outline"
+    },
+    "set_state": {
+      "service": "mdi:toggle-switch-outline"
+    },
+    "set_attributes": {
+      "service": "mdi:tag-edit-outline"
+    },
+    "clear_attributes": {
+      "service": "mdi:tag-off-outline"
+    },
+    "backup_devices": {
+      "service": "mdi:database-arrow-down-outline"
+    },
+    "restore_devices": {
+      "service": "mdi:database-arrow-up-outline"
+    }
+  }
+}

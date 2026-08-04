@@ -1,0 +1,417 @@
+{
+  "title": "Virtual Devices",
+  "config": {
+    "abort": {
+      "import_not_supported": "File-based configuration is not supported. Add virtual entities from the integration UI."
+    },
+    "error": {
+      "group_name_used": "That device name is already in use, try another.",
+      "invalid_json": "Enter a valid JSON object.",
+      "invalid_entity_id": "Enter valid entity IDs."
+    },
+    "step": {
+      "user": {
+        "title": "Create Virtual Device",
+        "description": "Create a UI-managed virtual device and entity set. You can add an entity now or later from Configure.",
+        "data": {
+          "group_name": "Device",
+          "add_first_entity": "Add an entity now"
+        },
+        "data_description": {
+          "group_name": "Device metadata and entity IDs are scoped to this device set."
+        }
+      },
+      "reconfigure": {
+        "title": "Update Virtual Device",
+        "description": "Change the device name used by this Virtual Layer entry.",
+        "data": {
+          "group_name": "Device"
+        },
+        "data_description": {
+          "group_name": "Device metadata and entity IDs are scoped to this device set."
+        }
+      },
+      "entity": {
+        "title": "Add Virtual Entity",
+        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional.",
+        "data": {
+          "device_name": "Device name",
+          "device_id": "Device ID",
+          "device_manufacturer": "Device manufacturer",
+          "device_model": "Device model",
+          "device_sw_version": "Device software version",
+          "device_hw_version": "Device hardware version",
+          "device_serial_number": "Device serial number",
+          "entity_name": "Entity name",
+          "entity_id": "Entity ID",
+          "platform": "Entity domain",
+          "initial_value": "Initial value",
+          "initial_availability": "Initially available",
+          "persistent": "Restore previous state",
+          "source_entities_text": "Source entities",
+          "template_sources_json": "Template sources JSON",
+          "pull_interval": "Pull interval",
+          "value_template": "Value template",
+          "availability_template": "Availability template",
+          "attributes_json": "Attributes JSON",
+          "attribute_sources_json": "Attribute sources JSON",
+          "attribute_templates_json": "Attribute templates JSON"
+        },
+        "data_description": {
+          "device_name": "Entities with the same device name are attached to one Home Assistant device.",
+          "device_id": "Stable identifier used in the Home Assistant device registry. Leave empty to use the device name.",
+          "device_manufacturer": "Optional manufacturer shown in the Home Assistant device registry.",
+          "device_model": "Optional model shown in the Home Assistant device registry.",
+          "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
+          "device_hw_version": "Optional hardware version shown in the Home Assistant device registry.",
+          "device_serial_number": "Optional serial number shown in the Home Assistant device registry.",
+          "entity_name": "This is used for the entity name and default entity ID.",
+          "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
+          "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
+          "template_sources_json": "A JSON object mapping template variable names to source states or attributes, for example {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}.",
+          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
+          "attributes_json": "A JSON object, for example {\"battery_level\": 91}.",
+          "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes, for example {\"battery\": \"sensor.remote.battery_level\"}. Use \"state\" to copy the source state.",
+          "attribute_templates_json": "A JSON object whose values are templates, for example {\"power\": \"{{ states('sensor.power') }}\"}."
+        }
+      },
+      "entity_source": {
+        "title": "Copy From Existing Entities",
+        "description": "Optionally choose one or more Home Assistant entities. Multiple sources generate starter templates automatically.",
+        "data": {
+          "reference_entity_id": "Existing entities"
+        },
+        "data_description": {
+          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and location sources use all-home."
+        }
+      }
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_json": "Enter a valid JSON object.",
+      "invalid_entity_id": "Enter valid entity IDs.",
+      "backup_group_not_found": "No matching virtual device was found in the backup.",
+      "entity_not_found": "The selected virtual entity was not found.",
+      "no_entities": "This device does not have any virtual entities to edit."
+    },
+    "step": {
+      "init": {
+        "title": "Configure Virtual Layer",
+        "description": "Add, edit, back up, or restore UI-managed virtual devices and entities.",
+        "data": {
+          "action": "Action"
+        }
+      },
+      "select_entity": {
+        "title": "Edit Virtual Entity",
+        "description": "Choose the virtual entity to edit.",
+        "data": {
+          "entity_key": "Virtual entity"
+        }
+      },
+      "delete_entities": {
+        "title": "Delete Virtual Entities",
+        "description": "Choose one or more virtual entities to delete.",
+        "data": {
+          "entity_keys": "Virtual entities"
+        },
+        "data_description": {
+          "entity_keys": "Devices with no remaining entities are removed from this configuration."
+        }
+      },
+      "edit_entity": {
+        "title": "Edit Virtual Entity",
+        "description": "Update this virtual entity and save the new configuration.",
+        "data": {
+          "device_name": "Device name",
+          "device_id": "Device ID",
+          "device_manufacturer": "Device manufacturer",
+          "device_model": "Device model",
+          "device_sw_version": "Device software version",
+          "device_hw_version": "Device hardware version",
+          "device_serial_number": "Device serial number",
+          "entity_name": "Entity name",
+          "entity_id": "Entity ID",
+          "platform": "Entity domain",
+          "initial_value": "Initial value",
+          "initial_availability": "Initially available",
+          "persistent": "Restore previous state",
+          "source_entities_text": "Source entities",
+          "template_sources_json": "Template sources JSON",
+          "pull_interval": "Pull interval",
+          "value_template": "Value template",
+          "availability_template": "Availability template",
+          "attributes_json": "Attributes JSON",
+          "attribute_sources_json": "Attribute sources JSON",
+          "attribute_templates_json": "Attribute templates JSON"
+        },
+        "data_description": {
+          "device_name": "Changing this moves the entity to another virtual device.",
+          "device_id": "Stable identifier used in the Home Assistant device registry. Leave empty to use the device name.",
+          "device_manufacturer": "Optional manufacturer shown in the Home Assistant device registry.",
+          "device_model": "Optional model shown in the Home Assistant device registry.",
+          "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
+          "device_hw_version": "Optional hardware version shown in the Home Assistant device registry.",
+          "device_serial_number": "Optional serial number shown in the Home Assistant device registry.",
+          "entity_name": "This is used for the entity name and default entity ID.",
+          "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
+          "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
+          "template_sources_json": "A JSON object mapping template variable names to source states or attributes, for example {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}.",
+          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
+          "attributes_json": "A JSON object, for example {\"battery_level\": 91}.",
+          "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes, for example {\"battery\": \"sensor.remote.battery_level\"}. Use \"state\" to copy the source state.",
+          "attribute_templates_json": "A JSON object whose values are templates, for example {\"power\": \"{{ states('sensor.power') }}\"}."
+        }
+      },
+      "edit_entity_source": {
+        "title": "Copy From Existing Entities",
+        "description": "Optionally choose one or more Home Assistant entities to prefill editable values and generate starter templates.",
+        "data": {
+          "reference_entity_id": "Existing entities"
+        },
+        "data_description": {
+          "reference_entity_id": "Leave empty to keep the current virtual entity values. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and location sources use all-home."
+        }
+      },
+      "entity": {
+        "title": "Add Virtual Entity",
+        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional.",
+        "data": {
+          "device_name": "Device name",
+          "device_id": "Device ID",
+          "device_manufacturer": "Device manufacturer",
+          "device_model": "Device model",
+          "device_sw_version": "Device software version",
+          "device_hw_version": "Device hardware version",
+          "device_serial_number": "Device serial number",
+          "entity_name": "Entity name",
+          "entity_id": "Entity ID",
+          "platform": "Entity domain",
+          "initial_value": "Initial value",
+          "initial_availability": "Initially available",
+          "persistent": "Restore previous state",
+          "source_entities_text": "Source entities",
+          "template_sources_json": "Template sources JSON",
+          "pull_interval": "Pull interval",
+          "value_template": "Value template",
+          "availability_template": "Availability template",
+          "attributes_json": "Attributes JSON",
+          "attribute_sources_json": "Attribute sources JSON",
+          "attribute_templates_json": "Attribute templates JSON"
+        },
+        "data_description": {
+          "device_name": "Entities with the same device name are attached to one Home Assistant device.",
+          "device_id": "Stable identifier used in the Home Assistant device registry. Leave empty to use the device name.",
+          "device_manufacturer": "Optional manufacturer shown in the Home Assistant device registry.",
+          "device_model": "Optional model shown in the Home Assistant device registry.",
+          "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
+          "device_hw_version": "Optional hardware version shown in the Home Assistant device registry.",
+          "device_serial_number": "Optional serial number shown in the Home Assistant device registry.",
+          "entity_name": "This is used for the entity name and default entity ID.",
+          "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
+          "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
+          "template_sources_json": "A JSON object mapping template variable names to source states or attributes, for example {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}.",
+          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
+          "attributes_json": "A JSON object, for example {\"battery_level\": 91}.",
+          "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes, for example {\"battery\": \"sensor.remote.battery_level\"}. Use \"state\" to copy the source state.",
+          "attribute_templates_json": "A JSON object whose values are templates, for example {\"power\": \"{{ states('sensor.power') }}\"}."
+        }
+      },
+      "entity_source": {
+        "title": "Copy From Existing Entities",
+        "description": "Optionally choose one or more Home Assistant entities. Multiple sources generate starter templates automatically.",
+        "data": {
+          "reference_entity_id": "Existing entities"
+        },
+        "data_description": {
+          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and location sources use all-home."
+        }
+      },
+      "backup": {
+        "title": "Back Up Virtual Devices",
+        "description": "Save this virtual device set to a JSON backup file.",
+        "data": {
+          "file_name": "Backup file"
+        }
+      },
+      "restore": {
+        "title": "Restore Virtual Devices",
+        "description": "Restore virtual devices from a backup file.",
+        "data": {
+          "file_name": "Backup file",
+          "mode": "Mode"
+        },
+        "data_description": {
+          "mode": "Merge keeps current devices and appends restored devices. Replace overwrites the device list."
+        }
+      }
+    }
+  },
+  "selector": {
+    "options_action": {
+      "options": {
+        "add_entity": "Add a virtual entity",
+        "edit_entity": "Edit a virtual entity",
+        "delete_entity": "Delete virtual entities",
+        "backup_devices": "Back up devices",
+        "restore_devices": "Restore devices",
+        "finish": "Done"
+      }
+    },
+    "restore_mode": {
+      "options": {
+        "merge": "Merge",
+        "replace": "Replace"
+      }
+    }
+  },
+  "services": {
+    "turn_on": {
+      "name": "Turn On",
+      "description": "Turn on a binary sensor.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity Id",
+          "description": "Name(s) of entities to set"
+        }
+      }
+    },
+    "turn_off": {
+      "name": "Turn Off",
+      "description": "Turn off a binary sensor.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity Id",
+          "description": "Name(s) of entities to set"
+        }
+      }
+    },
+    "toggle": {
+      "name": "Toggle",
+      "description": "Toggle a binary sensor.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity Id",
+          "description": "Name(s) of entities to set"
+        }
+      }
+    },
+    "set": {
+      "name": "Set",
+      "description": "Set the value of a sensor.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity Id",
+          "description": "Name(s) of entities to set"
+        },
+        "value": {
+          "name": "Value",
+          "description": "Value to set state to."
+        }
+      }
+    },
+    "set_available": {
+      "name": "Set Availability",
+      "description": "Set availability of an entity.",
+      "fields": {
+        "value": {
+          "name": "Value",
+          "description": "Is the entity available.."
+        }
+      }
+    },
+    "set_state": {
+      "name": "Set State",
+      "description": "Set the state of a virtual entity.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity Id",
+          "description": "Name(s) of entities to set"
+        },
+        "value": {
+          "name": "Value",
+          "description": "Value to set state to."
+        }
+      }
+    },
+    "set_attributes": {
+      "name": "Set Attributes",
+      "description": "Set extra state attributes on a virtual entity.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity Id",
+          "description": "Name(s) of entities to set"
+        },
+        "attributes": {
+          "name": "Attributes",
+          "description": "Attributes to add or update."
+        }
+      }
+    },
+    "clear_attributes": {
+      "name": "Clear Attributes",
+      "description": "Clear extra state attributes from a virtual entity.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity Id",
+          "description": "Name(s) of entities to set"
+        },
+        "attributes": {
+          "name": "Attributes",
+          "description": "Attribute names to clear. Leave empty to clear all extra attributes."
+        }
+      }
+    },
+    "backup_devices": {
+      "name": "Backup Devices",
+      "description": "Back up one virtual device set or all virtual device sets.",
+      "fields": {
+        "file_name": {
+          "name": "File",
+          "description": "Backup JSON file path."
+        },
+        "group_name": {
+          "name": "Device",
+          "description": "Optional device name. Leave empty to back up all virtual device sets."
+        }
+      }
+    },
+    "restore_devices": {
+      "name": "Restore Devices",
+      "description": "Restore virtual devices from a backup file.",
+      "fields": {
+        "file_name": {
+          "name": "File",
+          "description": "Backup JSON file path."
+        },
+        "group_name": {
+          "name": "Device",
+          "description": "Optional target device name. If the backup contains one device set, it can be restored into this device set."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Merge with or replace existing UI-managed devices."
+        }
+      }
+    },
+    "move": {
+      "name": "Move",
+      "description": "Move a device tracker to a new location.",
+      "fields": {
+        "location": {
+          "name": "Location",
+          "description": "A named location to move the device tracker to."
+        },
+        "gps": {
+          "name": "GPS",
+          "description": "Which coordinates to move the device tracker to."
+        },
+        "gps_accuracy": {
+          "name": "GPS accuracy",
+          "description": "Accuracy of the GPS coordinates."
+        }
+      }
+    }
+  }
+}

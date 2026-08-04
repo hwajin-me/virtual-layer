@@ -1,0 +1,16 @@
+name: virtual-layer-homeassistant
+
+services:
+  homeassistant:
+    container_name: virtual-layer-homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    volumes:
+      - ./homeassistant/config:/config
+      - ../../custom_components/virtual_layer:/config/custom_components/virtual_layer:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      TZ: Asia/Seoul
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - "8123:8123"

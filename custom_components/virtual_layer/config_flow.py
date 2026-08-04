@@ -1,0 +1,1474 @@
+"""Config flow for Virtual Layer."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+import copy
+import json
+import logging
+from typing import Any
+
+import voluptuous as vol
+
+from homeassistant import config_entries, exceptions
+import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import selector
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME, CONF_PLATFORM
+from homeassistant.core import callback
+import homeassistant.helpers.device_registry as dr
+import homeassistant.helpers.entity_registry as er
+from homeassistant.util import slugify
+
+from .const import *
+from .cfg import (
+    async_build_entry_backup,
+    async_load_backup,
+    async_save_backup,
+    clone_entities_with_new_keys,
+    make_entity_key,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+CONF_ACTION = "action"
+CONF_ADD_FIRST_ENTITY = "add_first_entity"
+CONF_ATTRIBUTE_SOURCES_JSON = "attribute_sources_json"
+CONF_ATTRIBUTES_JSON = "attributes_json"
+CONF_ATTRIBUTE_TEMPLATES_JSON = "attribute_templates_json"
+CONF_DEVICE_NAME = "device_name"
+CONF_DEVICE_ID = "device_id"
+CONF_DEVICE_MANUFACTURER = "device_manufacturer"
+CONF_DEVICE_MODEL = "device_model"
+CONF_DEVICE_SW_VERSION = "device_sw_version"
+CONF_DEVICE_HW_VERSION = "device_hw_version"
+CONF_DEVICE_SERIAL_NUMBER = "device_serial_number"
+CONF_ENTITY_NAME = "entity_name"
+CONF_ENTITY_KEY = "entity_key"
+CONF_ENTITY_KEYS = "entity_keys"
+CONF_REFERENCE_ENTITY_ID = "reference_entity_id"
+CONF_SOURCE_ENTITIES_TEXT = "source_entities_text"
+CONF_TEMPLATE_SOURCES_JSON = "template_sources_json"
+
+ACTION_ADD_ENTITY = "add_entity"
+ACTION_BACKUP_DEVICES = "backup_devices"
+ACTION_DELETE_ENTITY = "delete_entity"
+ACTION_EDIT_ENTITY = "edit_entity"
+ACTION_FINISH = "finish"
+ACTION_RESTORE_DEVICES = "restore_devices"
+
+DEFAULT_ENTITY_DOMAIN = "sensor"
+DEFAULT_ENTITY_VALUE = "unknown"
+DEFAULT_NUMBER_MIN = 0
+DEFAULT_NUMBER_MAX = 100
+
+MULTILINE_TEXT_SELECTOR = selector.TextSelector(
+    selector.TextSelectorConfig(multiline=True),
+)
+TEMPLATE_SELECTOR = selector.TemplateSelector()
+ENTITY_SELECTOR = selector.EntitySelector(
+    selector.EntitySelectorConfig(
+        multiple=True,
+        reorder=True,
+    ),
+)
+
+
+REFERENCE_ENTITY_SCHEMA = vol.Schema({
+    vol.Optional(CONF_REFERENCE_ENTITY_ID): ENTITY_SELECTOR,
+})
+
+BOOLEAN_SOURCE_DOMAINS = {
+    "binary_sensor",
+    "input_boolean",
+    "light",
+    "lock",
+    "switch",
+}
+BOOLEAN_TRUE_STATES = {"1", "on", "open", "true", "unlocked", "yes"}
+BOOLEAN_FALSE_STATES = {"0", "closed", "false", "locked", "no", "off"}
+NUMBER_SOURCE_DOMAINS = {"counter", "input_number", "number"}
+DATE_SOURCE_DOMAINS = {"date"}
+TIME_SOURCE_DOMAINS = {"time"}
+DATETIME_SOURCE_DOMAINS = {"datetime"}
+ENUM_SOURCE_DOMAINS = {"input_select", "select"}
+LOCATION_SOURCE_DOMAINS = {"device_tracker", "person"}
+UNKNOWN_STATES = {"", "none", "unknown", "unavailable"}
+
+def _options_schema(options: dict[str, Any]) -> vol.Schema:
+    actions = [ACTION_ADD_ENTITY]
+    if _entity_choices(options):
+        actions.append(ACTION_EDIT_ENTITY)
+    if _entity_choices(options, include_invalid=True):
+        actions.append(ACTION_DELETE_ENTITY)
+    actions.extend([
+        ACTION_BACKUP_DEVICES,
+        ACTION_RESTORE_DEVICES,
+        ACTION_FINISH,
+    ])
+    return vol.Schema({
+        vol.Required(CONF_ACTION, default=ACTION_ADD_ENTITY): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=actions,
+                translation_key="options_action",
+            ),
+        ),
+    })
+
+
+BACKUP_SCHEMA = vol.Schema({
+    vol.Required(ATTR_FILE_NAME, default="/config/virtual_layer_backup.json"): str,
+})
+RESTORE_SCHEMA = vol.Schema({
+    vol.Required(ATTR_FILE_NAME, default="/config/virtual_layer_backup.json"): str,
+    vol.Optional("mode", default="merge"): selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=["merge", "replace"],
+            translation_key="restore_mode",
+        ),
+    ),
+})
+
+
+def _setup_schema(defaults: dict[str, Any], include_entity_toggle: bool = True) -> vol.Schema:
+    schema = {
+        vol.Required(ATTR_GROUP_NAME, default=defaults[ATTR_GROUP_NAME]): str,
+    }
+    if include_entity_toggle:
+        schema[vol.Optional(CONF_ADD_FIRST_ENTITY, default=False)] = cv.boolean
+    return vol.Schema(schema)
+
+
+def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    defaults = defaults or {}
+    return vol.Schema({
+        vol.Required(CONF_DEVICE_NAME, default=defaults.get(CONF_DEVICE_NAME, "Virtual Device")): str,
+        vol.Optional(CONF_DEVICE_ID, default=defaults.get(CONF_DEVICE_ID, "")): str,
+        vol.Optional(CONF_DEVICE_MANUFACTURER, default=defaults.get(CONF_DEVICE_MANUFACTURER, "")): str,
+        vol.Optional(CONF_DEVICE_MODEL, default=defaults.get(CONF_DEVICE_MODEL, "")): str,
+        vol.Optional(CONF_DEVICE_SW_VERSION, default=defaults.get(CONF_DEVICE_SW_VERSION, "")): str,
+        vol.Optional(CONF_DEVICE_HW_VERSION, default=defaults.get(CONF_DEVICE_HW_VERSION, "")): str,
+        vol.Optional(CONF_DEVICE_SERIAL_NUMBER, default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, "")): str,
+        vol.Required(CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")): str,
+        vol.Optional(ATTR_ENTITY_ID, default=defaults.get(ATTR_ENTITY_ID, "")): str,
+        vol.Required(CONF_PLATFORM, default=defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)): vol.In(VIRTUAL_ENTITY_DOMAINS),
+        vol.Required(CONF_INITIAL_VALUE, default=defaults.get(CONF_INITIAL_VALUE, DEFAULT_ENTITY_VALUE)): str,
+        vol.Optional(CONF_INITIAL_AVAILABILITY, default=defaults.get(CONF_INITIAL_AVAILABILITY, True)): cv.boolean,
+        vol.Optional(CONF_PERSISTENT, default=defaults.get(CONF_PERSISTENT, True)): cv.boolean,
+        vol.Optional(CONF_SOURCE_ENTITIES_TEXT, default=defaults.get(CONF_SOURCE_ENTITIES_TEXT, "")): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(CONF_TEMPLATE_SOURCES_JSON, default=defaults.get(CONF_TEMPLATE_SOURCES_JSON, "")): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(CONF_PULL_INTERVAL, default=defaults.get(CONF_PULL_INTERVAL, 0)): vol.All(vol.Coerce(int), vol.Range(min=0)),
+        vol.Optional(CONF_VALUE_TEMPLATE, default=defaults.get(CONF_VALUE_TEMPLATE, "")): TEMPLATE_SELECTOR,
+        vol.Optional(CONF_AVAILABILITY_TEMPLATE, default=defaults.get(CONF_AVAILABILITY_TEMPLATE, "")): TEMPLATE_SELECTOR,
+        vol.Optional(CONF_ATTRIBUTES_JSON, default=defaults.get(CONF_ATTRIBUTES_JSON, "")): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(CONF_ATTRIBUTE_SOURCES_JSON, default=defaults.get(CONF_ATTRIBUTE_SOURCES_JSON, "")): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(CONF_ATTRIBUTE_TEMPLATES_JSON, default=defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "")): MULTILINE_TEXT_SELECTOR,
+    })
+
+
+def _parse_json_object(value: str, field_name: str) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as err:
+        raise InvalidJson(field_name) from err
+    if not isinstance(parsed, dict):
+        raise InvalidJson(field_name)
+    return parsed
+
+
+def _parse_source_entities(value: str) -> list[str]:
+    if not value:
+        return []
+    raw_entities = value.replace(",", "\n").splitlines()
+    try:
+        return [
+            cv.entity_id(entity_id.strip())
+            for entity_id in raw_entities
+            if entity_id.strip()
+        ]
+    except vol.Invalid as err:
+        raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT) from err
+
+
+def _parse_attribute_sources(value: str) -> dict[str, dict[str, str]]:
+    parsed = _parse_json_object(value, CONF_ATTRIBUTE_SOURCES_JSON)
+    attribute_sources = {}
+    for target_attribute, source in parsed.items():
+        if not isinstance(target_attribute, str) or not target_attribute.strip():
+            raise InvalidJson(CONF_ATTRIBUTE_SOURCES_JSON)
+
+        attribute_sources[target_attribute.strip()] = _parse_source_reference(
+            source,
+            CONF_ATTRIBUTE_SOURCES_JSON,
+        )
+    return attribute_sources
+
+
+def _parse_template_sources(value: str) -> dict[str, dict[str, str]]:
+    parsed = _parse_json_object(value, CONF_TEMPLATE_SOURCES_JSON)
+    template_sources = {}
+    for variable_name, source in parsed.items():
+        if not isinstance(variable_name, str) or not variable_name.strip():
+            raise InvalidJson(CONF_TEMPLATE_SOURCES_JSON)
+        template_sources[variable_name.strip()] = _parse_source_reference(
+            source,
+            CONF_TEMPLATE_SOURCES_JSON,
+            default_attribute="state",
+        )
+    return template_sources
+
+
+def _parse_source_reference(source, field_name: str, default_attribute: str | None = None) -> dict[str, str]:
+    if isinstance(source, str):
+        source = source.strip()
+        if default_attribute is not None:
+            try:
+                return {
+                    ATTR_ENTITY_ID: cv.entity_id(source),
+                    CONF_ATTRIBUTE: default_attribute,
+                }
+            except vol.Invalid:
+                if "." not in source:
+                    raise InvalidEntityReference(field_name)
+        entity_id, _, attribute = source.rpartition(".")
+    elif isinstance(source, dict):
+        entity_id = source.get(ATTR_ENTITY_ID, "")
+        attribute = source.get(CONF_ATTRIBUTE, default_attribute or "")
+    else:
+        raise InvalidJson(field_name)
+
+    entity_id = str(entity_id).strip()
+    attribute = str(attribute).strip()
+    if not entity_id or not attribute:
+        raise InvalidJson(field_name)
+
+    try:
+        entity_id = cv.entity_id(entity_id)
+    except vol.Invalid as err:
+        raise InvalidEntityReference(field_name) from err
+
+    return {
+        ATTR_ENTITY_ID: entity_id,
+        CONF_ATTRIBUTE: attribute,
+    }
+
+
+def _build_entity_config(user_input: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    device_name = user_input[CONF_DEVICE_NAME].strip()
+    entity_name = user_input[CONF_ENTITY_NAME].strip()
+    platform = user_input[CONF_PLATFORM]
+
+    if not device_name:
+        raise MissingDeviceName
+    if not entity_name:
+        raise MissingEntityName
+
+    entity = {
+        CONF_PLATFORM: platform,
+        CONF_NAME: entity_name,
+        CONF_INITIAL_VALUE: user_input[CONF_INITIAL_VALUE],
+        CONF_INITIAL_AVAILABILITY: user_input[CONF_INITIAL_AVAILABILITY],
+        CONF_PERSISTENT: user_input[CONF_PERSISTENT],
+    }
+
+    entity_id = user_input.get(ATTR_ENTITY_ID, "").strip()
+    if entity_id:
+        try:
+            entity_id = cv.entity_id(entity_id)
+        except vol.Invalid as err:
+            raise InvalidEntityId from err
+        if not entity_id.startswith(f"{platform}."):
+            raise InvalidEntityId
+        entity[ATTR_ENTITY_ID] = entity_id
+
+    source_entities = _parse_source_entities(user_input.get(CONF_SOURCE_ENTITIES_TEXT, ""))
+    if source_entities:
+        entity[CONF_SOURCE_ENTITIES] = source_entities
+
+    template_sources = _parse_template_sources(
+        user_input.get(CONF_TEMPLATE_SOURCES_JSON, "").strip(),
+    )
+    if template_sources:
+        entity[CONF_TEMPLATE_SOURCES] = template_sources
+
+    pull_interval = user_input.get(CONF_PULL_INTERVAL, 0) or 0
+    if pull_interval:
+        entity[CONF_PULL_INTERVAL] = pull_interval
+
+    value_template = user_input.get(CONF_VALUE_TEMPLATE, "").strip()
+    if value_template:
+        entity[CONF_VALUE_TEMPLATE] = value_template
+
+    availability_template = user_input.get(CONF_AVAILABILITY_TEMPLATE, "").strip()
+    if availability_template:
+        entity[CONF_AVAILABILITY_TEMPLATE] = availability_template
+
+    attributes = _parse_json_object(user_input.get(CONF_ATTRIBUTES_JSON, "").strip(), CONF_ATTRIBUTES_JSON)
+    if attributes:
+        entity[CONF_ATTRIBUTES] = attributes
+
+    attribute_sources = _parse_attribute_sources(
+        user_input.get(CONF_ATTRIBUTE_SOURCES_JSON, "").strip(),
+    )
+    if attribute_sources:
+        entity[CONF_ATTRIBUTE_SOURCES] = attribute_sources
+
+    attribute_templates = _parse_json_object(
+        user_input.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "").strip(),
+        CONF_ATTRIBUTE_TEMPLATES_JSON,
+    )
+    if attribute_templates:
+        entity[CONF_ATTRIBUTE_TEMPLATES] = attribute_templates
+
+    # Number entities require a native range. Keep a practical default for the
+    # UI flow; richer domain options can be added later.
+    if platform == "number":
+        entity.setdefault(CONF_MIN, DEFAULT_NUMBER_MIN)
+        entity.setdefault(CONF_MAX, DEFAULT_NUMBER_MAX)
+
+    return device_name, entity
+
+
+def _make_entity_key() -> str:
+    return make_entity_key()
+
+
+def _ensure_entity_key(entity: dict[str, Any], fallback: str | None = None) -> dict[str, Any]:
+    entity = _plain_options(entity)
+    entity.setdefault(ATTR_ENTITY_KEY, fallback or _make_entity_key())
+    return entity
+
+
+def _build_device_config(user_input: dict[str, Any], device_name: str) -> dict[str, Any]:
+    """Build Home Assistant device metadata from the UI form."""
+    device_id = user_input.get(CONF_DEVICE_ID, "").strip() or device_name
+    if not device_id:
+        raise MissingDeviceName
+
+    device = {
+        ATTR_DEVICE_ID: device_id,
+        CONF_NAME: _make_device_name(device_name),
+    }
+    optional_fields = {
+        CONF_DEVICE_MANUFACTURER: CONF_MANUFACTURER,
+        CONF_DEVICE_MODEL: CONF_MODEL,
+        CONF_DEVICE_SW_VERSION: CONF_SW_VERSION,
+        CONF_DEVICE_HW_VERSION: CONF_HW_VERSION,
+        CONF_DEVICE_SERIAL_NUMBER: CONF_SERIAL_NUMBER,
+    }
+    for form_field, config_field in optional_fields.items():
+        value = user_input.get(form_field, "").strip()
+        if value:
+            device[config_field] = value
+    return device
+
+
+def _make_device_name(device_name: str) -> str:
+    return device_name[1:] if device_name.startswith("+") else device_name
+
+
+def _plain_options(value):
+    """Convert Home Assistant read-only option mappings to mutable containers."""
+    if isinstance(value, Mapping):
+        return {
+            key: _plain_options(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_plain_options(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_plain_options(item) for item in value)
+    return copy.deepcopy(value)
+
+
+def _mapping_or_empty(value) -> dict[str, Any]:
+    return _plain_options(value) if isinstance(value, Mapping) else {}
+
+
+def _options_devices(options: dict[str, Any] | None) -> dict[str, Any]:
+    return _mapping_or_empty(_plain_options(options or {}).get(ATTR_DEVICES, {}))
+
+
+def _options_device_attributes(options: dict[str, Any] | None) -> dict[str, Any]:
+    return _mapping_or_empty(
+        _plain_options(options or {}).get(ATTR_DEVICE_ATTRIBUTES, {}),
+    )
+
+
+def _entity_list_or_empty(entities) -> list:
+    return list(entities) if isinstance(entities, list) else []
+
+
+def _set_device_attributes(
+    options: dict[str, Any],
+    device_name: str,
+    device_config: dict[str, Any] | None,
+) -> None:
+    if device_config is None:
+        return
+    if not isinstance(options.get(ATTR_DEVICE_ATTRIBUTES), Mapping):
+        options[ATTR_DEVICE_ATTRIBUTES] = {}
+    device_attributes = options.setdefault(ATTR_DEVICE_ATTRIBUTES, {})
+    device_attributes[device_name] = _plain_options(device_config)
+
+
+def _get_device_attributes(options: dict[str, Any], device_name: str) -> dict[str, Any]:
+    device_attributes = _options_device_attributes(options)
+    return _mapping_or_empty(device_attributes.get(device_name))
+
+
+def _append_ui_entity(
+    options: dict[str, Any],
+    device_name: str,
+    entity: dict[str, Any],
+    device_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    next_options = _plain_options(options or {})
+    if not isinstance(next_options.get(ATTR_DEVICES), Mapping):
+        next_options[ATTR_DEVICES] = {}
+    devices = next_options.setdefault(ATTR_DEVICES, {})
+    if not isinstance(devices.get(device_name), list):
+        devices[device_name] = []
+    devices[device_name].append(_ensure_entity_key(entity))
+    _set_device_attributes(next_options, device_name, device_config)
+    return next_options
+
+
+def _replace_ui_entity(
+    options: dict[str, Any],
+    old_device_name: str,
+    old_index: int,
+    new_device_name: str,
+    entity: dict[str, Any],
+    device_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    next_options = _plain_options(options or {})
+    if not isinstance(next_options.get(ATTR_DEVICES), Mapping):
+        next_options[ATTR_DEVICES] = {}
+    devices = next_options.setdefault(ATTR_DEVICES, {})
+    old_entities = _entity_list_or_empty(devices.get(old_device_name))
+    if old_index < 0 or old_index >= len(old_entities):
+        raise InvalidEntitySelection
+
+    if old_device_name == new_device_name:
+        old_entity = old_entities[old_index]
+        if not isinstance(old_entity, Mapping):
+            raise InvalidEntitySelection
+        old_entity_key = old_entity.get(ATTR_ENTITY_KEY)
+        old_entities[old_index] = _ensure_entity_key(entity, old_entity_key)
+        devices[old_device_name] = old_entities
+        _set_device_attributes(next_options, new_device_name, device_config)
+        return next_options
+
+    old_entity = old_entities.pop(old_index)
+    if not isinstance(old_entity, Mapping):
+        raise InvalidEntitySelection
+    if old_entities:
+        devices[old_device_name] = old_entities
+    else:
+        devices.pop(old_device_name, None)
+        device_attributes = _options_device_attributes(next_options)
+        device_attributes.pop(old_device_name, None)
+        next_options[ATTR_DEVICE_ATTRIBUTES] = device_attributes
+    if not isinstance(devices.get(new_device_name), list):
+        devices[new_device_name] = []
+    devices[new_device_name].append(_ensure_entity_key(entity, old_entity.get(ATTR_ENTITY_KEY)))
+    _set_device_attributes(next_options, new_device_name, device_config)
+    return next_options
+
+
+def _entity_key(device_name: str, index: int) -> str:
+    return json.dumps([device_name, index], separators=(",", ":"))
+
+
+def _entity_key_from_stable_key(entity_key: str) -> str:
+    return json.dumps(["key", entity_key], separators=(",", ":"))
+
+
+def _selection_key_for_entity(device_name: str, index: int, entity: dict[str, Any]) -> str:
+    if entity.get(ATTR_ENTITY_KEY):
+        return _entity_key_from_stable_key(entity[ATTR_ENTITY_KEY])
+    return _entity_key(device_name, index)
+
+
+def _parse_entity_key(value: str) -> tuple[str, int]:
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError) as err:
+        raise InvalidEntitySelection from err
+    if (
+        not isinstance(parsed, list)
+        or len(parsed) != 2
+        or not isinstance(parsed[0], str)
+        or not isinstance(parsed[1], int)
+    ):
+        raise InvalidEntitySelection
+    return parsed[0], parsed[1]
+
+
+def _find_entity_by_selection_key(options: dict[str, Any], value: str) -> tuple[str, int]:
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        parsed = None
+
+    if (
+        isinstance(parsed, list)
+        and len(parsed) == 2
+        and parsed[0] == "key"
+        and isinstance(parsed[1], str)
+    ):
+        wanted_key = parsed[1]
+        devices = _options_devices(options)
+        for device_name, entities in devices.items():
+            for index, entity in enumerate(_entity_list_or_empty(entities)):
+                if isinstance(entity, Mapping) and entity.get(ATTR_ENTITY_KEY) == wanted_key:
+                    return device_name, index
+        raise InvalidEntitySelection
+
+    return _parse_entity_key(value)
+
+
+def _entity_choices(
+    options: dict[str, Any],
+    *,
+    include_invalid: bool = False,
+) -> dict[str, str]:
+    devices = _options_devices(options)
+    choices = {}
+    for device_name, entities in devices.items():
+        for index, entity in enumerate(_entity_list_or_empty(entities)):
+            if not isinstance(entity, Mapping):
+                if include_invalid:
+                    choices[_entity_key(device_name, index)] = (
+                        f"{device_name} / #{index + 1} (!)"
+                    )
+                continue
+            platform = entity.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
+            name = entity.get(CONF_NAME, "Virtual Entity")
+            choices[_selection_key_for_entity(device_name, index, entity)] = f"{device_name} / {name} ({platform})"
+    return choices
+
+
+def _select_entity_schema(options: dict[str, Any]) -> vol.Schema:
+    return vol.Schema({
+        vol.Required(CONF_ENTITY_KEY): vol.In(_entity_choices(options)),
+    })
+
+
+def _delete_entities_schema(options: dict[str, Any]) -> vol.Schema:
+    choices = _entity_choices(options, include_invalid=True)
+    return vol.Schema({
+        vol.Required(CONF_ENTITY_KEYS): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    {"value": value, "label": label}
+                    for value, label in choices.items()
+                ],
+                multiple=True,
+                mode=selector.SelectSelectorMode.LIST,
+            ),
+        ),
+    })
+
+
+def _get_ui_entity(options: dict[str, Any], device_name: str, index: int) -> dict[str, Any]:
+    devices = _options_devices(options)
+    entities = _entity_list_or_empty(devices.get(device_name))
+    if index < 0 or index >= len(entities):
+        raise InvalidEntitySelection
+    if not isinstance(entities[index], Mapping):
+        raise InvalidEntitySelection
+    return entities[index]
+
+
+def _delete_ui_entities(options: dict[str, Any], entity_keys: list[str]) -> dict[str, Any]:
+    parsed_keys = [
+        _find_entity_by_selection_key(options, entity_key)
+        for entity_key in (entity_keys or [])
+    ]
+    if not parsed_keys:
+        raise InvalidEntitySelection
+
+    next_options = _plain_options(options or {})
+    if not isinstance(next_options.get(ATTR_DEVICES), Mapping):
+        next_options[ATTR_DEVICES] = {}
+    devices = next_options.setdefault(ATTR_DEVICES, {})
+    grouped_indexes: dict[str, set[int]] = {}
+    for device_name, index in parsed_keys:
+        entities = _entity_list_or_empty(devices.get(device_name))
+        if index < 0 or index >= len(entities):
+            raise InvalidEntitySelection
+        grouped_indexes.setdefault(device_name, set()).add(index)
+
+    for device_name, indexes in grouped_indexes.items():
+        entities = _entity_list_or_empty(devices.get(device_name))
+        for index in sorted(indexes, reverse=True):
+            entities.pop(index)
+
+        if entities:
+            devices[device_name] = entities
+        else:
+            devices.pop(device_name, None)
+            device_attributes = _options_device_attributes(next_options)
+            device_attributes.pop(device_name, None)
+            next_options[ATTR_DEVICE_ATTRIBUTES] = device_attributes
+
+    return next_options
+
+
+def _json_default(value) -> str:
+    if not value:
+        return ""
+    return json.dumps(_plain_options(value), sort_keys=True)
+
+
+def _json_safe(value):
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        if isinstance(value, Mapping):
+            return {
+                str(key): _json_safe(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [_json_safe(item) for item in value]
+        if isinstance(value, tuple):
+            return [_json_safe(item) for item in value]
+        return str(value)
+
+
+def _fallback_entity_name(entity_id: str) -> str:
+    object_id = entity_id.split(".", 1)[1]
+    return object_id.replace("_", " ").title()
+
+
+def _normalize_reference_entity_ids(value) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        values = [value]
+    else:
+        values = list(value)
+
+    entity_ids = []
+    for entity_id in values:
+        try:
+            entity_ids.append(cv.entity_id(str(entity_id).strip()))
+        except vol.Invalid as err:
+            raise InvalidEntityReference(CONF_REFERENCE_ENTITY_ID) from err
+    return entity_ids
+
+
+def _source_variable_name(entity_id: str, existing: set[str]) -> str:
+    object_id = entity_id.split(".", 1)[1]
+    variable_name = slugify(object_id) or "source"
+    if variable_name[0].isdigit():
+        variable_name = f"source_{variable_name}"
+
+    candidate = variable_name
+    index = 2
+    while candidate in existing:
+        candidate = f"{variable_name}_{index}"
+        index += 1
+    existing.add(candidate)
+    return candidate
+
+
+def _source_state_is_boolean(entity_id: str, state) -> bool:
+    domain = entity_id.split(".", 1)[0]
+    if domain in BOOLEAN_SOURCE_DOMAINS:
+        return True
+    if domain in NUMBER_SOURCE_DOMAINS:
+        return False
+    value = str(state.state).lower()
+    if value in {"0", "1"}:
+        return False
+    return value in BOOLEAN_TRUE_STATES | BOOLEAN_FALSE_STATES
+
+
+def _source_state_is_true(state) -> bool:
+    return str(state.state).lower() in BOOLEAN_TRUE_STATES
+
+
+def _source_state_is_number(entity_id: str, state) -> bool:
+    domain = entity_id.split(".", 1)[0]
+    if domain in BOOLEAN_SOURCE_DOMAINS:
+        return False
+    if domain in NUMBER_SOURCE_DOMAINS:
+        return True
+    try:
+        float(state.state)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _source_state_as_float(state) -> float:
+    try:
+        return float(state.state)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _average_known_states(states: list) -> str:
+    values = [
+        _source_state_as_float(state)
+        for state in states
+        if _source_state_is_known(state)
+    ]
+    return str(sum(values) / len(values)) if values else "unknown"
+
+
+def _all_source_domains(entity_ids: list[str], domains: set[str]) -> bool:
+    return all(entity_id.split(".", 1)[0] in domains for entity_id in entity_ids)
+
+
+def _source_state_is_known(state) -> bool:
+    return str(state.state).lower() not in UNKNOWN_STATES
+
+
+def _first_known_state(states: list, default: str = "unknown") -> str:
+    for state in states:
+        if _source_state_is_known(state):
+            return str(state.state)
+    return default
+
+
+def _latest_state(states: list) -> str:
+    values = [
+        str(state.state)
+        for state in states
+        if _source_state_is_known(state)
+    ]
+    return max(values) if values else "unknown"
+
+
+def _location_state(states: list) -> str:
+    return "home" if all(str(state.state) == "home" for state in states) else "not_home"
+
+
+def _reference_states(hass, entity_ids: list[str]) -> list:
+    states = []
+    for entity_id in entity_ids:
+        state = hass.states.get(entity_id)
+        if state is None:
+            raise InvalidEntityReference(CONF_REFERENCE_ENTITY_ID)
+        states.append(state)
+    return states
+
+
+def _device_name_for_source_entity(hass, entity_id: str) -> str:
+    entity_entry = er.async_get(hass).async_get(entity_id)
+    if entity_entry is None or entity_entry.device_id is None:
+        return "Virtual Device"
+
+    device_entry = dr.async_get(hass).async_get(entity_entry.device_id)
+    if device_entry is None:
+        return "Virtual Device"
+    return device_entry.name_by_user or device_entry.name or "Virtual Device"
+
+
+def _combined_device_name(hass, entity_ids: list[str]) -> str:
+    device_names = {
+        _device_name_for_source_entity(hass, entity_id)
+        for entity_id in entity_ids
+    }
+    if len(device_names) == 1:
+        return next(iter(device_names))
+    return "Virtual Device"
+
+
+def _combined_entity_name(states: list) -> str:
+    names = [
+        state.attributes.get(ATTR_FRIENDLY_NAME) or _fallback_entity_name(state.entity_id)
+        for state in states
+    ]
+    if len(names) == 1:
+        return names[0]
+    return "Combined " + " + ".join(names[:3])
+
+
+def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
+    entity_ids = _normalize_reference_entity_ids(entity_ids)
+    if not entity_ids:
+        return {}
+
+    states = _reference_states(hass, entity_ids)
+    source_domains = [entity_id.split(".", 1)[0] for entity_id in entity_ids]
+    all_boolean = all(
+        _source_state_is_boolean(entity_id, state)
+        for entity_id, state in zip(entity_ids, states, strict=True)
+    )
+    all_number = all(
+        _source_state_is_number(entity_id, state)
+        for entity_id, state in zip(entity_ids, states, strict=True)
+    )
+    all_datetime = _all_source_domains(entity_ids, DATETIME_SOURCE_DOMAINS)
+    all_date = _all_source_domains(entity_ids, DATE_SOURCE_DOMAINS)
+    all_time = _all_source_domains(entity_ids, TIME_SOURCE_DOMAINS)
+    all_enum = _all_source_domains(entity_ids, ENUM_SOURCE_DOMAINS)
+    all_location = _all_source_domains(entity_ids, LOCATION_SOURCE_DOMAINS)
+    if len(entity_ids) == 1 and source_domains[0] in VIRTUAL_ENTITY_DOMAINS:
+        platform = source_domains[0]
+    elif all_boolean:
+        platform = "binary_sensor"
+    elif all_datetime:
+        platform = "datetime"
+    elif all_date:
+        platform = "date"
+    elif all_time:
+        platform = "time"
+    elif all_location:
+        platform = "device_tracker"
+    elif all_enum:
+        platform = "select"
+    else:
+        platform = "sensor"
+
+    first_state = states[0]
+    if platform == "binary_sensor":
+        initial_value = "on" if all(_source_state_is_true(state) for state in states) else "off"
+    elif len(states) == 1:
+        initial_value = first_state.state
+    elif all_number:
+        initial_value = _average_known_states(states)
+    elif all_datetime or all_date or all_time:
+        initial_value = _latest_state(states)
+    elif all_location:
+        initial_value = _location_state(states)
+    elif all_enum:
+        initial_value = _first_known_state(states)
+    else:
+        initial_value = "".join(str(state.state) for state in states)
+
+    attributes = {
+        name: _json_safe(value)
+        for name, value in dict(first_state.attributes).items()
+        if name != ATTR_FRIENDLY_NAME
+    }
+    defaults = {
+        CONF_DEVICE_NAME: _combined_device_name(hass, entity_ids),
+        CONF_ENTITY_NAME: _combined_entity_name(states),
+        CONF_PLATFORM: platform,
+        CONF_INITIAL_VALUE: initial_value,
+        CONF_SOURCE_ENTITIES_TEXT: "\n".join(entity_ids),
+        CONF_ATTRIBUTES_JSON: _json_default(attributes),
+    }
+
+    variable_names: list[str] = []
+    template_sources: dict[str, str] = {}
+    existing_variables: set[str] = set()
+    for entity_id in entity_ids:
+        variable_name = _source_variable_name(entity_id, existing_variables)
+        variable_names.append(variable_name)
+        template_sources[variable_name] = entity_id
+
+    defaults[CONF_TEMPLATE_SOURCES_JSON] = _json_default(template_sources)
+    if len(entity_ids) == 1:
+        defaults[CONF_VALUE_TEMPLATE] = f"{{{{ {variable_names[0]} }}}}"
+    elif platform == "binary_sensor":
+        boolean_checks = [
+            f"(({variable_name} | lower) in ['1', 'on', 'open', 'true', 'unlocked', 'yes'])"
+            for variable_name in variable_names
+        ]
+        defaults[CONF_VALUE_TEMPLATE] = "{{ " + " and ".join(boolean_checks) + " }}"
+    elif all_number:
+        defaults[CONF_VALUE_TEMPLATE] = (
+            "{% set values = ["
+            + ", ".join(variable_names)
+            + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | map('float') | list %}"
+            "{{ (values | average) if values else 'unknown' }}"
+        )
+    elif all_datetime or all_date or all_time:
+        defaults[CONF_VALUE_TEMPLATE] = (
+            "{{ ["
+            + ", ".join(variable_names)
+            + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | list | sort | last | default('unknown') }}"
+        )
+    elif all_location:
+        location_checks = [
+            f"({variable_name} == 'home')"
+            for variable_name in variable_names
+        ]
+        defaults[CONF_VALUE_TEMPLATE] = "{{ 'home' if " + " and ".join(location_checks) + " else 'not_home' }}"
+    elif all_enum:
+        defaults[CONF_VALUE_TEMPLATE] = (
+            "{% set values = ["
+            + ", ".join(variable_names)
+            + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | list %}"
+            "{{ values[0] if values else 'unknown' }}"
+        )
+    else:
+        defaults[CONF_VALUE_TEMPLATE] = "{{ " + " ~ ".join(variable_names) + " }}"
+        defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] = _json_default({
+            variable_name: f"{{{{ {variable_name} }}}}"
+            for variable_name in variable_names
+        })
+
+    return defaults
+
+
+def _reference_edit_defaults(
+    current_defaults: dict[str, Any],
+    reference_defaults: dict[str, Any],
+) -> dict[str, Any]:
+    if not reference_defaults:
+        return current_defaults
+
+    merged = dict(current_defaults)
+    for key in (
+        CONF_DEVICE_NAME,
+        CONF_ENTITY_NAME,
+        CONF_PLATFORM,
+        CONF_INITIAL_VALUE,
+        CONF_ATTRIBUTES_JSON,
+    ):
+        if key in reference_defaults:
+            merged[key] = reference_defaults[key]
+    return merged
+
+
+def _entity_form_defaults(
+    device_name: str,
+    entity: dict[str, Any],
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    entity = _plain_options(entity)
+    device = _get_device_attributes(options or {}, device_name)
+    return {
+        CONF_DEVICE_NAME: device_name,
+        CONF_DEVICE_ID: device.get(ATTR_DEVICE_ID, device_name),
+        CONF_DEVICE_MANUFACTURER: device.get(CONF_MANUFACTURER, ""),
+        CONF_DEVICE_MODEL: device.get(CONF_MODEL, ""),
+        CONF_DEVICE_SW_VERSION: device.get(CONF_SW_VERSION, ""),
+        CONF_DEVICE_HW_VERSION: device.get(CONF_HW_VERSION, ""),
+        CONF_DEVICE_SERIAL_NUMBER: device.get(CONF_SERIAL_NUMBER, ""),
+        CONF_ENTITY_NAME: entity.get(CONF_NAME, "Virtual Entity"),
+        ATTR_ENTITY_ID: entity.get(ATTR_ENTITY_ID, ""),
+        CONF_PLATFORM: entity.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN),
+        CONF_INITIAL_VALUE: str(entity.get(CONF_INITIAL_VALUE, DEFAULT_ENTITY_VALUE)),
+        CONF_INITIAL_AVAILABILITY: entity.get(CONF_INITIAL_AVAILABILITY, True),
+        CONF_PERSISTENT: entity.get(CONF_PERSISTENT, True),
+        CONF_SOURCE_ENTITIES_TEXT: "\n".join(entity.get(CONF_SOURCE_ENTITIES, [])),
+        CONF_TEMPLATE_SOURCES_JSON: _json_default(entity.get(CONF_TEMPLATE_SOURCES)),
+        CONF_PULL_INTERVAL: entity.get(CONF_PULL_INTERVAL, 0),
+        CONF_VALUE_TEMPLATE: entity.get(CONF_VALUE_TEMPLATE, ""),
+        CONF_AVAILABILITY_TEMPLATE: entity.get(CONF_AVAILABILITY_TEMPLATE, ""),
+        CONF_ATTRIBUTES_JSON: _json_default(entity.get(CONF_ATTRIBUTES)),
+        CONF_ATTRIBUTE_SOURCES_JSON: _json_default(entity.get(CONF_ATTRIBUTE_SOURCES)),
+        CONF_ATTRIBUTE_TEMPLATES_JSON: _json_default(entity.get(CONF_ATTRIBUTE_TEMPLATES)),
+    }
+
+
+def _merge_device_sets(existing_devices, restored_devices):
+    existing_devices = _mapping_or_empty(existing_devices)
+    restored_devices = _mapping_or_empty(restored_devices)
+    merged = {
+        device_name: _entity_list_or_empty(entities)
+        for device_name, entities in (existing_devices or {}).items()
+        if isinstance(entities, list)
+    }
+    for device_name, entities in (restored_devices or {}).items():
+        if not isinstance(entities, list):
+            _LOGGER.warning("Skipping invalid restored entity list for %s", device_name)
+            continue
+        merged.setdefault(device_name, [])
+        merged[device_name].extend(clone_entities_with_new_keys(entities))
+    return merged
+
+
+def _merge_device_attributes(existing_attributes, restored_attributes):
+    merged = {
+        device_name: attributes
+        for device_name, attributes in _mapping_or_empty(existing_attributes).items()
+        if isinstance(attributes, Mapping)
+    }
+    for device_name, attributes in _mapping_or_empty(restored_attributes).items():
+        if not isinstance(attributes, Mapping):
+            _LOGGER.warning("Skipping invalid restored device attributes for %s", device_name)
+            continue
+        merged[device_name] = attributes or {}
+    return merged
+
+
+def _find_backup_group_for_entry(backup_groups, entry):
+    if len(backup_groups) == 1:
+        return backup_groups[0]
+
+    entry_group_name = entry.data[ATTR_GROUP_NAME]
+    for backup_group in backup_groups:
+        if backup_group.get(ATTR_GROUP_NAME) == entry_group_name:
+            return backup_group
+    return None
+
+
+class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
+    """Virtual Layer config flow."""
+
+    VERSION = 1
+
+    def __init__(self) -> None:
+        self._pending_data: dict[str, Any] | None = None
+        self._pending_title: str | None = None
+        self._entity_defaults: dict[str, Any] | None = None
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        """Create the options flow."""
+        return VirtualOptionsFlowHandler()
+
+    async def validate_input(self, user_input, current_entry=None):
+        for entry in self.hass.config_entries.async_entries(COMPONENT_DOMAIN):
+            if current_entry and entry.entry_id == current_entry.entry_id:
+                continue
+            if entry.data.get(ATTR_GROUP_NAME) == user_input[ATTR_GROUP_NAME]:
+                raise GroupNameAlreadyUsed
+
+        if current_entry:
+            return {
+                "title": f"{user_input[ATTR_GROUP_NAME]} - {COMPONENT_DOMAIN}"
+            }
+
+        for group, values in self.hass.data.get(COMPONENT_DOMAIN, {}).items():
+            _LOGGER.debug(f"checking {group}")
+            if group == user_input[ATTR_GROUP_NAME]:
+                raise GroupNameAlreadyUsed
+        return {
+            "title": f"{user_input[ATTR_GROUP_NAME]} - {COMPONENT_DOMAIN}"
+        }
+
+    async def async_step_user(self, user_input=None):
+        _LOGGER.debug(f"step user {user_input}")
+
+        errors = {}
+        if user_input is not None:
+            try:
+                info = await self.validate_input(user_input)
+                self._pending_title = info["title"]
+                self._pending_data = {
+                    ATTR_GROUP_NAME: user_input[ATTR_GROUP_NAME],
+                }
+                if user_input.get(CONF_ADD_FIRST_ENTITY):
+                    return await self.async_step_entity_source()
+
+                return self.async_create_entry(
+                    title=self._pending_title,
+                    data=self._pending_data,
+                    options={ATTR_DEVICES: {}, ATTR_DEVICE_ATTRIBUTES: {}},
+                )
+            except GroupNameAlreadyUsed:
+                errors["base"] = "group_name_used"
+
+        defaults = user_input or {
+            ATTR_GROUP_NAME: IMPORTED_GROUP_NAME,
+        }
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=_setup_schema(defaults),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure(self, user_input=None):
+        """Reconfigure group metadata."""
+        entry = self._get_reconfigure_entry()
+        errors = {}
+
+        if user_input is not None:
+            try:
+                await self.validate_input(user_input, current_entry=entry)
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={
+                        ATTR_GROUP_NAME: user_input[ATTR_GROUP_NAME],
+                    },
+                )
+            except GroupNameAlreadyUsed:
+                errors["base"] = "group_name_used"
+
+        defaults = user_input or {
+            ATTR_GROUP_NAME: entry.data[ATTR_GROUP_NAME],
+        }
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_setup_schema(defaults, include_entity_toggle=False),
+            errors=errors,
+        )
+
+    async def async_step_entity_source(self, user_input=None):
+        """Choose an existing entity to prefill a new virtual entity."""
+        errors = {}
+        if user_input is not None:
+            try:
+                self._entity_defaults = _reference_entity_defaults(
+                    self.hass,
+                    user_input.get(CONF_REFERENCE_ENTITY_ID),
+                )
+                return await self.async_step_entity()
+            except InvalidEntityReference:
+                errors[CONF_REFERENCE_ENTITY_ID] = "invalid_entity_id"
+
+        return self.async_show_form(
+            step_id="entity_source",
+            data_schema=REFERENCE_ENTITY_SCHEMA,
+            errors=errors,
+        )
+
+    async def async_step_entity(self, user_input=None):
+        """Add the first UI-managed virtual entity."""
+        errors = {}
+        if user_input is not None:
+            try:
+                device_name, entity = _build_entity_config(user_input)
+                device_config = _build_device_config(user_input, device_name)
+                options = _append_ui_entity(
+                    {ATTR_DEVICES: {}, ATTR_DEVICE_ATTRIBUTES: {}},
+                    device_name,
+                    entity,
+                    device_config,
+                )
+                return self.async_create_entry(
+                    title=self._pending_title,
+                    data=self._pending_data,
+                    options=options,
+                )
+            except InvalidJson as err:
+                errors[err.field_name] = "invalid_json"
+            except InvalidEntityReference as err:
+                errors[err.field_name] = "invalid_entity_id"
+            except InvalidEntityId:
+                errors[ATTR_ENTITY_ID] = "invalid_entity_id"
+            except MissingDeviceName:
+                errors[CONF_DEVICE_NAME] = "required"
+            except MissingEntityName:
+                errors[CONF_ENTITY_NAME] = "required"
+
+        return self.async_show_form(
+            step_id="entity",
+            data_schema=_entity_schema(user_input or self._entity_defaults),
+            errors=errors,
+        )
+
+    async def async_step_import(self, import_data):
+        """Reject non-UI import. Virtual Layer is UI-only."""
+        return self.async_abort(reason="import_not_supported")
+
+
+class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
+    """Virtual Layer options flow."""
+
+    def __init__(self) -> None:
+        self._edit_device_name: str | None = None
+        self._edit_index: int | None = None
+        self._entity_defaults: dict[str, Any] | None = None
+
+    async def async_step_init(self, user_input=None):
+        errors = {}
+        if user_input is not None:
+            if user_input[CONF_ACTION] == ACTION_FINISH:
+                return self.async_create_entry(data=_plain_options(self.config_entry.options))
+            if user_input[CONF_ACTION] == ACTION_EDIT_ENTITY:
+                return await self.async_step_select_entity()
+            if user_input[CONF_ACTION] == ACTION_DELETE_ENTITY:
+                return await self.async_step_delete_entities()
+            if user_input[CONF_ACTION] == ACTION_BACKUP_DEVICES:
+                return await self.async_step_backup()
+            if user_input[CONF_ACTION] == ACTION_RESTORE_DEVICES:
+                return await self.async_step_restore()
+            return await self.async_step_entity_source()
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=_options_schema(self.config_entry.options),
+            errors=errors,
+        )
+
+    async def async_step_entity_source(self, user_input=None):
+        """Choose an existing entity to prefill a new virtual entity."""
+        errors = {}
+        if user_input is not None:
+            try:
+                self._entity_defaults = _reference_entity_defaults(
+                    self.hass,
+                    user_input.get(CONF_REFERENCE_ENTITY_ID),
+                )
+                return await self.async_step_entity()
+            except InvalidEntityReference:
+                errors[CONF_REFERENCE_ENTITY_ID] = "invalid_entity_id"
+
+        return self.async_show_form(
+            step_id="entity_source",
+            data_schema=REFERENCE_ENTITY_SCHEMA,
+            errors=errors,
+        )
+
+    async def async_step_entity(self, user_input=None):
+        """Add a UI-managed virtual entity."""
+        errors = {}
+        if user_input is not None:
+            try:
+                device_name, entity = _build_entity_config(user_input)
+                device_config = _build_device_config(user_input, device_name)
+                options = _append_ui_entity(
+                    self.config_entry.options,
+                    device_name,
+                    entity,
+                    device_config,
+                )
+                return self.async_create_entry(data=options)
+            except InvalidJson as err:
+                errors[err.field_name] = "invalid_json"
+            except InvalidEntityReference as err:
+                errors[err.field_name] = "invalid_entity_id"
+            except InvalidEntityId:
+                errors[ATTR_ENTITY_ID] = "invalid_entity_id"
+            except MissingDeviceName:
+                errors[CONF_DEVICE_NAME] = "required"
+            except MissingEntityName:
+                errors[CONF_ENTITY_NAME] = "required"
+
+        return self.async_show_form(
+            step_id="entity",
+            data_schema=_entity_schema(user_input or self._entity_defaults),
+            errors=errors,
+        )
+
+    async def async_step_select_entity(self, user_input=None):
+        """Select a UI-managed virtual entity to edit."""
+        errors = {}
+        if not _entity_choices(self.config_entry.options):
+            return self.async_show_form(
+                step_id="init",
+                data_schema=_options_schema(self.config_entry.options),
+                errors={"base": "no_entities"},
+            )
+
+        if user_input is not None:
+            try:
+                device_name, index = _find_entity_by_selection_key(
+                    self.config_entry.options,
+                    user_input[CONF_ENTITY_KEY],
+                )
+                _get_ui_entity(self.config_entry.options, device_name, index)
+                self._edit_device_name = device_name
+                self._edit_index = index
+                return await self.async_step_edit_entity_source()
+            except InvalidEntitySelection:
+                errors[CONF_ENTITY_KEY] = "entity_not_found"
+
+        return self.async_show_form(
+            step_id="select_entity",
+            data_schema=_select_entity_schema(self.config_entry.options),
+            errors=errors,
+        )
+
+    async def async_step_delete_entities(self, user_input=None):
+        """Delete one or more UI-managed virtual entities."""
+        errors = {}
+        if not _entity_choices(self.config_entry.options):
+            return self.async_show_form(
+                step_id="init",
+                data_schema=_options_schema(self.config_entry.options),
+                errors={"base": "no_entities"},
+            )
+
+        if user_input is not None:
+            try:
+                options = _delete_ui_entities(
+                    self.config_entry.options,
+                    user_input.get(CONF_ENTITY_KEYS, []),
+                )
+                return self.async_create_entry(data=options)
+            except InvalidEntitySelection:
+                errors[CONF_ENTITY_KEYS] = "entity_not_found"
+
+        return self.async_show_form(
+            step_id="delete_entities",
+            data_schema=_delete_entities_schema(self.config_entry.options),
+            errors=errors,
+        )
+
+    async def async_step_edit_entity_source(self, user_input=None):
+        """Choose an existing entity to prefill an edited virtual entity."""
+        errors = {}
+        if self._edit_device_name is None or self._edit_index is None:
+            return await self.async_step_select_entity()
+
+        try:
+            entity = _get_ui_entity(
+                self.config_entry.options,
+                self._edit_device_name,
+                self._edit_index,
+            )
+            current_defaults = _entity_form_defaults(
+                self._edit_device_name,
+                entity,
+                self.config_entry.options,
+            )
+        except InvalidEntitySelection:
+            return await self.async_step_select_entity()
+
+        if user_input is not None:
+            try:
+                reference_defaults = _reference_entity_defaults(
+                    self.hass,
+                    user_input.get(CONF_REFERENCE_ENTITY_ID),
+                )
+                self._entity_defaults = _reference_edit_defaults(
+                    current_defaults,
+                    reference_defaults,
+                )
+                return await self.async_step_edit_entity()
+            except InvalidEntityReference:
+                errors[CONF_REFERENCE_ENTITY_ID] = "invalid_entity_id"
+
+        return self.async_show_form(
+            step_id="edit_entity_source",
+            data_schema=REFERENCE_ENTITY_SCHEMA,
+            errors=errors,
+        )
+
+    async def async_step_edit_entity(self, user_input=None):
+        """Edit a UI-managed virtual entity."""
+        errors = {}
+        if self._edit_device_name is None or self._edit_index is None:
+            return await self.async_step_select_entity()
+
+        if user_input is not None:
+            try:
+                device_name, entity = _build_entity_config(user_input)
+                device_config = _build_device_config(user_input, device_name)
+                options = _replace_ui_entity(
+                    self.config_entry.options,
+                    self._edit_device_name,
+                    self._edit_index,
+                    device_name,
+                    entity,
+                    device_config,
+                )
+                return self.async_create_entry(data=options)
+            except InvalidJson as err:
+                errors[err.field_name] = "invalid_json"
+            except InvalidEntityReference as err:
+                errors[err.field_name] = "invalid_entity_id"
+            except InvalidEntityId:
+                errors[ATTR_ENTITY_ID] = "invalid_entity_id"
+            except MissingDeviceName:
+                errors[CONF_DEVICE_NAME] = "required"
+            except MissingEntityName:
+                errors[CONF_ENTITY_NAME] = "required"
+            except InvalidEntitySelection:
+                errors["base"] = "entity_not_found"
+
+        defaults = user_input
+        if defaults is None:
+            if self._entity_defaults is not None:
+                defaults = self._entity_defaults
+            else:
+                try:
+                    entity = _get_ui_entity(
+                        self.config_entry.options,
+                        self._edit_device_name,
+                        self._edit_index,
+                    )
+                    defaults = _entity_form_defaults(
+                        self._edit_device_name,
+                        entity,
+                        self.config_entry.options,
+                    )
+                except InvalidEntitySelection:
+                    return await self.async_step_select_entity()
+
+        return self.async_show_form(
+            step_id="edit_entity",
+            data_schema=_entity_schema(defaults),
+            errors=errors,
+        )
+
+    async def async_step_backup(self, user_input=None):
+        """Back up this config entry."""
+        errors = {}
+        if user_input is not None:
+            backup = await async_build_entry_backup(self.config_entry)
+            await async_save_backup(user_input[ATTR_FILE_NAME], [backup])
+            return self.async_create_entry(data=_plain_options(self.config_entry.options))
+
+        return self.async_show_form(
+            step_id="backup",
+            data_schema=BACKUP_SCHEMA,
+            errors=errors,
+        )
+
+    async def async_step_restore(self, user_input=None):
+        """Restore this config entry."""
+        errors = {}
+        if user_input is not None:
+            backup_groups = await async_load_backup(user_input[ATTR_FILE_NAME])
+            backup_group = _find_backup_group_for_entry(backup_groups, self.config_entry)
+            if backup_group is None:
+                errors["base"] = "backup_group_not_found"
+            else:
+                restored_ui_devices = backup_group.get(ATTR_DEVICES, {})
+                restored_device_attributes = backup_group.get(ATTR_DEVICE_ATTRIBUTES, {})
+                if user_input["mode"] == "merge":
+                    restored_ui_devices = _merge_device_sets(
+                        self.config_entry.options.get(ATTR_DEVICES, {}),
+                        restored_ui_devices,
+                    )
+                    restored_device_attributes = _merge_device_attributes(
+                        self.config_entry.options.get(ATTR_DEVICE_ATTRIBUTES, {}),
+                        restored_device_attributes,
+                    )
+
+                options = _plain_options(self.config_entry.options)
+                options[ATTR_DEVICES] = restored_ui_devices
+                options[ATTR_DEVICE_ATTRIBUTES] = restored_device_attributes
+                return self.async_create_entry(data=options)
+
+        return self.async_show_form(
+            step_id="restore",
+            data_schema=RESTORE_SCHEMA,
+            errors=errors,
+        )
+
+
+class GroupNameAlreadyUsed(exceptions.HomeAssistantError):
+    """Error indicating group name already used."""
+
+
+class MissingDeviceName(exceptions.HomeAssistantError):
+    """Error indicating missing device name."""
+
+
+class MissingEntityName(exceptions.HomeAssistantError):
+    """Error indicating missing entity name."""
+
+
+class InvalidJson(exceptions.HomeAssistantError):
+    """Error indicating an invalid JSON field."""
+
+    def __init__(self, field_name: str) -> None:
+        super().__init__(field_name)
+        self.field_name = field_name
+
+
+class InvalidEntityReference(exceptions.HomeAssistantError):
+    """Error indicating an invalid source entity reference."""
+
+    def __init__(self, field_name: str) -> None:
+        super().__init__(field_name)
+        self.field_name = field_name
+
+
+class InvalidEntityId(exceptions.HomeAssistantError):
+    """Error indicating an invalid entity ID."""
+
+
+class InvalidEntitySelection(exceptions.HomeAssistantError):
+    """Error indicating an invalid entity selection."""
