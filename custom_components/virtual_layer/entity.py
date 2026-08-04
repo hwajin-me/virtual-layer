@@ -15,6 +15,7 @@ from homeassistant.components.cover import ATTR_CURRENT_POSITION
 from homeassistant.const import (
     ATTR_DEVICE_CLASS,
     ATTR_ENTITY_ID,
+    CONF_ICON,
     STATE_CLOSED,
 )
 from homeassistant.core import callback
@@ -43,6 +44,7 @@ def virtual_schema(default_initial_value: str, extra_attrs):
         vol.Optional(CONF_INITIAL_VALUE, default=default_initial_value): cv.string,
         vol.Optional(CONF_INITIAL_AVAILABILITY, default=DEFAULT_AVAILABILITY): cv.boolean,
         vol.Optional(CONF_ATTRIBUTES, default=dict): dict,
+        vol.Optional(CONF_ICON): cv.string,
         vol.Optional(CONF_AUTO_HELPER): object,
         vol.Optional(CONF_ATTRIBUTE_SOURCES, default=dict): dict,
         vol.Optional(CONF_ATTRIBUTE_TEMPLATES, default=dict): dict,
@@ -76,6 +78,7 @@ class VirtualEntity(RestoreEntity):
         """Initialize an Virtual Sensor."""
         _LOGGER.debug(f"creating-virtual-{domain}={config}")
         self._config = config
+        self._attr_icon = config.get(CONF_ICON)
         self._persistent = config.get(CONF_PERSISTENT)
         self._virtual_attributes = {
             name: value

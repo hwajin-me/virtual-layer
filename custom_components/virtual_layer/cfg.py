@@ -14,6 +14,8 @@ import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
+    CONF_ICON,
     CONF_PLATFORM,
     CONF_UNIT_OF_MEASUREMENT,
     Platform,
@@ -421,6 +423,16 @@ def _diagnostic_configuration(entity, platform):
     }
 
 
+def _diagnostic_source_name(hass, entity_id):
+    """Return a readable source name without depending on the registry."""
+    state = hass.states.get(entity_id)
+    if state is not None:
+        friendly_name = state.attributes.get(ATTR_FRIENDLY_NAME)
+        if isinstance(friendly_name, str) and friendly_name.strip():
+            return friendly_name
+    return entity_id.split(".", 1)[-1].replace("_", " ").title()
+
+
 def _make_unique_id():
     return f'{uuid.uuid4()}.{COMPONENT_DOMAIN}'
 
@@ -566,19 +578,36 @@ class BlendedCfg:
         object_id = entity_id.split(".", 1)[1]
         source_entities = _diagnostic_source_entities(entity)
         configuration = _diagnostic_configuration(entity, platform)
-        diagnostics = [("info", entity_id, {
-            "virtual_entity_id": entity_id,
-            "virtual_entity_platform": platform,
-            "configured_source_entities": source_entities,
-            "configuration": configuration,
-        })]
+        diagnostics = [(
+            "info",
+            entity_id,
+            f"{entity[CONF_NAME]} - Configuration",
+            "mdi:information-outline",
+            {
+                "diagnostic_type": "configuration",
+                "virtual_entity_id": entity_id,
+                "virtual_entity_platform": platform,
+                "configured_source_entities": source_entities,
+                "configuration": configuration,
+            },
+        )]
         diagnostics.extend(
             (
                 f"debug{index}",
                 source_entity_id,
+                (
+                    f"{entity[CONF_NAME]} - Source {index}: "
+                    f"{_diagnostic_source_name(self._hass, source_entity_id)}"
+                ),
+                "mdi:bug-outline",
                 {
+                    "diagnostic_type": "source_state",
                     "virtual_entity_id": entity_id,
                     "source_entity_id": source_entity_id,
+                    "source_entity_name": _diagnostic_source_name(
+                        self._hass,
+                        source_entity_id,
+                    ),
                     "source_index": index,
                 },
             )
@@ -586,7 +615,7 @@ class BlendedCfg:
         )
 
         sensor_entities = self._entities.setdefault("sensor", [])
-        for suffix, source_entity_id, attributes in diagnostics:
+        for suffix, source_entity_id, diagnostic_name, icon, attributes in diagnostics:
             diagnostic_unique_id = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}{suffix}"
             diagnostic_entity_id = self._reserve_entity_id(
                 "sensor",
@@ -594,7 +623,7 @@ class BlendedCfg:
                 diagnostic_unique_id,
             )
             sensor_entities.append({
-                CONF_NAME: f"{entity[CONF_NAME]} {suffix.title()}",
+                CONF_NAME: diagnostic_name,
                 ATTR_ENTITY_ID: diagnostic_entity_id,
                 ATTR_UNIQUE_ID: diagnostic_unique_id,
                 ATTR_DEVICE_ID: device_id,
@@ -610,6 +639,7 @@ class BlendedCfg:
                 },
                 CONF_VALUE_TEMPLATE: "{{ source }}",
                 CONF_ATTRIBUTES: attributes,
+                CONF_ICON: icon,
                 CONF_DIAGNOSTIC_SOURCE_ENTITY: source_entity_id,
                 **_entity_device_info({
                     key: entity[key]

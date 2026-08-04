@@ -15,7 +15,13 @@ import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
 from homeassistant import config_entries, exceptions
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME, CONF_PLATFORM
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
+    CONF_ICON,
+    CONF_PLATFORM,
+    CONF_UNIT_OF_MEASUREMENT,
+)
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.util import slugify
@@ -47,10 +53,13 @@ CONF_DEVICE_SERIAL_NUMBER = "device_serial_number"
 CONF_ENTITY_NAME = "entity_name"
 CONF_ENTITY_KEY = "entity_key"
 CONF_ENTITY_KEYS = "entity_keys"
+CONF_MANAGED_DEVICE_NAME = "managed_device_name"
 CONF_REFERENCE_ENTITY_ID = "reference_entity_id"
 CONF_SOURCE_ENTITIES_TEXT = "source_entities_text"
 CONF_TEMPLATE_SOURCES_JSON = "template_sources_json"
+CONF_TARGET_DEVICE_NAME = "target_device_name"
 CAMERA_SOURCE_ENTITY_OPTION = "source_entity"
+NEW_DEVICE_TARGET = "__new_device__"
 
 _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_PLATFORM,
@@ -69,6 +78,7 @@ ACTION_BACKUP_DEVICES = "backup_devices"
 ACTION_DELETE_ENTITY = "delete_entity"
 ACTION_EDIT_ENTITY = "edit_entity"
 ACTION_FINISH = "finish"
+ACTION_MANAGE_DEVICES = "manage_devices"
 ACTION_RESTORE_DEVICES = "restore_devices"
 
 DEFAULT_ENTITY_DOMAIN = "sensor"
@@ -104,6 +114,7 @@ _DOMAIN_OPTION_RESERVED_KEYS = {
     CONF_VALUE_TEMPLATE,
     CONF_AVAILABILITY_TEMPLATE,
     CONF_ATTRIBUTES,
+    CONF_ICON,
     CONF_AUTO_HELPER,
     CONF_ATTRIBUTE_SOURCES,
     CONF_ATTRIBUTE_TEMPLATES,
@@ -127,14 +138,35 @@ ENTITY_SELECTOR = selector.EntitySelector(
 )
 
 
-def _reference_entity_schema(entity_ids: list[str] | None = None) -> vol.Schema:
+def _reference_entity_schema(
+    entity_ids: list[str] | None = None,
+    device_options: list[dict[str, str]] | None = None,
+    default_device_name: str | None = None,
+) -> vol.Schema:
     """Build the copy-source selector with the entity's current sources."""
-    return vol.Schema({
+    schema = {
         vol.Optional(
             CONF_REFERENCE_ENTITY_ID,
             default=entity_ids or [],
         ): ENTITY_SELECTOR,
-    })
+    }
+    if device_options:
+        valid_device_names = {option["value"] for option in device_options}
+        default_device_name = (
+            default_device_name
+            if default_device_name in valid_device_names
+            else NEW_DEVICE_TARGET
+        )
+        schema[vol.Optional(
+            CONF_TARGET_DEVICE_NAME,
+            default=default_device_name,
+        )] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=device_options,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            ),
+        )
+    return vol.Schema(schema)
 
 BOOLEAN_SOURCE_DOMAINS = {
     "binary_sensor",
@@ -155,6 +187,15 @@ LOCATION_HELPER_DISTANCE_METERS = 300
 LOCATION_HELPER_PRIORITY_WINDOW_SECONDS = 30 * 60
 PRESENCE_MOTION_CLEAR_DELAY_SECONDS = 5 * 60
 PRESENCE_MOTION_DEVICE_CLASSES = frozenset({"motion", "presence"})
+SAFETY_BOOLEAN_DEVICE_CLASSES = frozenset({
+    "carbon_monoxide",
+    "gas",
+    "moisture",
+    "problem",
+    "safety",
+    "smoke",
+})
+NON_MERGEABLE_SOURCE_DOMAINS = frozenset({"camera", "image"})
 UNKNOWN_STATES = {"", "none", "unknown", "unavailable"}
 TEMPLATE_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 JINJA_RESERVED_VARIABLE_NAMES = {
@@ -193,6 +234,8 @@ def _options_schema(options: dict[str, Any]) -> vol.Schema:
         actions.append(ACTION_EDIT_ENTITY)
     if _entity_choices(options, include_invalid=True):
         actions.append(ACTION_DELETE_ENTITY)
+    if _options_devices(options):
+        actions.append(ACTION_MANAGE_DEVICES)
     actions.extend([
         ACTION_BACKUP_DEVICES,
         ACTION_RESTORE_DEVICES,
@@ -248,6 +291,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         vol.Optional(CONF_DEVICE_HW_VERSION, default=defaults.get(CONF_DEVICE_HW_VERSION, "")): str,
         vol.Optional(CONF_DEVICE_SERIAL_NUMBER, default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, "")): str,
         vol.Required(CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")): str,
+        vol.Optional(CONF_ICON, default=defaults.get(CONF_ICON, "")): str,
         vol.Optional(ATTR_ENTITY_ID, default=default_entity_id): str,
         vol.Required(CONF_PLATFORM, default=defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)): vol.In(VIRTUAL_ENTITY_DOMAINS),
         vol.Required(CONF_INITIAL_VALUE, default=defaults.get(CONF_INITIAL_VALUE, DEFAULT_ENTITY_VALUE)): str,
@@ -262,6 +306,35 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         vol.Optional(CONF_ATTRIBUTE_SOURCES_JSON, default=defaults.get(CONF_ATTRIBUTE_SOURCES_JSON, "")): MULTILINE_TEXT_SELECTOR,
         vol.Optional(CONF_ATTRIBUTE_TEMPLATES_JSON, default=defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "")): MULTILINE_TEXT_SELECTOR,
         vol.Optional(CONF_DOMAIN_OPTIONS_JSON, default=defaults.get(CONF_DOMAIN_OPTIONS_JSON, "")): MULTILINE_TEXT_SELECTOR,
+    })
+
+
+def _device_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    """Build the Device-only metadata form used by the options flow."""
+    defaults = defaults or {}
+    return vol.Schema({
+        vol.Required(
+            CONF_DEVICE_NAME,
+            default=defaults.get(CONF_DEVICE_NAME, "Virtual Device"),
+        ): str,
+        vol.Optional(CONF_DEVICE_ID, default=defaults.get(CONF_DEVICE_ID, "")): str,
+        vol.Optional(
+            CONF_DEVICE_MANUFACTURER,
+            default=defaults.get(CONF_DEVICE_MANUFACTURER, ""),
+        ): str,
+        vol.Optional(CONF_DEVICE_MODEL, default=defaults.get(CONF_DEVICE_MODEL, "")): str,
+        vol.Optional(
+            CONF_DEVICE_SW_VERSION,
+            default=defaults.get(CONF_DEVICE_SW_VERSION, ""),
+        ): str,
+        vol.Optional(
+            CONF_DEVICE_HW_VERSION,
+            default=defaults.get(CONF_DEVICE_HW_VERSION, ""),
+        ): str,
+        vol.Optional(
+            CONF_DEVICE_SERIAL_NUMBER,
+            default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, ""),
+        ): str,
     })
 
 
@@ -562,6 +635,10 @@ def _build_entity_config(
         CONF_PERSISTENT: user_input[CONF_PERSISTENT],
     }
 
+    icon = user_input.get(CONF_ICON, "").strip()
+    if icon:
+        entity[CONF_ICON] = icon
+
     entity_id = user_input.get(ATTR_ENTITY_ID, "").strip()
     if entity_id:
         try:
@@ -768,6 +845,95 @@ def _get_device_attributes(options: dict[str, Any], device_name: str) -> dict[st
     return _mapping_or_empty(device_attributes.get(device_name))
 
 
+def _existing_device_options(hass, options: dict[str, Any]) -> list[dict[str, str]]:
+    """Return selectable virtual Devices, including the explicit new-Device choice."""
+    device_options = [{
+        "value": NEW_DEVICE_TARGET,
+        "label": (
+            "새 장치 만들기"
+            if hass.config.language.lower().startswith("ko")
+            else "Create a new Device"
+        ),
+    }]
+    for device_name in _options_devices(options):
+        device = _get_device_attributes(options, device_name)
+        device_id = device.get(ATTR_DEVICE_ID, device_name)
+        device_options.append({
+            "value": device_name,
+            "label": f"{device_name} ({device_id})",
+        })
+    return device_options
+
+
+def _managed_device_choices(options: dict[str, Any]) -> dict[str, str]:
+    """Return Devices with entity counts for the standalone management screen."""
+    choices = {}
+    for device_name, entities in _options_devices(options).items():
+        device = _get_device_attributes(options, device_name)
+        device_id = device.get(ATTR_DEVICE_ID, device_name)
+        entity_count = len(_entity_list_or_empty(entities))
+        choices[device_name] = f"{device_name} ({device_id}, {entity_count} entities)"
+    return choices
+
+
+def _select_device_schema(options: dict[str, Any]) -> vol.Schema:
+    return vol.Schema({
+        vol.Required(CONF_MANAGED_DEVICE_NAME): vol.In(_managed_device_choices(options)),
+    })
+
+
+def _device_form_defaults(
+    options: dict[str, Any],
+    device_name: str,
+) -> dict[str, Any]:
+    """Return just the metadata fields that belong to a logical Device."""
+    return _with_existing_device_defaults({}, options, device_name)
+
+
+def _with_existing_device_defaults(
+    defaults: dict[str, Any],
+    options: dict[str, Any],
+    device_name: str | None,
+) -> dict[str, Any]:
+    """Overlay an existing Device's stable identity onto entity-form defaults."""
+    if not device_name or device_name == NEW_DEVICE_TARGET:
+        return defaults
+    if device_name not in _options_devices(options):
+        return defaults
+    device = _get_device_attributes(options, device_name)
+
+    updated_defaults = dict(defaults)
+    updated_defaults[CONF_DEVICE_NAME] = device_name
+    updated_defaults[CONF_DEVICE_ID] = device.get(ATTR_DEVICE_ID, device_name)
+    for config_field, form_field in (
+        (CONF_MANUFACTURER, CONF_DEVICE_MANUFACTURER),
+        (CONF_MODEL, CONF_DEVICE_MODEL),
+        (CONF_SW_VERSION, CONF_DEVICE_SW_VERSION),
+        (CONF_HW_VERSION, CONF_DEVICE_HW_VERSION),
+        (CONF_SERIAL_NUMBER, CONF_DEVICE_SERIAL_NUMBER),
+    ):
+        updated_defaults[form_field] = device.get(config_field, "")
+    return updated_defaults
+
+
+def _canonical_device_name(
+    options: dict[str, Any],
+    device_name: str,
+    device_config: dict[str, Any] | None,
+) -> str:
+    """Use an existing Device group when its stable ID already exists."""
+    if not device_config:
+        return device_name
+    device_id = device_config.get(ATTR_DEVICE_ID)
+    if not isinstance(device_id, str) or not device_id:
+        return device_name
+    for existing_device_name in _options_devices(options):
+        existing_device = _get_device_attributes(options, existing_device_name)
+        if existing_device.get(ATTR_DEVICE_ID, existing_device_name) == device_id:
+            return existing_device_name
+    return device_name
+
+
 def _append_ui_entity(
     options: dict[str, Any],
     device_name: str,
@@ -775,13 +941,21 @@ def _append_ui_entity(
     device_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     next_options = _plain_options(options or {})
+    canonical_device_name = _canonical_device_name(
+        next_options,
+        device_name,
+        device_config,
+    )
+    reusing_existing_device = canonical_device_name != device_name
+    device_name = canonical_device_name
     if not isinstance(next_options.get(ATTR_DEVICES), Mapping):
         next_options[ATTR_DEVICES] = {}
     devices = next_options.setdefault(ATTR_DEVICES, {})
     if not isinstance(devices.get(device_name), list):
         devices[device_name] = []
     devices[device_name].append(_ensure_entity_key(entity))
-    _set_device_attributes(next_options, device_name, device_config)
+    if not reusing_existing_device:
+        _set_device_attributes(next_options, device_name, device_config)
     return next_options
 
 
@@ -794,6 +968,13 @@ def _replace_ui_entity(
     device_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     next_options = _plain_options(options or {})
+    canonical_device_name = _canonical_device_name(
+        next_options,
+        new_device_name,
+        device_config,
+    )
+    reusing_existing_device = canonical_device_name != new_device_name
+    new_device_name = canonical_device_name
     if not isinstance(next_options.get(ATTR_DEVICES), Mapping):
         next_options[ATTR_DEVICES] = {}
     devices = next_options.setdefault(ATTR_DEVICES, {})
@@ -808,7 +989,8 @@ def _replace_ui_entity(
         old_entity_key = old_entity.get(ATTR_ENTITY_KEY)
         old_entities[old_index] = _ensure_entity_key(entity, old_entity_key)
         devices[old_device_name] = old_entities
-        _set_device_attributes(next_options, new_device_name, device_config)
+        if not reusing_existing_device:
+            _set_device_attributes(next_options, new_device_name, device_config)
         return next_options
 
     old_entity = old_entities.pop(old_index)
@@ -824,7 +1006,57 @@ def _replace_ui_entity(
     if not isinstance(devices.get(new_device_name), list):
         devices[new_device_name] = []
     devices[new_device_name].append(_ensure_entity_key(entity, old_entity.get(ATTR_ENTITY_KEY)))
-    _set_device_attributes(next_options, new_device_name, device_config)
+    if not reusing_existing_device:
+        _set_device_attributes(next_options, new_device_name, device_config)
+    return next_options
+
+
+def _replace_ui_device(
+    options: dict[str, Any],
+    old_device_name: str,
+    new_device_name: str,
+    device_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Update one Device's metadata and safely merge its entity group if needed."""
+    next_options = _plain_options(options or {})
+    if not isinstance(next_options.get(ATTR_DEVICES), Mapping):
+        next_options[ATTR_DEVICES] = {}
+    devices = next_options.setdefault(ATTR_DEVICES, {})
+    old_entities = _entity_list_or_empty(devices.get(old_device_name))
+    if old_device_name not in devices:
+        raise InvalidEntitySelection
+
+    new_device_name = _make_device_name(new_device_name).strip()
+    if not new_device_name:
+        raise MissingDeviceName
+
+    # A matching stable ID represents the same physical Device even when the
+    # requested display name is new. Do not overwrite its existing metadata.
+    target_device_name = new_device_name
+    new_device_id = device_config.get(ATTR_DEVICE_ID)
+    if isinstance(new_device_id, str) and new_device_id:
+        for existing_name in devices:
+            if existing_name == old_device_name:
+                continue
+            existing = _get_device_attributes(next_options, existing_name)
+            if existing.get(ATTR_DEVICE_ID, existing_name) == new_device_id:
+                target_device_name = existing_name
+                break
+
+    device_attributes = _options_device_attributes(next_options)
+    if target_device_name == old_device_name:
+        devices[old_device_name] = old_entities
+        _set_device_attributes(next_options, old_device_name, device_config)
+        return next_options
+
+    target_exists = target_device_name in devices
+    target_entities = _entity_list_or_empty(devices.get(target_device_name))
+    devices[target_device_name] = target_entities + old_entities
+    devices.pop(old_device_name, None)
+    device_attributes.pop(old_device_name, None)
+    next_options[ATTR_DEVICE_ATTRIBUTES] = device_attributes
+    if not target_exists:
+        _set_device_attributes(next_options, target_device_name, device_config)
     return next_options
 
 
@@ -1060,6 +1292,26 @@ def _presence_or_motion_device_class(entity_ids: list[str], states: list) -> str
     return "motion" if "motion" in device_classes else "presence"
 
 
+def _safety_boolean_sources(entity_ids: list[str], states: list) -> bool:
+    """Return true for alarm-like binary sensors where any active source wins."""
+    if not all(entity_id.startswith("binary_sensor.") for entity_id in entity_ids):
+        return False
+    device_classes = {
+        str(state.attributes.get("device_class", "")).lower()
+        for state in states
+    }
+    return bool(device_classes) and device_classes <= SAFETY_BOOLEAN_DEVICE_CLASSES
+
+
+def _safety_boolean_helper_template(variable_names: list[str]) -> str:
+    """Build an OR helper for leak, smoke, gas, and other alarm sensors."""
+    active_checks = ", ".join(
+        f"(({variable_name} | lower) in {sorted(BOOLEAN_TRUE_STATES)!r})"
+        for variable_name in variable_names
+    )
+    return "{{ ( [" + active_checks + "] | select | list | count ) > 0 }}"
+
+
 def _presence_motion_helper_template(
     entity_ids: list[str],
     variable_names: list[str],
@@ -1194,6 +1446,12 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     if not entity_ids:
         return {}
 
+    if len(entity_ids) > 1 and any(
+        entity_id.split(".", 1)[0] in NON_MERGEABLE_SOURCE_DOMAINS
+        for entity_id in entity_ids
+    ):
+        raise InvalidEntityReference(CONF_REFERENCE_ENTITY_ID)
+
     states = _reference_states(hass, entity_ids)
     source_domains = [entity_id.split(".", 1)[0] for entity_id in entity_ids]
     all_boolean = all(
@@ -1211,6 +1469,9 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     all_location = _all_source_domains(entity_ids, LOCATION_SOURCE_DOMAINS)
     presence_or_motion_class = (
         _presence_or_motion_device_class(entity_ids, states) if all_boolean else None
+    )
+    safety_boolean_sources = (
+        _safety_boolean_sources(entity_ids, states) if all_boolean else False
     )
     if len(entity_ids) == 1 and source_domains[0] in VIRTUAL_ENTITY_DOMAINS:
         platform = source_domains[0]
@@ -1235,6 +1496,12 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             initial_value = (
                 "on"
                 if sum(_source_state_is_true(state) for state in states) > len(states) / 2
+                else "off"
+            )
+        elif safety_boolean_sources:
+            initial_value = (
+                "on"
+                if any(_source_state_is_true(state) for state in states)
                 else "off"
             )
         else:
@@ -1266,6 +1533,24 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         CONF_ATTRIBUTES_JSON: _json_default(attributes),
     }
 
+    source_device_classes = {
+        str(state.attributes.get("device_class", "")).lower()
+        for state in states
+    }
+    source_units = {
+        str(state.attributes.get(CONF_UNIT_OF_MEASUREMENT, ""))
+        for state in states
+    }
+    if (
+        platform == "sensor"
+        and len(source_device_classes) == 1
+        and "" not in source_device_classes
+    ):
+        domain_options = {CONF_CLASS: next(iter(source_device_classes))}
+        if len(source_units) == 1 and "" not in source_units:
+            domain_options[CONF_UNIT_OF_MEASUREMENT] = next(iter(source_units))
+        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
+
     variable_names: list[str] = []
     template_sources: dict[str, str] = {}
     existing_variables: set[str] = set()
@@ -1287,6 +1572,8 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             entity_ids,
             variable_names,
         )
+    elif platform == "binary_sensor" and safety_boolean_sources:
+        defaults[CONF_VALUE_TEMPLATE] = _safety_boolean_helper_template(variable_names)
     elif len(entity_ids) == 1:
         defaults[CONF_VALUE_TEMPLATE] = f"{{{{ {variable_names[0]} }}}}"
     elif platform == "binary_sensor":
@@ -1423,6 +1710,7 @@ def _entity_form_defaults(
         CONF_DEVICE_HW_VERSION: device.get(CONF_HW_VERSION, ""),
         CONF_DEVICE_SERIAL_NUMBER: device.get(CONF_SERIAL_NUMBER, ""),
         CONF_ENTITY_NAME: entity.get(CONF_NAME, "Virtual Entity"),
+        CONF_ICON: entity.get(CONF_ICON, ""),
         ATTR_ENTITY_ID: entity.get(ATTR_ENTITY_ID, ""),
         CONF_PLATFORM: entity.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN),
         CONF_INITIAL_VALUE: str(entity.get(CONF_INITIAL_VALUE, DEFAULT_ENTITY_VALUE)),
@@ -1657,6 +1945,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
     def __init__(self) -> None:
         self._edit_device_name: str | None = None
         self._edit_index: int | None = None
+        self._managed_device_name: str | None = None
         self._entity_defaults: dict[str, Any] | None = None
         self._reference_defaults: dict[str, Any] = {}
         self._edit_auto_helper_profile: dict[str, Any] | None = None
@@ -1670,6 +1959,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 return await self.async_step_select_entity()
             if user_input[CONF_ACTION] == ACTION_DELETE_ENTITY:
                 return await self.async_step_delete_entities()
+            if user_input[CONF_ACTION] == ACTION_MANAGE_DEVICES:
+                return await self.async_step_select_device()
             if user_input[CONF_ACTION] == ACTION_BACKUP_DEVICES:
                 return await self.async_step_backup()
             if user_input[CONF_ACTION] == ACTION_RESTORE_DEVICES:
@@ -1682,6 +1973,65 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             errors=errors,
         )
 
+    async def async_step_select_device(self, user_input=None):
+        """Select a logical Device without exposing entity-specific settings."""
+        errors = {}
+        if not _managed_device_choices(self.config_entry.options):
+            return self.async_show_form(
+                step_id="init",
+                data_schema=_options_schema(self.config_entry.options),
+                errors={"base": "no_devices"},
+            )
+
+        if user_input is not None:
+            device_name = user_input.get(CONF_MANAGED_DEVICE_NAME)
+            if device_name in _managed_device_choices(self.config_entry.options):
+                self._managed_device_name = device_name
+                return await self.async_step_edit_device()
+            errors[CONF_MANAGED_DEVICE_NAME] = "device_not_found"
+
+        return self.async_show_form(
+            step_id="select_device",
+            data_schema=_select_device_schema(self.config_entry.options),
+            errors=errors,
+        )
+
+    async def async_step_edit_device(self, user_input=None):
+        """Edit Device metadata independently from its virtual entities."""
+        if self._managed_device_name is None:
+            return await self.async_step_select_device()
+        if self._managed_device_name not in _options_devices(self.config_entry.options):
+            return await self.async_step_select_device()
+
+        errors = {}
+        if user_input is not None:
+            try:
+                new_device_name = _make_device_name(
+                    user_input[CONF_DEVICE_NAME],
+                ).strip()
+                device_config = _build_device_config(user_input, new_device_name)
+                options = _replace_ui_device(
+                    self.config_entry.options,
+                    self._managed_device_name,
+                    new_device_name,
+                    device_config,
+                )
+                return self.async_create_entry(data=options)
+            except MissingDeviceName:
+                errors[CONF_DEVICE_NAME] = "required"
+            except InvalidEntitySelection:
+                errors["base"] = "device_not_found"
+
+        defaults = user_input or _device_form_defaults(
+            self.config_entry.options,
+            self._managed_device_name,
+        )
+        return self.async_show_form(
+            step_id="edit_device",
+            data_schema=_device_schema(defaults),
+            errors=errors,
+        )
+
     async def async_step_entity_source(self, user_input=None):
         """Choose an existing entity to prefill a new virtual entity."""
         errors = {}
@@ -1691,14 +2041,20 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     self.hass,
                     user_input.get(CONF_REFERENCE_ENTITY_ID),
                 )
-                self._entity_defaults = self._reference_defaults
+                self._entity_defaults = _with_existing_device_defaults(
+                    self._reference_defaults,
+                    self.config_entry.options,
+                    user_input.get(CONF_TARGET_DEVICE_NAME),
+                )
                 return await self.async_step_entity()
             except InvalidEntityReference:
                 errors[CONF_REFERENCE_ENTITY_ID] = "invalid_entity_id"
 
         return self.async_show_form(
             step_id="entity_source",
-            data_schema=_reference_entity_schema(),
+            data_schema=_reference_entity_schema(
+                device_options=_existing_device_options(self.hass, self.config_entry.options),
+            ),
             errors=errors,
         )
 
@@ -1831,6 +2187,11 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     self._reference_defaults,
                     self._edit_auto_helper_profile is not None,
                 )
+                self._entity_defaults = _with_existing_device_defaults(
+                    self._entity_defaults,
+                    self.config_entry.options,
+                    user_input.get(CONF_TARGET_DEVICE_NAME),
+                )
                 return await self.async_step_edit_entity()
             except InvalidEntityReference:
                 errors[CONF_REFERENCE_ENTITY_ID] = "invalid_entity_id"
@@ -1841,6 +2202,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 entity.get(CONF_SOURCE_ENTITIES, [])
                 if isinstance(entity.get(CONF_SOURCE_ENTITIES), list)
                 else [],
+                _existing_device_options(self.hass, self.config_entry.options),
+                self._edit_device_name,
             ),
             errors=errors,
         )

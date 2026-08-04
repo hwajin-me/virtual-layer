@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME, CONF_ICON
 
 COMPONENT_DOMAIN = "virtual_layer"
 COMPONENT_SERVICES = "virtual_layer-services"
@@ -76,7 +76,9 @@ GENERIC_ENTITY_OPTION_EXCLUDED_KEYS = frozenset({
     CONF_AUTO_HELPER,
     CONF_AVAILABILITY_TEMPLATE,
     CONF_CLASS,
+    CONF_DIAGNOSTIC_SOURCE_ENTITY,
     CONF_HW_VERSION,
+    CONF_ICON,
     CONF_INITIAL_AVAILABILITY,
     CONF_INITIAL_VALUE,
     CONF_MANUFACTURER,
@@ -89,7 +91,7 @@ GENERIC_ENTITY_OPTION_EXCLUDED_KEYS = frozenset({
     CONF_SW_VERSION,
     CONF_TEMPLATE_SOURCES,
     CONF_VALUE_TEMPLATE,
-    "icon",
+    "unit_of_measurement",
     "platform",
     "state_class",
 })

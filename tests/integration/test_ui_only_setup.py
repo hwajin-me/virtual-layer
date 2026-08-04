@@ -12,6 +12,7 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_LATITUDE,
     ATTR_LONGITUDE,
+    CONF_ICON,
     CONF_NAME,
     CONF_PLATFORM,
 )
@@ -21,6 +22,8 @@ from homeassistant.helpers.translation import async_get_translations
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.virtual_layer import (
+    _async_delete_virtual_device_from_registry,
+    _async_remove_orphaned_diagnostic_registry_entries,
     async_remove_entry,
     async_setup,
     async_setup_entry,
@@ -49,6 +52,7 @@ from custom_components.virtual_layer.config_flow import (
     ACTION_DELETE_ENTITY,
     ACTION_EDIT_ENTITY,
     ACTION_FINISH,
+    ACTION_MANAGE_DEVICES,
     CONF_ACTION,
     CONF_DEVICE_ID,
     CONF_DEVICE_MANUFACTURER,
@@ -57,9 +61,11 @@ from custom_components.virtual_layer.config_flow import (
     CONF_ENTITY_KEY,
     CONF_ENTITY_KEYS,
     CONF_ENTITY_NAME,
+    CONF_MANAGED_DEVICE_NAME,
     CONF_REFERENCE_ENTITY_ID,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
+    CONF_TARGET_DEVICE_NAME,
     _entity_key,
     _reference_entity_defaults,
 )
@@ -301,6 +307,67 @@ async def test_options_flow_finish_preserves_existing_options(hass):
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"] == {ATTR_DEVICES: {"Laundry": []}}
+
+
+async def test_options_flow_manages_shared_device_metadata_without_editing_entities(hass):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Laundry": [
+                    {CONF_PLATFORM: "sensor", CONF_NAME: "Washer Phase"},
+                    {CONF_PLATFORM: "binary_sensor", CONF_NAME: "Washer Door"},
+                ],
+            },
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Laundry": {
+                    ATTR_DEVICE_ID: "laundry-old",
+                    CONF_NAME: "Laundry",
+                },
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_MANAGE_DEVICES},
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "select_device"
+    assert result["data_schema"]({CONF_MANAGED_DEVICE_NAME: "Laundry"}) == {
+        CONF_MANAGED_DEVICE_NAME: "Laundry",
+    }
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_MANAGED_DEVICE_NAME: "Laundry"},
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "edit_device"
+    defaults = result["data_schema"]({})
+    assert defaults[CONF_DEVICE_ID] == "laundry-old"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_DEVICE_NAME: "Laundry Room",
+            CONF_DEVICE_ID: "laundry-new",
+            CONF_DEVICE_MANUFACTURER: "Acme",
+            CONF_DEVICE_MODEL: "Washer 9000",
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert "Laundry" not in result["data"][ATTR_DEVICES]
+    assert len(result["data"][ATTR_DEVICES]["Laundry Room"]) == 2
+    assert result["data"][ATTR_DEVICE_ATTRIBUTES]["Laundry Room"] == {
+        ATTR_DEVICE_ID: "laundry-new",
+        CONF_NAME: "Laundry Room",
+        CONF_MANUFACTURER: "Acme",
+        CONF_MODEL: "Washer 9000",
+    }
 
 
 async def test_options_flow_can_delete_multiple_entities(hass):
@@ -662,6 +729,134 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
     }
 
 
+async def test_options_flow_adds_entity_to_selected_existing_device(hass):
+    hass.states.async_set("sensor.refrigerator_temperature", "4")
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Refrigerator Door": [
+                    {
+                        CONF_PLATFORM: "binary_sensor",
+                        CONF_NAME: "Refrigerator Door",
+                        CONF_INITIAL_VALUE: "off",
+                    },
+                ],
+            },
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Refrigerator Door": {
+                    ATTR_DEVICE_ID: "refrigerator-door-1",
+                    CONF_NAME: "Refrigerator Door",
+                    CONF_MANUFACTURER: "TCL",
+                },
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    source_defaults = result["data_schema"]({})
+    assert source_defaults[CONF_TARGET_DEVICE_NAME] == "__new_device__"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_REFERENCE_ENTITY_ID: ["sensor.refrigerator_temperature"],
+            CONF_TARGET_DEVICE_NAME: "Refrigerator Door",
+        },
+    )
+    defaults = result["data_schema"]({})
+    assert defaults[CONF_DEVICE_NAME] == "Refrigerator Door"
+    assert defaults[CONF_DEVICE_ID] == "refrigerator-door-1"
+    assert defaults[CONF_DEVICE_MANUFACTURER] == "TCL"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_ENTITY_NAME: "Refrigerator Temperature",
+            ATTR_ENTITY_ID: "sensor.refrigerator_temperature_virtual",
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    devices = result["data"][ATTR_DEVICES]
+    assert list(devices) == ["Refrigerator Door"]
+    assert len(devices["Refrigerator Door"]) == 2
+    assert result["data"][ATTR_DEVICE_ATTRIBUTES]["Refrigerator Door"][ATTR_DEVICE_ID] == (
+        "refrigerator-door-1"
+    )
+
+
+async def test_setup_entry_groups_multiple_virtual_entities_on_one_device(hass, tmp_path, monkeypatch):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "refrigerator"},
+        options={
+            ATTR_DEVICES: {
+                "Refrigerator Door": [
+                    {
+                        CONF_PLATFORM: "binary_sensor",
+                        CONF_NAME: "Door Open",
+                        CONF_ICON: "mdi:door-open",
+                        ATTR_ENTITY_ID: "binary_sensor.refrigerator_door_open",
+                        CONF_INITIAL_VALUE: "off",
+                        CONF_INITIAL_AVAILABILITY: True,
+                        CONF_PERSISTENT: False,
+                    },
+                    {
+                        CONF_PLATFORM: "sensor",
+                        CONF_NAME: "Door Temperature",
+                        ATTR_ENTITY_ID: "sensor.refrigerator_door_temperature",
+                        CONF_INITIAL_VALUE: "4",
+                        CONF_INITIAL_AVAILABILITY: True,
+                        CONF_PERSISTENT: False,
+                    },
+                ],
+            },
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Refrigerator Door": {
+                    ATTR_DEVICE_ID: "refrigerator-door-1",
+                    CONF_NAME: "Refrigerator Door",
+                    CONF_MANUFACTURER: "TCL",
+                },
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+    await hass.async_block_till_done()
+
+    entity_registry = er.async_get(hass)
+    device_ids = {
+        entity_registry.async_get(entity_id).device_id
+        for entity_id in (
+            "binary_sensor.refrigerator_door_open",
+            "sensor.refrigerator_door_open_info",
+            "sensor.refrigerator_door_temperature",
+            "sensor.refrigerator_door_temperature_info",
+        )
+    }
+    assert len(device_ids) == 1
+    device_id = device_ids.pop()
+    assert entity_registry.async_get(
+        "binary_sensor.refrigerator_door_open",
+    ).original_icon == "mdi:door-open"
+    device_entry = dr.async_get(hass).async_get(device_id)
+    assert device_entry.name == "Refrigerator Door"
+    assert (COMPONENT_DOMAIN, "refrigerator-door-1") in device_entry.identifiers
+
+
 async def test_presence_motion_helper_retains_detected_state_until_all_sources_clear(hass):
     source_ids = [
         "binary_sensor.entry_motion",
@@ -857,15 +1052,79 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
         "binary_sensor.washer_door",
     ]
     assert info.attributes["configuration"]["platform"] == "sensor"
+    assert info.attributes["diagnostic_type"] == "configuration"
+    assert info.attributes["friendly_name"].endswith("Washer Summary - Configuration")
+    assert info.attributes["icon"] == "mdi:information-outline"
     assert debug_power.state == "150"
+    assert debug_power.attributes["diagnostic_type"] == "source_state"
+    assert debug_power.attributes["source_entity_name"] == "Washer Power"
+    assert debug_power.attributes["friendly_name"].endswith(
+        "Washer Summary - Source 1: Washer Power"
+    )
+    assert debug_power.attributes["icon"] == "mdi:bug-outline"
     assert debug_power.attributes["source_attributes"] == {"unit": "W"}
+    assert debug_power.attributes["source_last_updated"] == hass.states.get(
+        "sensor.washer_power"
+    ).last_updated.isoformat()
+    assert debug_power.attributes["source_last_changed"] == hass.states.get(
+        "sensor.washer_power"
+    ).last_changed.isoformat()
     assert debug_door.state == "on"
     assert debug_door.attributes["source_attributes"] == {"battery": 95}
+
+    hass.states.async_set("sensor.washer_power", "160", {"unit": "W"})
+    await hass.async_block_till_done()
+    debug_power = hass.states.get("sensor.virtual_washer_debug1")
+    source_power = hass.states.get("sensor.washer_power")
+    assert debug_power.state == "160"
+    assert debug_power.attributes["source_last_updated"] == source_power.last_updated.isoformat()
+    assert debug_power.attributes["source_last_changed"] == source_power.last_changed.isoformat()
 
     entity_registry = er.async_get(hass)
     primary_entry = entity_registry.async_get("sensor.virtual_washer")
     assert entity_registry.async_get("sensor.virtual_washer_info").device_id == primary_entry.device_id
     assert entity_registry.async_get("sensor.virtual_washer_debug1").device_id == primary_entry.device_id
+
+
+async def test_diagnostic_registry_defaults_are_migrated_without_overwriting_user_customization(hass):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "diagnostics"},
+    )
+    entry.add_to_hass(hass)
+    entity_registry = er.async_get(hass)
+    diagnostic = entity_registry.async_get_or_create(
+        "sensor",
+        COMPONENT_DOMAIN,
+        "virtual-unique.virtual_layer_diagnostic.info",
+        suggested_object_id="virtual_entity_info",
+        config_entry=entry,
+        original_name="Info",
+        original_icon="mdi:eye-outline",
+    )
+    entity_registry.async_update_entity(
+        diagnostic.entity_id,
+        name="My custom diagnostic name",
+        icon="mdi:star",
+    )
+
+    _async_remove_orphaned_diagnostic_registry_entries(
+        hass,
+        entry,
+        {
+            "sensor": [{
+                ATTR_UNIQUE_ID: diagnostic.unique_id,
+                CONF_NAME: "Virtual Entity - Configuration",
+                CONF_ICON: "mdi:information-outline",
+            }],
+        },
+    )
+
+    migrated = entity_registry.async_get(diagnostic.entity_id)
+    assert migrated.original_name == "Virtual Entity - Configuration"
+    assert migrated.original_icon == "mdi:information-outline"
+    assert migrated.name == "My custom diagnostic name"
+    assert migrated.icon == "mdi:star"
 
 
 async def test_entity_registry_rename_is_restored_to_configured_id(
@@ -969,6 +1228,123 @@ async def test_setup_entry_removes_orphaned_entity_and_device_registry_entries(h
     assert device_registry.async_get_device(
         identifiers={(COMPONENT_DOMAIN, "orphan-device")},
     ) is None
+
+
+async def test_orphan_cleanup_preserves_device_shared_with_another_entry(hass):
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "ui"})
+    shared_entry = MockConfigEntry(domain="test", data={})
+    entry.add_to_hass(hass)
+    shared_entry.add_to_hass(hass)
+    device_registry = dr.async_get(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(COMPONENT_DOMAIN, "shared-device")},
+        name="Shared Device",
+    )
+    device_registry.async_update_device(
+        device.id,
+        add_config_entry_id=shared_entry.entry_id,
+    )
+
+    await _async_delete_virtual_device_from_registry(
+        hass,
+        entry,
+        {ATTR_DEVICE_ID: "shared-device"},
+    )
+
+    remaining = device_registry.async_get(device.id)
+    assert remaining is not None
+    assert entry.entry_id not in remaining.config_entries
+    assert shared_entry.entry_id in remaining.config_entries
+
+
+async def test_setup_entry_removes_stale_device_after_device_id_change(hass, tmp_path, monkeypatch):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {"Laundry": []},
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Laundry": {ATTR_DEVICE_ID: "laundry-new", CONF_NAME: "Laundry"},
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+    device_registry = dr.async_get(hass)
+    device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(COMPONENT_DOMAIN, "laundry-old")},
+        name="Laundry",
+    )
+
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+
+    assert device_registry.async_get_device(
+        identifiers={(COMPONENT_DOMAIN, "laundry-old")},
+    ) is None
+    assert device_registry.async_get_device(
+        identifiers={(COMPONENT_DOMAIN, "laundry-new")},
+    ) is not None
+
+
+async def test_device_id_change_moves_existing_entity_to_new_device(hass, tmp_path, monkeypatch):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entity = {
+        CONF_PLATFORM: "sensor",
+        CONF_NAME: "Washer Phase",
+        ATTR_ENTITY_ID: "sensor.washer_phase",
+        ATTR_ENTITY_KEY: "washer-phase",
+        CONF_INITIAL_VALUE: "idle",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: False,
+    }
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {"Laundry": [entity]},
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Laundry": {ATTR_DEVICE_ID: "laundry-old", CONF_NAME: "Laundry"},
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+    await hass.async_block_till_done()
+    entity_registry = er.async_get(hass)
+    old_device_id = entity_registry.async_get("sensor.washer_phase").device_id
+
+    assert await hass.config_entries.async_unload(entry.entry_id) is True
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            ATTR_DEVICES: {"Laundry": [entity]},
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Laundry": {ATTR_DEVICE_ID: "laundry-new", CONF_NAME: "Laundry"},
+            },
+        },
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+    await hass.async_block_till_done()
+
+    new_device_id = entity_registry.async_get("sensor.washer_phase").device_id
+    assert new_device_id != old_device_id
+    assert (
+        er.async_get(hass).async_get("sensor.washer_phase_info").device_id
+        == new_device_id
+    )
+    assert dr.async_get(hass).async_get(old_device_id) is None
+    assert dr.async_get(hass).async_get(new_device_id) is not None
 
 
 async def test_unload_entry_is_idempotent_when_group_data_is_missing(hass):
@@ -1314,6 +1690,37 @@ async def test_direct_jinja_template_reacts_without_explicit_source_list(hass):
 
     assert entity._attr_state == "17"
     await entity.async_will_remove_from_hass()
+
+
+async def test_state_only_entity_registry_preserves_configured_icon(hass, tmp_path, monkeypatch):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Virtual Tag": [{
+                    CONF_PLATFORM: "tag",
+                    CONF_NAME: "Protected Tag",
+                    ATTR_ENTITY_ID: "tag.protected_tag",
+                    CONF_ICON: "mdi:tag-heart",
+                    CONF_INITIAL_VALUE: "ready",
+                    CONF_INITIAL_AVAILABILITY: True,
+                    CONF_PERSISTENT: False,
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+    registry_entry = er.async_get(hass).async_get("tag.protected_tag")
+    assert registry_entry is not None
+    assert registry_entry.original_icon == "mdi:tag-heart"
 
 
 async def test_state_only_entity_updates_composite_templates(hass, tmp_path, monkeypatch):

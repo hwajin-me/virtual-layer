@@ -194,10 +194,24 @@ Example washer-style virtual sensor:
 {% endif %}
 ```
 
-Home Assistant does not provide a dedicated `washer` entity domain. Model
-appliances such as washers by creating multiple virtual entities under one
-Virtual Layer device, for example a state sensor, a door binary sensor, and a
-power switch.
+Home Assistant does not provide dedicated `washer`, `dryer`, or `pump` entity
+domains. Model these appliances by creating multiple virtual entities under
+one Virtual Layer device, for example a state sensor, a door binary sensor,
+and a power switch. Washer and dryer status metadata such as `program`,
+`remaining_time`, and `door_locked` can be supplied through the UI's Domain
+options JSON and is exposed as sensor attributes. A pump can use a virtual
+`switch` or `valve` depending on whether it needs position/open-close control.
+
+Humidifiers support both `humidifier` and `dehumidifier` device classes,
+humidity targets, modes, and native turn-on/turn-off commands. Electrical
+sensor and number values support power (`kW`), energy (`kWh`), current (`A`),
+voltage (`V`), apparent power (`VA`), reactive power (`var`), and power factor
+(`%`) with automatic units unless a custom unit is supplied.
+
+Image entities support a single source-image alias, a local file, or an image
+URL and expose the native image bytes/content type. Camera and image entities
+cannot be combined into a multi-source helper because binary media cannot be
+meaningfully concatenated or averaged.
 
 ## Cameras
 
@@ -259,21 +273,23 @@ was updated.
 Domain-specific virtual behavior is implemented for:
 
 `binary_sensor`, `camera`, `climate`, `cover`, `device_tracker`, `fan`,
-`humidifier`, `light`, `lock`, `number`, `sensor`, `switch`, and `valve`.
+`humidifier`, `image`, `light`, `lock`, `number`, `sensor`, `switch`, `vacuum`,
+and `valve`.
 
 Generic state-backed virtual entities are available for:
 
 `ai_task`, `air_quality`, `alarm_control_panel`, `assist_satellite`, `button`,
 `calendar`, `conversation`, `date`, `datetime`, `event`, `geolocation`,
-`image`, `image_processing`, `infrared`, `lawn_mower`, `media_player`,
+`image_processing`, `infrared`, `lawn_mower`, `media_player`,
 `notify`, `radio_frequency`, `remote`, `scene`, `select`, `siren`, `stt`,
-`tag`, `text`, `time`, `todo`, `tts`, `update`, `vacuum`, `wake_word`,
-`water_heater`, and `weather`.
+`tag`, `text`, `time`, `todo`, `tts`, `update`, `wake_word`, `water_heater`,
+and `weather`.
 
-Generic entities support state, availability, persistence, device attachment,
-attributes, source entities, templates, and pull refresh. Domain-specific
-service behavior can be added later without changing the UI-backed storage
-shape.
+Generic state-backed virtual entities support state, availability, persistence,
+device attachment, attributes, source entities, templates, and pull refresh.
+The virtual vacuum additionally exposes native HA activity states and start,
+pause, stop, return-to-base, spot-clean, locate, fan-speed, and send-command
+services.
 
 ## Services
 

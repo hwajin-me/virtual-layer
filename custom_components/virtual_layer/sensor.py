@@ -18,6 +18,7 @@ from homeassistant.const import (
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     CONCENTRATION_PARTS_PER_MILLION,
     CONF_UNIT_OF_MEASUREMENT,
+    CONF_ICON,
     LIGHT_LUX,
     PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS,
@@ -30,6 +31,7 @@ from homeassistant.const import (
     UnitOfPressure,
     UnitOfReactivePower,
     UnitOfVolume,
+    UnitOfVolumeFlowRate,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
@@ -39,6 +41,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import _assert_managed_virtual_entity, get_entity_configs, get_entity_from_domain
 from .const import *
+from .const import generic_entity_options
 from .entity import VirtualEntity, virtual_schema
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,13 +53,15 @@ DEFAULT_SENSOR_VALUE = "0"
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(virtual_schema(DEFAULT_SENSOR_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
     vol.Optional(CONF_DIAGNOSTIC_SOURCE_ENTITY): cv.entity_id,
+    vol.Optional(CONF_ICON): cv.string,
     vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
 }))
 SENSOR_SCHEMA = vol.Schema(virtual_schema(DEFAULT_SENSOR_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
     vol.Optional(CONF_DIAGNOSTIC_SOURCE_ENTITY): cv.entity_id,
+    vol.Optional(CONF_ICON): cv.string,
     vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
-}))
+}), extra=vol.ALLOW_EXTRA)
 
 SERVICE_SET = "set"
 SERVICE_SCHEMA = vol.Schema({
@@ -91,6 +96,11 @@ UNITS_OF_MEASUREMENT = {
     SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS: CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,  # µg/m³ of vocs
     SensorDeviceClass.VOLTAGE: UnitOfElectricPotential.VOLT,  # voltage (V)
     SensorDeviceClass.GAS: UnitOfVolume.CUBIC_METERS,  # gas (m³)
+    SensorDeviceClass.MOISTURE: PERCENTAGE,  # moisture percentage
+    SensorDeviceClass.VOLUME: UnitOfVolume.CUBIC_METERS,  # volume (m³)
+    SensorDeviceClass.VOLUME_FLOW_RATE: UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
+    SensorDeviceClass.VOLUME_STORAGE: UnitOfVolume.CUBIC_METERS,
+    SensorDeviceClass.WATER: UnitOfVolume.LITERS,  # water consumption (L)
 }
 
 
@@ -146,6 +156,8 @@ class VirtualSensor(VirtualEntity, Entity):
         super().__init__(config, PLATFORM_DOMAIN, old_style)
 
         self._attr_device_class = config.get(CONF_CLASS)
+        self._attr_icon = config.get(CONF_ICON)
+        self._domain_options = generic_entity_options(config)
 
         # Set unit of measurement
         self._attr_unit_of_measurement = config.get(CONF_UNIT_OF_MEASUREMENT)
@@ -172,6 +184,7 @@ class VirtualSensor(VirtualEntity, Entity):
                 (ATTR_UNIT_OF_MEASUREMENT, self._attr_unit_of_measurement),
             ) if value is not None
         })
+        self._attr_extra_state_attributes.update(self._domain_options)
 
     def set(self, value) -> None:
         _LOGGER.debug(f"set {self.name} to {value}")
@@ -196,11 +209,15 @@ class VirtualDiagnosticSensor(VirtualSensor):
             self._attr_extra_state_attributes.update({
                 "source_state": None,
                 "source_attributes": {},
+                "source_last_updated": None,
+                "source_last_changed": None,
             })
             return
         self._attr_extra_state_attributes.update({
             "source_state": source_state.state,
             "source_attributes": dict(source_state.attributes),
+            "source_last_updated": source_state.last_updated.isoformat(),
+            "source_last_changed": source_state.last_changed.isoformat(),
         })
 
 

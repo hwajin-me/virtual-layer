@@ -5,7 +5,7 @@ from datetime import timedelta
 from types import MappingProxyType, SimpleNamespace
 
 import pytest
-from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME, CONF_PLATFORM
+from homeassistant.const import ATTR_ENTITY_ID, CONF_ICON, CONF_NAME, CONF_PLATFORM
 from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
 
@@ -40,6 +40,7 @@ from custom_components.virtual_layer.config_flow import (
     _entity_form_defaults,
     _entity_key,
     _entity_key_from_stable_key,
+    _managed_device_choices,
     _entity_schema,
     _find_backup_group_for_entry,
     _find_entity_by_selection_key,
@@ -49,6 +50,7 @@ from custom_components.virtual_layer.config_flow import (
     _reference_edit_defaults,
     _reference_entity_defaults,
     _replace_ui_entity,
+    _replace_ui_device,
     _set_auto_helper_profile,
 )
 from custom_components.virtual_layer.const import (
@@ -395,6 +397,29 @@ def test_reference_entity_defaults_ignores_unknown_number_in_initial_average(has
     assert defaults[CONF_INITIAL_VALUE] == "30.0"
 
 
+def test_reference_entity_defaults_preserves_water_usage_class_and_unit(hass):
+    hass.states.async_set(
+        "sensor.water_meter_one",
+        "12",
+        {"device_class": "water", "unit_of_measurement": "L"},
+    )
+    hass.states.async_set(
+        "sensor.water_meter_two",
+        "8",
+        {"device_class": "water", "unit_of_measurement": "L"},
+    )
+
+    defaults = _reference_entity_defaults(hass, [
+        "sensor.water_meter_one",
+        "sensor.water_meter_two",
+    ])
+
+    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+        "class": "water",
+        "unit_of_measurement": "L",
+    }
+
+
 def test_reference_entity_defaults_combines_string_sources_with_concat_template(hass):
     hass.states.async_set("sensor.washer_phase", "wash")
     hass.states.async_set("sensor.washer_mode", "eco")
@@ -632,6 +657,15 @@ def test_build_camera_alias_adds_source_subscription_and_state_template():
     assert entity[CONF_VALUE_TEMPLATE] == "{{ states('camera.front_door') }}"
 
 
+def test_build_entity_config_accepts_common_icon_for_native_domains():
+    _, entity = _build_entity_config(_entity_input({
+        CONF_PLATFORM: "binary_sensor",
+        CONF_ICON: "mdi:door-open",
+    }))
+
+    assert entity[CONF_ICON] == "mdi:door-open"
+
+
 def test_build_camera_alias_rejects_non_camera_source():
     with pytest.raises(InvalidDomainOptions):
         _build_entity_config(_entity_input({
@@ -855,6 +889,36 @@ def test_append_ui_entity_stores_device_attributes():
     }
 
 
+def test_append_ui_entity_reuses_existing_device_with_matching_device_id():
+    options = {
+        ATTR_DEVICES: {
+            "Refrigerator Door": [{CONF_PLATFORM: "binary_sensor"}],
+        },
+        ATTR_DEVICE_ATTRIBUTES: {
+            "Refrigerator Door": {
+                ATTR_DEVICE_ID: "refrigerator-door-1",
+                CONF_NAME: "Refrigerator Door",
+            },
+        },
+    }
+
+    next_options = _append_ui_entity(
+        options,
+        "A Different Display Name",
+        {CONF_PLATFORM: "sensor", CONF_NAME: "Temperature"},
+        {
+            ATTR_DEVICE_ID: "refrigerator-door-1",
+            CONF_NAME: "A Different Display Name",
+        },
+    )
+
+    assert list(next_options[ATTR_DEVICES]) == ["Refrigerator Door"]
+    assert len(next_options[ATTR_DEVICES]["Refrigerator Door"]) == 2
+    assert next_options[ATTR_DEVICE_ATTRIBUTES]["Refrigerator Door"][CONF_NAME] == (
+        "Refrigerator Door"
+    )
+
+
 def test_append_ui_entity_accepts_home_assistant_read_only_options():
     original = MappingProxyType({
         ATTR_DEVICES: MappingProxyType({
@@ -949,10 +1013,112 @@ def test_options_schema_allows_deleting_but_not_editing_invalid_stored_entity():
     assert action_selector.config["options"] == [
         "add_entity",
         "delete_entity",
+        "manage_devices",
         "backup_devices",
         "restore_devices",
         "finish",
     ]
+
+
+def test_managed_device_choices_show_stable_id_and_entity_count():
+    choices = _managed_device_choices({
+        ATTR_DEVICES: {
+            "Laundry": [{CONF_PLATFORM: "sensor"}, {CONF_PLATFORM: "binary_sensor"}],
+        },
+        ATTR_DEVICE_ATTRIBUTES: {
+            "Laundry": {ATTR_DEVICE_ID: "laundry-1"},
+        },
+    })
+
+    assert choices == {"Laundry": "Laundry (laundry-1, 2 entities)"}
+
+
+def test_replace_ui_device_renames_group_and_updates_shared_metadata():
+    original = {
+        ATTR_DEVICES: {
+            "Laundry": [
+                {CONF_PLATFORM: "sensor", CONF_NAME: "Washer Phase"},
+                {CONF_PLATFORM: "binary_sensor", CONF_NAME: "Washer Door"},
+            ],
+        },
+        ATTR_DEVICE_ATTRIBUTES: {
+            "Laundry": {ATTR_DEVICE_ID: "laundry-old", CONF_NAME: "Laundry"},
+        },
+    }
+
+    next_options = _replace_ui_device(
+        original,
+        "Laundry",
+        "Laundry Room",
+        {
+            ATTR_DEVICE_ID: "laundry-new",
+            CONF_NAME: "Laundry Room",
+            CONF_MANUFACTURER: "Acme",
+        },
+    )
+
+    assert "Laundry" not in next_options[ATTR_DEVICES]
+    assert len(next_options[ATTR_DEVICES]["Laundry Room"]) == 2
+    assert next_options[ATTR_DEVICE_ATTRIBUTES]["Laundry Room"] == {
+        ATTR_DEVICE_ID: "laundry-new",
+        CONF_NAME: "Laundry Room",
+        CONF_MANUFACTURER: "Acme",
+    }
+    assert original[ATTR_DEVICE_ATTRIBUTES]["Laundry"][ATTR_DEVICE_ID] == "laundry-old"
+
+
+def test_replace_ui_device_merges_matching_stable_device_id_without_overwrite():
+    original = {
+        ATTR_DEVICES: {
+            "Washer": [{CONF_PLATFORM: "sensor", CONF_NAME: "Phase"}],
+            "Laundry": [{CONF_PLATFORM: "binary_sensor", CONF_NAME: "Door"}],
+        },
+        ATTR_DEVICE_ATTRIBUTES: {
+            "Washer": {ATTR_DEVICE_ID: "washer-1", CONF_NAME: "Washer"},
+            "Laundry": {
+                ATTR_DEVICE_ID: "laundry-1",
+                CONF_NAME: "Laundry",
+                CONF_MANUFACTURER: "TCL",
+            },
+        },
+    }
+
+    next_options = _replace_ui_device(
+        original,
+        "Washer",
+        "Washer Renamed",
+        {ATTR_DEVICE_ID: "laundry-1", CONF_NAME: "Washer Renamed"},
+    )
+
+    assert "Washer" not in next_options[ATTR_DEVICES]
+    assert [entity[CONF_NAME] for entity in next_options[ATTR_DEVICES]["Laundry"]] == [
+        "Door",
+        "Phase",
+    ]
+    assert next_options[ATTR_DEVICE_ATTRIBUTES]["Laundry"][CONF_MANUFACTURER] == "TCL"
+
+
+def test_replace_ui_device_merges_matching_id_when_device_name_is_unchanged():
+    original = {
+        ATTR_DEVICES: {
+            "Washer": [{CONF_PLATFORM: "sensor", CONF_NAME: "Phase"}],
+            "Laundry": [{CONF_PLATFORM: "binary_sensor", CONF_NAME: "Door"}],
+        },
+        ATTR_DEVICE_ATTRIBUTES: {
+            "Washer": {ATTR_DEVICE_ID: "washer-1", CONF_NAME: "Washer"},
+            "Laundry": {ATTR_DEVICE_ID: "laundry-1", CONF_NAME: "Laundry"},
+        },
+    }
+
+    next_options = _replace_ui_device(
+        original,
+        "Washer",
+        "Washer",
+        {ATTR_DEVICE_ID: "laundry-1", CONF_NAME: "Washer"},
+    )
+
+    assert "Washer" not in next_options[ATTR_DEVICES]
+    assert len(next_options[ATTR_DEVICES]["Laundry"]) == 2
 
 
 def test_replace_ui_entity_updates_existing_entity_without_mutating_options():

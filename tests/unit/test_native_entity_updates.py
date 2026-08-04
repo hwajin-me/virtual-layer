@@ -5,6 +5,11 @@ from unittest.mock import Mock
 import pytest
 
 from homeassistant.const import ATTR_ENTITY_ID
+from homeassistant.components.vacuum import (
+    StateVacuumEntity,
+    VacuumActivity,
+    VacuumEntityFeature,
+)
 
 from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
 from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClimate
@@ -21,6 +26,7 @@ from custom_components.virtual_layer.humidifier import (
 from custom_components.virtual_layer.light import LIGHT_SCHEMA, VirtualLight
 from custom_components.virtual_layer.lock import LOCK_SCHEMA, VirtualLock
 from custom_components.virtual_layer.switch import SWITCH_SCHEMA, VirtualSwitch
+from custom_components.virtual_layer.vacuum import VACUUM_SCHEMA, VirtualVacuum
 
 
 pytestmark = pytest.mark.unit
@@ -78,3 +84,58 @@ async def test_native_commands_write_the_new_state(entity, command):
     await command(entity)
 
     entity.async_write_ha_state.assert_called_once()
+
+
+async def test_virtual_vacuum_exposes_state_and_native_commands():
+    entity = VirtualVacuum(
+        VACUUM_SCHEMA({
+            CONF_NAME: "Robot Vacuum",
+            ATTR_ENTITY_ID: "vacuum.robot_vacuum",
+            ATTR_UNIQUE_ID: "robot_vacuum.unique",
+            CONF_INITIAL_VALUE: "docked",
+            "battery_level": 82,
+            "fan_speed_list": ["quiet", "standard", "turbo"],
+        }),
+        False,
+    )
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    assert isinstance(entity, StateVacuumEntity)
+    assert entity.state == VacuumActivity.DOCKED
+    assert VacuumEntityFeature.START in entity.supported_features
+    assert VacuumEntityFeature.FAN_SPEED in entity.supported_features
+    assert entity.battery_level == 82
+
+    await entity.async_start()
+    assert entity.state == VacuumActivity.CLEANING
+    await entity.async_pause()
+    assert entity.state == VacuumActivity.PAUSED
+    await entity.async_return_to_base()
+    assert entity.state == VacuumActivity.RETURNING
+    await entity.async_set_fan_speed("turbo")
+    assert entity.fan_speed == "turbo"
+    await entity.async_send_command("clean_room", params={"room": 1})
+    assert entity.extra_state_attributes["last_command"] == {
+        "command": "clean_room",
+        "params": {"room": 1},
+    }
+    assert entity.async_write_ha_state.call_count == 5
+
+
+async def test_virtual_vacuum_rejects_unknown_fan_speed():
+    entity = VirtualVacuum(
+        VACUUM_SCHEMA({
+            CONF_NAME: "Robot Vacuum",
+            ATTR_ENTITY_ID: "vacuum.robot_vacuum_invalid",
+            ATTR_UNIQUE_ID: "robot_vacuum_invalid.unique",
+            CONF_INITIAL_VALUE: "idle",
+            "fan_speed_list": ["quiet"],
+        }),
+        False,
+    )
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    with pytest.raises(ValueError):
+        await entity.async_set_fan_speed("turbo")

@@ -21,7 +21,7 @@ from homeassistant.helpers.event import (
 )
 from homeassistant.helpers.service import verify_domain_control
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID
+from homeassistant.const import ATTR_ENTITY_ID, CONF_ICON
 from homeassistant.core import (
     HomeAssistant,
     callback
@@ -40,7 +40,7 @@ from .cfg import (
 )
 
 
-__version__ = '1.0.2'
+__version__ = '1.0.3'
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -169,6 +169,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     platforms = _entry_platforms_from_entities(vcfg.entities)
     if platforms:
         await hass.config_entries.async_forward_entry_setups(entry, platforms)
+    _async_remove_inactive_virtual_devices(hass, entry, active_device_ids)
 
     # Install service handlers.
     _async_register_virtual_services(hass)
@@ -226,21 +227,33 @@ def _async_remove_entry_registry_entries(hass: HomeAssistant, entry: ConfigEntry
 
 @callback
 def _async_remove_orphaned_diagnostic_registry_entries(hass, entry, entities) -> None:
-    """Remove diagnostics whose parent virtual entity was deleted or renamed."""
-    active_unique_ids = {
-        entity.get(ATTR_UNIQUE_ID)
-        for entity in entities.get("sensor", [])
+    """Synchronize diagnostic registry defaults and remove obsolete diagnostics."""
+    sensor_entities = entities.get("sensor", []) if isinstance(entities, Mapping) else []
+    active_diagnostics = {
+        entity[ATTR_UNIQUE_ID]: entity
+        for entity in sensor_entities
         if isinstance(entity, Mapping)
         and isinstance(entity.get(ATTR_UNIQUE_ID), str)
         and DIAGNOSTIC_UNIQUE_ID_MARKER in entity[ATTR_UNIQUE_ID]
     }
     entity_registry = er.async_get(hass)
     for entity_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
-        if (
-            DIAGNOSTIC_UNIQUE_ID_MARKER in entity_entry.unique_id
-            and entity_entry.unique_id not in active_unique_ids
-        ):
+        if DIAGNOSTIC_UNIQUE_ID_MARKER not in entity_entry.unique_id:
+            continue
+        diagnostic = active_diagnostics.get(entity_entry.unique_id)
+        if diagnostic is None:
             entity_registry.async_remove(entity_entry.entity_id)
+            continue
+
+        updates = {}
+        diagnostic_name = diagnostic.get(CONF_NAME)
+        if isinstance(diagnostic_name, str) and entity_entry.original_name != diagnostic_name:
+            updates["original_name"] = diagnostic_name
+        diagnostic_icon = diagnostic.get(CONF_ICON)
+        if isinstance(diagnostic_icon, str) and entity_entry.original_icon != diagnostic_icon:
+            updates["original_icon"] = diagnostic_icon
+        if updates:
+            entity_registry.async_update_entity(entity_entry.entity_id, **updates)
 
 
 @callback
@@ -615,6 +628,7 @@ def _async_register_state_only_entity(hass, entry, entity) -> str | None:
         suggested_object_id=_state_only_suggested_object_id(entity_id),
         config_entry=entry,
         device_id=device_id,
+        original_icon=entity.get(CONF_ICON),
     )
     entity[ATTR_ENTITY_ID] = entity_entry.entity_id
     return entity_entry.entity_id
@@ -1022,8 +1036,39 @@ async def _async_get_or_create_virtual_device_in_registry(
     )
 
 
+@callback
+def _async_remove_inactive_virtual_devices(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    active_device_ids: set[str],
+) -> None:
+    """Remove old Device registry entries after a Device ID is changed.
+
+    Entity metadata is intentionally stable across Device ID changes, so it
+    cannot be used alone to identify an old Device. Inspecting the registry
+    entry ownership closes that gap without touching Devices used by another
+    config entry.
+    """
+    registry = dr.async_get(hass)
+    for device_entry in dr.async_entries_for_config_entry(registry, entry.entry_id):
+        virtual_ids = {
+            identifier[1]
+            for identifier in device_entry.identifiers
+            if identifier[0] == COMPONENT_DOMAIN
+        }
+        if not virtual_ids or virtual_ids & active_device_ids:
+            continue
+        if len(device_entry.config_entries) <= 1:
+            registry.async_remove_device(device_entry.id)
+        else:
+            registry.async_update_device(
+                device_entry.id,
+                remove_config_entry_id=entry.entry_id,
+            )
+
+
 async def _async_delete_virtual_device_from_registry(
-        hass: HomeAssistant, _entry: ConfigEntry, device
+        hass: HomeAssistant, entry: ConfigEntry, device
 ) -> None:
     device_id = device.get(ATTR_DEVICE_ID)
     if not device_id:
@@ -1036,7 +1081,13 @@ async def _async_delete_virtual_device_from_registry(
     )
     if device_in_registry:
         _LOGGER.debug(f"found something to delete! {device_in_registry.id}")
-        registery.async_remove_device(device_in_registry.id)
+        if len(device_in_registry.config_entries) <= 1:
+            registery.async_remove_device(device_in_registry.id)
+        else:
+            registery.async_update_device(
+                device_in_registry.id,
+                remove_config_entry_id=entry.entry_id,
+            )
     else:
         _LOGGER.info(f"have orphaned device in meta {device_id}")
 

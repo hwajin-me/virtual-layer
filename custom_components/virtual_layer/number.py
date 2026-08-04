@@ -31,6 +31,7 @@ from homeassistant.const import (
     UnitOfPressure,
     UnitOfReactivePower,
     UnitOfVolume,
+    UnitOfVolumeFlowRate,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
@@ -89,6 +90,11 @@ UNITS_OF_MEASUREMENT = {
     NumberDeviceClass.VOLATILE_ORGANIC_COMPOUNDS: CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,  # µg/m³ of vocs
     NumberDeviceClass.VOLTAGE: UnitOfElectricPotential.VOLT,  # voltage (V)
     NumberDeviceClass.GAS: UnitOfVolume.CUBIC_METERS,  # gas (m³)
+    NumberDeviceClass.MOISTURE: PERCENTAGE,  # moisture percentage
+    NumberDeviceClass.VOLUME: UnitOfVolume.CUBIC_METERS,  # volume (m³)
+    NumberDeviceClass.VOLUME_FLOW_RATE: UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
+    NumberDeviceClass.VOLUME_STORAGE: UnitOfVolume.CUBIC_METERS,
+    NumberDeviceClass.WATER: UnitOfVolume.LITERS,  # water consumption (L)
 }
 
 
