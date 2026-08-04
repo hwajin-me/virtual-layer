@@ -2,24 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import copy
 import json
 import logging
+import re
+from collections.abc import Mapping
+from importlib import import_module
 from typing import Any
 
-import voluptuous as vol
-
-from homeassistant import config_entries, exceptions
 import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers import selector
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME, CONF_PLATFORM
-from homeassistant.core import callback
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
+import voluptuous as vol
+from homeassistant import config_entries, exceptions
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME, CONF_PLATFORM
+from homeassistant.core import callback
+from homeassistant.helpers import selector
 from homeassistant.util import slugify
 
-from .const import *
 from .cfg import (
     async_build_entry_backup,
     async_load_backup,
@@ -27,6 +27,7 @@ from .cfg import (
     clone_entities_with_new_keys,
     make_entity_key,
 )
+from .const import *
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ CONF_DEVICE_ID = "device_id"
 CONF_DEVICE_MANUFACTURER = "device_manufacturer"
 CONF_DEVICE_MODEL = "device_model"
 CONF_DEVICE_SW_VERSION = "device_sw_version"
+CONF_DOMAIN_OPTIONS_JSON = "domain_options_json"
 CONF_DEVICE_HW_VERSION = "device_hw_version"
 CONF_DEVICE_SERIAL_NUMBER = "device_serial_number"
 CONF_ENTITY_NAME = "entity_name"
@@ -48,6 +50,19 @@ CONF_ENTITY_KEYS = "entity_keys"
 CONF_REFERENCE_ENTITY_ID = "reference_entity_id"
 CONF_SOURCE_ENTITIES_TEXT = "source_entities_text"
 CONF_TEMPLATE_SOURCES_JSON = "template_sources_json"
+CAMERA_SOURCE_ENTITY_OPTION = "source_entity"
+
+_AUTO_HELPER_PROFILE_FIELDS = (
+    CONF_PLATFORM,
+    CONF_INITIAL_VALUE,
+    CONF_SOURCE_ENTITIES_TEXT,
+    CONF_TEMPLATE_SOURCES_JSON,
+    CONF_VALUE_TEMPLATE,
+    CONF_ATTRIBUTES_JSON,
+    CONF_ATTRIBUTE_SOURCES_JSON,
+    CONF_ATTRIBUTE_TEMPLATES_JSON,
+    CONF_DOMAIN_OPTIONS_JSON,
+)
 
 ACTION_ADD_ENTITY = "add_entity"
 ACTION_BACKUP_DEVICES = "backup_devices"
@@ -60,6 +75,45 @@ DEFAULT_ENTITY_DOMAIN = "sensor"
 DEFAULT_ENTITY_VALUE = "unknown"
 DEFAULT_NUMBER_MIN = 0
 DEFAULT_NUMBER_MAX = 100
+DEFAULT_INITIAL_VALUES = {
+    "climate": "off",
+}
+CLIMATE_INITIAL_VALUES = {
+    "off",
+    "heat",
+    "cool",
+    "heat_cool",
+    "auto",
+    "dry",
+    "fan_only",
+}
+
+_DOMAIN_OPTION_RESERVED_KEYS = {
+    ATTR_ENTITY_ID,
+    ATTR_ENTITY_KEY,
+    ATTR_FRIENDLY_NAME,
+    ATTR_UNIQUE_ID,
+    CONF_PLATFORM,
+    CONF_NAME,
+    CONF_INITIAL_VALUE,
+    CONF_INITIAL_AVAILABILITY,
+    CONF_PERSISTENT,
+    CONF_SOURCE_ENTITIES,
+    CONF_TEMPLATE_SOURCES,
+    CONF_PULL_INTERVAL,
+    CONF_VALUE_TEMPLATE,
+    CONF_AVAILABILITY_TEMPLATE,
+    CONF_ATTRIBUTES,
+    CONF_AUTO_HELPER,
+    CONF_ATTRIBUTE_SOURCES,
+    CONF_ATTRIBUTE_TEMPLATES,
+    ATTR_DEVICE_ID,
+    CONF_MANUFACTURER,
+    CONF_MODEL,
+    CONF_SW_VERSION,
+    CONF_HW_VERSION,
+    CONF_SERIAL_NUMBER,
+}
 
 MULTILINE_TEXT_SELECTOR = selector.TextSelector(
     selector.TextSelectorConfig(multiline=True),
@@ -91,8 +145,40 @@ DATE_SOURCE_DOMAINS = {"date"}
 TIME_SOURCE_DOMAINS = {"time"}
 DATETIME_SOURCE_DOMAINS = {"datetime"}
 ENUM_SOURCE_DOMAINS = {"input_select", "select"}
-LOCATION_SOURCE_DOMAINS = {"device_tracker", "person"}
+LOCATION_SOURCE_DOMAINS = {"device_tracker", "geolocation", "person"}
+LOCATION_HELPER_DISTANCE_METERS = 300
+LOCATION_HELPER_PRIORITY_WINDOW_SECONDS = 30 * 60
 UNKNOWN_STATES = {"", "none", "unknown", "unavailable"}
+TEMPLATE_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+JINJA_RESERVED_VARIABLE_NAMES = {
+    "and",
+    "as",
+    "block",
+    "elif",
+    "else",
+    "endblock",
+    "endfilter",
+    "endfor",
+    "endif",
+    "endmacro",
+    "endset",
+    "endwith",
+    "false",
+    "filter",
+    "for",
+    "from",
+    "if",
+    "import",
+    "in",
+    "is",
+    "macro",
+    "none",
+    "not",
+    "or",
+    "set",
+    "true",
+    "with",
+}
 
 def _options_schema(options: dict[str, Any]) -> vol.Schema:
     actions = [ACTION_ADD_ENTITY]
@@ -162,6 +248,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         vol.Optional(CONF_ATTRIBUTES_JSON, default=defaults.get(CONF_ATTRIBUTES_JSON, "")): MULTILINE_TEXT_SELECTOR,
         vol.Optional(CONF_ATTRIBUTE_SOURCES_JSON, default=defaults.get(CONF_ATTRIBUTE_SOURCES_JSON, "")): MULTILINE_TEXT_SELECTOR,
         vol.Optional(CONF_ATTRIBUTE_TEMPLATES_JSON, default=defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "")): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(CONF_DOMAIN_OPTIONS_JSON, default=defaults.get(CONF_DOMAIN_OPTIONS_JSON, "")): MULTILINE_TEXT_SELECTOR,
     })
 
 
@@ -182,20 +269,25 @@ def _parse_source_entities(value: str) -> list[str]:
         return []
     raw_entities = value.replace(",", "\n").splitlines()
     try:
-        return [
+        source_entities = [
             cv.entity_id(entity_id.strip())
             for entity_id in raw_entities
             if entity_id.strip()
         ]
     except vol.Invalid as err:
         raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT) from err
+    return list(dict.fromkeys(source_entities))
 
 
 def _parse_attribute_sources(value: str) -> dict[str, dict[str, str]]:
     parsed = _parse_json_object(value, CONF_ATTRIBUTE_SOURCES_JSON)
     attribute_sources = {}
     for target_attribute, source in parsed.items():
-        if not isinstance(target_attribute, str) or not target_attribute.strip():
+        if (
+            not isinstance(target_attribute, str)
+            or not target_attribute.strip()
+            or target_attribute.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+        ):
             raise InvalidJson(CONF_ATTRIBUTE_SOURCES_JSON)
 
         attribute_sources[target_attribute.strip()] = _parse_source_reference(
@@ -209,7 +301,11 @@ def _parse_template_sources(value: str) -> dict[str, dict[str, str]]:
     parsed = _parse_json_object(value, CONF_TEMPLATE_SOURCES_JSON)
     template_sources = {}
     for variable_name, source in parsed.items():
-        if not isinstance(variable_name, str) or not variable_name.strip():
+        if (
+            not isinstance(variable_name, str)
+            or not TEMPLATE_VARIABLE_NAME.fullmatch(variable_name.strip())
+            or variable_name.strip().casefold() in JINJA_RESERVED_VARIABLE_NAMES
+        ):
             raise InvalidJson(CONF_TEMPLATE_SOURCES_JSON)
         template_sources[variable_name.strip()] = _parse_source_reference(
             source,
@@ -217,6 +313,45 @@ def _parse_template_sources(value: str) -> dict[str, dict[str, str]]:
             default_attribute="state",
         )
     return template_sources
+
+
+def _parse_domain_options(value: str) -> dict[str, Any]:
+    domain_options = _parse_json_object(value, CONF_DOMAIN_OPTIONS_JSON)
+    if any(key in _DOMAIN_OPTION_RESERVED_KEYS for key in domain_options):
+        raise InvalidJson(CONF_DOMAIN_OPTIONS_JSON)
+    return domain_options
+
+
+def _platform_schema(platform: str):
+    module = import_module(f".{platform}", __package__)
+    return getattr(module, f"{platform.upper()}_SCHEMA", None) or module.ENTITY_SCHEMA
+
+
+def _platform_validator(platform: str):
+    """Load the platform schema and optional domain validator."""
+    module = import_module(f".{platform}", __package__)
+    schema = getattr(module, f"{platform.upper()}_SCHEMA", None) or module.ENTITY_SCHEMA
+    return schema, getattr(module, "validate_domain_options", None)
+
+
+def _validate_platform_entity(
+    entity: dict[str, Any],
+    schema=None,
+    validate_domain_options=None,
+) -> None:
+    platform = entity[CONF_PLATFORM]
+    schema_entity = dict(entity)
+    schema_entity.pop(CONF_PLATFORM, None)
+    try:
+        if schema is None:
+            schema = _platform_schema(platform)
+            module = import_module(f".{platform}", __package__)
+            validate_domain_options = getattr(module, "validate_domain_options", None)
+        schema(schema_entity)
+        if validate_domain_options:
+            validate_domain_options(schema_entity)
+    except (AttributeError, ImportError, TypeError, ValueError, vol.Invalid) as err:
+        raise InvalidDomainOptions from err
 
 
 def _parse_source_reference(source, field_name: str, default_attribute: str | None = None) -> dict[str, str]:
@@ -254,7 +389,135 @@ def _parse_source_reference(source, field_name: str, default_attribute: str | No
     }
 
 
-def _build_entity_config(user_input: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _validate_entity_references(entity: dict[str, Any]) -> None:
+    """Reject explicit source references back to the virtual entity itself."""
+    entity_id = entity.get(ATTR_ENTITY_ID)
+    if not entity_id:
+        return
+    if entity_id in entity.get(CONF_SOURCE_ENTITIES, []):
+        raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
+    for field_name, sources in (
+        (CONF_ATTRIBUTE_SOURCES_JSON, entity.get(CONF_ATTRIBUTE_SOURCES, {})),
+        (CONF_TEMPLATE_SOURCES_JSON, entity.get(CONF_TEMPLATE_SOURCES, {})),
+    ):
+        if any(
+            source.get(ATTR_ENTITY_ID) == entity_id
+            for source in sources.values()
+        ):
+            raise InvalidEntityReference(field_name)
+
+
+def _virtual_entity_id(entity: Mapping) -> str | None:
+    """Return the configured or deterministic entity id for a UI entity."""
+    platform = entity.get(CONF_PLATFORM)
+    if platform not in VIRTUAL_ENTITY_DOMAINS:
+        return None
+
+    entity_id = entity.get(ATTR_ENTITY_ID)
+    if isinstance(entity_id, str) and entity_id:
+        try:
+            entity_id = cv.entity_id(entity_id)
+        except vol.Invalid:
+            return None
+        return entity_id if entity_id.startswith(f"{platform}.") else None
+
+    name = entity.get(CONF_NAME)
+    if not isinstance(name, str) or not name:
+        return None
+    if name.startswith("+"):
+        return f"{platform}.{COMPONENT_DOMAIN}_{slugify(name[1:])}"
+    return f"{platform}.{slugify(name)}"
+
+
+def _entity_dependency_sources(entity: Mapping) -> dict[str, str]:
+    """Return explicit source entities and the field that configured each one."""
+    sources = {}
+    source_entities = entity.get(CONF_SOURCE_ENTITIES, [])
+    if isinstance(source_entities, (list, tuple, set)):
+        for entity_id in source_entities:
+            if isinstance(entity_id, str):
+                sources[entity_id] = CONF_SOURCE_ENTITIES_TEXT
+
+    for field_name, source_group in (
+        (CONF_ATTRIBUTE_SOURCES_JSON, entity.get(CONF_ATTRIBUTE_SOURCES, {})),
+        (CONF_TEMPLATE_SOURCES_JSON, entity.get(CONF_TEMPLATE_SOURCES, {})),
+    ):
+        if not isinstance(source_group, Mapping):
+            continue
+        for source in source_group.values():
+            if isinstance(source, Mapping) and isinstance(source.get(ATTR_ENTITY_ID), str):
+                sources[source[ATTR_ENTITY_ID]] = field_name
+
+    camera_source = entity.get(CAMERA_SOURCE_ENTITY_OPTION)
+    if isinstance(camera_source, str):
+        sources[camera_source] = CONF_DOMAIN_OPTIONS_JSON
+    return sources
+
+
+def _iter_option_entities(options: Mapping):
+    """Yield well-formed persisted entities without trusting backup payloads."""
+    devices = options.get(ATTR_DEVICES, {})
+    if not isinstance(devices, Mapping):
+        return
+    for entities in devices.values():
+        if not isinstance(entities, list):
+            continue
+        for entity in entities:
+            if isinstance(entity, Mapping):
+                yield entity
+
+
+def _dependency_graph(hass, ignored_entity_id: str | None = None) -> dict[str, set[str]]:
+    """Build the explicit Virtual Layer entity dependency graph."""
+    graph = {}
+    for entry in hass.config_entries.async_entries(COMPONENT_DOMAIN):
+        for entity in _iter_option_entities(entry.options):
+            entity_id = _virtual_entity_id(entity)
+            if entity_id is None or entity_id == ignored_entity_id:
+                continue
+            graph[entity_id] = set(_entity_dependency_sources(entity))
+    return graph
+
+
+def _has_dependency_path(graph: dict[str, set[str]], start: str, target: str) -> bool:
+    """Return whether ``start`` reaches ``target`` through explicit sources."""
+    pending = [start]
+    visited = set()
+    while pending:
+        entity_id = pending.pop()
+        if entity_id == target:
+            return True
+        if entity_id in visited:
+            continue
+        visited.add(entity_id)
+        pending.extend(graph.get(entity_id, ()))
+    return False
+
+
+def _validate_virtual_dependency_cycle(
+    hass,
+    entity: Mapping,
+    replacing_entity_id: str | None = None,
+) -> None:
+    """Reject UI configurations that introduce a direct dependency cycle."""
+    entity_id = _virtual_entity_id(entity)
+    if entity_id is None:
+        return
+
+    graph = _dependency_graph(hass, replacing_entity_id)
+    graph.pop(entity_id, None)
+    sources = _entity_dependency_sources(entity)
+    graph[entity_id] = set(sources)
+    for source_entity_id, field_name in sources.items():
+        if _has_dependency_path(graph, source_entity_id, entity_id):
+            raise InvalidEntityReference(field_name)
+
+
+def _build_entity_config(
+    user_input: dict[str, Any],
+    schema=None,
+    validate_domain_options=None,
+) -> tuple[str, dict[str, Any]]:
     device_name = user_input[CONF_DEVICE_NAME].strip()
     entity_name = user_input[CONF_ENTITY_NAME].strip()
     platform = user_input[CONF_PLATFORM]
@@ -264,10 +527,16 @@ def _build_entity_config(user_input: dict[str, Any]) -> tuple[str, dict[str, Any
     if not entity_name:
         raise MissingEntityName
 
+    initial_value = user_input[CONF_INITIAL_VALUE]
+    if platform == "climate" and initial_value == DEFAULT_ENTITY_VALUE:
+        initial_value = DEFAULT_INITIAL_VALUES[platform]
+    if platform == "climate" and initial_value.lower() not in CLIMATE_INITIAL_VALUES:
+        raise InvalidDomainOptions
+
     entity = {
         CONF_PLATFORM: platform,
         CONF_NAME: entity_name,
-        CONF_INITIAL_VALUE: user_input[CONF_INITIAL_VALUE],
+        CONF_INITIAL_VALUE: initial_value,
         CONF_INITIAL_AVAILABILITY: user_input[CONF_INITIAL_AVAILABILITY],
         CONF_PERSISTENT: user_input[CONF_PERSISTENT],
     }
@@ -305,6 +574,13 @@ def _build_entity_config(user_input: dict[str, Any]) -> tuple[str, dict[str, Any
         entity[CONF_AVAILABILITY_TEMPLATE] = availability_template
 
     attributes = _parse_json_object(user_input.get(CONF_ATTRIBUTES_JSON, "").strip(), CONF_ATTRIBUTES_JSON)
+    if any(
+        not isinstance(name, str)
+        or not name.strip()
+        or name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+        for name in attributes
+    ):
+        raise InvalidJson(CONF_ATTRIBUTES_JSON)
     if attributes:
         entity[CONF_ATTRIBUTES] = attributes
 
@@ -318,8 +594,21 @@ def _build_entity_config(user_input: dict[str, Any]) -> tuple[str, dict[str, Any
         user_input.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "").strip(),
         CONF_ATTRIBUTE_TEMPLATES_JSON,
     )
+    if any(
+        not isinstance(name, str)
+        or not name.strip()
+        or name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+        for name in attribute_templates
+    ):
+        raise InvalidJson(CONF_ATTRIBUTE_TEMPLATES_JSON)
     if attribute_templates:
         entity[CONF_ATTRIBUTE_TEMPLATES] = attribute_templates
+
+    domain_options = _parse_domain_options(
+        user_input.get(CONF_DOMAIN_OPTIONS_JSON, "").strip(),
+    )
+    entity.update(domain_options)
+    _validate_entity_references(entity)
 
     # Number entities require a native range. Keep a practical default for the
     # UI flow; richer domain options can be added later.
@@ -327,6 +616,46 @@ def _build_entity_config(user_input: dict[str, Any]) -> tuple[str, dict[str, Any
         entity.setdefault(CONF_MIN, DEFAULT_NUMBER_MIN)
         entity.setdefault(CONF_MAX, DEFAULT_NUMBER_MAX)
 
+    _validate_platform_entity(entity, schema, validate_domain_options)
+
+    # A camera alias remains a normal virtual entity, but follows the source
+    # camera state and subscribes to it without requiring a handwritten Jinja
+    # template in the UI.
+    if platform == "camera" and (source_entity := entity.get(CAMERA_SOURCE_ENTITY_OPTION)):
+        if source_entity == entity.get(ATTR_ENTITY_ID):
+            raise InvalidEntityReference(CONF_DOMAIN_OPTIONS_JSON)
+        source_entities = list(entity.get(CONF_SOURCE_ENTITIES, []))
+        if source_entity not in source_entities:
+            source_entities.append(source_entity)
+        entity[CONF_SOURCE_ENTITIES] = source_entities
+        entity.setdefault(
+            CONF_VALUE_TEMPLATE,
+            f"{{{{ states('{source_entity}') }}}}",
+        )
+
+    return device_name, entity
+
+
+async def _async_build_entity_config(
+    hass,
+    user_input: dict[str, Any],
+    replacing_entity_id: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Build UI entity configuration without importing platform code on the loop."""
+    platform = user_input[CONF_PLATFORM]
+    try:
+        schema, validate_domain_options = await hass.async_add_executor_job(
+            _platform_validator,
+            platform,
+        )
+    except (AttributeError, ImportError, TypeError, ValueError) as err:
+        raise InvalidDomainOptions from err
+    device_name, entity = _build_entity_config(
+        user_input,
+        schema,
+        validate_domain_options,
+    )
+    _validate_virtual_dependency_cycle(hass, entity, replacing_entity_id)
     return device_name, entity
 
 
@@ -365,7 +694,7 @@ def _build_device_config(user_input: dict[str, Any], device_name: str) -> dict[s
 
 
 def _make_device_name(device_name: str) -> str:
-    return device_name[1:] if device_name.startswith("+") else device_name
+    return device_name.removeprefix("+")
 
 
 def _plain_options(value):
@@ -660,13 +989,16 @@ def _normalize_reference_entity_ids(value) -> list[str]:
             entity_ids.append(cv.entity_id(str(entity_id).strip()))
         except vol.Invalid as err:
             raise InvalidEntityReference(CONF_REFERENCE_ENTITY_ID) from err
-    return entity_ids
+    return list(dict.fromkeys(entity_ids))
 
 
 def _source_variable_name(entity_id: str, existing: set[str]) -> str:
     object_id = entity_id.split(".", 1)[1]
     variable_name = slugify(object_id) or "source"
-    if variable_name[0].isdigit():
+    if (
+        variable_name[0].isdigit()
+        or variable_name.casefold() in JINJA_RESERVED_VARIABLE_NAMES
+    ):
         variable_name = f"source_{variable_name}"
 
     candidate = variable_name
@@ -868,6 +1200,10 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         template_sources[variable_name] = entity_id
 
     defaults[CONF_TEMPLATE_SOURCES_JSON] = _json_default(template_sources)
+    if platform == "camera" and len(entity_ids) == 1 and source_domains[0] == "camera":
+        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default({
+            CAMERA_SOURCE_ENTITY_OPTION: entity_ids[0],
+        })
     if len(entity_ids) == 1:
         defaults[CONF_VALUE_TEMPLATE] = f"{{{{ {variable_names[0]} }}}}"
     elif platform == "binary_sensor":
@@ -890,11 +1226,16 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | list | sort | last | default('unknown') }}"
         )
     elif all_location:
-        location_checks = [
-            f"({variable_name} == 'home')"
-            for variable_name in variable_names
-        ]
-        defaults[CONF_VALUE_TEMPLATE] = "{{ 'home' if " + " and ".join(location_checks) + " else 'not_home' }}"
+        # Device tracker coordinates need stateful priority retention after an
+        # outlying device reaches its destination. The platform helper performs
+        # that calculation and keeps this policy visible/editable in the UI.
+        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default({
+            CONF_LOCATION_HELPER: {
+                "distance_threshold_meters": LOCATION_HELPER_DISTANCE_METERS,
+                "priority_window_seconds": LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
+            },
+        })
+        defaults[CONF_VALUE_TEMPLATE] = ""
     elif all_enum:
         defaults[CONF_VALUE_TEMPLATE] = (
             "{% set values = ["
@@ -915,21 +1256,72 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
 def _reference_edit_defaults(
     current_defaults: dict[str, Any],
     reference_defaults: dict[str, Any],
+    auto_helper: bool = False,
 ) -> dict[str, Any]:
-    if not reference_defaults:
+    if not reference_defaults or not auto_helper:
         return current_defaults
 
     merged = dict(current_defaults)
-    for key in (
-        CONF_DEVICE_NAME,
-        CONF_ENTITY_NAME,
-        CONF_PLATFORM,
-        CONF_INITIAL_VALUE,
-        CONF_ATTRIBUTES_JSON,
-    ):
-        if key in reference_defaults:
-            merged[key] = reference_defaults[key]
+    for key in _AUTO_HELPER_PROFILE_FIELDS:
+        merged[key] = reference_defaults.get(key, "")
     return merged
+
+
+def _auto_helper_profile(defaults: dict[str, Any]) -> dict[str, Any]:
+    """Create a stable record of the generated helper fields."""
+    return {
+        field: _plain_options(defaults.get(field, ""))
+        for field in _AUTO_HELPER_PROFILE_FIELDS
+    }
+
+
+def _matches_auto_helper_profile(defaults: dict[str, Any], profile: Mapping) -> bool:
+    return all(
+        _plain_options(defaults.get(field, "")) == profile.get(field, "")
+        for field in _AUTO_HELPER_PROFILE_FIELDS
+    )
+
+
+def _existing_auto_helper_profile(hass, entity, defaults: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a validated generated-helper profile, including legacy entries."""
+    saved_profile = entity.get(CONF_AUTO_HELPER)
+    if isinstance(saved_profile, Mapping):
+        profile = _plain_options(saved_profile)
+        return profile if _matches_auto_helper_profile(defaults, profile) else None
+    if saved_profile is False:
+        return None
+    if saved_profile is True:
+        return _auto_helper_profile(defaults)
+
+    source_entities = entity.get(CONF_SOURCE_ENTITIES, [])
+    if not source_entities:
+        return None
+    try:
+        reference_defaults = _reference_entity_defaults(hass, source_entities)
+    except InvalidEntityReference:
+        return None
+    profile = _auto_helper_profile(reference_defaults)
+    return profile if _matches_auto_helper_profile(defaults, profile) else None
+
+
+def _set_auto_helper_profile(
+    entity: dict[str, Any],
+    submitted_defaults: dict[str, Any],
+    reference_defaults: dict[str, Any],
+    current_profile: dict[str, Any] | None = None,
+) -> None:
+    """Persist whether submitted values are still generated helper values."""
+    if not reference_defaults and current_profile is None:
+        return
+    expected_profile = (
+        _auto_helper_profile(reference_defaults)
+        if reference_defaults
+        else current_profile
+    )
+    if expected_profile and _matches_auto_helper_profile(submitted_defaults, expected_profile):
+        entity[CONF_AUTO_HELPER] = expected_profile
+    else:
+        entity[CONF_AUTO_HELPER] = False
 
 
 def _entity_form_defaults(
@@ -939,7 +1331,7 @@ def _entity_form_defaults(
 ) -> dict[str, Any]:
     entity = _plain_options(entity)
     device = _get_device_attributes(options or {}, device_name)
-    return {
+    defaults = {
         CONF_DEVICE_NAME: device_name,
         CONF_DEVICE_ID: device.get(ATTR_DEVICE_ID, device_name),
         CONF_DEVICE_MANUFACTURER: device.get(CONF_MANUFACTURER, ""),
@@ -962,6 +1354,13 @@ def _entity_form_defaults(
         CONF_ATTRIBUTE_SOURCES_JSON: _json_default(entity.get(CONF_ATTRIBUTE_SOURCES)),
         CONF_ATTRIBUTE_TEMPLATES_JSON: _json_default(entity.get(CONF_ATTRIBUTE_TEMPLATES)),
     }
+    domain_options = {
+        key: value
+        for key, value in entity.items()
+        if key not in _DOMAIN_OPTION_RESERVED_KEYS
+    }
+    defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
+    return defaults
 
 
 def _merge_device_sets(existing_devices, restored_devices):
@@ -1015,6 +1414,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         self._pending_data: dict[str, Any] | None = None
         self._pending_title: str | None = None
         self._entity_defaults: dict[str, Any] | None = None
+        self._reference_defaults: dict[str, Any] = {}
 
     @staticmethod
     @callback
@@ -1034,7 +1434,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 "title": f"{user_input[ATTR_GROUP_NAME]} - {COMPONENT_DOMAIN}"
             }
 
-        for group, values in self.hass.data.get(COMPONENT_DOMAIN, {}).items():
+        for group in self.hass.data.get(COMPONENT_DOMAIN, {}):
             _LOGGER.debug(f"checking {group}")
             if group == user_input[ATTR_GROUP_NAME]:
                 raise GroupNameAlreadyUsed
@@ -1106,10 +1506,11 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         errors = {}
         if user_input is not None:
             try:
-                self._entity_defaults = _reference_entity_defaults(
+                self._reference_defaults = _reference_entity_defaults(
                     self.hass,
                     user_input.get(CONF_REFERENCE_ENTITY_ID),
                 )
+                self._entity_defaults = self._reference_defaults
                 return await self.async_step_entity()
             except InvalidEntityReference:
                 errors[CONF_REFERENCE_ENTITY_ID] = "invalid_entity_id"
@@ -1125,7 +1526,12 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         errors = {}
         if user_input is not None:
             try:
-                device_name, entity = _build_entity_config(user_input)
+                device_name, entity = await _async_build_entity_config(self.hass, user_input)
+                _set_auto_helper_profile(
+                    entity,
+                    user_input,
+                    self._reference_defaults,
+                )
                 device_config = _build_device_config(user_input, device_name)
                 options = _append_ui_entity(
                     {ATTR_DEVICES: {}, ATTR_DEVICE_ATTRIBUTES: {}},
@@ -1144,6 +1550,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 errors[err.field_name] = "invalid_entity_id"
             except InvalidEntityId:
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
+            except InvalidDomainOptions:
+                errors[CONF_DOMAIN_OPTIONS_JSON] = "invalid_domain_options"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -1167,6 +1575,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._edit_device_name: str | None = None
         self._edit_index: int | None = None
         self._entity_defaults: dict[str, Any] | None = None
+        self._reference_defaults: dict[str, Any] = {}
+        self._edit_auto_helper_profile: dict[str, Any] | None = None
 
     async def async_step_init(self, user_input=None):
         errors = {}
@@ -1194,10 +1604,11 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         errors = {}
         if user_input is not None:
             try:
-                self._entity_defaults = _reference_entity_defaults(
+                self._reference_defaults = _reference_entity_defaults(
                     self.hass,
                     user_input.get(CONF_REFERENCE_ENTITY_ID),
                 )
+                self._entity_defaults = self._reference_defaults
                 return await self.async_step_entity()
             except InvalidEntityReference:
                 errors[CONF_REFERENCE_ENTITY_ID] = "invalid_entity_id"
@@ -1213,7 +1624,12 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         errors = {}
         if user_input is not None:
             try:
-                device_name, entity = _build_entity_config(user_input)
+                device_name, entity = await _async_build_entity_config(self.hass, user_input)
+                _set_auto_helper_profile(
+                    entity,
+                    user_input,
+                    self._reference_defaults,
+                )
                 device_config = _build_device_config(user_input, device_name)
                 options = _append_ui_entity(
                     self.config_entry.options,
@@ -1228,6 +1644,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 errors[err.field_name] = "invalid_entity_id"
             except InvalidEntityId:
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
+            except InvalidDomainOptions:
+                errors[CONF_DOMAIN_OPTIONS_JSON] = "invalid_domain_options"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -1311,18 +1729,24 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 entity,
                 self.config_entry.options,
             )
+            self._edit_auto_helper_profile = _existing_auto_helper_profile(
+                self.hass,
+                entity,
+                current_defaults,
+            )
         except InvalidEntitySelection:
             return await self.async_step_select_entity()
 
         if user_input is not None:
             try:
-                reference_defaults = _reference_entity_defaults(
+                self._reference_defaults = _reference_entity_defaults(
                     self.hass,
                     user_input.get(CONF_REFERENCE_ENTITY_ID),
                 )
                 self._entity_defaults = _reference_edit_defaults(
                     current_defaults,
-                    reference_defaults,
+                    self._reference_defaults,
+                    self._edit_auto_helper_profile is not None,
                 )
                 return await self.async_step_edit_entity()
             except InvalidEntityReference:
@@ -1342,7 +1766,22 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
         if user_input is not None:
             try:
-                device_name, entity = _build_entity_config(user_input)
+                current_entity = _get_ui_entity(
+                    self.config_entry.options,
+                    self._edit_device_name,
+                    self._edit_index,
+                )
+                device_name, entity = await _async_build_entity_config(
+                    self.hass,
+                    user_input,
+                    _virtual_entity_id(current_entity),
+                )
+                _set_auto_helper_profile(
+                    entity,
+                    user_input,
+                    self._reference_defaults,
+                    self._edit_auto_helper_profile,
+                )
                 device_config = _build_device_config(user_input, device_name)
                 options = _replace_ui_entity(
                     self.config_entry.options,
@@ -1359,6 +1798,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 errors[err.field_name] = "invalid_entity_id"
             except InvalidEntityId:
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
+            except InvalidDomainOptions:
+                errors[CONF_DOMAIN_OPTIONS_JSON] = "invalid_domain_options"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -1468,6 +1909,10 @@ class InvalidEntityReference(exceptions.HomeAssistantError):
 
 class InvalidEntityId(exceptions.HomeAssistantError):
     """Error indicating an invalid entity ID."""
+
+
+class InvalidDomainOptions(exceptions.HomeAssistantError):
+    """Error indicating invalid domain-specific options."""
 
 
 class InvalidEntitySelection(exceptions.HomeAssistantError):

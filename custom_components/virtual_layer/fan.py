@@ -147,12 +147,14 @@ class VirtualFan(VirtualEntity, FanEntity):
         self._attr_percentage = percentage
         self._attr_preset_mode = None
         self._update_attributes()
+        self.async_write_ha_state()
 
     def _set_preset_mode(self, preset_mode: str) -> None:
         if preset_mode in self.preset_modes:
             self._attr_preset_mode = preset_mode
             self._attr_percentage = None
             self._update_attributes()
+            self.async_write_ha_state()
         else:
             raise ValueError(f"Invalid preset mode: {preset_mode}")
 
@@ -192,12 +194,14 @@ class VirtualFan(VirtualEntity, FanEntity):
         _LOGGER.debug(f"setting direction of {self.name} to {direction}")
         self._attr_current_direction = direction
         self._update_attributes()
+        self.async_write_ha_state()
 
     async def async_oscillate(self, oscillating: bool) -> None:
         """Set oscillation."""
         _LOGGER.debug(f"setting oscillate of {self.name} to {oscillating}")
         self._attr_oscillating = oscillating
         self._update_attributes()
+        self.async_write_ha_state()
 
     def set_state(self, value) -> None:
         value = str(value).lower()

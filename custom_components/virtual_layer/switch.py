@@ -98,10 +98,12 @@ class VirtualSwitch(VirtualEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         _LOGGER.debug(f"turning {self.name} on")
         self._attr_is_on = True
+        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         _LOGGER.debug(f"turning {self.name} off")
         self._attr_is_on = False
+        self.async_write_ha_state()
 
     def set_state(self, value) -> None:
         self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]

@@ -5,6 +5,7 @@ import json
 import pytest
 
 from custom_components.virtual_layer.cfg import (
+    _async_save_json,
     BlendedCfg,
     _delete_meta_data,
     _make_entity_id,
@@ -29,6 +30,8 @@ from custom_components.virtual_layer.const import (
     CONF_ATTRIBUTE_TEMPLATES,
     CONF_AVAILABILITY_TEMPLATE,
     CONF_NAME,
+    CONF_MAX,
+    CONF_MIN,
     CONF_PERSISTENT,
     CONF_PULL_INTERVAL,
     CONF_SOURCE_ENTITIES,
@@ -58,7 +61,13 @@ async def test_entry_backup_contains_only_group_and_ui_devices():
     class Entry:
         data = {ATTR_GROUP_NAME: "ui"}
         options = {
-            ATTR_DEVICES: {"Device": [{"platform": "sensor"}]},
+            ATTR_DEVICES: {
+                "Device": [{
+                    "platform": "weather",
+                    "temperature": 21.5,
+                    "forecast_provider": "virtual",
+                }],
+            },
             ATTR_DEVICE_ATTRIBUTES: {
                 "Device": {
                     ATTR_DEVICE_ID: "device-1",
@@ -71,7 +80,13 @@ async def test_entry_backup_contains_only_group_and_ui_devices():
 
     assert backup == {
         ATTR_GROUP_NAME: "ui",
-        ATTR_DEVICES: {"Device": [{"platform": "sensor"}]},
+        ATTR_DEVICES: {
+            "Device": [{
+                "platform": "weather",
+                "temperature": 21.5,
+                "forecast_provider": "virtual",
+            }],
+        },
         ATTR_DEVICE_ATTRIBUTES: {
             "Device": {
                 ATTR_DEVICE_ID: "device-1",
@@ -155,6 +170,23 @@ async def test_save_backup_raises_when_file_cannot_be_written(tmp_path):
 
     with pytest.raises(IsADirectoryError):
         await async_save_backup(str(file_name), [])
+
+
+@pytest.mark.asyncio
+async def test_atomic_json_save_keeps_previous_file_when_replace_fails(tmp_path, monkeypatch):
+    file_name = tmp_path / "backup.json"
+    file_name.write_text('{"previous": true}')
+
+    def fail_replace(_source, _target):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.os.replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        await _async_save_json(str(file_name), {"next": True})
+
+    assert json.loads(file_name.read_text()) == {"previous": True}
+    assert not list(tmp_path.glob("backup.json.*.tmp"))
 
 
 @pytest.mark.asyncio
@@ -402,3 +434,70 @@ async def test_blended_cfg_normalizes_malformed_common_entity_fields(
     assert CONF_VALUE_TEMPLATE not in entity
     assert CONF_AVAILABILITY_TEMPLATE not in entity
     assert entity[ATTR_DEVICE_ID] == "Damaged Device"
+
+
+@pytest.mark.asyncio
+async def test_blended_cfg_repairs_legacy_number_range(hass, tmp_path, monkeypatch):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    cfg = BlendedCfg(
+        hass,
+        {ATTR_GROUP_NAME: "ui"},
+        {ATTR_DEVICES: {"Meter": [{
+            CONF_PLATFORM: "number",
+            CONF_NAME: "Legacy Meter",
+            CONF_MIN: "not-a-number",
+            CONF_MAX: -1,
+        }]}},
+    )
+
+    await cfg.async_load()
+
+    entity = cfg.entities["number"][0]
+    assert entity[CONF_MIN] == 0.0
+    assert entity[CONF_MAX] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_blended_cfg_skips_invalid_domain_entity_but_keeps_repair_metadata(
+    hass,
+    tmp_path,
+    monkeypatch,
+):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    cfg = BlendedCfg(
+        hass,
+        {ATTR_GROUP_NAME: "ui"},
+        {ATTR_DEVICES: {"Mixed Device": [
+            {
+                CONF_PLATFORM: "sensor",
+                CONF_NAME: "Healthy Sensor",
+                ATTR_ENTITY_KEY: "healthy",
+                CONF_INITIAL_VALUE: "12",
+            },
+            {
+                CONF_PLATFORM: "camera",
+                CONF_NAME: "Broken Camera",
+                ATTR_ENTITY_KEY: "broken",
+                # Camera requires a string stream source; this simulates a
+                # stale backup after a schema change.
+                "stream_source": {"unexpected": "shape"},
+            },
+        ]}},
+    )
+
+    await cfg.async_load()
+
+    assert [entity[CONF_NAME] for entity in cfg.entities["sensor"]] == [
+        "Healthy Sensor",
+    ]
+    assert "camera" not in cfg.entities
+    saved_metadata = json.loads(meta_file.read_text())[ATTR_DEVICES]["ui"]
+    assert "broken" in saved_metadata

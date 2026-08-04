@@ -1,5 +1,9 @@
 """Constants for the virtual layer component. """
 
+from collections.abc import Mapping
+
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME
+
 COMPONENT_DOMAIN = "virtual_layer"
 COMPONENT_SERVICES = "virtual_layer-services"
 COMPONENT_MANUFACTURER = "twrecked"
@@ -22,14 +26,24 @@ ATTR_VERSION = "version"
 ATTR_ATTRIBUTES = "attributes"
 ATTR_VIRTUAL_ATTRIBUTES = "virtual_attributes"
 
+RESERVED_VIRTUAL_ATTRIBUTE_NAMES = frozenset({
+    ATTR_AVAILABLE,
+    ATTR_ENTITY_ID,
+    ATTR_PERSISTENT,
+    ATTR_UNIQUE_ID,
+    ATTR_VIRTUAL_ATTRIBUTES,
+})
+
 CONF_CLASS = "class"
 CONF_ATTRIBUTE = "attribute"
 CONF_ATTRIBUTE_SOURCES = "attribute_sources"
 CONF_INITIAL_AVAILABILITY = "initial_availability"
 CONF_ATTRIBUTES = "attributes"
+CONF_AUTO_HELPER = "auto_helper"
 CONF_ATTRIBUTE_TEMPLATES = "attribute_templates"
 CONF_AVAILABILITY_TEMPLATE = "availability_template"
 CONF_INITIAL_VALUE = "initial_value"
+CONF_LOCATION_HELPER = "location_helper"
 CONF_MAX = "max"
 CONF_MIN = "min"
 CONF_NAME = "name"
@@ -45,6 +59,50 @@ CONF_MODEL = "model"
 CONF_HW_VERSION = "hw_version"
 CONF_SERIAL_NUMBER = "serial_number"
 CONF_SW_VERSION = "sw_version"
+
+# Options supplied through the UI's domain-options JSON are kept separate from
+# Virtual Layer storage and template configuration. Generic domains expose the
+# remaining options as state attributes.
+GENERIC_ENTITY_OPTION_EXCLUDED_KEYS = frozenset({
+    ATTR_DEVICE_ID,
+    ATTR_ENTITY_ID,
+    ATTR_ENTITY_KEY,
+    ATTR_FRIENDLY_NAME,
+    ATTR_UNIQUE_ID,
+    CONF_ATTRIBUTE_SOURCES,
+    CONF_ATTRIBUTE_TEMPLATES,
+    CONF_ATTRIBUTES,
+    CONF_AUTO_HELPER,
+    CONF_AVAILABILITY_TEMPLATE,
+    CONF_CLASS,
+    CONF_HW_VERSION,
+    CONF_INITIAL_AVAILABILITY,
+    CONF_INITIAL_VALUE,
+    CONF_MANUFACTURER,
+    CONF_MODEL,
+    CONF_NAME,
+    CONF_PERSISTENT,
+    CONF_PULL_INTERVAL,
+    CONF_SERIAL_NUMBER,
+    CONF_SOURCE_ENTITIES,
+    CONF_SW_VERSION,
+    CONF_TEMPLATE_SOURCES,
+    CONF_VALUE_TEMPLATE,
+    "icon",
+    "platform",
+    "state_class",
+})
+
+
+def generic_entity_options(config: Mapping) -> dict:
+    """Extract user-supplied generic domain options from an entity config."""
+    return {
+        key: value
+        for key, value in config.items()
+        if isinstance(key, str)
+        and key not in GENERIC_ENTITY_OPTION_EXCLUDED_KEYS
+        and key not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+    }
 
 DEFAULT_AVAILABILITY = True
 DEFAULT_PERSISTENT = True

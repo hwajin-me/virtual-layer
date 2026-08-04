@@ -4,29 +4,46 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-import pytest
-
-from homeassistant.config_entries import SOURCE_IMPORT
-from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME, CONF_PLATFORM
-from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
+import pytest
+from homeassistant.config_entries import SOURCE_IMPORT
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    ATTR_LATITUDE,
+    ATTR_LONGITUDE,
+    CONF_NAME,
+    CONF_PLATFORM,
+)
+from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.translation import async_get_translations
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.virtual_layer import (
+    async_remove_entry,
     async_setup,
     async_setup_entry,
-    async_remove_entry,
     async_unload_entry,
     async_virtual_clear_attributes_service,
     async_virtual_set_attributes_service,
     async_virtual_set_availability_service,
     async_virtual_set_state_service,
 )
-from custom_components.virtual_layer.binary_sensor import async_setup_platform as async_setup_binary_sensor_platform
+from custom_components.virtual_layer import binary_sensor as virtual_binary_sensor
+from custom_components.virtual_layer import device_tracker as virtual_device_tracker
+from custom_components.virtual_layer import sensor as virtual_sensor
+from custom_components.virtual_layer.binary_sensor import (
+    async_setup_platform as async_setup_binary_sensor_platform,
+)
+from custom_components.virtual_layer.camera import (
+    CAMERA_SCHEMA,
+    VirtualCamera,
+)
+from custom_components.virtual_layer.camera import (
+    CONF_SOURCE_ENTITY as CAMERA_SOURCE_ENTITY,
+)
+from custom_components.virtual_layer.climate import CLIMATE_SCHEMA
 from custom_components.virtual_layer.config_flow import (
     ACTION_ADD_ENTITY,
     ACTION_DELETE_ENTITY,
@@ -47,36 +64,36 @@ from custom_components.virtual_layer.config_flow import (
     _reference_entity_defaults,
 )
 from custom_components.virtual_layer.const import (
+    ATTR_ATTRIBUTES,
     ATTR_AVAILABLE,
     ATTR_DEVICE_ATTRIBUTES,
-    ATTR_DEVICES,
     ATTR_DEVICE_ID,
-    ATTR_ENTITY_KEY,
+    ATTR_DEVICES,
     ATTR_ENTITIES,
+    ATTR_ENTITY_KEY,
     ATTR_FILE_NAME,
     ATTR_GROUP_NAME,
     ATTR_UNIQUE_ID,
     ATTR_VALUE,
+    COMPONENT_DOMAIN,
+    COMPONENT_SERVICES,
     CONF_ATTRIBUTE,
     CONF_ATTRIBUTE_SOURCES,
+    CONF_ATTRIBUTE_TEMPLATES,
     CONF_ATTRIBUTES,
     CONF_AVAILABILITY_TEMPLATE,
     CONF_INITIAL_AVAILABILITY,
     CONF_INITIAL_VALUE,
+    CONF_LOCATION_HELPER,
     CONF_MANUFACTURER,
     CONF_MODEL,
     CONF_PERSISTENT,
     CONF_PULL_INTERVAL,
     CONF_SOURCE_ENTITIES,
     CONF_TEMPLATE_SOURCES,
-    CONF_ATTRIBUTE_TEMPLATES,
     CONF_VALUE_TEMPLATE,
-    COMPONENT_DOMAIN,
-    COMPONENT_SERVICES,
 )
 from custom_components.virtual_layer.sensor import VirtualSensor
-from custom_components.virtual_layer import device_tracker as virtual_device_tracker
-
 
 pytestmark = pytest.mark.integration
 
@@ -440,6 +457,56 @@ async def test_options_flow_can_edit_existing_entity(hass):
     }
 
 
+async def test_options_flow_rejects_indirect_virtual_entity_dependency_cycle(hass):
+    """Editing an entity must not turn an existing dependency into a cycle."""
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Virtual": [
+                    {
+                        CONF_PLATFORM: "sensor",
+                        CONF_NAME: "First",
+                        ATTR_ENTITY_ID: "sensor.first",
+                        CONF_SOURCE_ENTITIES: ["sensor.second"],
+                    },
+                    {
+                        CONF_PLATFORM: "sensor",
+                        CONF_NAME: "Second",
+                        ATTR_ENTITY_ID: "sensor.second",
+                    },
+                ],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Virtual", 1)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {},
+    )
+
+    defaults = result["data_schema"]({})
+    defaults[CONF_SOURCE_ENTITIES_TEXT] = "sensor.first"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "edit_entity"
+    assert result["errors"] == {CONF_SOURCE_ENTITIES_TEXT: "invalid_entity_id"}
+
+
 async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     hass.states.async_set(
         "light.kitchen_lamp",
@@ -489,6 +556,7 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][ATTR_DEVICES]["Kitchen"][0].pop(ATTR_ENTITY_KEY)
+    assert result["data"][ATTR_DEVICES]["Kitchen"][0].pop("auto_helper")
     assert result["data"][ATTR_DEVICES]["Kitchen"] == [
         {
             CONF_PLATFORM: "light",
@@ -555,6 +623,7 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = result["data"][ATTR_DEVICES]["Security"][0]
     entity.pop(ATTR_ENTITY_KEY)
+    entity.pop("auto_helper")
     assert entity == {
         CONF_PLATFORM: "binary_sensor",
         CONF_NAME: "All Doors Ready",
@@ -609,6 +678,63 @@ async def test_options_flow_can_prefill_composite_sensor_with_average_template(h
     assert defaults[CONF_INITIAL_VALUE] == "23.0"
     assert "reject('in'" in defaults[CONF_VALUE_TEMPLATE]
     assert "values | average" in defaults[CONF_VALUE_TEMPLATE]
+
+
+async def test_setup_entries_reserve_unique_ids_for_matching_generated_entities(hass):
+    """Separate config entries must not claim the same generated entity id."""
+    first_entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "first"},
+        options={
+            ATTR_DEVICES: {
+                "First Device": [
+                    {
+                        CONF_PLATFORM: "sensor",
+                        CONF_NAME: "Shared Name",
+                        CONF_INITIAL_VALUE: "unknown",
+                        CONF_INITIAL_AVAILABILITY: True,
+                        CONF_PERSISTENT: False,
+                    },
+                ],
+            },
+        },
+    )
+    second_entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "second"},
+        options={
+            ATTR_DEVICES: {
+                "Second Device": [
+                    {
+                        CONF_PLATFORM: "sensor",
+                        CONF_NAME: "Shared Name",
+                        CONF_INITIAL_VALUE: "unknown",
+                        CONF_INITIAL_AVAILABILITY: True,
+                        CONF_PERSISTENT: False,
+                    },
+                ],
+            },
+        },
+    )
+    first_entry.add_to_hass(hass)
+    second_entry.add_to_hass(hass)
+
+    with patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        AsyncMock(return_value=True),
+    ):
+        assert await async_setup_entry(hass, first_entry) is True
+        assert await async_setup_entry(hass, second_entry) is True
+
+    first_entity = hass.data[COMPONENT_DOMAIN]["first"][ATTR_ENTITIES]["sensor"][0]
+    second_entity = hass.data[COMPONENT_DOMAIN]["second"][ATTR_ENTITIES]["sensor"][0]
+    assert first_entity[ATTR_ENTITY_ID] == "sensor.shared_name"
+    assert second_entity[ATTR_ENTITY_ID] != first_entity[ATTR_ENTITY_ID]
+
+    entity_registry = er.async_get(hass)
+    assert entity_registry.async_get(first_entity[ATTR_ENTITY_ID]).config_entry_id == first_entry.entry_id
+    assert entity_registry.async_get(second_entity[ATTR_ENTITY_ID]).config_entry_id == second_entry.entry_id
 
 
 async def test_setup_entry_removes_orphaned_entity_and_device_registry_entries(hass, tmp_path, monkeypatch):
@@ -754,6 +880,7 @@ async def test_state_only_virtual_entities_can_be_updated_with_services(hass):
                         ATTR_ENTITY_ID: "tag.virtual_tag",
                         ATTR_UNIQUE_ID: "tag-virtual-tag",
                         ATTR_DEVICE_ID: "tag-device",
+                        "configured": "fixed",
                     },
                 ],
             },
@@ -765,6 +892,7 @@ async def test_state_only_virtual_entities_can_be_updated_with_services(hass):
         {
             ATTR_AVAILABLE: True,
             "source": "initial",
+            "configured": "fixed",
         },
     )
 
@@ -776,14 +904,18 @@ async def test_state_only_virtual_entities_can_be_updated_with_services(hass):
         hass,
         SimpleNamespace(data={
             ATTR_ENTITY_ID: ["tag.virtual_tag"],
-            "attributes": {"source": "service", "extra": 1},
+            "attributes": {
+                "source": "service",
+                "extra": 1,
+                "configured": "overridden",
+            },
         }),
     )
     await async_virtual_clear_attributes_service(
         hass,
         SimpleNamespace(data={
             ATTR_ENTITY_ID: ["tag.virtual_tag"],
-            "attributes": ["source"],
+            "attributes": ["source", "configured"],
         }),
     )
     await async_virtual_set_availability_service(
@@ -795,6 +927,7 @@ async def test_state_only_virtual_entities_can_be_updated_with_services(hass):
     assert state.state == "new"
     assert state.attributes[ATTR_AVAILABLE] is False
     assert state.attributes["extra"] == 1
+    assert state.attributes["configured"] == "fixed"
     assert "source" not in state.attributes
 
 
@@ -830,6 +963,227 @@ async def test_state_only_services_do_not_update_unmanaged_entities(hass):
     state = hass.states.get("tag.external_tag")
     assert state.state == "external"
     assert state.attributes["source"] == "outside"
+
+
+async def test_virtual_services_reject_non_virtual_platform_entities(hass):
+    entity_registry = er.async_get(hass)
+    external_entry = entity_registry.async_get_or_create(
+        "sensor",
+        "external_integration",
+        "external-sensor",
+        suggested_object_id="external_sensor",
+    )
+    external_entity = Mock()
+    hass.data["sensor"] = Mock(get_entity=Mock(return_value=external_entity))
+
+    with pytest.raises(HomeAssistantError, match="not managed by virtual_layer"):
+        await async_virtual_set_state_service(
+            hass,
+            SimpleNamespace(data={
+                ATTR_ENTITY_ID: [external_entry.entity_id],
+                ATTR_VALUE: "42",
+            }),
+        )
+
+    external_entity.set_state.assert_not_called()
+
+
+async def test_virtual_attributes_cannot_override_reserved_entity_metadata(hass):
+    config = {
+        CONF_NAME: "Protected Attributes",
+        ATTR_ENTITY_ID: "sensor.protected_attributes",
+        ATTR_UNIQUE_ID: "protected_attributes",
+        ATTR_DEVICE_ID: "Protected",
+        CONF_INITIAL_VALUE: "ready",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: True,
+        CONF_ATTRIBUTES: {"available": False, "custom": "value"},
+    }
+    entity = VirtualSensor(config, False)
+    entity.hass = hass
+    entity.async_schedule_update_ha_state = Mock()
+    entity._create_state(config)
+    entity.set_attributes({"persistent": False, "custom": "updated"})
+
+    assert entity.extra_state_attributes[ATTR_AVAILABLE] is True
+    assert entity.extra_state_attributes[CONF_PERSISTENT] is True
+    assert entity.extra_state_attributes["custom"] == "updated"
+
+
+async def test_state_only_attributes_cannot_override_reserved_entity_metadata(hass):
+    hass.data[COMPONENT_DOMAIN] = {
+        "ui": {
+            ATTR_ENTITIES: {
+                "tag": [{ATTR_ENTITY_ID: "tag.protected", ATTR_UNIQUE_ID: "protected"}],
+            },
+        },
+    }
+    hass.states.async_set(
+        "tag.protected",
+        "ready",
+        {ATTR_AVAILABLE: True, CONF_PERSISTENT: True, "custom": "original"},
+    )
+
+    await async_virtual_set_attributes_service(
+        hass,
+        SimpleNamespace(data={
+            ATTR_ENTITY_ID: ["tag.protected"],
+            ATTR_ATTRIBUTES: {
+                ATTR_AVAILABLE: False,
+                CONF_PERSISTENT: False,
+                "custom": "updated",
+            },
+        }),
+    )
+
+    state = hass.states.get("tag.protected")
+    assert state.attributes[ATTR_AVAILABLE] is True
+    assert state.attributes[CONF_PERSISTENT] is True
+    assert state.attributes["custom"] == "updated"
+
+
+@pytest.mark.parametrize(
+    ("domain", "service", "service_data", "method"),
+    [
+        (
+            "binary_sensor",
+            virtual_binary_sensor.async_virtual_on_service,
+            {},
+            "turn_on",
+        ),
+        (
+            "sensor",
+            virtual_sensor.async_virtual_set_service,
+            {ATTR_VALUE: "42"},
+            "set",
+        ),
+        (
+            "device_tracker",
+            virtual_device_tracker.async_virtual_move_service,
+            {"location": "home"},
+            "move_to_location",
+        ),
+    ],
+)
+async def test_platform_services_reject_non_virtual_entities(
+    hass,
+    domain,
+    service,
+    service_data,
+    method,
+):
+    entity_registry = er.async_get(hass)
+    external_entry = entity_registry.async_get_or_create(
+        domain,
+        "external_integration",
+        f"external-{domain}",
+        suggested_object_id=f"external_{domain}",
+    )
+    external_entity = Mock()
+    hass.data[domain] = Mock(get_entity=Mock(return_value=external_entity))
+
+    with pytest.raises(HomeAssistantError, match="not managed by virtual_layer"):
+        await service(
+            hass,
+            SimpleNamespace(data={
+                ATTR_ENTITY_ID: [external_entry.entity_id],
+                **service_data,
+            }),
+        )
+
+    getattr(external_entity, method).assert_not_called()
+
+
+def test_climate_schema_accepts_template_sources_and_default_state():
+    config = CLIMATE_SCHEMA({
+        CONF_NAME: "Virtual Thermostat",
+        CONF_INITIAL_VALUE: "off",
+        CONF_TEMPLATE_SOURCES: {
+            "outdoor_temperature": {
+                ATTR_ENTITY_ID: "sensor.outdoor_temperature",
+                CONF_ATTRIBUTE: "state",
+            },
+        },
+    })
+
+    assert config[CONF_TEMPLATE_SOURCES]["outdoor_temperature"][ATTR_ENTITY_ID] == "sensor.outdoor_temperature"
+
+
+async def test_direct_jinja_template_reacts_without_explicit_source_list(hass):
+    config = {
+        CONF_NAME: "Template Sensor",
+        ATTR_ENTITY_ID: "sensor.template_sensor",
+        ATTR_UNIQUE_ID: "template-sensor",
+        ATTR_DEVICE_ID: "template-device",
+        CONF_INITIAL_VALUE: "0",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: False,
+        CONF_VALUE_TEMPLATE: "{{ states('sensor.template_source') }}",
+    }
+    entity = VirtualSensor(config, False)
+    entity.hass = hass
+    entity.async_schedule_update_ha_state = Mock()
+    entity._create_state(config)
+    entity._setup_templates()
+
+    hass.states.async_set("sensor.template_source", "17")
+    await hass.async_block_till_done()
+
+    assert entity._attr_state == "17"
+    await entity.async_will_remove_from_hass()
+
+
+async def test_state_only_entity_updates_composite_templates(hass, tmp_path, monkeypatch):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {"Virtual Tag": [{
+            CONF_PLATFORM: "tag",
+            CONF_NAME: "Composite Tag",
+            ATTR_ENTITY_ID: "tag.composite_tag",
+            CONF_INITIAL_VALUE: "waiting",
+            CONF_INITIAL_AVAILABILITY: True,
+            CONF_PERSISTENT: False,
+            CONF_SOURCE_ENTITIES: ["sensor.tag_source"],
+            CONF_TEMPLATE_SOURCES: {
+                "source": {
+                    ATTR_ENTITY_ID: "sensor.tag_source",
+                    CONF_ATTRIBUTE: "state",
+                },
+            },
+            CONF_VALUE_TEMPLATE: "{{ source }}",
+            CONF_ATTRIBUTE_TEMPLATES: {
+                "copied": "{{ source }}",
+                "direct_setting": "{{ 'overridden' }}",
+            },
+            "direct_setting": {"mode": "nfc", "priority": 1},
+        }]}},
+    )
+    entry.add_to_hass(hass)
+    hass.states.async_set("sensor.tag_source", "first")
+
+    assert await async_setup_entry(hass, entry) is True
+    await hass.async_block_till_done()
+    assert hass.states.get("tag.composite_tag").state == "first"
+    assert hass.states.get("tag.composite_tag").attributes["copied"] == "first"
+    assert hass.states.get("tag.composite_tag").attributes["direct_setting"] == {
+        "mode": "nfc",
+        "priority": 1,
+    }
+
+    hass.states.async_set("sensor.tag_source", "second")
+    await hass.async_block_till_done()
+    assert hass.states.get("tag.composite_tag").state == "second"
+
+    assert await async_unload_entry(hass, entry) is True
+    hass.states.async_set("sensor.tag_source", "after_unload")
+    await hass.async_block_till_done()
+    assert hass.states.get("tag.composite_tag") is None
 
 
 async def test_state_only_setup_does_not_overwrite_existing_state(hass, tmp_path, monkeypatch):
@@ -953,6 +1307,12 @@ async def test_virtual_entity_copies_source_attributes_and_registers_pull(hass):
     assert entity.extra_state_attributes["phase"] == "running"
     assert entity.extra_state_attributes[ATTR_AVAILABLE] is True
 
+    hass.states.async_remove("sensor.washer_source")
+    assert entity._apply_attribute_sources() is True
+    entity._update_attributes()
+    assert entity.extra_state_attributes["battery"] is None
+    assert entity.extra_state_attributes["phase"] is None
+
     with (
         patch(
             "custom_components.virtual_layer.entity.async_track_state_change_event",
@@ -1066,6 +1426,64 @@ async def test_generated_numeric_helper_ignores_unavailable_sources_at_runtime(h
     assert entity.state == "unknown"
 
 
+async def test_location_helper_updates_from_home_assistant_state_events(hass):
+    hass.states.async_set(
+        "device_tracker.phone_one",
+        "not_home",
+        {ATTR_LATITUDE: 37.5, ATTR_LONGITUDE: 127.0},
+    )
+    hass.states.async_set(
+        "device_tracker.phone_two",
+        "not_home",
+        {ATTR_LATITUDE: 37.5, ATTR_LONGITUDE: 127.001},
+    )
+    hass.states.async_set(
+        "person.traveller",
+        "not_home",
+        {ATTR_LATITUDE: 37.52, ATTR_LONGITUDE: 127.02},
+    )
+    config = {
+        CONF_NAME: "Family GPS",
+        ATTR_ENTITY_ID: "device_tracker.family_gps",
+        ATTR_UNIQUE_ID: "family_gps",
+        ATTR_DEVICE_ID: "Family",
+        CONF_INITIAL_VALUE: "not_home",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: False,
+        CONF_SOURCE_ENTITIES: [
+            "device_tracker.phone_one",
+            "device_tracker.phone_two",
+            "person.traveller",
+        ],
+        CONF_LOCATION_HELPER: {
+            "distance_threshold_meters": 300,
+            "priority_window_seconds": 1800,
+        },
+    }
+    entity = virtual_device_tracker.VirtualDeviceTracker(config)
+    entity.hass = hass
+    entity.async_schedule_update_ha_state = Mock()
+
+    await entity.async_added_to_hass()
+
+    assert entity.latitude == 37.52
+    assert entity.longitude == 127.02
+    assert entity.extra_state_attributes[
+        virtual_device_tracker.ATTR_LOCATION_PRIORITY_SOURCE
+    ] == "person.traveller"
+
+    hass.states.async_set(
+        "person.traveller",
+        "not_home",
+        {ATTR_LATITUDE: 37.5, ATTR_LONGITUDE: 127.0002},
+    )
+    await hass.async_block_till_done()
+
+    assert entity.latitude == 37.5
+    assert entity.longitude == 127.0002
+    await entity.async_will_remove_from_hass()
+
+
 async def test_virtual_entity_restore_defaults_availability_when_missing(hass):
     config = {
         CONF_NAME: "Restored Washer",
@@ -1120,3 +1538,69 @@ async def test_virtual_entity_template_failures_do_not_block_other_templates(has
     assert entity.extra_state_attributes["good"] == "ok"
     assert "bad" not in entity.extra_state_attributes
     assert entity.async_schedule_update_ha_state.called
+
+
+async def test_virtual_camera_alias_proxies_source_image_and_stream(hass):
+    source = Mock()
+    source.async_camera_image = AsyncMock(return_value=b"camera-image")
+    source.stream_source = AsyncMock(return_value="rtsp://source/live")
+    camera_component = Mock()
+    camera_component.get_entity.return_value = source
+    hass.data["camera"] = camera_component
+
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Front Door Alias",
+        ATTR_ENTITY_ID: "camera.front_door_alias",
+        CONF_INITIAL_VALUE: "on",
+        CAMERA_SOURCE_ENTITY: "camera.front_door",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+
+    assert await entity.async_camera_image(width=640, height=360) == b"camera-image"
+    assert await entity.stream_source() == "rtsp://source/live"
+    source.async_camera_image.assert_awaited_once_with(width=640, height=360)
+    source.stream_source.assert_awaited_once_with()
+
+
+async def test_virtual_camera_alias_does_not_proxy_itself(hass):
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Self Alias",
+        ATTR_ENTITY_ID: "camera.self_alias",
+        CONF_INITIAL_VALUE: "on",
+        CAMERA_SOURCE_ENTITY: "camera.self_alias",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    camera_component = Mock()
+    camera_component.get_entity.return_value = entity
+    hass.data["camera"] = camera_component
+
+    assert await entity.async_camera_image() is None
+    assert await entity.stream_source() is None
+
+
+def test_virtual_entity_does_not_subscribe_to_its_own_template_source(hass):
+    entity = VirtualSensor({
+        CONF_NAME: "Self Referencing Source",
+        ATTR_ENTITY_ID: "sensor.self_referencing_source",
+        ATTR_UNIQUE_ID: "self_referencing_source",
+        ATTR_DEVICE_ID: "Test Device",
+        CONF_INITIAL_VALUE: "unknown",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: False,
+        CONF_TEMPLATE_SOURCES: {
+            "self_state": {
+                ATTR_ENTITY_ID: "sensor.self_referencing_source",
+                CONF_ATTRIBUTE: "state",
+            },
+        },
+    }, False)
+    entity.hass = hass
+
+    with patch(
+        "custom_components.virtual_layer.entity.async_track_state_change_event",
+    ) as track_state_change:
+        entity._setup_templates()
+
+    track_state_change.assert_not_called()

@@ -30,6 +30,7 @@ GENERIC_SCHEMA = virtual_schema(DEFAULT_GENERIC_VALUE, {
     vol.Optional(CONF_ICON): cv.string,
     vol.Optional(CONF_STATE_CLASS): cv.string,
 })
+ENTITY_SCHEMA = vol.Schema(GENERIC_SCHEMA, extra=vol.ALLOW_EXTRA)
 
 
 class GenericVirtualEntity(VirtualEntity, Entity):
@@ -41,6 +42,7 @@ class GenericVirtualEntity(VirtualEntity, Entity):
         self._attr_device_class = config.get(CONF_CLASS)
         self._attr_icon = config.get(CONF_ICON)
         self._attr_state_class = config.get(CONF_STATE_CLASS)
+        self._domain_options = generic_entity_options(config)
         _LOGGER.info(f"GenericVirtualEntity: {self.name} ({domain}) created")
 
     @property
@@ -63,6 +65,7 @@ class GenericVirtualEntity(VirtualEntity, Entity):
                 (CONF_STATE_CLASS, self._attr_state_class),
             ) if value is not None
         })
+        self._attr_extra_state_attributes.update(self._domain_options)
 
     def set_state(self, value) -> None:
         self._attr_state = value

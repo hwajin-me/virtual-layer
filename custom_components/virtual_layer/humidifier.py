@@ -148,15 +148,19 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         self._attr_is_on = True
+        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         self._attr_is_on = False
+        self.async_write_ha_state()
 
     async def async_set_humidity(self, humidity: int) -> None:
         self._attr_target_humidity = humidity
+        self.async_write_ha_state()
 
     async def async_set_mode(self, mode: str) -> None:
         self._attr_mode = mode
+        self.async_write_ha_state()
 
     def set_state(self, value) -> None:
         self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]

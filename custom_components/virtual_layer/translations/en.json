@@ -7,7 +7,8 @@
     "error": {
       "group_name_used": "That device name is already in use, try another.",
       "invalid_json": "Enter a valid JSON object.",
-      "invalid_entity_id": "Enter valid entity IDs."
+      "invalid_entity_id": "Enter valid entity IDs.",
+      "invalid_domain_options": "Enter valid options for the selected entity domain."
     },
     "step": {
       "user": {
@@ -55,7 +56,8 @@
           "availability_template": "Availability template",
           "attributes_json": "Attributes JSON",
           "attribute_sources_json": "Attribute sources JSON",
-          "attribute_templates_json": "Attribute templates JSON"
+          "attribute_templates_json": "Attribute templates JSON",
+          "domain_options_json": "Domain options JSON"
         },
         "data_description": {
           "device_name": "Entities with the same device name are attached to one Home Assistant device.",
@@ -68,11 +70,12 @@
           "entity_name": "This is used for the entity name and default entity ID.",
           "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
-          "template_sources_json": "A JSON object mapping template variable names to source states or attributes, for example {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}.",
+          "template_sources_json": "A JSON object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
           "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
-          "attributes_json": "A JSON object, for example {\"battery_level\": 91}.",
-          "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes, for example {\"battery\": \"sensor.remote.battery_level\"}. Use \"state\" to copy the source state.",
-          "attribute_templates_json": "A JSON object whose values are templates, for example {\"power\": \"{{ states('sensor.power') }}\"}."
+          "attributes_json": "A JSON object. Example key: battery_level -> 91.",
+          "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
+          "attribute_templates_json": "A JSON object whose values are templates. Example key: power -> states('sensor.power').",
+          "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
         }
       },
       "entity_source": {
@@ -82,7 +85,7 @@
           "reference_entity_id": "Existing entities"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and location sources use all-home."
+          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes)."
         }
       }
     }
@@ -91,6 +94,7 @@
     "error": {
       "invalid_json": "Enter a valid JSON object.",
       "invalid_entity_id": "Enter valid entity IDs.",
+      "invalid_domain_options": "Enter valid options for the selected entity domain.",
       "backup_group_not_found": "No matching virtual device was found in the backup.",
       "entity_not_found": "The selected virtual entity was not found.",
       "no_entities": "This device does not have any virtual entities to edit."
@@ -144,7 +148,8 @@
           "availability_template": "Availability template",
           "attributes_json": "Attributes JSON",
           "attribute_sources_json": "Attribute sources JSON",
-          "attribute_templates_json": "Attribute templates JSON"
+          "attribute_templates_json": "Attribute templates JSON",
+          "domain_options_json": "Domain options JSON"
         },
         "data_description": {
           "device_name": "Changing this moves the entity to another virtual device.",
@@ -157,11 +162,12 @@
           "entity_name": "This is used for the entity name and default entity ID.",
           "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
-          "template_sources_json": "A JSON object mapping template variable names to source states or attributes, for example {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}.",
+          "template_sources_json": "A JSON object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
           "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
-          "attributes_json": "A JSON object, for example {\"battery_level\": 91}.",
-          "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes, for example {\"battery\": \"sensor.remote.battery_level\"}. Use \"state\" to copy the source state.",
-          "attribute_templates_json": "A JSON object whose values are templates, for example {\"power\": \"{{ states('sensor.power') }}\"}."
+          "attributes_json": "A JSON object. Example key: battery_level -> 91.",
+          "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
+          "attribute_templates_json": "A JSON object whose values are templates. Example key: power -> states('sensor.power').",
+          "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
         }
       },
       "edit_entity_source": {
@@ -171,7 +177,7 @@
           "reference_entity_id": "Existing entities"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to keep the current virtual entity values. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and location sources use all-home."
+          "reference_entity_id": "Leave empty to keep the current virtual entity values. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes)."
         }
       },
       "entity": {
@@ -198,7 +204,8 @@
           "availability_template": "Availability template",
           "attributes_json": "Attributes JSON",
           "attribute_sources_json": "Attribute sources JSON",
-          "attribute_templates_json": "Attribute templates JSON"
+          "attribute_templates_json": "Attribute templates JSON",
+          "domain_options_json": "Domain options JSON"
         },
         "data_description": {
           "device_name": "Entities with the same device name are attached to one Home Assistant device.",
@@ -211,11 +218,12 @@
           "entity_name": "This is used for the entity name and default entity ID.",
           "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
-          "template_sources_json": "A JSON object mapping template variable names to source states or attributes, for example {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}.",
+          "template_sources_json": "A JSON object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
           "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
-          "attributes_json": "A JSON object, for example {\"battery_level\": 91}.",
-          "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes, for example {\"battery\": \"sensor.remote.battery_level\"}. Use \"state\" to copy the source state.",
-          "attribute_templates_json": "A JSON object whose values are templates, for example {\"power\": \"{{ states('sensor.power') }}\"}."
+          "attributes_json": "A JSON object. Example key: battery_level -> 91.",
+          "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
+          "attribute_templates_json": "A JSON object whose values are templates. Example key: power -> states('sensor.power').",
+          "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
         }
       },
       "entity_source": {
@@ -225,7 +233,7 @@
           "reference_entity_id": "Existing entities"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and location sources use all-home."
+          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes)."
         }
       },
       "backup": {

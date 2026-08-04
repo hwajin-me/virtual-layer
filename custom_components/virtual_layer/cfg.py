@@ -1,27 +1,28 @@
 """Handles Virtual Layer config-entry backed configuration."""
 
-import aiofiles
 import asyncio
-from collections.abc import Mapping
 import copy
-import logging
 import json
+import logging
 import os
-import voluptuous as vol
 import uuid
+from collections.abc import Mapping
+from importlib import import_module
 
+import aiofiles
+import homeassistant.helpers.entity_registry as er
+import voluptuous as vol
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_PLATFORM,
     CONF_UNIT_OF_MEASUREMENT,
-    Platform
+    Platform,
 )
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import slugify
 
 from .const import *
 from .entity import virtual_schema
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +39,18 @@ SENSOR_SCHEMA = vol.Schema(virtual_schema(SENSOR_DEFAULT_INITIAL_VALUE, {
 
 _meta_lock = asyncio.Lock()
 STORAGE_VERSION = 1
+
+_CLIMATE_INITIAL_VALUES = {
+    "off",
+    "heat",
+    "cool",
+    "heat_cool",
+    "auto",
+    "dry",
+    "fan_only",
+}
+_DEFAULT_NUMBER_MIN = 0.0
+_DEFAULT_NUMBER_MAX = 100.0
 
 
 def _as_dict(value, label):
@@ -133,16 +146,23 @@ async def _async_load_json(file_name):
 
 async def _async_save_json(file_name, data):
     _LOGGER.debug("_async_save_json1 file_name for %s", file_name)
+    temporary_file_name = f"{file_name}.{uuid.uuid4().hex}.tmp"
     try:
         directory = os.path.dirname(file_name)
         if directory:
             os.makedirs(directory, exist_ok=True)
-        async with aiofiles.open(file_name, 'w') as meta_file:
+        async with aiofiles.open(temporary_file_name, 'w') as meta_file:
             data = json.dumps(data, indent=4)
             await meta_file.write(data)
+        os.replace(temporary_file_name, file_name)
     except OSError:
         _LOGGER.exception("Unable to save json file: %s", file_name)
         raise
+    finally:
+        try:
+            os.remove(temporary_file_name)
+        except FileNotFoundError:
+            pass
 
 
 async def _load_meta_data(hass, group_name: str):
@@ -252,6 +272,37 @@ def _normalize_common_entity_config(entity, device_name, index):
         )
         entity[CONF_INITIAL_VALUE] = "unknown"
 
+    if entity.get(CONF_PLATFORM) == "climate":
+        climate_initial_value = str(entity.get(CONF_INITIAL_VALUE, "off")).lower()
+        if climate_initial_value not in _CLIMATE_INITIAL_VALUES:
+            _LOGGER.warning(
+                "Resetting invalid climate initial value for device %s at index %s",
+                device_name,
+                index,
+            )
+            entity[CONF_INITIAL_VALUE] = "off"
+
+    if entity.get(CONF_PLATFORM) == "number":
+        for key, default in ((CONF_MIN, _DEFAULT_NUMBER_MIN), (CONF_MAX, _DEFAULT_NUMBER_MAX)):
+            try:
+                entity[key] = float(entity.get(key, default))
+            except (TypeError, ValueError):
+                _LOGGER.warning(
+                    "Resetting invalid number %s for device %s at index %s",
+                    key,
+                    device_name,
+                    index,
+                )
+                entity[key] = default
+        if entity[CONF_MIN] > entity[CONF_MAX]:
+            _LOGGER.warning(
+                "Resetting inverted number range for device %s at index %s",
+                device_name,
+                index,
+            )
+            entity[CONF_MIN] = _DEFAULT_NUMBER_MIN
+            entity[CONF_MAX] = _DEFAULT_NUMBER_MAX
+
     for key in (
         CONF_ATTRIBUTES,
         CONF_ATTRIBUTE_SOURCES,
@@ -272,15 +323,20 @@ def _normalize_common_entity_config(entity, device_name, index):
         if not isinstance(source_entities, list):
             source_entities = []
         valid_source_entities = []
+        seen_source_entities = set()
         for source_entity_id in source_entities:
             try:
-                valid_source_entities.append(cv.entity_id(source_entity_id))
+                source_entity_id = cv.entity_id(source_entity_id)
             except vol.Invalid:
                 _LOGGER.warning(
                     "Ignoring invalid source entity for device %s at index %s",
                     device_name,
                     index,
                 )
+                continue
+            if source_entity_id not in seen_source_entities:
+                seen_source_entities.add(source_entity_id)
+                valid_source_entities.append(source_entity_id)
         entity[CONF_SOURCE_ENTITIES] = valid_source_entities
 
     for key in (CONF_VALUE_TEMPLATE, CONF_AVAILABILITY_TEMPLATE):
@@ -369,6 +425,21 @@ def _entity_id_matches_platform(entity_id, platform):
     )
 
 
+def _platform_entity_schema(platform):
+    """Load a platform schema for persisted entity validation."""
+    module = import_module(f".{platform}", __package__)
+    return getattr(module, f"{platform.upper()}_SCHEMA", None) or module.ENTITY_SCHEMA
+
+
+def _is_valid_platform_entity_config(schema, entity) -> bool:
+    """Check a stored entity without allowing one bad item to block setup."""
+    try:
+        schema(entity)
+    except (TypeError, ValueError, vol.Invalid):
+        return False
+    return True
+
+
 def _pop_entity_meta(meta_data, entity_key, name, platform):
     """Return matching meta data from either the current or legacy layout."""
     if entity_key in meta_data:
@@ -424,21 +495,36 @@ async def async_load_backup(file_name):
     return _backup_groups_from_payload(await _async_load_json(file_name))
 
 
-class BlendedCfg(object):
+class BlendedCfg:
     """Helper class to get at Virtual configuration options.
 
     Reads UI-managed devices from config entry options.
     """
 
-    def __init__(self, hass, flow_data, options=None):
+    def __init__(self, hass, flow_data, options=None, config_entry=None):
         self._hass = hass
         self._group_name = flow_data[ATTR_GROUP_NAME]
         self._options = options or {}
+        self._config_entry = config_entry
 
         self._meta_data = {}
         self._orphaned_entities = {}
         self._devices = []
         self._entities = {}
+
+    def _reserve_entity_id(self, platform, entity_id, unique_id):
+        """Reserve an entity registry id before platform setup can race."""
+        if self._config_entry is None:
+            return entity_id
+
+        entity_entry = er.async_get(self._hass).async_get_or_create(
+            platform,
+            COMPONENT_DOMAIN,
+            unique_id,
+            suggested_object_id=entity_id.split(".", 1)[1],
+            config_entry=self._config_entry,
+        )
+        return entity_entry.entity_id
 
     async def async_load(self):
         meta_data = await _load_meta_data(self._hass, self._group_name)
@@ -565,6 +651,47 @@ class BlendedCfg(object):
                     ATTR_DEVICE_ID: device_id,
                 })
                 entity.update(_entity_device_info(device_config))
+
+                # Platform modules are imported lazily to validate historical
+                # UI data. Only import off the event loop; Home Assistant
+                # template schema validation itself needs the loop context.
+                try:
+                    schema = await self._hass.async_add_executor_job(
+                        _platform_entity_schema,
+                        platform,
+                    )
+                except (AttributeError, ImportError, TypeError, ValueError):
+                    schema = None
+                if schema is None or not _is_valid_platform_entity_config(schema, entity):
+                    _LOGGER.warning(
+                        "Skipping invalid %s entity for device %s at index %s; "
+                        "the stored UI item remains available for repair or removal",
+                        platform,
+                        device_name,
+                        index,
+                    )
+                    # Keep identity metadata so repairing the item through the
+                    # UI does not produce a duplicate entity or device.
+                    self._meta_data[entity_key] = entity_meta
+                    continue
+
+                reserved_entity_id = self._reserve_entity_id(
+                    platform,
+                    entity_id,
+                    unique_id,
+                )
+                if reserved_entity_id != entity_id:
+                    _LOGGER.warning(
+                        "Entity id %s is already in use; assigned %s for %s",
+                        entity_id,
+                        reserved_entity_id,
+                        name,
+                    )
+                    entity_id = reserved_entity_id
+                    entity[ATTR_ENTITY_ID] = entity_id
+                    entity_meta[ATTR_ENTITY_ID] = entity_id
+                    changed = True
+
                 _LOGGER.debug(f"added entity {platform}/{entity}")
 
                 # Now store in the correct place. Move off temporary meta

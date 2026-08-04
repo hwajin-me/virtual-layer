@@ -217,12 +217,15 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         self._attr_hvac_mode = _as_hvac_mode(hvac_mode)
+        self.async_write_ha_state()
 
     async def async_turn_on(self) -> None:
         self._attr_hvac_mode = next((mode for mode in self._attr_hvac_modes if mode != HVACMode.OFF), HVACMode.HEAT)
+        self.async_write_ha_state()
 
     async def async_turn_off(self) -> None:
         self._attr_hvac_mode = HVACMode.OFF
+        self.async_write_ha_state()
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         if ATTR_TEMPERATURE in kwargs:
@@ -231,21 +234,27 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             self._attr_target_temperature_high = kwargs[ATTR_TARGET_TEMPERATURE_HIGH]
         if ATTR_TARGET_TEMPERATURE_LOW in kwargs:
             self._attr_target_temperature_low = kwargs[ATTR_TARGET_TEMPERATURE_LOW]
+        self.async_write_ha_state()
 
     async def async_set_humidity(self, humidity: int) -> None:
         self._attr_target_humidity = humidity
+        self.async_write_ha_state()
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         self._attr_fan_mode = fan_mode
+        self.async_write_ha_state()
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         self._attr_preset_mode = preset_mode
+        self.async_write_ha_state()
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         self._attr_swing_mode = swing_mode
+        self.async_write_ha_state()
 
     async def async_set_swing_horizontal_mode(self, swing_horizontal_mode: str) -> None:
         self._attr_swing_horizontal_mode = swing_horizontal_mode
+        self.async_write_ha_state()
 
     def set_state(self, value) -> None:
         self._attr_hvac_mode = _as_hvac_mode(value)

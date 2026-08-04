@@ -39,7 +39,7 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from . import get_entity_from_domain, get_entity_configs
+from . import _assert_managed_virtual_entity, get_entity_from_domain, get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
 
@@ -184,4 +184,5 @@ async def async_virtual_set_service(hass, call):
     for entity_id in call.data[ATTR_ENTITY_ID]:
         value = call.data[ATTR_VALUE]
         _LOGGER.debug(f"setting {entity_id} to {value})")
+        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, PLATFORM_DOMAIN, entity_id).set(value)

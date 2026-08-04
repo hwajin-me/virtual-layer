@@ -17,7 +17,7 @@ from homeassistant.const import ATTR_ENTITY_ID, ATTR_DEVICE_CLASS, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 
-from . import get_entity_from_domain, get_entity_configs
+from . import _assert_managed_virtual_entity, get_entity_from_domain, get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
 
@@ -145,16 +145,19 @@ class VirtualBinarySensor(VirtualEntity, BinarySensorEntity):
 async def async_virtual_on_service(hass, call):
     for entity_id in call.data['entity_id']:
         _LOGGER.debug(f"turning on {entity_id}")
+        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, PLATFORM_DOMAIN, entity_id).turn_on()
 
 
 async def async_virtual_off_service(hass, call):
     for entity_id in call.data['entity_id']:
         _LOGGER.debug(f"turning off {entity_id}")
+        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, PLATFORM_DOMAIN, entity_id).turn_off()
 
 
 async def async_virtual_toggle_service(hass, call):
     for entity_id in call.data['entity_id']:
         _LOGGER.debug(f"toggling {entity_id}")
+        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, PLATFORM_DOMAIN, entity_id).toggle()

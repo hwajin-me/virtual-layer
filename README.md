@@ -175,7 +175,9 @@ on the source type:
 - String-like sources use concatenation
 - Date, time, and datetime sources use the latest known value
 - Select/input-select sources use the first available value
-- Location sources use an all-home style helper
+- Multiple location sources create a GPS median helper. A source more than 300 m
+  from that median is followed for 30 minutes after its latest GPS update, so a
+  travelling device remains selected after it arrives near the other devices.
 
 The generated Home Assistant Jinja template is optional. You can keep it, edit
 it, or replace it entirely.
@@ -196,6 +198,57 @@ Home Assistant does not provide a dedicated `washer` entity domain. Model
 appliances such as washers by creating multiple virtual entities under one
 Virtual Layer device, for example a state sensor, a door binary sensor, and a
 power switch.
+
+## Cameras
+
+Create a camera alias by selecting one camera as the original entity. The UI
+automatically selects the `camera` domain, copies its state through a template,
+and sets the camera-specific `source_entity` option. The virtual camera proxies
+the source image and stream while keeping its own entity name, id, device, and
+other virtual-layer settings.
+
+Camera creation also supports direct UI configuration through **Domain options
+JSON**, which is the UI-only equivalent of camera YAML options. A camera can
+use a local image, a stream URL, or both without an original entity:
+
+```json
+{
+  "image_path": "/config/www/virtual-camera.jpg",
+  "stream_source": "rtsp://camera.example.local/live",
+  "is_recording": false,
+  "motion_detection": true
+}
+```
+
+For an alias, use the source option alone (or add direct options to override
+the proxied image or stream):
+
+```json
+{
+  "source_entity": "camera.front_door"
+}
+```
+
+## Direct Domain Settings
+
+Every virtual entity is created and edited from the UI. **Domain options JSON**
+is the UI-only equivalent of domain YAML options: it is validated against the
+native virtual implementation for rich domains such as climate, cover, light,
+humidifier, camera, and lock.
+
+For the remaining state-backed domains, use the same field for arbitrary
+JSON-compatible domain data. These settings are preserved on edits and backup
+restore, and appear as state attributes. This makes YAML-only style metadata
+available without enabling YAML loading. For example, a virtual weather entity
+can be created with:
+
+```json
+{
+  "temperature": 21.5,
+  "humidity": 48,
+  "forecast_provider": "virtual"
+}
+```
 
 ## Supported Domains
 
@@ -289,6 +342,15 @@ Run the syntax and lightweight lint checks used during development:
 ruff check custom_components/virtual_layer tests --select E9,F63,F7,F82
 git diff --check
 ```
+
+Install the local git pre-commit lint hook:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+After installing it, every commit runs the same lightweight compile, Ruff, and
+whitespace checks.
 
 Run a real Home Assistant container with Docker Compose:
 

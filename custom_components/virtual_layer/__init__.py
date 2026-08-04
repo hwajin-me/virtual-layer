@@ -4,6 +4,7 @@ This component provides support for virtual components.
 """
 
 from collections.abc import Mapping
+from datetime import timedelta
 import logging
 import voluptuous as vol
 
@@ -11,6 +12,12 @@ import homeassistant.helpers.config_validation as cv
 import homeassistant.helpers.device_registry as dr
 from homeassistant.helpers.entity import async_generate_entity_id
 import homeassistant.helpers.entity_registry as er
+from homeassistant.helpers.event import (
+    TrackTemplate,
+    async_track_state_change_event,
+    async_track_template_result,
+    async_track_time_interval,
+)
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.service import verify_domain_control
 from homeassistant.helpers.typing import ConfigType
@@ -21,6 +28,7 @@ from homeassistant.core import (
     callback
 )
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.template import Template
 
 from .const import *
 from .cfg import (
@@ -81,6 +89,7 @@ SERVICE_RESTORE_DEVICES_SCHEMA = vol.Schema({
 })
 
 VIRTUAL_PLATFORMS = VIRTUAL_ENTITY_DOMAINS
+_STATE_ONLY_TEMPLATE_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_state_only_template_listeners"
 
 
 def _entry_platforms_from_entities(entities):
@@ -125,7 +134,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Get the config.
     _LOGGER.debug(f"creating new cfg")
-    vcfg = BlendedCfg(hass, entry.data, entry.options)
+    vcfg = BlendedCfg(hass, entry.data, entry.options, entry)
     await vcfg.async_load()
 
     # create the devices.
@@ -176,7 +185,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
     if unload_ok:
         _LOGGER.debug("unloaded ok")
-        _async_unload_state_only_entities(hass, group_data.get(ATTR_ENTITIES, {}))
+        _async_unload_state_only_entities(hass, entry, group_data.get(ATTR_ENTITIES, {}))
         hass.data[COMPONENT_DOMAIN].pop(entry.data[ATTR_GROUP_NAME], None)
         # _LOGGER.debug(f"ocfg={ocfg}")
     # _LOGGER.debug(f"after hass={hass.data[COMPONENT_DOMAIN]}")
@@ -190,7 +199,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     _LOGGER.debug("removing virtual group %s", group_name)
 
     group_data = hass.data.get(COMPONENT_DOMAIN, {}).get(group_name, {})
-    _async_unload_state_only_entities(hass, group_data.get(ATTR_ENTITIES, {}))
+    _async_unload_state_only_entities(hass, entry, group_data.get(ATTR_ENTITIES, {}))
     _async_remove_entry_registry_entries(hass, entry)
 
     if group_name:
@@ -234,7 +243,12 @@ def _state_only_attributes(entity):
     }
     configured_attributes = entity.get(CONF_ATTRIBUTES, {})
     if isinstance(configured_attributes, Mapping):
-        attributes.update(configured_attributes)
+        attributes.update({
+            name: value
+            for name, value in configured_attributes.items()
+            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+        })
+    attributes.update(generic_entity_options(entity))
     return attributes
 
 
@@ -242,6 +256,7 @@ def _state_only_attributes(entity):
 def _async_setup_state_only_entities(hass, entry, entities) -> None:
     if not isinstance(entities, Mapping):
         return
+    _async_remove_state_only_template_listeners(hass, entry.entry_id)
     for domain in STATE_ONLY_ENTITY_DOMAINS:
         for entity in entities.get(domain, []):
             if not isinstance(entity, Mapping):
@@ -254,10 +269,12 @@ def _async_setup_state_only_entities(hass, entry, entities) -> None:
                 entity.get(CONF_INITIAL_VALUE, "unknown"),
                 _state_only_attributes(entity),
             )
+            _async_setup_state_only_templates(hass, entry, entity)
 
 
 @callback
-def _async_unload_state_only_entities(hass, entities) -> None:
+def _async_unload_state_only_entities(hass, entry, entities) -> None:
+    _async_remove_state_only_template_listeners(hass, entry.entry_id)
     if not isinstance(entities, Mapping):
         return
     for domain in STATE_ONLY_ENTITY_DOMAINS:
@@ -266,8 +283,166 @@ def _async_unload_state_only_entities(hass, entities) -> None:
                 hass.states.async_remove(entity[ATTR_ENTITY_ID])
 
 
+@callback
+def _async_remove_state_only_template_listeners(hass, entry_id) -> None:
+    entry_listeners = hass.data.get(_STATE_ONLY_TEMPLATE_LISTENERS_DATA)
+    listeners = entry_listeners.pop(entry_id, []) if entry_listeners else []
+    for remove_listener in listeners:
+        remove_listener()
+    if entry_listeners == {}:
+        hass.data.pop(_STATE_ONLY_TEMPLATE_LISTENERS_DATA, None)
+
+
+def _state_only_template_variables(hass, entity) -> dict:
+    variables = {}
+    template_sources = entity.get(CONF_TEMPLATE_SOURCES, {})
+    if not isinstance(template_sources, Mapping):
+        return variables
+    for name, source in template_sources.items():
+        if not isinstance(source, Mapping):
+            continue
+        entity_id = source.get(ATTR_ENTITY_ID)
+        attribute = source.get(CONF_ATTRIBUTE, "state")
+        state = hass.states.get(entity_id) if entity_id else None
+        if state is None:
+            variables[name] = None
+        elif attribute == "state":
+            variables[name] = state.state
+        else:
+            variables[name] = state.attributes.get(attribute)
+    return variables
+
+
+def _render_state_only_template(hass, entity, template):
+    return Template(str(template), hass).async_render(
+        variables=_state_only_template_variables(hass, entity),
+        parse_result=False,
+    )
+
+
+@callback
+def _async_apply_state_only_templates(hass, entity) -> None:
+    entity_id = entity.get(ATTR_ENTITY_ID)
+    state = hass.states.get(entity_id) if entity_id else None
+    if state is None:
+        return
+
+    value = state.state
+    attributes = dict(state.attributes)
+    domain_options = generic_entity_options(entity)
+    changed = False
+    try:
+        for name, configured_value in domain_options.items():
+            changed = attributes.get(name) != configured_value or changed
+            attributes[name] = configured_value
+
+        if entity.get(CONF_VALUE_TEMPLATE):
+            value = _render_state_only_template(hass, entity, entity[CONF_VALUE_TEMPLATE])
+            changed = value != state.state or changed
+
+        if entity.get(CONF_AVAILABILITY_TEMPLATE):
+            available = str(
+                _render_state_only_template(hass, entity, entity[CONF_AVAILABILITY_TEMPLATE])
+            ).lower() in {"y", "yes", "t", "true", "on", "1"}
+            changed = attributes.get(ATTR_AVAILABLE) != available or changed
+            attributes[ATTR_AVAILABLE] = available
+
+        attribute_templates = entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
+        if isinstance(attribute_templates, Mapping):
+            for name, template in attribute_templates.items():
+                if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+                    continue
+                rendered = _render_state_only_template(hass, entity, template)
+                changed = attributes.get(name) != rendered or changed
+                attributes[name] = rendered
+
+        attribute_sources = entity.get(CONF_ATTRIBUTE_SOURCES, {})
+        if isinstance(attribute_sources, Mapping):
+            for name, source in attribute_sources.items():
+                if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+                    continue
+                if not isinstance(source, Mapping):
+                    continue
+                source_entity_id = source.get(ATTR_ENTITY_ID)
+                source_state = hass.states.get(source_entity_id) if source_entity_id else None
+                attribute = source.get(CONF_ATTRIBUTE)
+                source_value = None if source_state is None else (
+                    source_state.state if attribute == "state"
+                    else source_state.attributes.get(attribute)
+                )
+                changed = attributes.get(name) != source_value or changed
+                attributes[name] = source_value
+    except Exception as err:
+        _LOGGER.warning("Unable to update state-only virtual entity %s: %s", entity_id, err)
+        return
+
+    if changed:
+        hass.states.async_set(entity_id, value, attributes)
+
+
+@callback
+def _async_setup_state_only_templates(hass, entry, entity) -> None:
+    entity_id = entity.get(ATTR_ENTITY_ID)
+    if not entity_id:
+        return
+    source_entities = set(entity.get(CONF_SOURCE_ENTITIES, []))
+    for source_group in (CONF_ATTRIBUTE_SOURCES, CONF_TEMPLATE_SOURCES):
+        sources = entity.get(source_group, {})
+        if isinstance(sources, Mapping):
+            source_entities.update(
+                source.get(ATTR_ENTITY_ID)
+                for source in sources.values()
+                if isinstance(source, Mapping) and source.get(ATTR_ENTITY_ID)
+            )
+    source_entities.discard(entity_id)
+
+    listeners = hass.data.setdefault(
+        _STATE_ONLY_TEMPLATE_LISTENERS_DATA, {}
+    ).setdefault(entry.entry_id, [])
+
+    if source_entities:
+        listeners.append(async_track_state_change_event(
+            hass,
+            source_entities,
+            lambda _event: _async_apply_state_only_templates(hass, entity),
+        ))
+
+    templates = [
+        template
+        for template in (
+            entity.get(CONF_VALUE_TEMPLATE),
+            entity.get(CONF_AVAILABILITY_TEMPLATE),
+            *dict(entity.get(CONF_ATTRIBUTE_TEMPLATES, {})).values(),
+        )
+        if template
+    ]
+    for template in templates:
+        tracked_template = Template(str(template), hass)
+        listeners.append(async_track_template_result(
+            hass,
+            [TrackTemplate(tracked_template, _state_only_template_variables(hass, entity))],
+            lambda _event, _updates: _async_apply_state_only_templates(hass, entity),
+        ).async_remove)
+
+    pull_interval = entity.get(CONF_PULL_INTERVAL, 0)
+    if pull_interval:
+        listeners.append(async_track_time_interval(
+            hass,
+            lambda _now: _async_apply_state_only_templates(hass, entity),
+            timedelta(seconds=pull_interval),
+        ))
+    _async_apply_state_only_templates(hass, entity)
+
+
 def _is_state_only_entity_id(entity_id):
     return entity_id.split(".", 1)[0] in STATE_ONLY_ENTITY_DOMAINS
+
+
+def _assert_managed_virtual_entity(hass, entity_id) -> None:
+    """Reject service calls targeting entities outside this integration."""
+    entity_entry = er.async_get(hass).async_get(entity_id)
+    if entity_entry is None or entity_entry.platform != COMPONENT_DOMAIN:
+        raise HomeAssistantError(f"{entity_id} is not managed by virtual_layer")
 
 
 def _get_state_only_entity_config(hass, entity_id):
@@ -356,12 +531,24 @@ def _get_state_only_state(hass, entity_id):
     return state
 
 
+def _state_only_direct_options(hass, entity_id) -> dict:
+    """Return configured generic options that runtime services must not replace."""
+    config = _get_state_only_entity_config(hass, entity_id)
+    return generic_entity_options(config) if config is not None else {}
+
+
 @callback
 def _async_set_state_only_entity(hass, entity_id, value=None, attributes=None):
     state = _get_state_only_state(hass, entity_id)
     next_attributes = dict(state.attributes)
+    direct_options = _state_only_direct_options(hass, entity_id)
     if attributes:
-        next_attributes.update(attributes)
+        next_attributes.update({
+            name: item
+            for name, item in attributes.items()
+            if name not in direct_options
+        })
+    next_attributes.update(direct_options)
     hass.states.async_set(
         entity_id,
         state.state if value is None else value,
@@ -373,13 +560,17 @@ def _async_set_state_only_entity(hass, entity_id, value=None, attributes=None):
 def _async_clear_state_only_attributes(hass, entity_id, attributes):
     state = _get_state_only_state(hass, entity_id)
     next_attributes = dict(state.attributes)
+    direct_options = _state_only_direct_options(hass, entity_id)
     if attributes:
         for attribute in attributes:
+            if attribute in (ATTR_PERSISTENT, ATTR_AVAILABLE) or attribute in direct_options:
+                continue
             next_attributes.pop(attribute, None)
     else:
         for attribute in list(next_attributes):
-            if attribute not in (ATTR_PERSISTENT, ATTR_AVAILABLE):
+            if attribute not in (ATTR_PERSISTENT, ATTR_AVAILABLE) and attribute not in direct_options:
                 next_attributes.pop(attribute, None)
+    next_attributes.update(direct_options)
     hass.states.async_set(entity_id, state.state, next_attributes)
 
 
@@ -394,6 +585,7 @@ async def async_virtual_set_availability_service(hass, call):
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, attributes={ATTR_AVAILABLE: value})
             continue
+        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, domain, entity_id).set_available(value)
 
 
@@ -486,18 +678,24 @@ async def async_virtual_set_state_service(hass, call):
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, value=value)
             continue
+        _assert_managed_virtual_entity(hass, entity_id)
         entity = get_entity_from_domain(hass, domain, entity_id)
         await _async_apply_virtual_state(entity, value)
 
 
 async def async_virtual_set_attributes_service(hass, call):
-    attributes = call.data[ATTR_ATTRIBUTES]
+    attributes = {
+        name: value
+        for name, value in call.data[ATTR_ATTRIBUTES].items()
+        if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+    }
     for entity_id in call.data[ATTR_ENTITY_ID]:
         domain = entity_id.split(".")[0]
         _LOGGER.info(f"{entity_id} set_attributes(attributes={attributes})")
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, attributes=attributes)
             continue
+        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, domain, entity_id).set_attributes(attributes)
 
 
@@ -509,6 +707,7 @@ async def async_virtual_clear_attributes_service(hass, call):
         if _is_state_only_entity_id(entity_id):
             _async_clear_state_only_attributes(hass, entity_id, attributes)
             continue
+        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, domain, entity_id).clear_attributes(attributes)
 
 

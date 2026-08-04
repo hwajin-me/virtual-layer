@@ -37,9 +37,19 @@ CONF_IS_RECORDING = "is_recording"
 CONF_IS_STREAMING = "is_streaming"
 CONF_MODEL = "model"
 CONF_MOTION_DETECTION = "motion_detection"
+CONF_SOURCE_ENTITY = "source_entity"
 CONF_STREAM_SOURCE = "stream_source"
 
 DEFAULT_CAMERA_VALUE = "on"
+
+
+def _camera_entity_id(value: str) -> str:
+    """Validate a camera entity id used as an alias source."""
+    entity_id = cv.entity_id(value)
+    if not entity_id.startswith(f"{PLATFORM_DOMAIN}."):
+        raise vol.Invalid("source_entity must be a camera entity")
+    return entity_id
+
 
 BASE_SCHEMA = virtual_schema(DEFAULT_CAMERA_VALUE, {
     vol.Optional(CONF_BRAND): cv.string,
@@ -48,6 +58,7 @@ BASE_SCHEMA = virtual_schema(DEFAULT_CAMERA_VALUE, {
     vol.Optional(CONF_IS_STREAMING, default=False): cv.boolean,
     vol.Optional(CONF_MODEL): cv.string,
     vol.Optional(CONF_MOTION_DETECTION, default=False): cv.boolean,
+    vol.Optional(CONF_SOURCE_ENTITY): _camera_entity_id,
     vol.Optional(CONF_STREAM_SOURCE): cv.string,
 })
 
@@ -87,10 +98,11 @@ class VirtualCamera(VirtualEntity, Camera):
         self._attr_brand = config.get(CONF_BRAND)
         self._attr_model = config.get(CONF_MODEL)
         self._attr_supported_features = CameraEntityFeature.ON_OFF
-        if config.get(CONF_STREAM_SOURCE):
+        if config.get(CONF_STREAM_SOURCE) or config.get(CONF_SOURCE_ENTITY):
             self._attr_supported_features |= CameraEntityFeature.STREAM
 
         self._image_path = config.get(CONF_IMAGE_PATH)
+        self._source_entity = config.get(CONF_SOURCE_ENTITY)
         self._stream_source = config.get(CONF_STREAM_SOURCE)
 
         _LOGGER.info(f"VirtualCamera: {self.name} created")
@@ -120,7 +132,20 @@ class VirtualCamera(VirtualEntity, Camera):
         width: int | None = None,
         height: int | None = None,
     ) -> bytes | None:
-        if not self._attr_is_on or not self._image_path:
+        if not self._attr_is_on:
+            return None
+        source = self._source_camera()
+        if source is not None and not self._image_path:
+            try:
+                return await source.async_camera_image(width=width, height=height)
+            except (AttributeError, OSError, ValueError) as err:
+                _LOGGER.warning(
+                    "Unable to get virtual camera image from %s: %s",
+                    self._source_entity,
+                    err,
+                )
+                return None
+        if not self._image_path:
             return None
         try:
             async with aiofiles.open(self._image_path, "rb") as image_file:
@@ -130,19 +155,47 @@ class VirtualCamera(VirtualEntity, Camera):
             return None
 
     async def stream_source(self) -> str | None:
+        source = self._source_camera()
+        if source is not None and not self._stream_source:
+            try:
+                return await source.stream_source()
+            except (AttributeError, OSError, ValueError) as err:
+                _LOGGER.warning(
+                    "Unable to get virtual camera stream from %s: %s",
+                    self._source_entity,
+                    err,
+                )
+                return None
         return self._stream_source
+
+    def _source_camera(self) -> Camera | None:
+        """Return the configured source camera without recursing into self."""
+        if not self._source_entity or self.hass is None:
+            return None
+
+        component = self.hass.data.get(PLATFORM_DOMAIN)
+        get_entity = getattr(component, "get_entity", None)
+        if get_entity is None:
+            return None
+
+        source = get_entity(self._source_entity)
+        return None if source is self else source
 
     async def async_turn_on(self) -> None:
         self._attr_is_on = True
+        self.async_write_ha_state()
 
     async def async_turn_off(self) -> None:
         self._attr_is_on = False
+        self.async_write_ha_state()
 
     async def async_enable_motion_detection(self) -> None:
         self._attr_motion_detection_enabled = True
+        self.async_write_ha_state()
 
     async def async_disable_motion_detection(self) -> None:
         self._attr_motion_detection_enabled = False
+        self.async_write_ha_state()
 
     def set_state(self, value) -> None:
         self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]

@@ -173,6 +173,7 @@ class VirtualLock(VirtualEntity, LockEntity):
         else:
             self._locking()
             self._start_operation()
+        self.async_write_ha_state()
 
     async def async_unlock(self, **kwargs: Any) -> None:
         if self._change_time == DEFAULT_CHANGE_TIME:
@@ -180,6 +181,7 @@ class VirtualLock(VirtualEntity, LockEntity):
         else:
             self._unlocking()
             self._start_operation()
+        self.async_write_ha_state()
 
     async def async_open(self, **kwargs: Any) -> None:
         _LOGGER.debug(f"opening {self.name}")
@@ -187,6 +189,7 @@ class VirtualLock(VirtualEntity, LockEntity):
             self._open()
         else:
             self._unlock()
+        self.async_write_ha_state()
 
     def set_state(self, value) -> None:
         value = str(value).lower()

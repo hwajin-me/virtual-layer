@@ -7,7 +7,7 @@ from .generic import GENERIC_SCHEMA, async_setup_generic_entry, async_setup_gene
 PLATFORM_DOMAIN = "geolocation"
 DEPENDENCIES = [COMPONENT_DOMAIN]
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(GENERIC_SCHEMA)
-ENTITY_SCHEMA = vol.Schema(GENERIC_SCHEMA)
+ENTITY_SCHEMA = vol.Schema(GENERIC_SCHEMA, extra=vol.ALLOW_EXTRA)
 
 
 async def async_setup_platform(hass, config, async_add_entities, _discovery_info=None):

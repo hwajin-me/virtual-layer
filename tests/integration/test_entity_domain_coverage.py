@@ -31,6 +31,7 @@ from custom_components.virtual_layer.const import (
     STATE_ONLY_ENTITY_DOMAINS,
     VIRTUAL_ENTITY_DOMAINS,
 )
+from custom_components.virtual_layer.generic import GenericVirtualEntity
 
 
 pytestmark = pytest.mark.integration
@@ -180,3 +181,24 @@ async def test_platform_setup_entry_creates_virtual_entity_for_domain(hass, doma
     entity = added_entities[0]
     assert entity.entity_id == f"{domain}.virtual_test"
     assert entity.unique_id == f"{domain}_virtual_test"
+
+
+def test_generic_entity_exposes_direct_ui_options_as_state_attributes():
+    module = importlib.import_module("custom_components.virtual_layer.weather")
+    config = module.ENTITY_SCHEMA({
+        CONF_NAME: "Virtual Forecast",
+        ATTR_ENTITY_ID: "weather.virtual_forecast",
+        ATTR_UNIQUE_ID: "weather_virtual_forecast",
+        ATTR_DEVICE_ID: "coverage-device",
+        "temperature": 21.5,
+        "humidity": 48,
+        "forecast_provider": "virtual",
+    })
+    entity = GenericVirtualEntity(config, "weather", False)
+
+    entity._create_state(config)
+    entity._update_attributes()
+
+    assert entity.extra_state_attributes["temperature"] == 21.5
+    assert entity.extra_state_attributes["humidity"] == 48
+    assert entity.extra_state_attributes["forecast_provider"] == "virtual"

@@ -20,6 +20,8 @@ from homeassistant.const import (
 from homeassistant.core import callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import (
+    TrackTemplate,
+    async_track_template_result,
     async_call_later,
     async_track_state_change_event,
     async_track_time_interval,
@@ -41,12 +43,14 @@ def virtual_schema(default_initial_value: str, extra_attrs):
         vol.Optional(CONF_INITIAL_VALUE, default=default_initial_value): cv.string,
         vol.Optional(CONF_INITIAL_AVAILABILITY, default=DEFAULT_AVAILABILITY): cv.boolean,
         vol.Optional(CONF_ATTRIBUTES, default=dict): dict,
+        vol.Optional(CONF_AUTO_HELPER): object,
         vol.Optional(CONF_ATTRIBUTE_SOURCES, default=dict): dict,
         vol.Optional(CONF_ATTRIBUTE_TEMPLATES, default=dict): dict,
         vol.Optional(CONF_AVAILABILITY_TEMPLATE): cv.template,
         vol.Optional(CONF_PERSISTENT, default=DEFAULT_PERSISTENT): cv.boolean,
         vol.Optional(CONF_PULL_INTERVAL, default=0): vol.All(vol.Coerce(int), vol.Range(min=0)),
         vol.Optional(CONF_SOURCE_ENTITIES, default=list): vol.All(cv.ensure_list, [cv.entity_id]),
+        vol.Optional(CONF_TEMPLATE_SOURCES, default=dict): dict,
         vol.Optional(CONF_VALUE_TEMPLATE): cv.template,
         vol.Optional(ATTR_DEVICE_ID, default="NOTYET"): cv.string,
         vol.Optional(CONF_MANUFACTURER): cv.string,
@@ -73,12 +77,21 @@ class VirtualEntity(RestoreEntity):
         _LOGGER.debug(f"creating-virtual-{domain}={config}")
         self._config = config
         self._persistent = config.get(CONF_PERSISTENT)
-        self._virtual_attributes = dict(config.get(CONF_ATTRIBUTES, {}))
+        self._virtual_attributes = {
+            name: value
+            for name, value in dict(config.get(CONF_ATTRIBUTES, {})).items()
+            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+        }
         self._attribute_sources = {
             name: self._normalize_attribute_source(source)
             for name, source in dict(config.get(CONF_ATTRIBUTE_SOURCES, {})).items()
+            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
         }
-        self._attribute_templates = dict(config.get(CONF_ATTRIBUTE_TEMPLATES, {}))
+        self._attribute_templates = {
+            name: template
+            for name, template in dict(config.get(CONF_ATTRIBUTE_TEMPLATES, {})).items()
+            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+        }
         self._pull_interval = config.get(CONF_PULL_INTERVAL, 0)
         self._source_entities = config.get(CONF_SOURCE_ENTITIES, [])
         self._template_sources = {
@@ -157,6 +170,7 @@ class VirtualEntity(RestoreEntity):
             name: state.attributes.get(name)
             for name in attribute_names
             if name in state.attributes
+            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
         }
 
     def _update_attributes(self):
@@ -197,13 +211,19 @@ class VirtualEntity(RestoreEntity):
         self.async_schedule_update_ha_state()
 
     def set_attributes(self, attributes):
-        self._virtual_attributes.update(attributes)
+        self._virtual_attributes.update({
+            name: value
+            for name, value in attributes.items()
+            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+        })
         self._update_attributes()
         self.async_schedule_update_ha_state()
 
     def clear_attributes(self, attributes):
         if attributes:
             for attribute in attributes:
+                if attribute in RESERVED_VIRTUAL_ATTRIBUTE_NAMES:
+                    continue
                 self._virtual_attributes.pop(attribute, None)
         else:
             self._virtual_attributes.clear()
@@ -226,6 +246,7 @@ class VirtualEntity(RestoreEntity):
             for source in self._template_sources.values()
             if source.get(ATTR_ENTITY_ID)
         )
+        source_entities.discard(self.entity_id)
 
         @callback
         def _async_source_entity_changed(_event):
@@ -237,6 +258,32 @@ class VirtualEntity(RestoreEntity):
                 source_entities,
                 _async_source_entity_changed,
             ))
+
+        templates = [
+            template
+            for template in (
+                self._value_template,
+                self._availability_template,
+                *self._attribute_templates.values(),
+            )
+            if template
+        ]
+        for template in templates:
+            tracked_template = template if isinstance(template, Template) else Template(
+                str(template), self.hass
+            )
+
+            @callback
+            def _async_template_changed(_event, _updates):
+                self._apply_templates()
+
+            self._refresh_remove_listeners.append(
+                async_track_template_result(
+                    self.hass,
+                    [TrackTemplate(tracked_template, self._template_variables())],
+                    _async_template_changed,
+                ).async_remove
+            )
 
         if self._pull_interval:
             self._refresh_remove_listeners.append(async_track_time_interval(
@@ -355,9 +402,8 @@ class VirtualEntity(RestoreEntity):
 
             state = self.hass.states.get(entity_id)
             if state is None:
-                continue
-
-            if attribute == "state":
+                value = None
+            elif attribute == "state":
                 value = state.state
             else:
                 value = state.attributes.get(attribute)

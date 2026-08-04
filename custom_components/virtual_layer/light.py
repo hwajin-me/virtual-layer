@@ -228,12 +228,14 @@ class VirtualLight(VirtualEntity, LightEntity):
 
         self._attr_is_on = True
         self._update_attributes()
+        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the light off."""
         _LOGGER.debug(f"turning {self.name} off {pprint.pformat(kwargs)}")
         self._attr_is_on = False
         self._update_attributes()
+        self.async_write_ha_state()
 
     def set_state(self, value) -> None:
         self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]

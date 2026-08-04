@@ -7,7 +7,8 @@
     "error": {
       "group_name_used": "이미 사용 중인 장치 이름입니다. 다른 이름을 입력하세요.",
       "invalid_json": "올바른 JSON 객체를 입력하세요.",
-      "invalid_entity_id": "올바른 엔티티 ID를 입력하세요."
+      "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
+      "invalid_domain_options": "선택한 엔티티 도메인에 맞는 옵션을 입력하세요."
     },
     "step": {
       "user": {
@@ -55,7 +56,8 @@
           "availability_template": "사용 가능 여부 템플릿",
           "attributes_json": "속성 JSON",
           "attribute_sources_json": "속성 소스 JSON",
-          "attribute_templates_json": "속성 템플릿 JSON"
+          "attribute_templates_json": "속성 템플릿 JSON",
+          "domain_options_json": "도메인 옵션 JSON"
         },
         "data_description": {
           "device_name": "장치 이름이 같은 엔티티는 하나의 Home Assistant 장치에 연결됩니다.",
@@ -68,11 +70,12 @@
           "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
           "entity_id": "선택 사항입니다. 비워 두면 엔티티 도메인과 이름으로 자동 생성합니다.",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
-          "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}",
+          "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
-          "attributes_json": "속성을 담은 JSON 객체입니다. 예: {\"battery_level\": 91}",
-          "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: {\"battery\": \"sensor.remote.battery_level\"}. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: {\"power\": \"{{ states('sensor.power') }}\"}"
+          "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
+          "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
+          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: power -> states('sensor.power')",
+          "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
         }
       },
       "entity_source": {
@@ -82,7 +85,7 @@
           "reference_entity_id": "기존 엔티티"
         },
         "data_description": {
-          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값, 위치는 모두 home인지 여부를 사용합니다."
+          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다."
         }
       }
     }
@@ -91,6 +94,7 @@
     "error": {
       "invalid_json": "올바른 JSON 객체를 입력하세요.",
       "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
+      "invalid_domain_options": "선택한 엔티티 도메인에 맞는 옵션을 입력하세요.",
       "backup_group_not_found": "백업에서 일치하는 가상 장치를 찾지 못했습니다.",
       "entity_not_found": "선택한 가상 엔티티를 찾지 못했습니다.",
       "no_entities": "이 장치에는 수정할 가상 엔티티가 없습니다."
@@ -144,7 +148,8 @@
           "availability_template": "사용 가능 여부 템플릿",
           "attributes_json": "속성 JSON",
           "attribute_sources_json": "속성 소스 JSON",
-          "attribute_templates_json": "속성 템플릿 JSON"
+          "attribute_templates_json": "속성 템플릿 JSON",
+          "domain_options_json": "도메인 옵션 JSON"
         },
         "data_description": {
           "device_name": "이 값을 바꾸면 엔티티를 다른 가상 장치로 이동합니다.",
@@ -157,11 +162,12 @@
           "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
           "entity_id": "선택 사항입니다. 비워 두면 엔티티 도메인과 이름으로 자동 생성합니다.",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
-          "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}",
+          "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
-          "attributes_json": "속성을 담은 JSON 객체입니다. 예: {\"battery_level\": 91}",
-          "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: {\"battery\": \"sensor.remote.battery_level\"}. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: {\"power\": \"{{ states('sensor.power') }}\"}"
+          "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
+          "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
+          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: power -> states('sensor.power')",
+          "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
         }
       },
       "edit_entity_source": {
@@ -171,7 +177,7 @@
           "reference_entity_id": "기존 엔티티"
         },
         "data_description": {
-          "reference_entity_id": "현재 가상 엔티티 값을 유지하려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값, 위치는 모두 home인지 여부를 사용합니다."
+          "reference_entity_id": "현재 가상 엔티티 값을 유지하려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다."
         }
       },
       "entity": {
@@ -198,7 +204,8 @@
           "availability_template": "사용 가능 여부 템플릿",
           "attributes_json": "속성 JSON",
           "attribute_sources_json": "속성 소스 JSON",
-          "attribute_templates_json": "속성 템플릿 JSON"
+          "attribute_templates_json": "속성 템플릿 JSON",
+          "domain_options_json": "도메인 옵션 JSON"
         },
         "data_description": {
           "device_name": "장치 이름이 같은 엔티티는 하나의 Home Assistant 장치에 연결됩니다.",
@@ -211,11 +218,12 @@
           "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
           "entity_id": "선택 사항입니다. 비워 두면 엔티티 도메인과 이름으로 자동 생성합니다.",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
-          "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: {\"power\": \"sensor.washer_power\", \"door\": \"binary_sensor.washer_door.state\"}",
+          "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
-          "attributes_json": "속성을 담은 JSON 객체입니다. 예: {\"battery_level\": 91}",
-          "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: {\"battery\": \"sensor.remote.battery_level\"}. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: {\"power\": \"{{ states('sensor.power') }}\"}"
+          "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
+          "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
+          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: power -> states('sensor.power')",
+          "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
         }
       },
       "entity_source": {
@@ -225,7 +233,7 @@
           "reference_entity_id": "기존 엔티티"
         },
         "data_description": {
-          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값, 위치는 모두 home인지 여부를 사용합니다."
+          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다."
         }
       },
       "backup": {

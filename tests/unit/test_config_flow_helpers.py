@@ -1,5 +1,6 @@
 """Unit tests for Virtual Layer config flow helpers."""
 
+import json
 from types import MappingProxyType
 
 import pytest
@@ -18,13 +19,16 @@ from custom_components.virtual_layer.config_flow import (
     CONF_DEVICE_NAME,
     CONF_DEVICE_SERIAL_NUMBER,
     CONF_DEVICE_SW_VERSION,
+    CONF_DOMAIN_OPTIONS_JSON,
     CONF_ENTITY_NAME,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
+    InvalidDomainOptions,
     InvalidEntityReference,
     InvalidEntityId,
     InvalidJson,
     _append_ui_entity,
+    _auto_helper_profile,
     _build_device_config,
     _build_entity_config,
     _delete_ui_entities,
@@ -38,7 +42,9 @@ from custom_components.virtual_layer.config_flow import (
     _merge_device_sets,
     _options_schema,
     _reference_entity_defaults,
+    _reference_edit_defaults,
     _replace_ui_entity,
+    _set_auto_helper_profile,
 )
 from custom_components.virtual_layer.const import (
     ATTR_DEVICE_ATTRIBUTES,
@@ -53,6 +59,7 @@ from custom_components.virtual_layer.const import (
     CONF_AVAILABILITY_TEMPLATE,
     CONF_INITIAL_AVAILABILITY,
     CONF_INITIAL_VALUE,
+    CONF_LOCATION_HELPER,
     CONF_HW_VERSION,
     CONF_MANUFACTURER,
     CONF_MAX,
@@ -65,6 +72,7 @@ from custom_components.virtual_layer.const import (
     CONF_SW_VERSION,
     CONF_TEMPLATE_SOURCES,
     CONF_VALUE_TEMPLATE,
+    VIRTUAL_ENTITY_DOMAINS,
 )
 
 
@@ -94,6 +102,7 @@ def _entity_input(overrides=None):
         CONF_ATTRIBUTES_JSON: "",
         CONF_ATTRIBUTE_SOURCES_JSON: "",
         CONF_ATTRIBUTE_TEMPLATES_JSON: "",
+        CONF_DOMAIN_OPTIONS_JSON: "",
     }
     data.update(overrides or {})
     return data
@@ -128,6 +137,98 @@ def test_build_entity_config_supports_composite_templates_and_attributes():
             "door": "{{ states(\"binary_sensor.washer_door\") }}",
         },
     }
+
+
+def test_build_entity_config_deduplicates_sources_and_rejects_invalid_template_variables():
+    _, entity = _build_entity_config(_entity_input({
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.power, sensor.power\nsensor.door",
+        CONF_TEMPLATE_SOURCES_JSON: '{"power": "sensor.power"}',
+    }))
+
+    assert entity[CONF_SOURCE_ENTITIES] == ["sensor.power", "sensor.door"]
+
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(_entity_input({
+            CONF_TEMPLATE_SOURCES_JSON: '{"not-valid": "sensor.power"}',
+        }))
+
+    assert err.value.field_name == CONF_TEMPLATE_SOURCES_JSON
+
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(_entity_input({
+            CONF_ATTRIBUTES_JSON: '{"available": false}',
+        }))
+
+    assert err.value.field_name == CONF_ATTRIBUTES_JSON
+
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(_entity_input({
+            CONF_TEMPLATE_SOURCES_JSON: '{"none": "sensor.power"}',
+        }))
+
+    assert err.value.field_name == CONF_TEMPLATE_SOURCES_JSON
+
+
+def test_reference_entity_defaults_avoids_jinja_reserved_source_variable_names(hass):
+    hass.states.async_set("sensor.none", "first")
+    hass.states.async_set("sensor.true", "second")
+
+    defaults = _reference_entity_defaults(hass, ["sensor.none", "sensor.true"])
+
+    assert json.loads(defaults[CONF_TEMPLATE_SOURCES_JSON]) == {
+        "source_none": "sensor.none",
+        "source_true": "sensor.true",
+    }
+    assert defaults[CONF_VALUE_TEMPLATE] == "{{ source_none ~ source_true }}"
+
+
+def test_build_entity_config_preserves_domain_options_and_normalizes_climate_default():
+    _, entity = _build_entity_config(_entity_input({
+        CONF_PLATFORM: "climate",
+        CONF_INITIAL_VALUE: "unknown",
+        CONF_DOMAIN_OPTIONS_JSON: '{"hvac_modes": ["off", "heat"], "target_temperature": 21}',
+    }))
+
+    assert entity[CONF_INITIAL_VALUE] == "off"
+    assert entity["hvac_modes"] == ["off", "heat"]
+    assert entity["target_temperature"] == 21
+
+
+def test_build_entity_config_validates_location_helper_options():
+    _, entity = _build_entity_config(_entity_input({
+        CONF_PLATFORM: "device_tracker",
+        CONF_INITIAL_VALUE: "not_home",
+        CONF_SOURCE_ENTITIES_TEXT: "device_tracker.first, person.second",
+        CONF_DOMAIN_OPTIONS_JSON: (
+            '{"location_helper": {'
+            '"distance_threshold_meters": 300, '
+            '"priority_window_seconds": 1800}}'
+        ),
+    }))
+
+    assert entity[CONF_LOCATION_HELPER]["distance_threshold_meters"] == 300
+
+    with pytest.raises(InvalidDomainOptions):
+        _build_entity_config(_entity_input({
+            CONF_PLATFORM: "device_tracker",
+            CONF_DOMAIN_OPTIONS_JSON: '{"location_helper": {"distance_threshold_meters": 0}}',
+        }))
+
+
+def test_build_entity_config_rejects_reserved_domain_options():
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(_entity_input({
+            CONF_DOMAIN_OPTIONS_JSON: '{"name": "must not override"}',
+        }))
+
+    assert err.value.field_name == CONF_DOMAIN_OPTIONS_JSON
+
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(_entity_input({
+            CONF_DOMAIN_OPTIONS_JSON: '{"friendly_name": "must not override"}',
+        }))
+
+    assert err.value.field_name == CONF_DOMAIN_OPTIONS_JSON
 
 
 def test_reference_entity_defaults_combines_boolean_sources_with_and_template(hass):
@@ -209,6 +310,20 @@ def test_reference_entity_defaults_combines_string_sources_with_concat_template(
     )
 
 
+def test_reference_camera_defaults_create_image_and_stream_alias(hass):
+    hass.states.async_set("camera.front_door", "on", {"friendly_name": "Front Door"})
+
+    defaults = _reference_entity_defaults(hass, ["camera.front_door"])
+
+    assert defaults[CONF_PLATFORM] == "camera"
+    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "camera.front_door"
+    assert defaults[CONF_VALUE_TEMPLATE] == "{{ front_door }}"
+    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+        "source_entity": "camera.front_door",
+    }
+
+
 def test_reference_entity_defaults_combines_date_sources_with_latest_template(hass):
     hass.states.async_set("date.started", "2026-08-01")
     hass.states.async_set("date.finished", "2026-08-04")
@@ -265,9 +380,17 @@ def test_reference_entity_defaults_combines_enum_sources_with_first_available_te
     assert "values[0] if values else 'unknown'" in defaults[CONF_VALUE_TEMPLATE]
 
 
-def test_reference_entity_defaults_combines_location_sources_with_all_home_template(hass):
-    hass.states.async_set("device_tracker.phone", "home")
-    hass.states.async_set("person.owner", "not_home")
+def test_reference_entity_defaults_creates_location_median_helper(hass):
+    hass.states.async_set(
+        "device_tracker.phone",
+        "home",
+        {"latitude": 37.5, "longitude": 127.0},
+    )
+    hass.states.async_set(
+        "person.owner",
+        "not_home",
+        {"latitude": 37.6, "longitude": 127.1},
+    )
 
     defaults = _reference_entity_defaults(
         hass,
@@ -276,9 +399,13 @@ def test_reference_entity_defaults_combines_location_sources_with_all_home_templ
 
     assert defaults[CONF_PLATFORM] == "device_tracker"
     assert defaults[CONF_INITIAL_VALUE] == "not_home"
-    assert defaults[CONF_VALUE_TEMPLATE] == (
-        "{{ 'home' if (phone == 'home') and (owner == 'home') else 'not_home' }}"
-    )
+    assert defaults[CONF_VALUE_TEMPLATE] == ""
+    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+        CONF_LOCATION_HELPER: {
+            "distance_threshold_meters": 300,
+            "priority_window_seconds": 1800,
+        },
+    }
 
 
 def test_build_device_config_supports_device_registry_metadata():
@@ -389,6 +516,170 @@ def test_build_entity_config_supports_template_sources_for_composite_values():
         },
     }
     assert "power|float" in entity[CONF_VALUE_TEMPLATE]
+
+
+def test_build_camera_alias_adds_source_subscription_and_state_template():
+    _, entity = _build_entity_config(_entity_input({
+        CONF_PLATFORM: "camera",
+        CONF_INITIAL_VALUE: "off",
+        CONF_DOMAIN_OPTIONS_JSON: '{"source_entity": "camera.front_door"}',
+    }))
+
+    assert entity["source_entity"] == "camera.front_door"
+    assert entity[CONF_SOURCE_ENTITIES] == ["camera.front_door"]
+    assert entity[CONF_VALUE_TEMPLATE] == "{{ states('camera.front_door') }}"
+
+
+def test_build_camera_alias_rejects_non_camera_source():
+    with pytest.raises(InvalidDomainOptions):
+        _build_entity_config(_entity_input({
+            CONF_PLATFORM: "camera",
+            CONF_DOMAIN_OPTIONS_JSON: '{"source_entity": "sensor.front_door"}',
+        }))
+
+
+def test_build_entity_config_rejects_explicit_self_references():
+    with pytest.raises(InvalidEntityReference) as err:
+        _build_entity_config(_entity_input({
+            ATTR_ENTITY_ID: "sensor.self_referencing",
+            CONF_SOURCE_ENTITIES_TEXT: "sensor.self_referencing",
+        }))
+
+    assert err.value.field_name == CONF_SOURCE_ENTITIES_TEXT
+
+
+def test_build_camera_alias_rejects_itself_as_source():
+    with pytest.raises(InvalidEntityReference) as err:
+        _build_entity_config(_entity_input({
+            ATTR_ENTITY_ID: "camera.self_alias",
+            CONF_PLATFORM: "camera",
+            CONF_DOMAIN_OPTIONS_JSON: '{"source_entity": "camera.self_alias"}',
+        }))
+
+    assert err.value.field_name == CONF_DOMAIN_OPTIONS_JSON
+
+
+def test_build_generic_entity_keeps_direct_domain_options():
+    _, entity = _build_entity_config(_entity_input({
+        CONF_PLATFORM: "weather",
+        CONF_DOMAIN_OPTIONS_JSON: (
+            '{"temperature": 21.5, "humidity": 48, '
+            '"forecast_provider": "virtual"}'
+        ),
+    }))
+
+    assert entity["temperature"] == 21.5
+    assert entity["humidity"] == 48
+    assert entity["forecast_provider"] == "virtual"
+
+
+def test_entity_form_preserves_generic_direct_domain_options_for_editing():
+    defaults = _entity_form_defaults("Weather", {
+        CONF_PLATFORM: "weather",
+        CONF_NAME: "Virtual Forecast",
+        "temperature": 21.5,
+        "humidity": 48,
+    })
+
+    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+        "humidity": 48,
+        "temperature": 21.5,
+    }
+
+
+def test_auto_helper_refresh_replaces_only_generated_helper_fields():
+    current = {
+        CONF_DEVICE_NAME: "Custom Device",
+        CONF_ENTITY_NAME: "Custom Name",
+        CONF_PLATFORM: "sensor",
+        CONF_INITIAL_VALUE: "10",
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.old",
+        CONF_TEMPLATE_SOURCES_JSON: '{"old": "sensor.old"}',
+        CONF_VALUE_TEMPLATE: "{{ old }}",
+        CONF_ATTRIBUTES_JSON: '{"battery": 50}',
+        CONF_ATTRIBUTE_SOURCES_JSON: "",
+        CONF_ATTRIBUTE_TEMPLATES_JSON: '{"old": "{{ old }}"}',
+        CONF_DOMAIN_OPTIONS_JSON: '{"old_option": true}',
+    }
+    reference = {
+        CONF_PLATFORM: "sensor",
+        CONF_INITIAL_VALUE: "20",
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.new",
+        CONF_TEMPLATE_SOURCES_JSON: '{"new": "sensor.new"}',
+        CONF_VALUE_TEMPLATE: "{{ new }}",
+        CONF_ATTRIBUTES_JSON: '{"battery": 90}',
+    }
+
+    refreshed = _reference_edit_defaults(current, reference, auto_helper=True)
+
+    assert refreshed[CONF_DEVICE_NAME] == "Custom Device"
+    assert refreshed[CONF_ENTITY_NAME] == "Custom Name"
+    assert refreshed[CONF_SOURCE_ENTITIES_TEXT] == "sensor.new"
+    assert refreshed[CONF_VALUE_TEMPLATE] == "{{ new }}"
+    assert refreshed[CONF_ATTRIBUTES_JSON] == '{"battery": 90}'
+    assert refreshed[CONF_ATTRIBUTE_TEMPLATES_JSON] == ""
+    assert refreshed[CONF_DOMAIN_OPTIONS_JSON] == ""
+
+
+def test_custom_helper_fields_are_preserved_and_marked_manual():
+    current = {
+        CONF_PLATFORM: "sensor",
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.old",
+        CONF_TEMPLATE_SOURCES_JSON: '{"old": "sensor.old"}',
+        CONF_VALUE_TEMPLATE: "{{ old | float(0) * 2 }}",
+        CONF_ATTRIBUTES_JSON: "",
+        CONF_ATTRIBUTE_SOURCES_JSON: "",
+        CONF_ATTRIBUTE_TEMPLATES_JSON: "",
+        CONF_DOMAIN_OPTIONS_JSON: "",
+        CONF_INITIAL_VALUE: "10",
+    }
+    reference = {
+        CONF_PLATFORM: "sensor",
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.new",
+        CONF_TEMPLATE_SOURCES_JSON: '{"new": "sensor.new"}',
+        CONF_VALUE_TEMPLATE: "{{ new }}",
+        CONF_ATTRIBUTES_JSON: "",
+        CONF_INITIAL_VALUE: "20",
+    }
+    entity = {}
+
+    assert _reference_edit_defaults(current, reference, auto_helper=False) == current
+    _set_auto_helper_profile(entity, current, reference, _auto_helper_profile(current))
+
+    assert entity["auto_helper"] is False
+
+
+RICH_DOMAIN_OPTIONS = {
+    "binary_sensor": {"class": "door"},
+    "camera": {"is_streaming": True},
+    "climate": {"target_temperature": 21},
+    "cover": {"open_close_duration": 5},
+    "device_tracker": {"location_helper": {"distance_threshold_meters": 300}},
+    "fan": {"speed_count": 3},
+    "humidifier": {"target_humidity": 50},
+    "light": {"support_brightness": True},
+    "lock": {"support_open": True},
+    "number": {"min": 1, "max": 10},
+    "sensor": {"unit_of_measurement": "C"},
+    "switch": {"class": "outlet"},
+    "valve": {"open_close_duration": 5},
+}
+
+
+@pytest.mark.parametrize("domain", VIRTUAL_ENTITY_DOMAINS)
+def test_every_supported_domain_accepts_direct_ui_options(domain):
+    options = RICH_DOMAIN_OPTIONS.get(domain, {"yaml_only_option": True})
+    overrides = {
+        CONF_PLATFORM: domain,
+        CONF_DOMAIN_OPTIONS_JSON: json.dumps(options),
+    }
+    if domain == "climate":
+        overrides[CONF_INITIAL_VALUE] = "off"
+
+    _, entity = _build_entity_config(_entity_input(overrides))
+
+    for key, value in options.items():
+        assert entity[key] == value
 
 
 def test_build_entity_config_rejects_invalid_template_source_entity_id():
