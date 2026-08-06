@@ -4,20 +4,25 @@ This component provides support for a virtual camera entity.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-import aiofiles
-import voluptuous as vol
 from collections.abc import Callable
 
+import aiofiles
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
+from aiohttp import ClientError
 from homeassistant.components.camera import (
     DOMAIN as PLATFORM_DOMAIN,
+)
+from homeassistant.components.camera import (
     Camera,
     CameraEntityFeature,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -25,7 +30,6 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -138,7 +142,14 @@ class VirtualCamera(VirtualEntity, Camera):
         if source is not None and not self._image_path:
             try:
                 return await source.async_camera_image(width=width, height=height)
-            except (AttributeError, OSError, ValueError) as err:
+            except (
+                asyncio.TimeoutError,
+                AttributeError,
+                ClientError,
+                HomeAssistantError,
+                OSError,
+                ValueError,
+            ) as err:
                 _LOGGER.warning(
                     "Unable to get virtual camera image from %s: %s",
                     self._source_entity,
@@ -159,7 +170,14 @@ class VirtualCamera(VirtualEntity, Camera):
         if source is not None and not self._stream_source:
             try:
                 return await source.stream_source()
-            except (AttributeError, OSError, ValueError) as err:
+            except (
+                asyncio.TimeoutError,
+                AttributeError,
+                ClientError,
+                HomeAssistantError,
+                OSError,
+                ValueError,
+            ) as err:
                 _LOGGER.warning(
                     "Unable to get virtual camera stream from %s: %s",
                     self._source_entity,

@@ -2,7 +2,11 @@ import voluptuous as vol
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 
 from .const import COMPONENT_DOMAIN
-from .generic import GENERIC_SCHEMA, async_setup_generic_entry, async_setup_generic_platform
+from .generic import (
+    GENERIC_SCHEMA,
+    async_setup_generic_entry,
+    async_setup_generic_platform,
+)
 
 PLATFORM_DOMAIN = "todo"
 DEPENDENCIES = [COMPONENT_DOMAIN]

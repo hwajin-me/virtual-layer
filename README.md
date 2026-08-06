@@ -11,19 +11,19 @@ Virtual Layer is UI-only. Entity definitions are stored in the integration
 config entry options and file-based entity loading is no longer supported.
 
 Do not add Virtual Layer entities to `configuration.yaml`. Create, edit, delete,
-back up, and restore them from `Settings > Devices & services > Virtual Layer`.
+and manage them from `Settings > Devices & services > Virtual Layer`.
 
 ## Contents
 
 - [Features](#features)
 - [Installation](#installation)
 - [UI Configuration](#ui-configuration)
+- [Polygon Zones](#polygon-zones)
 - [Devices](#devices)
 - [Entities](#entities)
 - [Composite Entities](#composite-entities)
 - [Supported Domains](#supported-domains)
 - [Services](#services)
-- [Backup and Restore](#backup-and-restore)
 - [Translations and Icons](#translations-and-icons)
 - [Testing](#testing)
 
@@ -42,7 +42,6 @@ back up, and restore them from `Settings > Devices & services > Virtual Layer`.
 - Optional Home Assistant Jinja templates for custom state, availability, and
   attributes
 - Periodic pull refresh for composite entities
-- Backup and restore UI-managed device definitions
 - Korean and English UI translations
 - Integration icons and brand assets
 
@@ -79,8 +78,7 @@ After setup, use `Configure` on the Virtual Layer integration entry to:
 - add a virtual entity
 - edit an existing virtual entity
 - delete one or more virtual entities
-- back up devices
-- restore devices
+- manage virtual device metadata
 - finish without changes
 
 Use `Reconfigure` to update the integration entry's main device name.
@@ -213,6 +211,71 @@ URL and expose the native image bytes/content type. Camera and image entities
 cannot be combined into a multi-source helper because binary media cannot be
 meaningfully concatenated or averaged.
 
+## Polygon Zones
+
+A virtual `device_tracker` can combine multiple source trackers and resolve its
+GPS position against named GeoJSON polygons. Configure it entirely in the
+Add/Edit Virtual Entity form:
+
+- **Source entities**: one or more `device_tracker` entities
+- **Polygon GeoJSON**: an inline Feature or FeatureCollection
+- **Polygon files or URLs**: one local path or HTTP(S) URL per line
+- **Person**: the optional `person` represented by the combined tracker
+- **Tracker selection strategy**: `majority`, `priority`, `latest`, or `median`
+- **Tracker grouping distance**: distance used to form majority groups
+- **Tracker rules JSON**: optional per-source filtering and selection rules
+- **Outside-zone state**: defaults to `not_home`
+
+GeoJSON supports `Polygon`, `MultiPolygon`, interior holes, overlapping-zone
+priority, GPS accuracy at boundaries, and polygons crossing the international
+date line. Coordinates use GeoJSON order: `[longitude, latitude]`. Each feature
+must have a `properties.name`; a lower numeric `properties.priority` wins when
+zones overlap.
+
+```json
+{
+  "type": "FeatureCollection",
+  "features": [{
+    "type": "Feature",
+    "properties": {"name": "Office", "priority": 1},
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [[[126.9, 37.4], [127.1, 37.4], [127.1, 37.6], [126.9, 37.4]]]
+    }
+  }]
+}
+```
+
+Tracker rules are keyed by source entity ID. `dominant` always selects that
+valid source; `weight` affects majority voting; lower `priority` wins the
+priority strategy; `max_age_seconds` and `max_gps_accuracy` reject stale or
+imprecise reports; `enabled` disables a source; and `condition_template`
+provides a Home Assistant Jinja condition with `source`, `source_entity_id`,
+`person`, and `this` variables.
+
+```json
+{
+  "device_tracker.primary_phone": {
+    "dominant": true,
+    "priority": 1,
+    "max_age_seconds": 1800,
+    "max_gps_accuracy": 100,
+    "condition_template": "{{ source.state != 'unavailable' }}"
+  },
+  "device_tracker.watch": {"weight": 2}
+}
+```
+
+The virtual tracker keeps both the selected zone state and GPS coordinates, so
+it appears on Home Assistant maps. Virtual Layer also creates
+`sensor.<tracker_id>_zone` and `image.<tracker_id>_map` on the same device. The
+SVG image draws every Polygon/MultiPolygon and marks the combined tracker's
+current GPS position; it can be used in an image or picture card. File- and
+URL-backed GeoJSON is reloaded every five minutes. If one source fails, valid
+files and the last working polygon set remain active, and the error is reported
+in the tracker's `polygon_load_error` attribute. Editing or deleting the
+virtual tracker updates or cleans up both generated entities normally.
+
 ## Cameras
 
 Create a camera alias by selecting one camera as the original entity. The UI
@@ -251,8 +314,8 @@ native virtual implementation for rich domains such as climate, cover, light,
 humidifier, camera, and lock.
 
 For the remaining state-backed domains, use the same field for arbitrary
-JSON-compatible domain data. These settings are preserved on edits and backup
-restore, and appear as state attributes. This makes YAML-only style metadata
+JSON-compatible domain data. These settings are preserved on edits and appear
+as state attributes. This makes YAML-only style metadata
 available without enabling YAML loading. For example, a virtual weather entity
 can be created with:
 
@@ -305,31 +368,7 @@ Virtual Layer provides these services:
 - `virtual_layer.set_attributes`: add or update extra state attributes
 - `virtual_layer.clear_attributes`: clear selected attributes, or all extra
   attributes when no names are supplied
-- `virtual_layer.backup_devices`: write a JSON backup file
-- `virtual_layer.restore_devices`: restore a JSON backup file in `merge` or
-  `replace` mode
 - `virtual_layer.move`: move a virtual device tracker
-
-## Backup and Restore
-
-Use the integration `Configure` menu or the services to back up and restore
-Virtual Layer devices.
-
-Default backup path:
-
-```text
-/config/virtual_layer_backup.json
-```
-
-Restore modes:
-
-- `merge`: keep existing UI-managed devices and append restored entities with
-  regenerated entity keys
-- `replace`: replace existing UI-managed devices with the restored backup
-
-Backups include the UI-managed device/entity definitions and device metadata.
-The loader is defensive about older or malformed saved data so that invalid
-entries can still be skipped, replaced, or removed from the UI.
 
 ## Translations and Icons
 

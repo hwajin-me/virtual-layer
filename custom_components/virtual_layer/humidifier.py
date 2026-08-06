@@ -5,12 +5,15 @@ This component provides support for a virtual humidifier or dehumidifier.
 from __future__ import annotations
 
 import logging
-import voluptuous as vol
+import math
 from collections.abc import Callable
 
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
 from homeassistant.components.humidifier import (
     DOMAIN as PLATFORM_DOMAIN,
+)
+from homeassistant.components.humidifier import (
     HumidifierAction,
     HumidifierDeviceClass,
     HumidifierEntity,
@@ -26,7 +29,6 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,7 +51,10 @@ def _as_action(value) -> HumidifierAction | None:
         return None
     if isinstance(value, HumidifierAction):
         return value
-    return HumidifierAction(str(value).lower())
+    try:
+        return HumidifierAction(str(value).lower())
+    except (TypeError, ValueError):
+        return None
 
 
 def _as_device_class(value) -> HumidifierDeviceClass | None:
@@ -58,6 +63,15 @@ def _as_device_class(value) -> HumidifierDeviceClass | None:
     if isinstance(value, HumidifierDeviceClass):
         return value
     return HumidifierDeviceClass(str(value).lower())
+
+
+def _finite_float(value, default: float) -> float:
+    """Return a finite configured number or a compatibility default."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result if math.isfinite(result) else default
 
 
 BASE_SCHEMA = virtual_schema(DEFAULT_HUMIDIFIER_VALUE, {
@@ -110,9 +124,20 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         if self._attr_available_modes:
             self._attr_supported_features |= HumidifierEntityFeature.MODES
 
-        self._attr_min_humidity = config.get(CONF_MIN_HUMIDITY)
-        self._attr_max_humidity = config.get(CONF_MAX_HUMIDITY)
-        self._attr_target_humidity_step = config.get(CONF_TARGET_HUMIDITY_STEP)
+        self._attr_min_humidity = _finite_float(config.get(CONF_MIN_HUMIDITY), 0)
+        self._attr_max_humidity = _finite_float(config.get(CONF_MAX_HUMIDITY), 100)
+        if self._attr_min_humidity > self._attr_max_humidity:
+            self._attr_min_humidity, self._attr_max_humidity = (
+                self._attr_max_humidity,
+                self._attr_min_humidity,
+            )
+        target_step = config.get(CONF_TARGET_HUMIDITY_STEP)
+        self._attr_target_humidity_step = (
+            step
+            if target_step is not None
+            and (step := _finite_float(target_step, 0)) > 0
+            else None
+        )
 
         _LOGGER.info(f"VirtualHumidifier: {self.name} created")
 
@@ -120,17 +145,53 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         super()._create_state(config)
         self._attr_is_on = config.get(CONF_INITIAL_VALUE).lower() == STATE_ON
         self._attr_action = _as_action(config.get(CONF_ACTION))
-        self._attr_current_humidity = config.get(CONF_CURRENT_HUMIDITY)
-        self._attr_target_humidity = config.get(CONF_TARGET_HUMIDITY)
-        self._attr_mode = config.get(CONF_MODE)
+        self._attr_current_humidity = self._bounded_humidity(
+            config.get(CONF_CURRENT_HUMIDITY),
+        )
+        self._attr_target_humidity = self._bounded_humidity(
+            config.get(CONF_TARGET_HUMIDITY)
+        )
+        configured_mode = config.get(CONF_MODE)
+        self._attr_mode = (
+            configured_mode
+            if configured_mode in self._attr_available_modes
+            else (self._attr_available_modes[0] if self._attr_available_modes else None)
+        )
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
         self._attr_is_on = state.state.lower() == STATE_ON
         self._attr_action = _as_action(state.attributes.get(CONF_ACTION, config.get(CONF_ACTION)))
-        self._attr_current_humidity = state.attributes.get(CONF_CURRENT_HUMIDITY, config.get(CONF_CURRENT_HUMIDITY))
-        self._attr_target_humidity = state.attributes.get(CONF_TARGET_HUMIDITY, config.get(CONF_TARGET_HUMIDITY))
-        self._attr_mode = state.attributes.get(CONF_MODE, config.get(CONF_MODE))
+        self._attr_current_humidity = self._bounded_humidity(
+            state.attributes.get(
+                CONF_CURRENT_HUMIDITY,
+                config.get(CONF_CURRENT_HUMIDITY),
+            ),
+        )
+        self._attr_target_humidity = self._bounded_humidity(
+            state.attributes.get(
+                CONF_TARGET_HUMIDITY,
+                config.get(CONF_TARGET_HUMIDITY),
+            )
+        )
+        restored_mode = state.attributes.get(CONF_MODE, config.get(CONF_MODE))
+        self._attr_mode = (
+            restored_mode if restored_mode in self._attr_available_modes else None
+        )
+
+    def _bounded_humidity(self, humidity):
+        if humidity is None:
+            return None
+        try:
+            humidity = float(humidity)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(humidity):
+            return None
+        return max(
+            self._attr_min_humidity,
+            min(self._attr_max_humidity, humidity),
+        )
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -155,10 +216,19 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         self.async_write_ha_state()
 
     async def async_set_humidity(self, humidity: int) -> None:
+        humidity = float(humidity)
+        if not math.isfinite(humidity):
+            raise ValueError("Humidity must be finite")
+        if not self._attr_min_humidity <= humidity <= self._attr_max_humidity:
+            raise ValueError(
+                "Humidity must be within the configured minimum and maximum"
+            )
         self._attr_target_humidity = humidity
         self.async_write_ha_state()
 
     async def async_set_mode(self, mode: str) -> None:
+        if mode not in self._attr_available_modes:
+            raise ValueError(f"Invalid humidifier mode: {mode}")
         self._attr_mode = mode
         self.async_write_ha_state()
 

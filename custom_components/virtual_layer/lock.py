@@ -5,14 +5,16 @@ This component provides support for a virtual lock.
 
 import logging
 import random
-import voluptuous as vol
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
 from homeassistant.components.lock import (
     DOMAIN as PLATFORM_DOMAIN,
+)
+from homeassistant.components.lock import (
     LockEntity,
     LockEntityFeature,
     LockState,
@@ -27,7 +29,6 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -89,11 +90,12 @@ class VirtualLock(VirtualEntity, LockEntity):
         self._change_time = config.get(CONF_CHANGE_TIME)
         self._support_open = config.get(CONF_SUPPORT_OPEN)
         self._test_jamming = config.get(CONF_TEST_JAMMING)
+        self._timer_handle = None
         self._attr_supported_features = LockEntityFeature(0)
         if self._support_open:
             self._attr_supported_features |= LockEntityFeature.OPEN
         
-        _LOGGER.info('VirtualLock: {} created'.format(self.name))
+        _LOGGER.info(f'VirtualLock: {self.name} created')
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -158,6 +160,7 @@ class VirtualLock(VirtualEntity, LockEntity):
 
     @callback
     async def _finish_operation(self, _point_in_time) -> None:
+        self._timer_handle = None
         if self.is_locking:
             self._lock()
         if self.is_unlocking:
@@ -165,7 +168,22 @@ class VirtualLock(VirtualEntity, LockEntity):
         self.async_schedule_update_ha_state()
 
     def _start_operation(self):
-        async_call_later(self.hass, self._change_time, self._finish_operation)
+        self._cancel_timer()
+        self._timer_handle = async_call_later(
+            self.hass,
+            self._change_time,
+            self._finish_operation,
+        )
+
+    def _cancel_timer(self) -> None:
+        if self._timer_handle is not None:
+            self._timer_handle()
+            self._timer_handle = None
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel an in-flight lock operation before unload."""
+        self._cancel_timer()
+        await super().async_will_remove_from_hass()
 
     async def async_lock(self, **kwargs: Any) -> None:
         if self._change_time == DEFAULT_CHANGE_TIME:

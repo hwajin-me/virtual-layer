@@ -100,53 +100,6 @@ clear_attributes:
       selector:
         text:
 
-backup_devices:
-  name: Backup Devices
-  description: Back up one virtual device set or all virtual device sets.
-  fields:
-    file_name:
-      name: File
-      description: Backup JSON file path.
-      required: true
-      example: /config/virtual_layer_backup.json
-      selector:
-        text:
-    group_name:
-      name: Device
-      description: Optional device name. Leave empty to back up all virtual device sets.
-      required: false
-      example: imported
-      selector:
-        text:
-
-restore_devices:
-  name: Restore Devices
-  description: Restore virtual devices from a backup file.
-  fields:
-    file_name:
-      name: File
-      description: Backup JSON file path.
-      required: true
-      example: /config/virtual_layer_backup.json
-      selector:
-        text:
-    group_name:
-      name: Device
-      description: Optional target device name. If the backup contains one device set, it can be restored into this device set.
-      required: false
-      example: imported
-      selector:
-        text:
-    mode:
-      name: Mode
-      description: Merge with or replace existing UI-managed devices.
-      required: false
-      default: merge
-      selector:
-        select:
-          options:
-            - merge
-            - replace
 move:
   name: Move
   description: Move a device tracker to a new location.
@@ -169,6 +122,8 @@ move:
         location:
           radius: false
     gps_accuracy:
+      name: GPS Accuracy
+      description: Accuracy radius for GPS coordinates.
       selector:
         number:
           min: 0

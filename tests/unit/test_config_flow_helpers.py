@@ -2,29 +2,37 @@
 
 import json
 from datetime import timedelta
-from types import MappingProxyType, SimpleNamespace
+from types import MappingProxyType
 
 import pytest
-from homeassistant.const import ATTR_ENTITY_ID, CONF_ICON, CONF_NAME, CONF_PLATFORM
+import voluptuous as vol
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
+    CONF_ICON,
+    CONF_NAME,
+    CONF_PLATFORM,
+)
 from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
 
-from custom_components.virtual_layer import (
-    _merge_device_sets as _service_merge_device_sets,
-)
 from custom_components.virtual_layer.config_flow import (
     CONF_ATTRIBUTE_SOURCES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
     CONF_ATTRIBUTES_JSON,
+    CONF_DEVICE_CONFIGURATION_URL,
     CONF_DEVICE_HW_VERSION,
     CONF_DEVICE_ID,
     CONF_DEVICE_MANUFACTURER,
     CONF_DEVICE_MODEL,
     CONF_DEVICE_NAME,
     CONF_DEVICE_SERIAL_NUMBER,
+    CONF_DEVICE_SUGGESTED_AREA,
     CONF_DEVICE_SW_VERSION,
+    CONF_DEVICE_VIA_DEVICE_ID,
     CONF_DOMAIN_OPTIONS_JSON,
     CONF_ENTITY_NAME,
+    CONF_EVENT_HOOKS_JSON,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
     InvalidDomainOptions,
@@ -35,22 +43,20 @@ from custom_components.virtual_layer.config_flow import (
     _auto_helper_profile,
     _build_device_config,
     _build_entity_config,
+    _default_virtual_entity_id,
     _delete_ui_entities,
     _entity_choices,
     _entity_form_defaults,
     _entity_key,
     _entity_key_from_stable_key,
-    _managed_device_choices,
     _entity_schema,
-    _find_backup_group_for_entry,
     _find_entity_by_selection_key,
-    _merge_device_attributes,
-    _merge_device_sets,
+    _managed_device_choices,
     _options_schema,
     _reference_edit_defaults,
     _reference_entity_defaults,
-    _replace_ui_entity,
     _replace_ui_device,
+    _replace_ui_entity,
     _set_auto_helper_profile,
 )
 from custom_components.virtual_layer.const import (
@@ -58,13 +64,14 @@ from custom_components.virtual_layer.const import (
     ATTR_DEVICE_ID,
     ATTR_DEVICES,
     ATTR_ENTITY_KEY,
-    ATTR_GROUP_NAME,
     CONF_ATTRIBUTE,
     CONF_ATTRIBUTE_SOURCES,
     CONF_ATTRIBUTE_TEMPLATES,
     CONF_ATTRIBUTES,
     CONF_AVAILABILITY_TEMPLATE,
     CONF_CLASS,
+    CONF_CONFIGURATION_URL,
+    CONF_EVENT_HOOKS,
     CONF_HW_VERSION,
     CONF_INITIAL_AVAILABILITY,
     CONF_INITIAL_VALUE,
@@ -77,9 +84,11 @@ from custom_components.virtual_layer.const import (
     CONF_PULL_INTERVAL,
     CONF_SERIAL_NUMBER,
     CONF_SOURCE_ENTITIES,
+    CONF_SUGGESTED_AREA,
     CONF_SW_VERSION,
     CONF_TEMPLATE_SOURCES,
     CONF_VALUE_TEMPLATE,
+    CONF_VIA_DEVICE_ID,
     VIRTUAL_ENTITY_DOMAINS,
 )
 
@@ -95,6 +104,9 @@ def _entity_input(overrides=None):
         CONF_DEVICE_SW_VERSION: "",
         CONF_DEVICE_HW_VERSION: "",
         CONF_DEVICE_SERIAL_NUMBER: "",
+        CONF_DEVICE_CONFIGURATION_URL: "",
+        CONF_DEVICE_SUGGESTED_AREA: "",
+        CONF_DEVICE_VIA_DEVICE_ID: "",
         CONF_ENTITY_NAME: "Washer Phase",
         ATTR_ENTITY_ID: "",
         CONF_PLATFORM: "sensor",
@@ -106,6 +118,7 @@ def _entity_input(overrides=None):
         CONF_PULL_INTERVAL: 0,
         CONF_VALUE_TEMPLATE: "",
         CONF_AVAILABILITY_TEMPLATE: "",
+        CONF_EVENT_HOOKS_JSON: "",
         CONF_ATTRIBUTES_JSON: "",
         CONF_ATTRIBUTE_SOURCES_JSON: "",
         CONF_ATTRIBUTE_TEMPLATES_JSON: "",
@@ -163,6 +176,165 @@ def test_build_entity_config_supports_composite_templates_and_attributes():
             "door": "{{ states(\"binary_sensor.washer_door\") }}",
         },
     }
+
+
+def test_build_entity_config_supports_custom_event_hooks():
+    _, entity = _build_entity_config(_entity_input({
+        ATTR_ENTITY_ID: "sensor.washer_phase",
+        CONF_EVENT_HOOKS_JSON: json.dumps({
+            "door_hook": {
+                "trigger": "state",
+                "entity_ids": ["binary_sensor.washer_door"],
+                "attribute": "battery",
+                "value_template": "{{ trigger.to }}",
+                "attribute_templates": {
+                    "source_battery": "{{ trigger.to_state.attributes.battery }}",
+                },
+                "debounce": 0.5,
+                "enabled": "false",
+            },
+            "manual_event": {
+                "trigger": "event",
+                "event_type": "virtual_layer_manual_update",
+                "event_data": {"target": "washer"},
+                "attributes": {"hooked": True},
+                "refresh": "no",
+            },
+        }),
+    }))
+
+    assert entity[CONF_EVENT_HOOKS] == [
+        {
+            "trigger": "state",
+            ATTR_ENTITY_ID: ["binary_sensor.washer_door"],
+            CONF_ATTRIBUTE: ["battery"],
+            CONF_VALUE_TEMPLATE: "{{ trigger.to }}",
+            CONF_ATTRIBUTE_TEMPLATES: {
+                "source_battery": "{{ trigger.to_state.attributes.battery }}",
+            },
+            "debounce": 0.5,
+            "enabled": False,
+            CONF_NAME: "door_hook",
+        },
+        {
+            "trigger": "event",
+            "event_type": "virtual_layer_manual_update",
+            "event_data": {"target": "washer"},
+            CONF_ATTRIBUTES: {"hooked": True},
+            "refresh": False,
+            CONF_NAME: "manual_event",
+        },
+    ]
+
+
+def test_build_entity_config_rejects_invalid_custom_event_hooks():
+    with pytest.raises(InvalidEntityReference) as err:
+        _build_entity_config(_entity_input({
+            CONF_EVENT_HOOKS_JSON: '[{"trigger": "state", "entity_id": ["not-an-entity"]}]',
+        }))
+
+    assert err.value.field_name == CONF_EVENT_HOOKS_JSON
+
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(_entity_input({
+            CONF_EVENT_HOOKS_JSON: json.dumps([{
+                "trigger": "event",
+                "event_type": "virtual_layer_manual_update",
+                "enabled": "sometimes",
+            }]),
+        }))
+
+    assert err.value.field_name == CONF_EVENT_HOOKS_JSON
+
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(_entity_input({
+            CONF_EVENT_HOOKS_JSON: '[{"trigger": "event"}]',
+        }))
+
+    assert err.value.field_name == CONF_EVENT_HOOKS_JSON
+
+    with pytest.raises(InvalidEntityReference) as err:
+        _build_entity_config(_entity_input({
+            ATTR_ENTITY_ID: "sensor.washer_phase",
+            CONF_EVENT_HOOKS_JSON: '[{"trigger": "state", "entity_id": ["sensor.washer_phase"]}]',
+        }))
+
+    assert err.value.field_name == CONF_EVENT_HOOKS_JSON
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_build_entity_config_rejects_non_standard_json_numbers(constant):
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(_entity_input({
+            CONF_ATTRIBUTES_JSON: f'{{"bad": {constant}}}',
+        }))
+
+    assert err.value.field_name == CONF_ATTRIBUTES_JSON
+
+
+def test_build_entity_config_rejects_non_finite_numeric_strings():
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(_entity_input({
+            CONF_EVENT_HOOKS_JSON: json.dumps([{
+                "trigger": "event",
+                "event_type": "virtual_layer_update",
+                "debounce": "Infinity",
+            }]),
+        }))
+
+    assert err.value.field_name == CONF_EVENT_HOOKS_JSON
+
+    with pytest.raises(InvalidDomainOptions):
+        _build_entity_config(_entity_input({
+            CONF_PLATFORM: "number",
+            CONF_INITIAL_VALUE: "1",
+            CONF_DOMAIN_OPTIONS_JSON: '{"min": "NaN", "max": 100}',
+        }))
+
+
+def test_climate_schema_rejects_unknown_hvac_modes():
+    from custom_components.virtual_layer.climate import CLIMATE_SCHEMA
+
+    with pytest.raises(vol.Invalid):
+        CLIMATE_SCHEMA({
+            CONF_NAME: "Invalid climate",
+            "hvac_modes": ["off", "removed_mode"],
+        })
+
+
+@pytest.mark.parametrize(
+    "domain_options",
+    [
+        {"support_color": True, "initial_color": [120]},
+        {
+            "support_effect": True,
+            "initial_effect": "removed",
+            "initial_effect_list": ["none", "rainbow"],
+        },
+    ],
+)
+def test_build_entity_config_rejects_malformed_light_options(domain_options):
+    with pytest.raises(InvalidDomainOptions):
+        _build_entity_config(_entity_input({
+            CONF_PLATFORM: "light",
+            CONF_DOMAIN_OPTIONS_JSON: json.dumps(domain_options),
+        }))
+
+
+@pytest.mark.parametrize(
+    "domain_options",
+    [
+        {"battery_level": 101},
+        {"activity": "teleporting"},
+        {"fan_speed": "turbo", "fan_speed_list": ["normal"]},
+    ],
+)
+def test_build_entity_config_rejects_malformed_vacuum_options(domain_options):
+    with pytest.raises(InvalidDomainOptions):
+        _build_entity_config(_entity_input({
+            CONF_PLATFORM: "vacuum",
+            CONF_DOMAIN_OPTIONS_JSON: json.dumps(domain_options),
+        }))
 
 
 def test_build_entity_config_deduplicates_sources_and_rejects_invalid_template_variables():
@@ -480,8 +652,9 @@ def test_reference_entity_defaults_combines_time_sources_with_latest_template(ha
 
 
 def test_reference_entity_defaults_combines_datetime_sources_with_latest_template(hass):
-    hass.states.async_set("datetime.first_seen", "2026-08-03T10:00:00+09:00")
-    hass.states.async_set("datetime.last_seen", "2026-08-04T11:00:00+09:00")
+    # Lexicographic order picks first_seen, but last_seen is the later instant.
+    hass.states.async_set("datetime.first_seen", "2026-08-04T00:30:00+09:00")
+    hass.states.async_set("datetime.last_seen", "2026-08-03T20:00:00+00:00")
 
     defaults = _reference_entity_defaults(
         hass,
@@ -489,8 +662,15 @@ def test_reference_entity_defaults_combines_datetime_sources_with_latest_templat
     )
 
     assert defaults[CONF_PLATFORM] == "datetime"
-    assert defaults[CONF_INITIAL_VALUE] == "2026-08-04T11:00:00+09:00"
-    assert "sort | last" in defaults[CONF_VALUE_TEMPLATE]
+    assert defaults[CONF_INITIAL_VALUE] == "2026-08-03T20:00:00+00:00"
+    assert "as_timestamp" in defaults[CONF_VALUE_TEMPLATE]
+    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+        variables={
+            "first_seen": "2026-08-04T00:30:00+09:00",
+            "last_seen": "2026-08-03T20:00:00+00:00",
+        },
+        parse_result=False,
+    ) == "2026-08-03T20:00:00+00:00"
 
 
 def test_reference_entity_defaults_combines_enum_sources_with_first_available_template(hass):
@@ -533,6 +713,79 @@ def test_reference_entity_defaults_creates_location_median_helper(hass):
             "priority_window_seconds": 1800,
         },
     }
+    assert defaults.get(CONF_ATTRIBUTES_JSON, "") == ""
+
+
+def test_reference_entity_defaults_uses_location_helper_for_single_location_source(hass):
+    hass.states.async_set(
+        "device_tracker.phone",
+        "home",
+        {
+            ATTR_FRIENDLY_NAME: "Hwajin's iPhone 14 Pro (iCloud)",
+            "latitude": 37.5,
+            "longitude": 127.0,
+            "battery_level": 55,
+        },
+    )
+
+    defaults = _reference_entity_defaults(hass, ["device_tracker.phone"])
+
+    assert defaults[CONF_PLATFORM] == "device_tracker"
+    assert defaults[CONF_VALUE_TEMPLATE] == ""
+    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+        CONF_LOCATION_HELPER: {
+            "distance_threshold_meters": 300,
+            "priority_window_seconds": 1800,
+        },
+    }
+    assert defaults.get(CONF_ATTRIBUTES_JSON, "") == ""
+
+
+def test_reference_entity_defaults_shortens_generated_combined_location_names(hass):
+    long_name = (
+        "Hwajin's iPhone 14 Pro (iCloud) "
+        "(hwajin_s_iphone_14_pro_icloud) "
+        "Hwajin's Apple Watch Ultra 2 (iCloud)"
+    )
+    hass.states.async_set(
+        "device_tracker.phone",
+        "home",
+        {
+            ATTR_FRIENDLY_NAME: long_name,
+            "latitude": 37.5,
+            "longitude": 127.0,
+            "device_configuration": "large blob",
+        },
+    )
+    hass.states.async_set(
+        "person.owner",
+        "not_home",
+        {
+            ATTR_FRIENDLY_NAME: "Hwajin Lee",
+            "latitude": 37.6,
+            "longitude": 127.1,
+        },
+    )
+
+    defaults = _reference_entity_defaults(hass, ["device_tracker.phone", "person.owner"])
+
+    assert defaults[CONF_ENTITY_NAME].startswith(
+        "Combined Hwajin's iPhone 14 Pro (iCloud)",
+    )
+    assert defaults[CONF_ENTITY_NAME].endswith("...")
+    assert len(defaults[CONF_ENTITY_NAME]) <= 80
+    assert "Apple Watch" not in defaults[CONF_ENTITY_NAME]
+    assert defaults.get(CONF_ATTRIBUTES_JSON, "") == ""
+
+
+def test_default_virtual_entity_id_shortens_generated_slug():
+    entity_id = _default_virtual_entity_id(
+        "device_tracker",
+        "Combined " + ("very long source name " * 10),
+    )
+
+    assert entity_id.startswith("device_tracker.combined_very_long_source_name")
+    assert len(entity_id.split(".", 1)[1]) <= 80
 
 
 def test_build_device_config_supports_device_registry_metadata():
@@ -543,6 +796,9 @@ def test_build_device_config_supports_device_registry_metadata():
         CONF_DEVICE_SW_VERSION: "2026.8",
         CONF_DEVICE_HW_VERSION: "rev-a",
         CONF_DEVICE_SERIAL_NUMBER: "SN-123",
+        CONF_DEVICE_CONFIGURATION_URL: "https://example.test/laundry",
+        CONF_DEVICE_SUGGESTED_AREA: "Laundry Room",
+        CONF_DEVICE_VIA_DEVICE_ID: "parent-device-id",
     }), "Laundry")
 
     assert device == {
@@ -553,6 +809,9 @@ def test_build_device_config_supports_device_registry_metadata():
         CONF_SW_VERSION: "2026.8",
         CONF_HW_VERSION: "rev-a",
         CONF_SERIAL_NUMBER: "SN-123",
+        CONF_CONFIGURATION_URL: "https://example.test/laundry",
+        CONF_SUGGESTED_AREA: "Laundry Room",
+        CONF_VIA_DEVICE_ID: "parent-device-id",
     }
 
 
@@ -1014,8 +1273,6 @@ def test_options_schema_allows_deleting_but_not_editing_invalid_stored_entity():
         "add_entity",
         "delete_entity",
         "manage_devices",
-        "backup_devices",
-        "restore_devices",
         "finish",
     ]
 
@@ -1362,34 +1619,6 @@ def test_delete_ui_entities_can_remove_malformed_entity_and_metadata():
     assert next_options[ATTR_DEVICE_ATTRIBUTES] == {}
 
 
-def test_merge_helpers_skip_invalid_restored_payloads():
-    merged = _merge_device_sets(
-        {ATTR_DEVICES: "wrong"},
-        {"Laundry": "not-a-list", "HVAC": [{CONF_PLATFORM: "climate"}]},
-    )
-
-    assert merged["HVAC"][0].pop(ATTR_ENTITY_KEY)
-    assert merged == {"HVAC": [{CONF_PLATFORM: "climate"}]}
-
-
-def test_merge_helpers_skip_invalid_entities_inside_restored_list():
-    merged = _merge_device_sets(
-        {},
-        {
-            "Laundry": [
-                "bad-entity",
-                {CONF_PLATFORM: "sensor", CONF_NAME: "Washer"},
-                None,
-            ],
-        },
-    )
-
-    assert merged["Laundry"][0].pop(ATTR_ENTITY_KEY)
-    assert merged == {
-        "Laundry": [{CONF_PLATFORM: "sensor", CONF_NAME: "Washer"}],
-    }
-
-
 def test_entity_form_defaults_round_trips_stored_entity_config():
     defaults = _entity_form_defaults(
         "Laundry",
@@ -1409,6 +1638,11 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
             },
             CONF_PULL_INTERVAL: 30,
             CONF_VALUE_TEMPLATE: "{{ power }}",
+            CONF_EVENT_HOOKS: [{
+                "trigger": "event",
+                "event_type": "virtual_layer_manual_update",
+                CONF_VALUE_TEMPLATE: "{{ trigger.data.value }}",
+            }],
             CONF_ATTRIBUTES: {"source": "simulation"},
         },
         {
@@ -1420,6 +1654,9 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
                     CONF_SW_VERSION: "2026.8",
                     CONF_HW_VERSION: "rev-a",
                     CONF_SERIAL_NUMBER: "SN-123",
+                    CONF_CONFIGURATION_URL: "https://example.test/laundry",
+                    CONF_SUGGESTED_AREA: "Laundry Room",
+                    CONF_VIA_DEVICE_ID: "parent-device-id",
                 },
             },
         },
@@ -1432,6 +1669,9 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
     assert defaults[CONF_DEVICE_SW_VERSION] == "2026.8"
     assert defaults[CONF_DEVICE_HW_VERSION] == "rev-a"
     assert defaults[CONF_DEVICE_SERIAL_NUMBER] == "SN-123"
+    assert defaults[CONF_DEVICE_CONFIGURATION_URL] == "https://example.test/laundry"
+    assert defaults[CONF_DEVICE_SUGGESTED_AREA] == "Laundry Room"
+    assert defaults[CONF_DEVICE_VIA_DEVICE_ID] == "parent-device-id"
     assert defaults[CONF_ENTITY_NAME] == "Washer Phase"
     assert defaults[ATTR_ENTITY_ID] == "sensor.washer_phase"
     assert defaults[CONF_INITIAL_AVAILABILITY] is False
@@ -1440,6 +1680,11 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
     assert '"power"' in defaults[CONF_TEMPLATE_SOURCES_JSON]
     assert defaults[CONF_PULL_INTERVAL] == 30
     assert defaults[CONF_VALUE_TEMPLATE] == "{{ power }}"
+    assert json.loads(defaults[CONF_EVENT_HOOKS_JSON]) == [{
+        "trigger": "event",
+        "event_type": "virtual_layer_manual_update",
+        CONF_VALUE_TEMPLATE: "{{ trigger.data.value }}",
+    }]
     assert defaults[CONF_ATTRIBUTES_JSON] == '{"source": "simulation"}'
 
 
@@ -1499,116 +1744,3 @@ def test_delete_ui_entities_uses_stable_key_after_entity_order_changes():
             ATTR_ENTITY_KEY: "first-key",
         },
     ]
-
-
-def test_merge_device_sets_appends_restored_entities_without_mutating_existing():
-    existing = {
-        "Laundry": [
-            {
-                CONF_PLATFORM: "sensor",
-                CONF_NAME: "Current",
-                ATTR_ENTITY_KEY: "current-key",
-            },
-        ],
-    }
-    restored = {
-        "Laundry": [
-            {
-                CONF_PLATFORM: "binary_sensor",
-                CONF_NAME: "Door",
-                ATTR_ENTITY_KEY: "backup-door-key",
-            },
-        ],
-        "HVAC": [
-            {
-                CONF_PLATFORM: "climate",
-                CONF_NAME: "Thermostat",
-                ATTR_ENTITY_KEY: "backup-hvac-key",
-            },
-        ],
-    }
-
-    merged = _merge_device_sets(existing, restored)
-
-    assert existing["Laundry"] == [
-        {
-            CONF_PLATFORM: "sensor",
-            CONF_NAME: "Current",
-            ATTR_ENTITY_KEY: "current-key",
-        },
-    ]
-    assert merged["Laundry"][0] == {
-        CONF_PLATFORM: "sensor",
-        CONF_NAME: "Current",
-        ATTR_ENTITY_KEY: "current-key",
-    }
-    restored_laundry_entity = merged["Laundry"][1]
-    assert restored_laundry_entity.pop(ATTR_ENTITY_KEY) != "backup-door-key"
-    assert restored_laundry_entity == {
-        CONF_PLATFORM: "binary_sensor",
-        CONF_NAME: "Door",
-    }
-    restored_hvac_entity = merged["HVAC"][0]
-    assert restored_hvac_entity.pop(ATTR_ENTITY_KEY) != "backup-hvac-key"
-    assert restored_hvac_entity == {
-        CONF_PLATFORM: "climate",
-        CONF_NAME: "Thermostat",
-    }
-
-
-def test_service_restore_merge_regenerates_restored_entity_keys():
-    merged = _service_merge_device_sets(
-        {"Laundry": []},
-        {
-            "Laundry": [
-                {
-                    CONF_PLATFORM: "sensor",
-                    CONF_NAME: "Restored",
-                    ATTR_ENTITY_KEY: "backup-key",
-                },
-            ],
-        },
-    )
-
-    restored_entity = merged["Laundry"][0]
-    assert restored_entity.pop(ATTR_ENTITY_KEY) != "backup-key"
-    assert restored_entity == {
-        CONF_PLATFORM: "sensor",
-        CONF_NAME: "Restored",
-    }
-
-
-def test_merge_device_attributes_restored_metadata_wins():
-    existing = {
-        "Laundry": {
-            ATTR_DEVICE_ID: "old",
-            CONF_NAME: "Laundry",
-        },
-    }
-    restored = {
-        "Laundry": {
-            ATTR_DEVICE_ID: "new",
-            CONF_NAME: "Laundry",
-            CONF_MODEL: "Washer 9000",
-        },
-        "HVAC": {
-            ATTR_DEVICE_ID: "hvac",
-            CONF_NAME: "HVAC",
-        },
-    }
-
-    merged = _merge_device_attributes(existing, restored)
-
-    assert existing["Laundry"][ATTR_DEVICE_ID] == "old"
-    assert merged["Laundry"][ATTR_DEVICE_ID] == "new"
-    assert merged["Laundry"][CONF_MODEL] == "Washer 9000"
-    assert merged["HVAC"][ATTR_DEVICE_ID] == "hvac"
-
-
-def test_find_backup_group_prefers_matching_group_when_multiple_exist():
-    backup_group = _find_backup_group_for_entry([
-        {ATTR_GROUP_NAME: "first", ATTR_DEVICES: {}},
-        {ATTR_GROUP_NAME: "second", ATTR_DEVICES: {"Device": []}},
-    ], SimpleNamespace(data={ATTR_GROUP_NAME: "second"}))
-
-    assert backup_group == {ATTR_GROUP_NAME: "second", ATTR_DEVICES: {"Device": []}}

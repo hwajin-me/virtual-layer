@@ -4,13 +4,19 @@ This component provides support for a virtual number.
 """
 
 import logging
-import voluptuous as vol
+import math
 from collections.abc import Callable
 
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
 from homeassistant.components.number import (
-    ATTR_MAX, ATTR_MIN, DOMAIN as PLATFORM_DOMAIN,
-    NumberDeviceClass
+    ATTR_MAX,
+    ATTR_MIN,
+    NumberDeviceClass,
+    NumberEntity,
+)
+from homeassistant.components.number import (
+    DOMAIN as PLATFORM_DOMAIN,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -35,14 +41,12 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
-from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -122,7 +126,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class VirtualNumber(VirtualEntity, Entity):
+class VirtualNumber(VirtualEntity, NumberEntity):
     """An implementation of a Virtual Number."""
 
     def __init__(self, config, old_style: bool):
@@ -131,12 +135,23 @@ class VirtualNumber(VirtualEntity, Entity):
 
         self._attr_device_class = config.get(CONF_CLASS)
 
-        self.min_value = config.get(CONF_MIN)
-        self.max_value = config.get(CONF_MAX)
+        self._attr_native_min_value = self._finite_bound(
+            config.get(CONF_MIN),
+            0.0,
+        )
+        self._attr_native_max_value = self._finite_bound(
+            config.get(CONF_MAX),
+            100.0,
+        )
+        if self._attr_native_min_value > self._attr_native_max_value:
+            self._attr_native_min_value, self._attr_native_max_value = (
+                self._attr_native_max_value,
+                self._attr_native_min_value,
+            )
 
         # Set unit of measurement
         self._attr_unit_of_measurement = config.get(CONF_UNIT_OF_MEASUREMENT)
-        if not self._attr_unit_of_measurement and self._attr_device_class in UNITS_OF_MEASUREMENT.keys():
+        if not self._attr_unit_of_measurement and self._attr_device_class in UNITS_OF_MEASUREMENT:
             self._attr_unit_of_measurement = UNITS_OF_MEASUREMENT[self._attr_device_class]
 
         _LOGGER.info(f"VirtualSensor: {self.name} created")
@@ -144,23 +159,40 @@ class VirtualNumber(VirtualEntity, Entity):
     def convert_to_native_value(self, value: float) -> float:
         return value
 
-    @property
-    def native_min_value(self):
-        return self.min_value
-
-    @property
-    def native_max_value(self):
-        return self.max_value
+    @staticmethod
+    def _finite_bound(value, fallback: float) -> float:
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        return value if math.isfinite(value) else fallback
 
     def _create_state(self, config):
         super()._create_state(config)
-
-        self._attr_state = config.get(CONF_INITIAL_VALUE)
+        self._attr_native_value = self._normalize_value(
+            config.get(CONF_INITIAL_VALUE),
+            self.native_min_value,
+        )
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
 
-        self._attr_state = state.state
+        self._attr_native_value = self._normalize_value(
+            state.state,
+            config.get(CONF_INITIAL_VALUE, self.native_min_value),
+        )
+
+    def _normalize_value(self, value, fallback) -> float:
+        try:
+            native_value = float(value)
+        except (TypeError, ValueError):
+            native_value = float(fallback)
+        if not math.isfinite(native_value):
+            native_value = self.native_min_value
+        return max(
+            self.native_min_value,
+            min(self.native_max_value, native_value),
+        )
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -168,18 +200,18 @@ class VirtualNumber(VirtualEntity, Entity):
             name: value for name, value in (
                 (ATTR_DEVICE_CLASS, self._attr_device_class),
                 (ATTR_UNIT_OF_MEASUREMENT, self._attr_unit_of_measurement),
-                (ATTR_MIN, self.min_value),
-                (ATTR_MAX, self.max_value)
+                (ATTR_MIN, self.native_min_value),
+                (ATTR_MAX, self.native_max_value)
             ) if value is not None
         })
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new value."""
-        await self.hass.async_add_executor_job(self.set, value)
+        self.set(value)
 
     def set(self, value) -> None:
         _LOGGER.debug(f"set {self.name} to {value}")
-        self._attr_state = value
+        self._attr_native_value = self._normalize_value(value, self.native_value)
         self.async_schedule_update_ha_state()
 
     def set_state(self, value) -> None:

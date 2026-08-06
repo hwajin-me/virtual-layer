@@ -3,7 +3,6 @@
 from importlib import import_module
 
 import pytest
-
 from homeassistant.const import ATTR_ENTITY_ID
 
 from custom_components.virtual_layer.const import (
@@ -13,7 +12,6 @@ from custom_components.virtual_layer.const import (
     CONF_TEMPLATE_SOURCES,
     VIRTUAL_ENTITY_DOMAINS,
 )
-
 
 GENERIC_DIRECT_OPTION_DOMAINS = (
     "ai_task",
@@ -58,9 +56,7 @@ pytestmark = pytest.mark.unit
 @pytest.mark.parametrize("domain", VIRTUAL_ENTITY_DOMAINS)
 def test_every_domain_schema_accepts_composite_template_sources(domain):
     module = import_module(f"custom_components.virtual_layer.{domain}")
-    schema = getattr(module, f"{domain.upper()}_SCHEMA", None) or getattr(
-        module, "ENTITY_SCHEMA"
-    )
+    schema = getattr(module, f"{domain.upper()}_SCHEMA", None) or module.ENTITY_SCHEMA
     config = {
         CONF_NAME: "Schema validation entity",
         CONF_TEMPLATE_SOURCES: {

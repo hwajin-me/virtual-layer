@@ -8,7 +8,8 @@
       "group_name_used": "이미 사용 중인 장치 이름입니다. 다른 이름을 입력하세요.",
       "invalid_json": "올바른 JSON 객체를 입력하세요.",
       "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
-      "invalid_domain_options": "선택한 엔티티 도메인에 맞는 옵션을 입력하세요."
+      "invalid_domain_options": "선택한 엔티티 도메인에 맞는 옵션을 입력하세요.",
+      "required": "필수 항목입니다."
     },
     "step": {
       "user": {
@@ -43,6 +44,9 @@
           "device_sw_version": "장치 소프트웨어 버전",
           "device_hw_version": "장치 하드웨어 버전",
           "device_serial_number": "장치 일련번호",
+          "device_configuration_url": "장치 설정 URL",
+          "device_suggested_area": "장치 추천 영역",
+          "device_via_device_id": "연결된 상위 장치",
           "entity_name": "엔티티 이름",
           "icon": "아이콘",
           "entity_id": "엔티티 ID",
@@ -55,10 +59,18 @@
           "pull_interval": "가져오기 주기",
           "value_template": "값 템플릿",
           "availability_template": "사용 가능 여부 템플릿",
+          "event_hooks_json": "이벤트 훅 JSON",
           "attributes_json": "속성 JSON",
           "attribute_sources_json": "속성 소스 JSON",
           "attribute_templates_json": "속성 템플릿 JSON",
-          "domain_options_json": "도메인 옵션 JSON"
+          "domain_options_json": "도메인 옵션 JSON",
+          "polygon_geojson_json": "Polygon GeoJSON",
+          "polygon_files_text": "Polygon 파일 또는 URL",
+          "polygon_person": "Person",
+          "polygon_strategy": "Tracker 위치 선정 방식",
+          "polygon_distance_meters": "Tracker 그룹 거리",
+          "polygon_tracker_rules_json": "Tracker 규칙 JSON",
+          "polygon_away_state": "영역 밖 상태"
         },
         "data_description": {
           "device_name": "장치 이름이 같은 엔티티는 하나의 Home Assistant 장치에 연결됩니다.",
@@ -68,16 +80,27 @@
           "device_sw_version": "Home Assistant 장치 레지스트리에 표시할 소프트웨어 버전입니다.",
           "device_hw_version": "Home Assistant 장치 레지스트리에 표시할 하드웨어 버전입니다.",
           "device_serial_number": "Home Assistant 장치 레지스트리에 표시할 일련번호입니다.",
+          "device_configuration_url": "Home Assistant 장치 레지스트리에서 열 수 있는 설정 URL입니다.",
+          "device_suggested_area": "Home Assistant가 장치를 만들 때 사용할 영역 힌트입니다.",
+          "device_via_device_id": "이 가상 장치가 연결된 상위 장치입니다.",
           "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
           "icon": "선택 사항인 Material Design 아이콘 이름입니다. 예: mdi:door",
           "entity_id": "선택 사항입니다. 비워 두면 엔티티 도메인과 이름으로 자동 생성합니다.",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
           "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
+          "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
           "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
           "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
           "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: power -> states('sensor.power')",
-          "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
+          "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다.",
+          "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
+          "polygon_files_text": "줄마다 로컬 경로 또는 HTTP(S) GeoJSON URL 하나를 입력합니다. 상대 경로는 Home Assistant 설정 디렉터리를 기준으로 합니다.",
+          "polygon_person": "이 가상 tracker가 나타내는 선택 Person입니다. 설정한 소스 tracker들이 지도 위치를 결정합니다.",
+          "polygon_strategy": "다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다.",
+          "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
+          "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
+          "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다."
         }
       },
       "entity_source": {
@@ -88,7 +111,7 @@
           "target_device_name": "가상 장치"
         },
         "data_description": {
-          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다.",
+          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 모션/재실은 과반 감지와 지연 해제, 누수/연기/가스/물 같은 안전 센서는 OR, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다. Camera와 Image 소스는 하나씩 별칭으로만 연결할 수 있고 병합하지 않습니다.",
           "target_device_name": "기존 가상 장치를 선택하면 해당 장치의 엔티티로 함께 묶입니다. 새 장치를 만들 수도 있습니다."
         }
       }
@@ -99,16 +122,16 @@
       "invalid_json": "올바른 JSON 객체를 입력하세요.",
       "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
       "invalid_domain_options": "선택한 엔티티 도메인에 맞는 옵션을 입력하세요.",
-      "backup_group_not_found": "백업에서 일치하는 가상 장치를 찾지 못했습니다.",
       "device_not_found": "선택한 가상 장치를 찾지 못했습니다.",
       "entity_not_found": "선택한 가상 엔티티를 찾지 못했습니다.",
       "no_devices": "관리할 가상 장치가 없습니다.",
-      "no_entities": "이 장치에는 수정할 가상 엔티티가 없습니다."
+      "no_entities": "이 장치에는 수정할 가상 엔티티가 없습니다.",
+      "required": "필수 항목입니다."
     },
     "step": {
       "init": {
         "title": "Virtual Layer 구성",
-        "description": "UI에서 관리하는 가상 장치와 엔티티를 추가, 수정, 백업 또는 복원합니다.",
+        "description": "UI에서 가상 장치와 엔티티를 추가, 수정, 삭제하거나 관리합니다.",
         "data": {
           "action": "작업"
         }
@@ -137,7 +160,10 @@
           "device_model": "장치 모델",
           "device_sw_version": "장치 소프트웨어 버전",
           "device_hw_version": "장치 하드웨어 버전",
-          "device_serial_number": "장치 일련번호"
+          "device_serial_number": "장치 일련번호",
+          "device_configuration_url": "장치 설정 URL",
+          "device_suggested_area": "장치 추천 영역",
+          "device_via_device_id": "연결된 상위 장치"
         },
         "data_description": {
           "device_name": "기존 장치 이름으로 바꾸면 두 장치의 가상 엔티티를 하나로 합칩니다.",
@@ -146,7 +172,10 @@
           "device_model": "Home Assistant 장치 레지스트리에 표시할 모델입니다.",
           "device_sw_version": "Home Assistant 장치 레지스트리에 표시할 소프트웨어 버전입니다.",
           "device_hw_version": "Home Assistant 장치 레지스트리에 표시할 하드웨어 버전입니다.",
-          "device_serial_number": "Home Assistant 장치 레지스트리에 표시할 일련번호입니다."
+          "device_serial_number": "Home Assistant 장치 레지스트리에 표시할 일련번호입니다.",
+          "device_configuration_url": "Home Assistant 장치 레지스트리에서 열 수 있는 설정 URL입니다.",
+          "device_suggested_area": "Home Assistant가 장치를 만들 때 사용할 영역 힌트입니다.",
+          "device_via_device_id": "이 가상 장치가 연결된 상위 장치입니다."
         }
       },
       "delete_entities": {
@@ -170,6 +199,9 @@
           "device_sw_version": "장치 소프트웨어 버전",
           "device_hw_version": "장치 하드웨어 버전",
           "device_serial_number": "장치 일련번호",
+          "device_configuration_url": "장치 설정 URL",
+          "device_suggested_area": "장치 추천 영역",
+          "device_via_device_id": "연결된 상위 장치",
           "entity_name": "엔티티 이름",
           "icon": "아이콘",
           "entity_id": "엔티티 ID",
@@ -182,10 +214,18 @@
           "pull_interval": "가져오기 주기",
           "value_template": "값 템플릿",
           "availability_template": "사용 가능 여부 템플릿",
+          "event_hooks_json": "이벤트 훅 JSON",
           "attributes_json": "속성 JSON",
           "attribute_sources_json": "속성 소스 JSON",
           "attribute_templates_json": "속성 템플릿 JSON",
-          "domain_options_json": "도메인 옵션 JSON"
+          "domain_options_json": "도메인 옵션 JSON",
+          "polygon_geojson_json": "Polygon GeoJSON",
+          "polygon_files_text": "Polygon 파일 또는 URL",
+          "polygon_person": "Person",
+          "polygon_strategy": "Tracker 위치 선정 방식",
+          "polygon_distance_meters": "Tracker 그룹 거리",
+          "polygon_tracker_rules_json": "Tracker 규칙 JSON",
+          "polygon_away_state": "영역 밖 상태"
         },
         "data_description": {
           "device_name": "이 값을 바꾸면 엔티티를 다른 가상 장치로 이동합니다.",
@@ -195,16 +235,27 @@
           "device_sw_version": "Home Assistant 장치 레지스트리에 표시할 소프트웨어 버전입니다.",
           "device_hw_version": "Home Assistant 장치 레지스트리에 표시할 하드웨어 버전입니다.",
           "device_serial_number": "Home Assistant 장치 레지스트리에 표시할 일련번호입니다.",
+          "device_configuration_url": "Home Assistant 장치 레지스트리에서 열 수 있는 설정 URL입니다.",
+          "device_suggested_area": "Home Assistant가 장치를 만들 때 사용할 영역 힌트입니다.",
+          "device_via_device_id": "이 가상 장치가 연결된 상위 장치입니다.",
           "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
           "icon": "선택 사항인 Material Design 아이콘 이름입니다. 예: mdi:door",
           "entity_id": "선택 사항입니다. 비워 두면 엔티티 도메인과 이름으로 자동 생성합니다.",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
           "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
+          "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
           "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
           "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
           "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: power -> states('sensor.power')",
-          "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
+          "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다.",
+          "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
+          "polygon_files_text": "줄마다 로컬 경로 또는 HTTP(S) GeoJSON URL 하나를 입력합니다. 상대 경로는 Home Assistant 설정 디렉터리를 기준으로 합니다.",
+          "polygon_person": "이 가상 tracker가 나타내는 선택 Person입니다. 설정한 소스 tracker들이 지도 위치를 결정합니다.",
+          "polygon_strategy": "다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다.",
+          "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
+          "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
+          "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다."
         }
       },
       "edit_entity_source": {
@@ -215,7 +266,7 @@
           "target_device_name": "가상 장치"
         },
         "data_description": {
-          "reference_entity_id": "현재 가상 엔티티 값을 유지하려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다.",
+          "reference_entity_id": "현재 가상 엔티티 값을 유지하려면 비워 두세요. Boolean은 AND, 모션/재실은 과반 감지와 지연 해제, 누수/연기/가스/물 같은 안전 센서는 OR, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다. Camera와 Image 소스는 하나씩 별칭으로만 연결할 수 있고 병합하지 않습니다.",
           "target_device_name": "이 엔티티를 포함할 가상 장치를 선택하세요."
         }
       },
@@ -230,6 +281,9 @@
           "device_sw_version": "장치 소프트웨어 버전",
           "device_hw_version": "장치 하드웨어 버전",
           "device_serial_number": "장치 일련번호",
+          "device_configuration_url": "장치 설정 URL",
+          "device_suggested_area": "장치 추천 영역",
+          "device_via_device_id": "연결된 상위 장치",
           "entity_name": "엔티티 이름",
           "icon": "아이콘",
           "entity_id": "엔티티 ID",
@@ -242,10 +296,18 @@
           "pull_interval": "가져오기 주기",
           "value_template": "값 템플릿",
           "availability_template": "사용 가능 여부 템플릿",
+          "event_hooks_json": "이벤트 훅 JSON",
           "attributes_json": "속성 JSON",
           "attribute_sources_json": "속성 소스 JSON",
           "attribute_templates_json": "속성 템플릿 JSON",
-          "domain_options_json": "도메인 옵션 JSON"
+          "domain_options_json": "도메인 옵션 JSON",
+          "polygon_geojson_json": "Polygon GeoJSON",
+          "polygon_files_text": "Polygon 파일 또는 URL",
+          "polygon_person": "Person",
+          "polygon_strategy": "Tracker 위치 선정 방식",
+          "polygon_distance_meters": "Tracker 그룹 거리",
+          "polygon_tracker_rules_json": "Tracker 규칙 JSON",
+          "polygon_away_state": "영역 밖 상태"
         },
         "data_description": {
           "device_name": "장치 이름이 같은 엔티티는 하나의 Home Assistant 장치에 연결됩니다.",
@@ -255,16 +317,27 @@
           "device_sw_version": "Home Assistant 장치 레지스트리에 표시할 소프트웨어 버전입니다.",
           "device_hw_version": "Home Assistant 장치 레지스트리에 표시할 하드웨어 버전입니다.",
           "device_serial_number": "Home Assistant 장치 레지스트리에 표시할 일련번호입니다.",
+          "device_configuration_url": "Home Assistant 장치 레지스트리에서 열 수 있는 설정 URL입니다.",
+          "device_suggested_area": "Home Assistant가 장치를 만들 때 사용할 영역 힌트입니다.",
+          "device_via_device_id": "이 가상 장치가 연결된 상위 장치입니다.",
           "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
           "icon": "선택 사항인 Material Design 아이콘 이름입니다. 예: mdi:door",
           "entity_id": "선택 사항입니다. 비워 두면 엔티티 도메인과 이름으로 자동 생성합니다.",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
           "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
+          "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
           "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
           "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
           "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: power -> states('sensor.power')",
-          "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
+          "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다.",
+          "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
+          "polygon_files_text": "줄마다 로컬 경로 또는 HTTP(S) GeoJSON URL 하나를 입력합니다. 상대 경로는 Home Assistant 설정 디렉터리를 기준으로 합니다.",
+          "polygon_person": "이 가상 tracker가 나타내는 선택 Person입니다. 설정한 소스 tracker들이 지도 위치를 결정합니다.",
+          "polygon_strategy": "다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다.",
+          "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
+          "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
+          "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다."
         }
       },
       "entity_source": {
@@ -275,26 +348,8 @@
           "target_device_name": "가상 장치"
         },
         "data_description": {
-          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다.",
+          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 모션/재실은 과반 감지와 지연 해제, 누수/연기/가스/물 같은 안전 센서는 OR, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다. Camera와 Image 소스는 하나씩 별칭으로만 연결할 수 있고 병합하지 않습니다.",
           "target_device_name": "기존 가상 장치를 선택하면 해당 장치의 엔티티로 함께 묶입니다. 새 장치를 만들 수도 있습니다."
-        }
-      },
-      "backup": {
-        "title": "가상 장치 백업",
-        "description": "이 가상 장치 모음을 JSON 백업 파일에 저장합니다.",
-        "data": {
-          "file_name": "백업 파일"
-        }
-      },
-      "restore": {
-        "title": "가상 장치 복원",
-        "description": "백업 파일에서 가상 장치를 복원합니다.",
-        "data": {
-          "file_name": "백업 파일",
-          "mode": "방식"
-        },
-        "data_description": {
-          "mode": "병합은 현재 장치를 유지하면서 복원한 장치를 추가합니다. 교체는 현재 장치 목록을 덮어씁니다."
         }
       }
     }
@@ -306,15 +361,15 @@
         "edit_entity": "가상 엔티티 수정",
         "delete_entity": "가상 엔티티 삭제",
         "manage_devices": "가상 장치 관리",
-        "backup_devices": "장치 백업",
-        "restore_devices": "장치 복원",
         "finish": "완료"
       }
     },
-    "restore_mode": {
+    "polygon_strategy": {
       "options": {
-        "merge": "병합",
-        "replace": "교체"
+        "majority": "다수결",
+        "priority": "우선순위",
+        "latest": "최근 업데이트",
+        "median": "중앙 위치"
       }
     }
   },
@@ -415,53 +470,21 @@
         }
       }
     },
-    "backup_devices": {
-      "name": "장치 백업",
-      "description": "하나 또는 모든 가상 장치 모음을 백업합니다.",
-      "fields": {
-        "file_name": {
-          "name": "파일",
-          "description": "백업 JSON 파일 경로입니다."
-        },
-        "group_name": {
-          "name": "장치",
-          "description": "선택할 장치 이름입니다. 비워 두면 모든 가상 장치 모음을 백업합니다."
-        }
-      }
-    },
-    "restore_devices": {
-      "name": "장치 복원",
-      "description": "백업 파일에서 가상 장치를 복원합니다.",
-      "fields": {
-        "file_name": {
-          "name": "파일",
-          "description": "백업 JSON 파일 경로입니다."
-        },
-        "group_name": {
-          "name": "장치",
-          "description": "대상 장치 이름입니다. 백업에 장치 모음이 하나뿐이면 이 장치 모음으로 복원할 수 있습니다."
-        },
-        "mode": {
-          "name": "방식",
-          "description": "UI에서 관리하는 기존 장치와 병합하거나 교체합니다."
-        }
-      }
-    },
     "move": {
       "name": "이동",
       "description": "장치 추적기를 새 위치로 이동합니다.",
       "fields": {
         "location": {
-          "name": "위치",
-          "description": "장치 추적기를 이동할 위치 이름입니다."
+          "name": "이름으로 지정한 위치",
+          "description": "장치 추적기를 이동할 위치입니다."
         },
         "gps": {
-          "name": "GPS",
+          "name": "GPS 위치",
           "description": "장치 추적기를 이동할 좌표입니다."
         },
         "gps_accuracy": {
           "name": "GPS 정확도",
-          "description": "GPS 좌표의 정확도입니다."
+          "description": "GPS 좌표의 정확도 반경입니다."
         }
       }
     }

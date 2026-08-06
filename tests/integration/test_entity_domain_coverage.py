@@ -6,12 +6,10 @@ import importlib
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
-from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME, CONF_PLATFORM
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
-
+import pytest
+from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME, CONF_PLATFORM
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.virtual_layer import async_setup_entry
@@ -32,7 +30,6 @@ from custom_components.virtual_layer.const import (
     VIRTUAL_ENTITY_DOMAINS,
 )
 from custom_components.virtual_layer.generic import GenericVirtualEntity
-
 
 pytestmark = pytest.mark.integration
 
@@ -203,3 +200,92 @@ def test_generic_entity_exposes_direct_ui_options_as_state_attributes():
     assert entity.extra_state_attributes["temperature"] == 21.5
     assert entity.extra_state_attributes["humidity"] == 48
     assert entity.extra_state_attributes["forecast_provider"] == "virtual"
+
+
+async def test_native_building_block_services_update_virtual_entities(
+    hass, tmp_path, monkeypatch
+):
+    """Verify that platform services work after a real config-entry setup."""
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entities = [
+        {
+            CONF_PLATFORM: "select",
+            CONF_NAME: "Native Select",
+            CONF_INITIAL_VALUE: "eco",
+            "options": ["eco", "boost"],
+        },
+        {
+            CONF_PLATFORM: "text",
+            CONF_NAME: "Native Text",
+            CONF_INITIAL_VALUE: "hello",
+            "min": 1,
+            "max": 20,
+        },
+        {
+            CONF_PLATFORM: "button",
+            CONF_NAME: "Native Button",
+            CONF_INITIAL_VALUE: "unknown",
+        },
+        {
+            CONF_PLATFORM: "siren",
+            CONF_NAME: "Native Siren",
+            CONF_INITIAL_VALUE: "off",
+            "available_tones": ["alarm"],
+        },
+        {
+            CONF_PLATFORM: "lawn_mower",
+            CONF_NAME: "Native Mower",
+            CONF_INITIAL_VALUE: "docked",
+        },
+    ]
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        title="native services - virtual_layer",
+        data={ATTR_GROUP_NAME: "native_services"},
+        options={ATTR_DEVICES: {"Native Device": entities}},
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {ATTR_ENTITY_ID: "select.native_select", "option": "boost"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "text",
+        "set_value",
+        {ATTR_ENTITY_ID: "text.native_text", "value": "updated"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "button",
+        "press",
+        {ATTR_ENTITY_ID: "button.native_button"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "siren",
+        "turn_on",
+        {ATTR_ENTITY_ID: "siren.native_siren", "tone": "alarm"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "lawn_mower",
+        "start_mowing",
+        {ATTR_ENTITY_ID: "lawn_mower.native_mower"},
+        blocking=True,
+    )
+
+    assert hass.states.get("select.native_select").state == "boost"
+    assert hass.states.get("text.native_text").state == "updated"
+    assert hass.states.get("button.native_button").state != "unknown"
+    assert hass.states.get("siren.native_siren").state == "on"
+    assert hass.states.get("lawn_mower.native_mower").state == "mowing"

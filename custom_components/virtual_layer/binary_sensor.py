@@ -4,23 +4,25 @@ This component provides support for a virtual binary sensor.
 """
 
 import logging
-import voluptuous as vol
 from collections.abc import Callable
 
 import homeassistant.helpers.config_validation as cv
-from homeassistant.components.binary_sensor import (
-    BinarySensorEntity,
-    DOMAIN as PLATFORM_DOMAIN
-)
+import voluptuous as vol
+from homeassistant.components.binary_sensor import DOMAIN as PLATFORM_DOMAIN
+from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_DEVICE_CLASS, STATE_ON
+from homeassistant.const import ATTR_DEVICE_CLASS, ATTR_ENTITY_ID, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 
-from . import _assert_managed_virtual_entity, get_entity_from_domain, get_entity_configs
+from . import (
+    _assert_managed_virtual_entity,
+    _async_verify_target_entity_control,
+    get_entity_configs,
+    get_entity_from_domain,
+)
 from .const import *
 from .entity import VirtualEntity, virtual_schema
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,6 +49,7 @@ def setup_services(hass: HomeAssistant) -> None:
 
     async def async_virtual_service(call):
         """Call virtual service handler."""
+        await _async_verify_target_entity_control(hass, call)
         _LOGGER.debug(f"{call.service} service called")
         if call.service == SERVICE_ON:
             await async_virtual_on_service(hass, call)

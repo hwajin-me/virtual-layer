@@ -5,12 +5,13 @@ This component provides support for a virtual light.
 from __future__ import annotations
 
 import logging
+import math
 import pprint
-import voluptuous as vol
 from collections.abc import Callable
 from typing import Any
 
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_MODE,
@@ -19,9 +20,11 @@ from homeassistant.components.light import (
     ATTR_EFFECT_LIST,
     ATTR_HS_COLOR,
     ColorMode,
-    DOMAIN as PLATFORM_DOMAIN,
     LightEntity,
     LightEntityFeature,
+)
+from homeassistant.components.light import (
+    DOMAIN as PLATFORM_DOMAIN,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON
@@ -33,7 +36,6 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,7 +59,7 @@ DEFAULT_INITIAL_BRIGHTNESS = 255
 DEFAULT_SUPPORT_COLOR = False
 DEFAULT_INITIAL_COLOR = [0, 100]
 DEFAULT_SUPPORT_COLOR_TEMP = False
-DEFAULT_INITIAL_COLOR_TEMP = 240
+DEFAULT_INITIAL_COLOR_TEMP = 4000
 DEFAULT_SUPPORT_WHITE_VALUE = False
 DEFAULT_INITIAL_WHITE_VALUE = 240
 DEFAULT_SUPPORT_EFFECT = False
@@ -70,7 +72,7 @@ BASE_SCHEMA = virtual_schema(DEFAULT_LIGHT_VALUE, {
     vol.Optional(CONF_SUPPORT_COLOR, default=DEFAULT_SUPPORT_COLOR): cv.boolean,
     vol.Optional(CONF_INITIAL_COLOR, default=DEFAULT_INITIAL_COLOR): cv.ensure_list,
     vol.Optional(CONF_SUPPORT_COLOR_TEMP, default=DEFAULT_SUPPORT_COLOR_TEMP): cv.boolean,
-    vol.Optional(CONF_INITIAL_COLOR_TEMP, default=DEFAULT_INITIAL_COLOR_TEMP): cv.byte,
+    vol.Optional(CONF_INITIAL_COLOR_TEMP, default=DEFAULT_INITIAL_COLOR_TEMP): cv.positive_int,
     vol.Optional(CONF_SUPPORT_WHITE_VALUE, default=DEFAULT_SUPPORT_WHITE_VALUE): cv.boolean,
     vol.Optional(CONF_INITIAL_WHITE_VALUE, default=DEFAULT_INITIAL_WHITE_VALUE): cv.byte,
     vol.Optional(CONF_SUPPORT_EFFECT, default=DEFAULT_SUPPORT_EFFECT): cv.boolean,
@@ -81,6 +83,66 @@ BASE_SCHEMA = virtual_schema(DEFAULT_LIGHT_VALUE, {
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
 
 LIGHT_SCHEMA = vol.Schema(BASE_SCHEMA)
+
+
+def _as_color_temp_kelvin(value: float | str) -> int:
+    """Normalize legacy mired values while storing modern Kelvin values."""
+    try:
+        color_temp = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_INITIAL_COLOR_TEMP
+    if not math.isfinite(color_temp) or color_temp <= 0:
+        return DEFAULT_INITIAL_COLOR_TEMP
+    if color_temp < 1000:
+        color_temp = 1_000_000 / color_temp
+    return max(1000, min(40000, round(color_temp)))
+
+
+def _as_brightness(value, fallback=None) -> int | None:
+    """Return a valid Home Assistant brightness value."""
+    if value is None or isinstance(value, bool):
+        return fallback
+    try:
+        brightness = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    return brightness if 0 <= brightness <= 255 else fallback
+
+
+def _as_hs_color(value, fallback=None) -> tuple[float, float] | None:
+    """Return a finite hue/saturation pair in Home Assistant's ranges."""
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return fallback
+    try:
+        hue, saturation = (float(item) for item in value)
+    except (TypeError, ValueError):
+        return fallback
+    if (
+        not math.isfinite(hue)
+        or not math.isfinite(saturation)
+        or not 0 <= hue <= 360
+        or not 0 <= saturation <= 100
+    ):
+        return fallback
+    return hue, saturation
+
+
+def validate_domain_options(config) -> None:
+    """Reject malformed light colors and effects entered through the UI."""
+    if config.get(CONF_SUPPORT_COLOR) and _as_hs_color(
+        config.get(CONF_INITIAL_COLOR)
+    ) is None:
+        raise vol.Invalid("initial_color must be a valid hue/saturation pair")
+    if config.get(CONF_SUPPORT_EFFECT):
+        effects = config.get(CONF_INITIAL_EFFECT_LIST)
+        if (
+            not isinstance(effects, list)
+            or not effects
+            or any(not isinstance(effect, str) or not effect for effect in effects)
+        ):
+            raise vol.Invalid("initial_effect_list must contain effect names")
+        if config.get(CONF_INITIAL_EFFECT) not in effects:
+            raise vol.Invalid("initial_effect must be in initial_effect_list")
 
 
 async def async_setup_platform(
@@ -116,14 +178,20 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._attr_supported_features = LightEntityFeature(0)
         self._attr_supported_color_modes = set()
         self._attr_color_mode = ColorMode.UNKNOWN
+        self._attr_min_color_temp_kelvin = 1000
+        self._attr_max_color_temp_kelvin = 40000
+        self._attr_brightness = None
+        self._attr_hs_color = None
+        self._attr_color_temp_kelvin = None
+        self._attr_effect = None
+        self._attr_effect_list = None
 
         if config.get(CONF_SUPPORT_COLOR_TEMP):
             self._attr_supported_color_modes.add(ColorMode.COLOR_TEMP)
         if config.get(CONF_SUPPORT_COLOR):
             self._attr_supported_color_modes.add(ColorMode.HS)
-        if config.get(CONF_SUPPORT_BRIGHTNESS):
-            if not self._attr_supported_color_modes:
-                self._attr_supported_color_modes.add(ColorMode.BRIGHTNESS)
+        if config.get(CONF_SUPPORT_BRIGHTNESS) and not self._attr_supported_color_modes:
+            self._attr_supported_color_modes.add(ColorMode.BRIGHTNESS)
         if not self._attr_supported_color_modes:
             self._attr_supported_color_modes.add(ColorMode.ONOFF)
 
@@ -154,15 +222,28 @@ class VirtualLight(VirtualEntity, LightEntity):
 
         if ColorMode.BRIGHTNESS in self._attr_supported_color_modes:
             self._attr_color_mode = ColorMode.BRIGHTNESS
-            self._attr_brightness = config.get(CONF_INITIAL_BRIGHTNESS)
+            self._attr_brightness = _as_brightness(
+                config.get(CONF_INITIAL_BRIGHTNESS),
+                DEFAULT_INITIAL_BRIGHTNESS,
+            )
         if ColorMode.HS in self._attr_supported_color_modes:
             self._attr_color_mode = ColorMode.HS
-            self._attr_hs_color = config.get(CONF_INITIAL_COLOR)
-            self._attr_brightness = config.get(CONF_INITIAL_BRIGHTNESS)
+            self._attr_hs_color = _as_hs_color(
+                config.get(CONF_INITIAL_COLOR),
+                tuple(DEFAULT_INITIAL_COLOR),
+            )
+            self._attr_brightness = _as_brightness(
+                config.get(CONF_INITIAL_BRIGHTNESS),
+                DEFAULT_INITIAL_BRIGHTNESS,
+            )
         if ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
             self._attr_color_mode = ColorMode.COLOR_TEMP
-            self._attr_color_temp_kelvin = config.get(CONF_INITIAL_COLOR_TEMP)
+            self._attr_color_temp_kelvin = _as_color_temp_kelvin(
+                config.get(CONF_INITIAL_COLOR_TEMP)
+            )
             self._attr_brightness = config.get(CONF_INITIAL_BRIGHTNESS)
+        if self._attr_color_mode == ColorMode.UNKNOWN:
+            self._attr_color_mode = ColorMode.ONOFF
         if self._attr_supported_features & LightEntityFeature.EFFECT:
             self._attr_effect = config.get(CONF_INITIAL_EFFECT)
 
@@ -171,17 +252,61 @@ class VirtualLight(VirtualEntity, LightEntity):
 
         self._attr_is_on = state.state.lower() == STATE_ON
 
-        self._attr_color_mode = state.attributes.get(ATTR_COLOR_MODE, ColorMode.ONOFF)
+        try:
+            restored_color_mode = ColorMode(
+                state.attributes.get(ATTR_COLOR_MODE, ColorMode.ONOFF),
+            )
+        except (TypeError, ValueError):
+            restored_color_mode = ColorMode.ONOFF
+        self._attr_color_mode = (
+            restored_color_mode
+            if restored_color_mode in self._attr_supported_color_modes
+            else next(iter(self._attr_supported_color_modes), ColorMode.ONOFF)
+        )
         if self._attr_color_mode == ColorMode.BRIGHTNESS:
-            self._attr_brightness = state.attributes.get(ATTR_BRIGHTNESS, config.get(CONF_INITIAL_BRIGHTNESS))
+            self._attr_brightness = _as_brightness(
+                state.attributes.get(ATTR_BRIGHTNESS),
+                _as_brightness(
+                    config.get(CONF_INITIAL_BRIGHTNESS),
+                    DEFAULT_INITIAL_BRIGHTNESS,
+                ),
+            )
         if self._attr_color_mode == ColorMode.HS:
-            self._attr_hs_color = state.attributes.get(ATTR_HS_COLOR, config.get(CONF_INITIAL_COLOR))
-            self._attr_brightness = state.attributes.get(ATTR_BRIGHTNESS, config.get(CONF_INITIAL_BRIGHTNESS))
+            self._attr_hs_color = _as_hs_color(
+                state.attributes.get(ATTR_HS_COLOR),
+                _as_hs_color(
+                    config.get(CONF_INITIAL_COLOR),
+                    tuple(DEFAULT_INITIAL_COLOR),
+                ),
+            )
+            self._attr_brightness = _as_brightness(
+                state.attributes.get(ATTR_BRIGHTNESS),
+                _as_brightness(
+                    config.get(CONF_INITIAL_BRIGHTNESS),
+                    DEFAULT_INITIAL_BRIGHTNESS,
+                ),
+            )
         if self._attr_color_mode == ColorMode.COLOR_TEMP:
-            self._attr_color_temp_kelvin = state.attributes.get(ATTR_COLOR_TEMP_KELVIN, config.get(CONF_INITIAL_COLOR_TEMP))
-            self._attr_brightness = state.attributes.get(ATTR_BRIGHTNESS, config.get(CONF_INITIAL_BRIGHTNESS))
+            self._attr_color_temp_kelvin = _as_color_temp_kelvin(
+                state.attributes.get(
+                    ATTR_COLOR_TEMP_KELVIN,
+                    config.get(CONF_INITIAL_COLOR_TEMP),
+                )
+            )
+            self._attr_brightness = _as_brightness(
+                state.attributes.get(ATTR_BRIGHTNESS),
+                _as_brightness(
+                    config.get(CONF_INITIAL_BRIGHTNESS),
+                    DEFAULT_INITIAL_BRIGHTNESS,
+                ),
+            )
         if self._attr_supported_features & LightEntityFeature.EFFECT:
-            self._attr_effect = state.attributes.get(ATTR_EFFECT, config.get(CONF_INITIAL_EFFECT))
+            effect = state.attributes.get(ATTR_EFFECT, config.get(CONF_INITIAL_EFFECT))
+            self._attr_effect = (
+                effect
+                if effect in (self._attr_effect_list or [])
+                else config.get(CONF_INITIAL_EFFECT)
+            )
 
     def _update_attributes(self):
         """Return the state attributes."""
@@ -204,26 +329,28 @@ class VirtualLight(VirtualEntity, LightEntity):
 
         if hs_color is not None and ColorMode.HS in self._attr_supported_color_modes:
             self._attr_color_mode = ColorMode.HS
-            self._attr_hs_color = hs_color
+            self._attr_hs_color = tuple(hs_color)
             self._attr_color_temp_kelvin = None
 
         ct = kwargs.get(ATTR_COLOR_TEMP_KELVIN, None)
         if ct is not None and ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
             self._attr_color_mode = ColorMode.COLOR_TEMP
-            self._attr_color_temp_kelvin = ct
+            self._attr_color_temp_kelvin = _as_color_temp_kelvin(ct)
             self._attr_hs_color = None
 
         brightness = kwargs.get(ATTR_BRIGHTNESS, None)
         if brightness is not None:
             if self._attr_color_mode == ColorMode.UNKNOWN:
                 self._attr_color_mode = ColorMode.BRIGHTNESS
-            self._attr_brightness = brightness
+            self._attr_brightness = max(0, min(255, int(brightness)))
 
         if self._attr_color_mode == ColorMode.UNKNOWN:
             self._attr_color_mode = ColorMode.ONOFF
 
         effect = kwargs.get(ATTR_EFFECT, None)
         if effect is not None and self._attr_supported_features & LightEntityFeature.EFFECT:
+            if self._attr_effect_list and effect not in self._attr_effect_list:
+                raise ValueError(f"Invalid light effect: {effect}")
             self._attr_effect = effect
 
         self._attr_is_on = True

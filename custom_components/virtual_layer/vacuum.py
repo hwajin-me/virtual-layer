@@ -6,15 +6,17 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-import voluptuous as vol
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
 from homeassistant.components.vacuum import (
     ATTR_FAN_SPEED,
     ATTR_FAN_SPEED_LIST,
-    DOMAIN as PLATFORM_DOMAIN,
     StateVacuumEntity,
     VacuumActivity,
     VacuumEntityFeature,
+)
+from homeassistant.components.vacuum import (
+    DOMAIN as PLATFORM_DOMAIN,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -28,7 +30,6 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,6 +94,36 @@ def _as_supported_features(value: Any) -> VacuumEntityFeature:
     return features
 
 
+def _as_battery_level(value: Any, fallback: int | None = None) -> int | None:
+    """Return a valid restored battery percentage."""
+    if value is None or isinstance(value, bool):
+        return fallback
+    try:
+        battery_level = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    return battery_level if 0 <= battery_level <= 100 else fallback
+
+
+def validate_domain_options(config) -> None:
+    """Reject inconsistent vacuum options entered through the UI."""
+    if (
+        CONF_ACTIVITY in config
+        and config[CONF_ACTIVITY] is not None
+        and _as_activity(config[CONF_ACTIVITY]) is None
+    ):
+        raise vol.Invalid("activity must be a supported vacuum activity")
+    if (
+        CONF_BATTERY_LEVEL in config
+        and _as_battery_level(config[CONF_BATTERY_LEVEL]) is None
+    ):
+        raise vol.Invalid("battery_level must be between 0 and 100")
+    fan_speed = config.get(CONF_FAN_SPEED)
+    fan_speeds = config.get(CONF_FAN_SPEED_LIST, [])
+    if fan_speed is not None and fan_speeds and fan_speed not in fan_speeds:
+        raise vol.Invalid("fan_speed must be in fan_speed_list")
+
+
 BASE_SCHEMA = virtual_schema(DEFAULT_VACUUM_VALUE, {
     vol.Optional(CONF_ACTIVITY): vol.Any(cv.string, _as_activity),
     vol.Optional(CONF_BATTERY_LEVEL): vol.Coerce(int),
@@ -136,7 +167,7 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
         super().__init__(config, PLATFORM_DOMAIN, old_style)
 
         self._attr_activity = _as_activity(config.get(CONF_ACTIVITY))
-        self._attr_battery_level = config.get(CONF_BATTERY_LEVEL)
+        self._attr_battery_level = _as_battery_level(config.get(CONF_BATTERY_LEVEL))
         self._attr_fan_speed = config.get(CONF_FAN_SPEED)
         self._attr_fan_speed_list = config.get(CONF_FAN_SPEED_LIST, [])
         self._attr_supported_features = config.get(
@@ -180,12 +211,21 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        self._attr_activity = _as_activity(state.state)
-        self._attr_battery_level = state.attributes.get(
-            ATTR_BATTERY_LEVEL, config.get(CONF_BATTERY_LEVEL)
+        self._attr_activity = _as_activity(state.state) or _as_activity(
+            config.get(CONF_ACTIVITY, config.get(CONF_INITIAL_VALUE))
         )
-        self._attr_fan_speed = state.attributes.get(
+        self._attr_battery_level = _as_battery_level(
+            state.attributes.get(ATTR_BATTERY_LEVEL),
+            _as_battery_level(config.get(CONF_BATTERY_LEVEL)),
+        )
+        restored_fan_speed = state.attributes.get(
             ATTR_FAN_SPEED, config.get(CONF_FAN_SPEED)
+        )
+        self._attr_fan_speed = (
+            restored_fan_speed
+            if not self._attr_fan_speed_list
+            or restored_fan_speed in self._attr_fan_speed_list
+            else config.get(CONF_FAN_SPEED)
         )
 
     def _update_attributes(self):

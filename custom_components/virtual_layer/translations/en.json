@@ -8,7 +8,8 @@
       "group_name_used": "That device name is already in use, try another.",
       "invalid_json": "Enter a valid JSON object.",
       "invalid_entity_id": "Enter valid entity IDs.",
-      "invalid_domain_options": "Enter valid options for the selected entity domain."
+      "invalid_domain_options": "Enter valid options for the selected entity domain.",
+      "required": "This field is required."
     },
     "step": {
       "user": {
@@ -43,6 +44,9 @@
           "device_sw_version": "Device software version",
           "device_hw_version": "Device hardware version",
           "device_serial_number": "Device serial number",
+          "device_configuration_url": "Device configuration URL",
+          "device_suggested_area": "Device suggested area",
+          "device_via_device_id": "Via device",
           "entity_name": "Entity name",
           "icon": "Icon",
           "entity_id": "Entity ID",
@@ -55,10 +59,18 @@
           "pull_interval": "Pull interval",
           "value_template": "Value template",
           "availability_template": "Availability template",
+          "event_hooks_json": "Event hooks JSON",
           "attributes_json": "Attributes JSON",
           "attribute_sources_json": "Attribute sources JSON",
           "attribute_templates_json": "Attribute templates JSON",
-          "domain_options_json": "Domain options JSON"
+          "domain_options_json": "Domain options JSON",
+          "polygon_geojson_json": "Polygon GeoJSON",
+          "polygon_files_text": "Polygon files or URLs",
+          "polygon_person": "Person",
+          "polygon_strategy": "Tracker selection strategy",
+          "polygon_distance_meters": "Tracker grouping distance",
+          "polygon_tracker_rules_json": "Tracker rules JSON",
+          "polygon_away_state": "Outside-zone state"
         },
         "data_description": {
           "device_name": "Entities with the same device name are attached to one Home Assistant device.",
@@ -68,16 +80,27 @@
           "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
           "device_hw_version": "Optional hardware version shown in the Home Assistant device registry.",
           "device_serial_number": "Optional serial number shown in the Home Assistant device registry.",
+          "device_configuration_url": "Optional URL opened from the Home Assistant device registry.",
+          "device_suggested_area": "Optional area hint shown when Home Assistant creates the device.",
+          "device_via_device_id": "Optional parent device this virtual device is connected through.",
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
           "template_sources_json": "A JSON object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
           "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
+          "event_hooks_json": "Optional hooks that listen to state changes or Home Assistant events. Each hook can set value_template, availability_template, attributes, or attribute_templates and receives a trigger variable.",
           "attributes_json": "A JSON object. Example key: battery_level -> 91.",
           "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
           "attribute_templates_json": "A JSON object whose values are templates. Example key: power -> states('sensor.power').",
-          "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
+          "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden.",
+          "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
+          "polygon_files_text": "One local path or HTTP(S) GeoJSON URL per line. Relative paths are resolved below the Home Assistant configuration directory.",
+          "polygon_person": "Optional person represented by this virtual tracker. The configured source trackers determine the map position.",
+          "polygon_strategy": "Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions.",
+          "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
+          "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
+          "polygon_away_state": "State used when the selected GPS position is outside every polygon."
         }
       },
       "entity_source": {
@@ -88,7 +111,7 @@
           "target_device_name": "Virtual Device"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes).",
+          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). Camera and image sources can be aliased one at a time, not merged.",
           "target_device_name": "Choose an existing Virtual Device to keep its entities together, or create a new Device."
         }
       }
@@ -99,16 +122,16 @@
       "invalid_json": "Enter a valid JSON object.",
       "invalid_entity_id": "Enter valid entity IDs.",
       "invalid_domain_options": "Enter valid options for the selected entity domain.",
-      "backup_group_not_found": "No matching virtual device was found in the backup.",
       "device_not_found": "The selected virtual device was not found.",
       "entity_not_found": "The selected virtual entity was not found.",
       "no_devices": "There are no virtual devices to manage.",
-      "no_entities": "This device does not have any virtual entities to edit."
+      "no_entities": "This device does not have any virtual entities to edit.",
+      "required": "This field is required."
     },
     "step": {
       "init": {
         "title": "Configure Virtual Layer",
-        "description": "Add, edit, back up, or restore UI-managed virtual devices and entities.",
+        "description": "Add, edit, delete, or manage UI-managed virtual devices and entities.",
         "data": {
           "action": "Action"
         }
@@ -137,7 +160,10 @@
           "device_model": "Device model",
           "device_sw_version": "Device software version",
           "device_hw_version": "Device hardware version",
-          "device_serial_number": "Device serial number"
+          "device_serial_number": "Device serial number",
+          "device_configuration_url": "Device configuration URL",
+          "device_suggested_area": "Device suggested area",
+          "device_via_device_id": "Via device"
         },
         "data_description": {
           "device_name": "Renaming to an existing Device combines their virtual entities.",
@@ -146,7 +172,10 @@
           "device_model": "Optional model shown in the Home Assistant device registry.",
           "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
           "device_hw_version": "Optional hardware version shown in the Home Assistant device registry.",
-          "device_serial_number": "Optional serial number shown in the Home Assistant device registry."
+          "device_serial_number": "Optional serial number shown in the Home Assistant device registry.",
+          "device_configuration_url": "Optional URL opened from the Home Assistant device registry.",
+          "device_suggested_area": "Optional area hint shown when Home Assistant creates the device.",
+          "device_via_device_id": "Optional parent device this virtual device is connected through."
         }
       },
       "delete_entities": {
@@ -170,6 +199,9 @@
           "device_sw_version": "Device software version",
           "device_hw_version": "Device hardware version",
           "device_serial_number": "Device serial number",
+          "device_configuration_url": "Device configuration URL",
+          "device_suggested_area": "Device suggested area",
+          "device_via_device_id": "Via device",
           "entity_name": "Entity name",
           "icon": "Icon",
           "entity_id": "Entity ID",
@@ -182,10 +214,18 @@
           "pull_interval": "Pull interval",
           "value_template": "Value template",
           "availability_template": "Availability template",
+          "event_hooks_json": "Event hooks JSON",
           "attributes_json": "Attributes JSON",
           "attribute_sources_json": "Attribute sources JSON",
           "attribute_templates_json": "Attribute templates JSON",
-          "domain_options_json": "Domain options JSON"
+          "domain_options_json": "Domain options JSON",
+          "polygon_geojson_json": "Polygon GeoJSON",
+          "polygon_files_text": "Polygon files or URLs",
+          "polygon_person": "Person",
+          "polygon_strategy": "Tracker selection strategy",
+          "polygon_distance_meters": "Tracker grouping distance",
+          "polygon_tracker_rules_json": "Tracker rules JSON",
+          "polygon_away_state": "Outside-zone state"
         },
         "data_description": {
           "device_name": "Changing this moves the entity to another virtual device.",
@@ -195,16 +235,27 @@
           "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
           "device_hw_version": "Optional hardware version shown in the Home Assistant device registry.",
           "device_serial_number": "Optional serial number shown in the Home Assistant device registry.",
+          "device_configuration_url": "Optional URL opened from the Home Assistant device registry.",
+          "device_suggested_area": "Optional area hint shown when Home Assistant creates the device.",
+          "device_via_device_id": "Optional parent device this virtual device is connected through.",
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
           "template_sources_json": "A JSON object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
           "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
+          "event_hooks_json": "Optional hooks that listen to state changes or Home Assistant events. Each hook can set value_template, availability_template, attributes, or attribute_templates and receives a trigger variable.",
           "attributes_json": "A JSON object. Example key: battery_level -> 91.",
           "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
           "attribute_templates_json": "A JSON object whose values are templates. Example key: power -> states('sensor.power').",
-          "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
+          "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden.",
+          "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
+          "polygon_files_text": "One local path or HTTP(S) GeoJSON URL per line. Relative paths are resolved below the Home Assistant configuration directory.",
+          "polygon_person": "Optional person represented by this virtual tracker. The configured source trackers determine the map position.",
+          "polygon_strategy": "Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions.",
+          "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
+          "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
+          "polygon_away_state": "State used when the selected GPS position is outside every polygon."
         }
       },
       "edit_entity_source": {
@@ -215,7 +266,7 @@
           "target_device_name": "Virtual Device"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to keep the current virtual entity values. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes).",
+          "reference_entity_id": "Leave empty to keep the current virtual entity values. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). Camera and image sources can be aliased one at a time, not merged.",
           "target_device_name": "Choose the Device that should contain this entity."
         }
       },
@@ -230,6 +281,9 @@
           "device_sw_version": "Device software version",
           "device_hw_version": "Device hardware version",
           "device_serial_number": "Device serial number",
+          "device_configuration_url": "Device configuration URL",
+          "device_suggested_area": "Device suggested area",
+          "device_via_device_id": "Via device",
           "entity_name": "Entity name",
           "icon": "Icon",
           "entity_id": "Entity ID",
@@ -242,10 +296,18 @@
           "pull_interval": "Pull interval",
           "value_template": "Value template",
           "availability_template": "Availability template",
+          "event_hooks_json": "Event hooks JSON",
           "attributes_json": "Attributes JSON",
           "attribute_sources_json": "Attribute sources JSON",
           "attribute_templates_json": "Attribute templates JSON",
-          "domain_options_json": "Domain options JSON"
+          "domain_options_json": "Domain options JSON",
+          "polygon_geojson_json": "Polygon GeoJSON",
+          "polygon_files_text": "Polygon files or URLs",
+          "polygon_person": "Person",
+          "polygon_strategy": "Tracker selection strategy",
+          "polygon_distance_meters": "Tracker grouping distance",
+          "polygon_tracker_rules_json": "Tracker rules JSON",
+          "polygon_away_state": "Outside-zone state"
         },
         "data_description": {
           "device_name": "Entities with the same device name are attached to one Home Assistant device.",
@@ -255,16 +317,27 @@
           "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
           "device_hw_version": "Optional hardware version shown in the Home Assistant device registry.",
           "device_serial_number": "Optional serial number shown in the Home Assistant device registry.",
+          "device_configuration_url": "Optional URL opened from the Home Assistant device registry.",
+          "device_suggested_area": "Optional area hint shown when Home Assistant creates the device.",
+          "device_via_device_id": "Optional parent device this virtual device is connected through.",
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
           "template_sources_json": "A JSON object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
           "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
+          "event_hooks_json": "Optional hooks that listen to state changes or Home Assistant events. Each hook can set value_template, availability_template, attributes, or attribute_templates and receives a trigger variable.",
           "attributes_json": "A JSON object. Example key: battery_level -> 91.",
           "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
           "attribute_templates_json": "A JSON object whose values are templates. Example key: power -> states('sensor.power').",
-          "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
+          "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden.",
+          "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
+          "polygon_files_text": "One local path or HTTP(S) GeoJSON URL per line. Relative paths are resolved below the Home Assistant configuration directory.",
+          "polygon_person": "Optional person represented by this virtual tracker. The configured source trackers determine the map position.",
+          "polygon_strategy": "Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions.",
+          "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
+          "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
+          "polygon_away_state": "State used when the selected GPS position is outside every polygon."
         }
       },
       "entity_source": {
@@ -275,26 +348,8 @@
           "target_device_name": "Virtual Device"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes).",
+          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). Camera and image sources can be aliased one at a time, not merged.",
           "target_device_name": "Choose an existing Virtual Device to keep its entities together, or create a new Device."
-        }
-      },
-      "backup": {
-        "title": "Back Up Virtual Devices",
-        "description": "Save this virtual device set to a JSON backup file.",
-        "data": {
-          "file_name": "Backup file"
-        }
-      },
-      "restore": {
-        "title": "Restore Virtual Devices",
-        "description": "Restore virtual devices from a backup file.",
-        "data": {
-          "file_name": "Backup file",
-          "mode": "Mode"
-        },
-        "data_description": {
-          "mode": "Merge keeps current devices and appends restored devices. Replace overwrites the device list."
         }
       }
     }
@@ -306,15 +361,15 @@
         "edit_entity": "Edit a virtual entity",
         "delete_entity": "Delete virtual entities",
         "manage_devices": "Manage virtual devices",
-        "backup_devices": "Back up devices",
-        "restore_devices": "Restore devices",
         "finish": "Done"
       }
     },
-    "restore_mode": {
+    "polygon_strategy": {
       "options": {
-        "merge": "Merge",
-        "replace": "Replace"
+        "majority": "Majority",
+        "priority": "Priority",
+        "latest": "Latest update",
+        "median": "Median position"
       }
     }
   },
@@ -369,7 +424,7 @@
       "fields": {
         "value": {
           "name": "Value",
-          "description": "Is the entity available.."
+          "description": "Is the entity available."
         }
       }
     },
@@ -415,53 +470,21 @@
         }
       }
     },
-    "backup_devices": {
-      "name": "Backup Devices",
-      "description": "Back up one virtual device set or all virtual device sets.",
-      "fields": {
-        "file_name": {
-          "name": "File",
-          "description": "Backup JSON file path."
-        },
-        "group_name": {
-          "name": "Device",
-          "description": "Optional device name. Leave empty to back up all virtual device sets."
-        }
-      }
-    },
-    "restore_devices": {
-      "name": "Restore Devices",
-      "description": "Restore virtual devices from a backup file.",
-      "fields": {
-        "file_name": {
-          "name": "File",
-          "description": "Backup JSON file path."
-        },
-        "group_name": {
-          "name": "Device",
-          "description": "Optional target device name. If the backup contains one device set, it can be restored into this device set."
-        },
-        "mode": {
-          "name": "Mode",
-          "description": "Merge with or replace existing UI-managed devices."
-        }
-      }
-    },
     "move": {
       "name": "Move",
       "description": "Move a device tracker to a new location.",
       "fields": {
         "location": {
-          "name": "Location",
-          "description": "A named location to move the device tracker to."
+          "name": "Named Location",
+          "description": "Where to move the device tracker to."
         },
         "gps": {
-          "name": "GPS",
+          "name": "GPS Location",
           "description": "Which coordinates to move the device tracker to."
         },
         "gps_accuracy": {
-          "name": "GPS accuracy",
-          "description": "Accuracy of the GPS coordinates."
+          "name": "GPS Accuracy",
+          "description": "Accuracy radius for GPS coordinates."
         }
       }
     }

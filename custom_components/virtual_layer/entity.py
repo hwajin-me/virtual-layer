@@ -5,12 +5,13 @@ This class adds persistence to an entity.
 """
 
 import logging
+import math
 import pprint
 from datetime import timedelta
-
-import voluptuous as vol
+from math import isfinite
 
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
 from homeassistant.components.cover import ATTR_CURRENT_POSITION
 from homeassistant.const import (
     ATTR_DEVICE_CLASS,
@@ -22,17 +23,16 @@ from homeassistant.core import callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import (
     TrackTemplate,
-    async_track_template_result,
     async_call_later,
     async_track_state_change_event,
+    async_track_template_result,
     async_track_time_interval,
 )
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.helpers.template import Template
+from homeassistant.helpers.template import Template, TemplateError
 from homeassistant.util import slugify
 
 from .const import *
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ def virtual_schema(default_initial_value: str, extra_attrs):
         vol.Optional(CONF_ATTRIBUTE_SOURCES, default=dict): dict,
         vol.Optional(CONF_ATTRIBUTE_TEMPLATES, default=dict): dict,
         vol.Optional(CONF_AVAILABILITY_TEMPLATE): cv.template,
+        vol.Optional(CONF_EVENT_HOOKS, default=list): vol.All(cv.ensure_list, [dict]),
         vol.Optional(CONF_PERSISTENT, default=DEFAULT_PERSISTENT): cv.boolean,
         vol.Optional(CONF_PULL_INTERVAL, default=0): vol.All(vol.Coerce(int), vol.Range(min=0)),
         vol.Optional(CONF_SOURCE_ENTITIES, default=list): vol.All(cv.ensure_list, [cv.entity_id]),
@@ -60,6 +61,9 @@ def virtual_schema(default_initial_value: str, extra_attrs):
         vol.Optional(CONF_SW_VERSION): cv.string,
         vol.Optional(CONF_HW_VERSION): cv.string,
         vol.Optional(CONF_SERIAL_NUMBER): cv.string,
+        vol.Optional(CONF_CONFIGURATION_URL): cv.string,
+        vol.Optional(CONF_SUGGESTED_AREA): cv.string,
+        vol.Optional(CONF_VIA_DEVICE_ID): cv.string,
         vol.Optional(ATTR_ENTITY_ID, default="NOTYET"): cv.string,
         vol.Optional(ATTR_UNIQUE_ID, default="NOTYET"): cv.string,
     }
@@ -103,6 +107,12 @@ class VirtualEntity(RestoreEntity):
         }
         self._value_template = config.get(CONF_VALUE_TEMPLATE)
         self._availability_template = config.get(CONF_AVAILABILITY_TEMPLATE)
+        self._event_hooks = [
+            hook
+            for hook in config.get(CONF_EVENT_HOOKS, [])
+            if isinstance(hook, dict) and hook.get("enabled", True)
+        ]
+        self._hook_debounce_cancelers = {}
         self._refresh_remove_listeners = []
 
         if old_style:
@@ -143,6 +153,7 @@ class VirtualEntity(RestoreEntity):
                     (CONF_SW_VERSION, "sw_version"),
                     (CONF_HW_VERSION, "hw_version"),
                     (CONF_SERIAL_NUMBER, "serial_number"),
+                    (CONF_CONFIGURATION_URL, "configuration_url"),
                 ):
                     if config.get(config_key):
                         device_info[info_key] = config[config_key]
@@ -202,7 +213,10 @@ class VirtualEntity(RestoreEntity):
         """Call when entity is being removed from hass."""
         for remove_listener in self._refresh_remove_listeners:
             remove_listener()
+        for remove_listener in self._hook_debounce_cancelers.values():
+            remove_listener()
         self._refresh_remove_listeners = []
+        self._hook_debounce_cancelers = {}
         await super().async_will_remove_from_hass()
 
     def set_available(self, value):
@@ -292,6 +306,125 @@ class VirtualEntity(RestoreEntity):
                 timedelta(seconds=self._pull_interval),
             ))
 
+        self._setup_event_hooks()
+
+    @callback
+    def _setup_event_hooks(self):
+        """Register user-configured state and event hooks from the UI flow."""
+        for index, hook in enumerate(self._event_hooks):
+            trigger = str(hook.get("trigger", "state")).lower()
+            if trigger == "state":
+                entity_ids = self._hook_entity_ids(hook)
+                entity_ids.discard(self.entity_id)
+                if not entity_ids:
+                    continue
+
+                @callback
+                def _async_hook_state_changed(event, hook=hook, index=index):
+                    if self._state_hook_matches(hook, event):
+                        self._schedule_event_hook(index, hook, event)
+
+                self._refresh_remove_listeners.append(async_track_state_change_event(
+                    self.hass,
+                    entity_ids,
+                    _async_hook_state_changed,
+                ))
+                continue
+
+            if trigger == "event":
+                event_type = str(hook.get("event_type", "")).strip()
+                if not event_type:
+                    continue
+
+                @callback
+                def _async_hook_event(event, hook=hook, index=index):
+                    if self._event_hook_matches(hook, event):
+                        self._schedule_event_hook(index, hook, event)
+
+                self._refresh_remove_listeners.append(
+                    self.hass.bus.async_listen(event_type, _async_hook_event),
+                )
+
+    def _hook_entity_ids(self, hook):
+        entity_ids = hook.get(ATTR_ENTITY_ID, hook.get("entity_ids", []))
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        if not isinstance(entity_ids, (list, tuple, set)):
+            return set()
+        return {
+            entity_id
+            for entity_id in entity_ids
+            if isinstance(entity_id, str) and entity_id
+        }
+
+    def _hook_values_match(self, configured, actual) -> bool:
+        if configured is None:
+            return True
+        values = configured if isinstance(configured, list) else [configured]
+        return str(actual) in {str(value) for value in values}
+
+    def _hook_attributes(self, hook):
+        attributes = hook.get(CONF_ATTRIBUTE, hook.get("attributes_changed", []))
+        if isinstance(attributes, str):
+            attributes = [attributes]
+        if not isinstance(attributes, (list, tuple, set)):
+            return []
+        return [
+            attribute
+            for attribute in attributes
+            if isinstance(attribute, str) and attribute
+        ]
+
+    def _state_hook_matches(self, hook, event) -> bool:
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
+        if not self._hook_values_match(hook.get("from"), old_state.state if old_state else None):
+            return False
+        if not self._hook_values_match(hook.get("to"), new_state.state if new_state else None):
+            return False
+
+        attributes = self._hook_attributes(hook)
+        if not attributes:
+            return True
+        for attribute in attributes:
+            old_value = old_state.attributes.get(attribute) if old_state else None
+            new_value = new_state.attributes.get(attribute) if new_state else None
+            if old_value != new_value:
+                return True
+        return False
+
+    def _event_hook_matches(self, hook, event) -> bool:
+        event_data = hook.get("event_data")
+        if not isinstance(event_data, dict):
+            return True
+        return all(event.data.get(key) == value for key, value in event_data.items())
+
+    @callback
+    def _schedule_event_hook(self, index: int, hook, event):
+        try:
+            delay = float(hook.get("debounce", 0) or 0)
+        except (TypeError, ValueError):
+            delay = 0
+        if not math.isfinite(delay):
+            delay = 0
+        if delay <= 0:
+            self._apply_event_hook(hook, event)
+            return
+
+        if cancel := self._hook_debounce_cancelers.pop(index, None):
+            cancel()
+
+        @callback
+        def _async_apply_later(_now):
+            self._hook_debounce_cancelers.pop(index, None)
+            self._apply_event_hook(hook, event)
+
+        self._hook_debounce_cancelers[index] = async_call_later(
+            self.hass,
+            delay,
+            _async_apply_later,
+        )
+
     def _normalize_attribute_source(self, source):
         if isinstance(source, str):
             entity_id, _, attribute = source.rpartition(".")
@@ -309,7 +442,7 @@ class VirtualEntity(RestoreEntity):
     def _normalize_template_source(self, source):
         if isinstance(source, str):
             if "." in source:
-                domain, _, object_id = source.partition(".")
+                _, _, object_id = source.partition(".")
                 if "." not in object_id:
                     return {
                         ATTR_ENTITY_ID: source,
@@ -327,12 +460,40 @@ class VirtualEntity(RestoreEntity):
             CONF_ATTRIBUTE: source.get(CONF_ATTRIBUTE, "state"),
         }
 
-    def _render_template(self, template):
+    def _render_template(self, template, extra_variables=None):
         variables = self._template_variables()
+        if extra_variables:
+            variables.update(extra_variables)
         if isinstance(template, Template):
             template.hass = self.hass
             return template.async_render(variables=variables, parse_result=False)
         return Template(str(template), self.hass).async_render(variables=variables, parse_result=False)
+
+    def _hook_template_variables(self, hook, event):
+        trigger = str(hook.get("trigger", "state")).lower()
+        if trigger == "event":
+            return {
+                "trigger": {
+                    "platform": "event",
+                    "event": event,
+                    "event_type": event.event_type,
+                    "data": event.data,
+                },
+            }
+
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
+        return {
+            "trigger": {
+                "platform": "state",
+                "event": event,
+                "entity_id": event.data.get(ATTR_ENTITY_ID),
+                "from_state": old_state,
+                "to_state": new_state,
+                "from": old_state.state if old_state else None,
+                "to": new_state.state if new_state else None,
+            },
+        }
 
     def _template_variables(self):
         variables = {"this": self.hass.states.get(self.entity_id)}
@@ -365,27 +526,27 @@ class VirtualEntity(RestoreEntity):
             try:
                 self._attr_available = self._template_to_bool(self._render_template(self._availability_template))
                 changed = True
-            except Exception as e:
+            except (TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to render availability template for {self.entity_id}: {e}")
 
         if self._value_template:
             try:
                 self.set_state(self._render_template(self._value_template))
                 changed = True
-            except Exception as e:
+            except (TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to render value template for {self.entity_id}: {e}")
 
         for name, template in self._attribute_templates.items():
             try:
                 self._virtual_attributes[name] = self._render_template(template)
                 changed = True
-            except Exception as e:
+            except (TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to render attribute template {name} for {self.entity_id}: {e}")
 
         if self._attribute_sources:
             try:
                 changed = self._apply_attribute_sources() or changed
-            except Exception as e:
+            except (TemplateError, KeyError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to apply attribute sources for {self.entity_id}: {e}")
 
         if changed:
@@ -412,6 +573,69 @@ class VirtualEntity(RestoreEntity):
                 self._virtual_attributes[name] = value
                 changed = True
         return changed
+
+    @callback
+    def _apply_event_hook(self, hook, event):
+        variables = self._hook_template_variables(hook, event)
+        changed = False
+
+        if hook.get(CONF_AVAILABILITY_TEMPLATE):
+            try:
+                self._attr_available = self._template_to_bool(
+                    self._render_template(hook[CONF_AVAILABILITY_TEMPLATE], variables),
+                )
+                changed = True
+            except (TemplateError, TypeError, ValueError) as e:
+                _LOGGER.warning(f"Unable to render event hook availability template for {self.entity_id}: {e}")
+
+        if hook.get(CONF_VALUE_TEMPLATE):
+            try:
+                self.set_state(self._render_template(hook[CONF_VALUE_TEMPLATE], variables))
+                changed = True
+            except (TemplateError, TypeError, ValueError) as e:
+                _LOGGER.warning(f"Unable to render event hook value template for {self.entity_id}: {e}")
+
+        attributes = hook.get(CONF_ATTRIBUTES)
+        if isinstance(attributes, dict):
+            next_attributes = {
+                name: value
+                for name, value in attributes.items()
+                if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+            }
+            if next_attributes:
+                self._virtual_attributes.update(next_attributes)
+                changed = True
+
+        attribute_templates = hook.get(CONF_ATTRIBUTE_TEMPLATES)
+        if isinstance(attribute_templates, dict):
+            for name, template in attribute_templates.items():
+                if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES:
+                    continue
+                try:
+                    self._virtual_attributes[name] = self._render_template(template, variables)
+                    changed = True
+                except (TemplateError, TypeError, ValueError) as e:
+                    _LOGGER.warning(f"Unable to render event hook attribute template {name} for {self.entity_id}: {e}")
+
+        should_refresh = hook.get(
+            "refresh",
+            not any(
+                hook.get(field)
+                for field in (
+                    CONF_AVAILABILITY_TEMPLATE,
+                    CONF_VALUE_TEMPLATE,
+                    CONF_ATTRIBUTES,
+                    CONF_ATTRIBUTE_TEMPLATES,
+                )
+            ),
+        )
+        if should_refresh:
+            self._apply_templates()
+            changed = True
+
+        if changed:
+            self._update_attributes()
+            self.async_schedule_update_ha_state()
 
 
 class VirtualOpenableEntity(VirtualEntity):
@@ -459,9 +683,19 @@ class VirtualOpenableEntity(VirtualEntity):
 
         # Cover and valve use the same position state. If this changes we will
         # need to add this into the derived class.
-        if ATTR_CURRENT_POSITION in state.attributes:
-            self._current_position = state.attributes[ATTR_CURRENT_POSITION]
         self._attr_is_closed = state.state.lower() == STATE_CLOSED
+        fallback_position = 0.0 if self._attr_is_closed else 100.0
+        restored_position = state.attributes.get(
+            ATTR_CURRENT_POSITION,
+            fallback_position,
+        )
+        try:
+            restored_position = float(restored_position)
+        except (TypeError, ValueError):
+            restored_position = fallback_position
+        if not isfinite(restored_position):
+            restored_position = fallback_position
+        self._current_position = max(0.0, min(100.0, restored_position))
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -512,6 +746,12 @@ class VirtualOpenableEntity(VirtualEntity):
         self._target_position = position
 
         if self._target_position == self._current_position:
+            self._target_position = None
+            self._positions_per_tick = None
+            self._attr_is_opening = False
+            self._attr_is_closing = False
+            self._attr_is_closed = self._current_position == 0
+            self.async_schedule_update_ha_state()
             return
 
         if self._open_close_tick > self._open_close_duration:
@@ -553,6 +793,13 @@ class VirtualOpenableEntity(VirtualEntity):
     def _update_position(self, _now) -> None:
         if self._target_position is None:
             return
+        if self._positions_per_tick is None:
+            _LOGGER.warning(
+                "Stopping %s because its movement step is unavailable",
+                self.name,
+            )
+            self._stop()
+            return
 
         if self._attr_is_closing:
             next_pos = max(self._target_position, self._current_position - self._positions_per_tick)
@@ -566,3 +813,8 @@ class VirtualOpenableEntity(VirtualEntity):
         else:
             self.async_write_ha_state()
             self._timer_handle = async_call_later(self.hass, self._open_close_tick, self._update_position)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel movement before the entity is detached from Home Assistant."""
+        self._cancel_timer()
+        await super().async_will_remove_from_hass()

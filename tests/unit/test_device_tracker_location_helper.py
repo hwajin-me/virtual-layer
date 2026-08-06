@@ -1,11 +1,16 @@
 """Unit tests for the aggregate GPS location helper."""
 
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_LATITUDE, ATTR_LONGITUDE
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
+    ATTR_LATITUDE,
+    ATTR_LONGITUDE,
+)
 from homeassistant.util import dt as dt_util
 
 from custom_components.virtual_layer.const import (
@@ -26,7 +31,6 @@ from custom_components.virtual_layer.device_tracker import (
     ATTR_LOCATION_SOURCE_POSITIONS,
     VirtualDeviceTracker,
 )
-
 
 pytestmark = pytest.mark.unit
 
@@ -63,6 +67,72 @@ def _set_position(hass, entity_id, latitude, longitude):
         "not_home",
         {ATTR_LATITUDE: latitude, ATTR_LONGITUDE: longitude},
     )
+
+
+def _set_zone(hass, entity_id, name, latitude, longitude):
+    hass.states.async_set(
+        entity_id,
+        "0",
+        {
+            ATTR_FRIENDLY_NAME: name,
+            ATTR_LATITUDE: latitude,
+            ATTR_LONGITUDE: longitude,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("latitude", "longitude"),
+    [
+        (float("nan"), 127),
+        (37.5, float("inf")),
+        (91, 127),
+        (37.5, -181),
+        ("invalid", 127),
+    ],
+)
+def test_tracker_restore_rejects_invalid_gps_coordinates(hass, latitude, longitude):
+    tracker = _helper_tracker(hass)
+
+    tracker._restore_state(
+        SimpleNamespace(
+            state="not_home",
+            attributes={
+                "available": True,
+                ATTR_LATITUDE: latitude,
+                ATTR_LONGITUDE: longitude,
+                "gps_accuracy": float("inf"),
+            },
+        ),
+        tracker._config,
+    )
+
+    assert tracker.location_name == "not_home"
+    assert tracker.latitude is None
+    assert tracker.longitude is None
+    assert tracker.location_accuracy == 0
+
+
+def test_tracker_restore_normalizes_valid_gps_coordinates_and_accuracy(hass):
+    tracker = _helper_tracker(hass)
+
+    tracker._restore_state(
+        SimpleNamespace(
+            state="not_home",
+            attributes={
+                "available": True,
+                ATTR_LATITUDE: "37.5",
+                ATTR_LONGITUDE: "127.0",
+                "gps_accuracy": -10,
+            },
+        ),
+        tracker._config,
+    )
+
+    assert tracker.location_name is None
+    assert tracker.latitude == 37.5
+    assert tracker.longitude == 127.0
+    assert tracker.location_accuracy == 0
 
 
 def test_location_helper_prefers_recent_outlier_and_holds_arrived_device(hass):
@@ -201,6 +271,40 @@ def test_location_helper_ignores_invalid_coordinates_and_uses_known_median(hass)
     assert tracker.extra_state_attributes[ATTR_LOCATION_PRIORITY_SOURCE] is None
 
 
+def test_location_helper_uses_named_zone_coordinates_for_sources_without_gps(hass):
+    tracker = _helper_tracker(hass)
+    _set_zone(hass, "zone.home", "Home", 37.5000, 127.0000)
+    hass.states.async_set("device_tracker.first_phone", "home")
+    hass.states.async_set("device_tracker.second_phone", "home")
+    _set_position(hass, "device_tracker.travel_phone", 37.5200, 127.0200)
+
+    tracker._update_location_from_sources()
+
+    assert tracker.extra_state_attributes[ATTR_LOCATION_MEDIAN_LATITUDE] == 37.5000
+    assert tracker.extra_state_attributes[ATTR_LOCATION_MEDIAN_LONGITUDE] == 127.0000
+    assert tracker.latitude == 37.5200
+    assert tracker.longitude == 127.0200
+    assert tracker.extra_state_attributes[ATTR_LOCATION_PRIORITY_SOURCE] == (
+        "device_tracker.travel_phone"
+    )
+
+
+def test_location_helper_matches_zone_by_friendly_name_when_entity_id_differs(hass):
+    tracker = _helper_tracker(hass)
+    _set_zone(hass, "zone.stat_zone_1", "StatZon1", 37.7000, 127.2000)
+    hass.states.async_set("device_tracker.first_phone", "StatZon1")
+    hass.states.async_set("device_tracker.second_phone", "StatZon1")
+    hass.states.async_set("device_tracker.travel_phone", "StatZon1")
+
+    tracker._update_location_from_sources()
+
+    assert tracker.latitude == 37.7000
+    assert tracker.longitude == 127.2000
+    assert tracker.extra_state_attributes[ATTR_LOCATION_MEDIAN_LATITUDE] == 37.7000
+    assert tracker.extra_state_attributes[ATTR_LOCATION_MEDIAN_LONGITUDE] == 127.2000
+    assert tracker.extra_state_attributes[ATTR_LOCATION_PRIORITY_SOURCE] is None
+
+
 def test_location_helper_clears_stale_metadata_when_no_gps_is_available(hass):
     tracker = _helper_tracker(hass)
     _set_position(hass, "device_tracker.first_phone", 37.5000, 127.0000)
@@ -216,3 +320,25 @@ def test_location_helper_clears_stale_metadata_when_no_gps_is_available(hass):
     assert tracker.extra_state_attributes[ATTR_LOCATION_MEDIAN_LATITUDE] is None
     assert tracker.extra_state_attributes[ATTR_LOCATION_MEDIAN_LONGITUDE] is None
     assert tracker.extra_state_attributes[ATTR_LOCATION_PRIORITY_SOURCE] is None
+
+
+def test_location_distance_handles_antipodal_coordinates():
+    distance = VirtualDeviceTracker._distance_meters((90, 0), (-90, 180))
+
+    assert 20_000_000 < distance < 20_100_000
+
+
+def test_location_helper_median_handles_the_international_date_line(hass):
+    tracker = _helper_tracker(hass)
+    _set_position(hass, "device_tracker.first_phone", 10.0, 179.8)
+    _set_position(hass, "device_tracker.second_phone", 10.0, -179.9)
+    _set_position(hass, "device_tracker.travel_phone", 10.0, 179.9)
+
+    tracker._source_is_recent = lambda *_args: False
+    tracker._update_location_from_sources()
+
+    assert tracker.latitude == 10.0
+    assert abs(tracker.longitude) == pytest.approx(179.9)
+    assert abs(
+        tracker.extra_state_attributes[ATTR_LOCATION_MEDIAN_LONGITUDE]
+    ) == pytest.approx(179.9)

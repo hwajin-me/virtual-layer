@@ -11,12 +11,6 @@
     },
     "clear_attributes": {
       "service": "mdi:tag-off-outline"
-    },
-    "backup_devices": {
-      "service": "mdi:database-arrow-down-outline"
-    },
-    "restore_devices": {
-      "service": "mdi:database-arrow-up-outline"
     }
   }
 }

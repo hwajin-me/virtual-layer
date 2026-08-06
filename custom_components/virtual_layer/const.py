@@ -10,13 +10,12 @@ COMPONENT_MANUFACTURER = "twrecked"
 COMPONENT_MODEL = "virtual_layer"
 
 ATTR_AVAILABLE = 'available'
-ATTR_BACKUP_GROUPS = "groups"
+ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 ATTR_DEVICES = "devices"
 ATTR_DEVICE_ATTRIBUTES = "device_attributes"
 ATTR_DEVICE_ID = "device_id"
 ATTR_ENTITIES = "entities"
 ATTR_ENTITY_KEY = "entity_key"
-ATTR_FILE_NAME = "file_name"
 ATTR_GROUP_NAME = "group_name"
 ATTR_PARENT_ID = "parent_id"
 ATTR_PERSISTENT = 'persistent'
@@ -43,8 +42,17 @@ CONF_AUTO_HELPER = "auto_helper"
 CONF_ATTRIBUTE_TEMPLATES = "attribute_templates"
 CONF_AVAILABILITY_TEMPLATE = "availability_template"
 CONF_DIAGNOSTIC_SOURCE_ENTITY = "diagnostic_source_entity"
+CONF_EVENT_HOOKS = "event_hooks"
 CONF_INITIAL_VALUE = "initial_value"
 CONF_LOCATION_HELPER = "location_helper"
+CONF_POLYGONAL_ZONE = "polygonal_zone"
+CONF_POLYGON_GEOJSON = "geojson"
+CONF_POLYGON_FILES = "files"
+CONF_POLYGON_PERSON_ENTITY = "person_entity_id"
+CONF_POLYGON_STRATEGY = "strategy"
+CONF_POLYGON_TRACKER_RULES = "tracker_rules"
+CONF_POLYGON_AWAY_STATE = "away_state"
+CONF_POLYGON_DISTANCE_METERS = "distance_threshold_meters"
 CONF_MAX = "max"
 CONF_MIN = "min"
 CONF_NAME = "name"
@@ -60,6 +68,9 @@ CONF_MODEL = "model"
 CONF_HW_VERSION = "hw_version"
 CONF_SERIAL_NUMBER = "serial_number"
 CONF_SW_VERSION = "sw_version"
+CONF_CONFIGURATION_URL = "configuration_url"
+CONF_SUGGESTED_AREA = "suggested_area"
+CONF_VIA_DEVICE_ID = "via_device_id"
 
 # Options supplied through the UI's domain-options JSON are kept separate from
 # Virtual Layer storage and template configuration. Generic domains expose the
@@ -77,6 +88,7 @@ GENERIC_ENTITY_OPTION_EXCLUDED_KEYS = frozenset({
     CONF_AVAILABILITY_TEMPLATE,
     CONF_CLASS,
     CONF_DIAGNOSTIC_SOURCE_ENTITY,
+    CONF_EVENT_HOOKS,
     CONF_HW_VERSION,
     CONF_ICON,
     CONF_INITIAL_AVAILABILITY,
@@ -87,9 +99,12 @@ GENERIC_ENTITY_OPTION_EXCLUDED_KEYS = frozenset({
     CONF_PERSISTENT,
     CONF_PULL_INTERVAL,
     CONF_SERIAL_NUMBER,
+    CONF_CONFIGURATION_URL,
+    CONF_SUGGESTED_AREA,
     CONF_SOURCE_ENTITIES,
     CONF_SW_VERSION,
     CONF_TEMPLATE_SOURCES,
+    CONF_VIA_DEVICE_ID,
     CONF_VALUE_TEMPLATE,
     "unit_of_measurement",
     "platform",

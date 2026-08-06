@@ -4,51 +4,42 @@ This component provides support for virtual components.
 """
 
 import asyncio
+import logging
+import math
 from collections.abc import Mapping
 from datetime import timedelta
-import logging
-import voluptuous as vol
 
+import homeassistant.helpers.area_registry as ar
 import homeassistant.helpers.config_validation as cv
 import homeassistant.helpers.device_registry as dr
-from homeassistant.helpers.entity import async_generate_entity_id
 import homeassistant.helpers.entity_registry as er
+import voluptuous as vol
+from homeassistant.auth.permissions.const import POLICY_CONTROL
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import ATTR_ENTITY_ID, CONF_ICON
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError, Unauthorized, UnknownUser
+from homeassistant.helpers.entity import async_generate_entity_id
 from homeassistant.helpers.event import (
     TrackTemplate,
+    async_call_later,
     async_track_state_change_event,
     async_track_template_result,
     async_track_time_interval,
 )
-from homeassistant.helpers.service import verify_domain_control
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, CONF_ICON
-from homeassistant.core import (
-    HomeAssistant,
-    callback
-)
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.template import Template
+from homeassistant.helpers.template import Template, TemplateError
 
-from .const import *
 from .cfg import (
     BlendedCfg,
     _delete_meta_data,
-    async_build_entry_backup,
-    async_load_backup,
-    async_save_backup,
-    clone_entities_with_new_keys,
 )
+from .const import *
 
-
-__version__ = '1.0.3'
+__version__ = '1.0.4'
 
 _LOGGER = logging.getLogger(__name__)
 
-CONFIG_SCHEMA = vol.Schema({
-        COMPONENT_DOMAIN: vol.Schema({}),
-    },
-    extra=vol.ALLOW_EXTRA,
-)
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(COMPONENT_DOMAIN)
 
 SERVICE_AVAILABILE = 'set_available'
 SERVICE_SCHEMA = vol.Schema({
@@ -58,38 +49,112 @@ SERVICE_SCHEMA = vol.Schema({
 SERVICE_SET_STATE = "set_state"
 SERVICE_SET_ATTRIBUTES = "set_attributes"
 SERVICE_CLEAR_ATTRIBUTES = "clear_attributes"
-SERVICE_BACKUP_DEVICES = "backup_devices"
-SERVICE_RESTORE_DEVICES = "restore_devices"
+
+
+def _finite_service_payload(value):
+    """Reject non-finite numbers before they reach HA state or attributes."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise vol.Invalid("NaN and infinity are not valid state values")
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _finite_service_payload(key)
+            _finite_service_payload(item)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            _finite_service_payload(item)
+    return value
+
+
+def _service_state_value(value):
+    """Validate a scalar service state without coercing numbers to strings."""
+    if not isinstance(value, (str, int, float, bool)):
+        raise vol.Invalid("State value must be a string, number, or boolean")
+    return _finite_service_payload(value)
+
+
 SERVICE_SET_STATE_SCHEMA = vol.Schema({
     vol.Required(ATTR_ENTITY_ID): cv.comp_entity_ids,
-    vol.Required(ATTR_VALUE): vol.Any(cv.string, int, float, bool),
+    vol.Required(ATTR_VALUE): _service_state_value,
 })
 SERVICE_SET_ATTRIBUTES_SCHEMA = vol.Schema({
     vol.Required(ATTR_ENTITY_ID): cv.comp_entity_ids,
-    vol.Required(ATTR_ATTRIBUTES): dict,
+    vol.Required(ATTR_ATTRIBUTES): vol.All(dict, _finite_service_payload),
 })
 SERVICE_CLEAR_ATTRIBUTES_SCHEMA = vol.Schema({
     vol.Required(ATTR_ENTITY_ID): cv.comp_entity_ids,
     vol.Optional(ATTR_ATTRIBUTES, default=list): vol.All(cv.ensure_list, [cv.string]),
 })
-SERVICE_BACKUP_DEVICES_SCHEMA = vol.Schema({
-    vol.Required(ATTR_FILE_NAME): cv.string,
-    vol.Optional(ATTR_GROUP_NAME): cv.string,
-})
-SERVICE_RESTORE_MODE_MERGE = "merge"
-SERVICE_RESTORE_MODE_REPLACE = "replace"
-SERVICE_RESTORE_DEVICES_SCHEMA = vol.Schema({
-    vol.Required(ATTR_FILE_NAME): cv.string,
-    vol.Optional(ATTR_GROUP_NAME): cv.string,
-    vol.Optional("mode", default=SERVICE_RESTORE_MODE_MERGE): vol.In([
-        SERVICE_RESTORE_MODE_MERGE,
-        SERVICE_RESTORE_MODE_REPLACE,
-    ]),
-})
+
+
+async def _async_service_call_user(hass: HomeAssistant, call):
+    """Return the authenticated service caller, allowing trusted system calls."""
+    user_id = call.context.user_id
+    if user_id is None:
+        return None
+    user = await hass.auth.async_get_user(user_id)
+    if user is None:
+        raise UnknownUser(
+            context=call.context,
+            user_id=user_id,
+            permission=POLICY_CONTROL,
+        )
+    return user
+
+
+async def _async_verify_target_entity_control(hass: HomeAssistant, call) -> None:
+    """Require control permission for every entity targeted by a service call."""
+    user = await _async_service_call_user(hass, call)
+    if user is None:
+        return
+    for entity_id in call.data.get(ATTR_ENTITY_ID, []):
+        if not user.permissions.check_entity(entity_id, POLICY_CONTROL):
+            raise Unauthorized(
+                context=call.context,
+                user_id=user.id,
+                entity_id=entity_id,
+                permission=POLICY_CONTROL,
+            )
+
+
+async def _async_verify_admin(hass: HomeAssistant, call) -> None:
+    """Require an administrator for configuration-wide service operations."""
+    user = await _async_service_call_user(hass, call)
+    if user is not None and not user.is_admin:
+        raise Unauthorized(
+            context=call.context,
+            user_id=user.id,
+            permission=POLICY_CONTROL,
+        )
 
 VIRTUAL_PLATFORMS = VIRTUAL_ENTITY_DOMAINS
 _STATE_ONLY_TEMPLATE_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_state_only_template_listeners"
 _ENTITY_ID_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_entity_id_guard_listeners"
+_DEVICE_METADATA_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_device_metadata_guard_listeners"
+
+
+def _async_ensure_runtime_data(hass: HomeAssistant) -> None:
+    """Initialize integration runtime containers independently and idempotently."""
+    hass.data.setdefault(COMPONENT_DOMAIN, {})
+    hass.data.setdefault(COMPONENT_SERVICES, {})
+
+
+def _runtime_group_name_for_entry(hass: HomeAssistant, entry: ConfigEntry):
+    """Find cached group data even when the config entry name has changed."""
+    groups = hass.data.get(COMPONENT_DOMAIN, {})
+    configured_group_name = entry.data.get(ATTR_GROUP_NAME)
+    configured_group = groups.get(configured_group_name)
+    if (
+        isinstance(configured_group, Mapping)
+        and configured_group.get(ATTR_CONFIG_ENTRY_ID) == entry.entry_id
+    ):
+        return configured_group_name
+    for group_name, group_data in groups.items():
+        if (
+            isinstance(group_data, Mapping)
+            and group_data.get(ATTR_CONFIG_ENTRY_ID) == entry.entry_id
+        ):
+            return group_name
+    return configured_group_name
 
 
 def _entry_platforms_from_entities(entities):
@@ -114,10 +179,7 @@ def str_to_bool(value) -> bool:
 async def async_setup(hass, config):
     """Set up Virtual Layer."""
 
-    # Set up hass data if necessary
-    if COMPONENT_DOMAIN not in hass.data:
-        hass.data[COMPONENT_DOMAIN] = {}
-        hass.data[COMPONENT_SERVICES] = {}
+    _async_ensure_runtime_data(hass)
 
     _async_register_virtual_services(hass)
 
@@ -127,22 +189,21 @@ async def async_setup(hass, config):
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug(f'async setup {entry.data}')
 
-    # Set up hass data if necessary
-    if COMPONENT_DOMAIN not in hass.data:
-        hass.data[COMPONENT_DOMAIN] = {}
-        hass.data[COMPONENT_SERVICES] = {}
+    _async_ensure_runtime_data(hass)
+    previous_group_name = _runtime_group_name_for_entry(hass, entry)
 
     # Get the config.
-    _LOGGER.debug(f"creating new cfg")
+    _LOGGER.debug("creating new cfg")
     vcfg = BlendedCfg(hass, entry.data, entry.options, entry)
     await vcfg.async_load()
-    _async_remove_orphaned_diagnostic_registry_entries(hass, entry, vcfg.entities)
 
     # create the devices.
     _LOGGER.debug("creating the devices")
     for device in vcfg.devices:
         _LOGGER.debug(f"creating-device={device}")
         await _async_get_or_create_virtual_device_in_registry(hass, entry, device)
+    _async_remove_orphaned_diagnostic_registry_entries(hass, entry, vcfg.entities)
+    _async_sync_active_entity_registry_entries(hass, entry, vcfg.entities)
 
     # Delete orphaned devices.
     active_device_ids = {
@@ -156,19 +217,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Update the component data.
     hass.data[COMPONENT_DOMAIN].update({
         entry.data[ATTR_GROUP_NAME]: {
+            ATTR_CONFIG_ENTRY_ID: entry.entry_id,
             ATTR_ENTITIES: vcfg.entities,
             ATTR_DEVICES: vcfg.devices,
         }
     })
+    if previous_group_name != entry.data[ATTR_GROUP_NAME]:
+        hass.data[COMPONENT_DOMAIN].pop(previous_group_name, None)
     _LOGGER.debug(f"update hass data {hass.data[COMPONENT_DOMAIN]}")
     _async_setup_state_only_entities(hass, entry, vcfg.entities)
-    _async_setup_entity_id_guard(hass, entry, vcfg.entities)
 
     # Create the entities.
     _LOGGER.debug("creating the entities")
     platforms = _entry_platforms_from_entities(vcfg.entities)
-    if platforms:
-        await hass.config_entries.async_forward_entry_setups(entry, platforms)
+    platforms_loaded = False
+    try:
+        if platforms:
+            await hass.config_entries.async_forward_entry_setups(entry, platforms)
+        platforms_loaded = True
+    finally:
+        if not platforms_loaded:
+            _async_remove_entity_id_guard(hass, entry.entry_id)
+            _async_remove_device_metadata_guard(hass, entry.entry_id)
+            _async_unload_state_only_entities(hass, entry, vcfg.entities)
+            hass.data[COMPONENT_DOMAIN].pop(entry.data[ATTR_GROUP_NAME], None)
+
+    _async_setup_entity_id_guard(hass, entry, vcfg.entities)
+    _async_setup_device_metadata_guard(hass, entry, vcfg.devices)
     _async_remove_inactive_virtual_devices(hass, entry, active_device_ids)
 
     # Install service handlers.
@@ -181,7 +256,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.debug(f"unloading virtual group {entry.data[ATTR_GROUP_NAME]}")
     # _LOGGER.debug(f"before hass={hass.data[COMPONENT_DOMAIN]}")
-    group_data = hass.data.get(COMPONENT_DOMAIN, {}).get(entry.data[ATTR_GROUP_NAME], {})
+    runtime_group_name = _runtime_group_name_for_entry(hass, entry)
+    group_data = hass.data.get(COMPONENT_DOMAIN, {}).get(runtime_group_name, {})
     platforms = _entry_platforms_from_entities(group_data.get(ATTR_ENTITIES, {}))
     unload_ok = True
     if platforms:
@@ -189,8 +265,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         _LOGGER.debug("unloaded ok")
         _async_remove_entity_id_guard(hass, entry.entry_id)
+        _async_remove_device_metadata_guard(hass, entry.entry_id)
         _async_unload_state_only_entities(hass, entry, group_data.get(ATTR_ENTITIES, {}))
-        hass.data[COMPONENT_DOMAIN].pop(entry.data[ATTR_GROUP_NAME], None)
+        hass.data[COMPONENT_DOMAIN].pop(runtime_group_name, None)
         # _LOGGER.debug(f"ocfg={ocfg}")
     # _LOGGER.debug(f"after hass={hass.data[COMPONENT_DOMAIN]}")
 
@@ -202,14 +279,16 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     group_name = entry.data.get(ATTR_GROUP_NAME)
     _LOGGER.debug("removing virtual group %s", group_name)
 
-    group_data = hass.data.get(COMPONENT_DOMAIN, {}).get(group_name, {})
+    runtime_group_name = _runtime_group_name_for_entry(hass, entry)
+    group_data = hass.data.get(COMPONENT_DOMAIN, {}).get(runtime_group_name, {})
     _async_remove_entity_id_guard(hass, entry.entry_id)
+    _async_remove_device_metadata_guard(hass, entry.entry_id)
     _async_unload_state_only_entities(hass, entry, group_data.get(ATTR_ENTITIES, {}))
     _async_remove_entry_registry_entries(hass, entry)
 
     if group_name:
         await _delete_meta_data(hass, group_name)
-        hass.data.get(COMPONENT_DOMAIN, {}).pop(group_name, None)
+        hass.data.get(COMPONENT_DOMAIN, {}).pop(runtime_group_name, None)
 
 
 @callback
@@ -228,10 +307,12 @@ def _async_remove_entry_registry_entries(hass: HomeAssistant, entry: ConfigEntry
 @callback
 def _async_remove_orphaned_diagnostic_registry_entries(hass, entry, entities) -> None:
     """Synchronize diagnostic registry defaults and remove obsolete diagnostics."""
-    sensor_entities = entities.get("sensor", []) if isinstance(entities, Mapping) else []
-    active_diagnostics = {
+    platform_entity_groups = entities.values() if isinstance(entities, Mapping) else []
+    active_generated_entities = {
         entity[ATTR_UNIQUE_ID]: entity
-        for entity in sensor_entities
+        for platform_entities in platform_entity_groups
+        if isinstance(platform_entities, list)
+        for entity in platform_entities
         if isinstance(entity, Mapping)
         and isinstance(entity.get(ATTR_UNIQUE_ID), str)
         and DIAGNOSTIC_UNIQUE_ID_MARKER in entity[ATTR_UNIQUE_ID]
@@ -240,20 +321,86 @@ def _async_remove_orphaned_diagnostic_registry_entries(hass, entry, entities) ->
     for entity_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
         if DIAGNOSTIC_UNIQUE_ID_MARKER not in entity_entry.unique_id:
             continue
-        diagnostic = active_diagnostics.get(entity_entry.unique_id)
-        if diagnostic is None:
+        generated_entity = active_generated_entities.get(entity_entry.unique_id)
+        if generated_entity is None:
             entity_registry.async_remove(entity_entry.entity_id)
             continue
 
         updates = {}
-        diagnostic_name = diagnostic.get(CONF_NAME)
-        if isinstance(diagnostic_name, str) and entity_entry.original_name != diagnostic_name:
-            updates["original_name"] = diagnostic_name
-        diagnostic_icon = diagnostic.get(CONF_ICON)
-        if isinstance(diagnostic_icon, str) and entity_entry.original_icon != diagnostic_icon:
-            updates["original_icon"] = diagnostic_icon
+        generated_name = generated_entity.get(CONF_NAME)
+        if isinstance(generated_name, str) and entity_entry.original_name != generated_name:
+            updates["original_name"] = generated_name
+        generated_icon = generated_entity.get(CONF_ICON)
+        if isinstance(generated_icon, str) and entity_entry.original_icon != generated_icon:
+            updates["original_icon"] = generated_icon
         if updates:
             entity_registry.async_update_entity(entity_entry.entity_id, **updates)
+
+
+@callback
+def _async_sync_active_entity_registry_entries(hass, entry, entities) -> None:
+    """Keep registry metadata aligned with the current virtual configuration."""
+    if not isinstance(entities, Mapping):
+        return
+
+    entity_registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
+    for domain, platform_entities in entities.items():
+        if not isinstance(platform_entities, list):
+            continue
+        for entity in platform_entities:
+            if not isinstance(entity, Mapping):
+                continue
+            unique_id = entity.get(ATTR_UNIQUE_ID)
+            if not isinstance(unique_id, str):
+                continue
+            current_entity_id = entity_registry.async_get_entity_id(
+                domain,
+                COMPONENT_DOMAIN,
+                unique_id,
+            )
+            if current_entity_id is None:
+                continue
+            entity_entry = entity_registry.async_get(current_entity_id)
+            if entity_entry is None or entity_entry.config_entry_id != entry.entry_id:
+                continue
+
+            updates = {}
+            configured_entity_id = entity.get(ATTR_ENTITY_ID)
+            if (
+                isinstance(configured_entity_id, str)
+                and configured_entity_id
+                and configured_entity_id != current_entity_id
+            ):
+                updates["new_entity_id"] = configured_entity_id
+
+            virtual_device_id = entity.get(ATTR_DEVICE_ID)
+            if isinstance(virtual_device_id, str) and virtual_device_id:
+                device_entry = device_registry.async_get_device(
+                    identifiers={(COMPONENT_DOMAIN, virtual_device_id)},
+                )
+                if device_entry is not None and entity_entry.device_id != device_entry.id:
+                    updates["device_id"] = device_entry.id
+
+            original_name = entity.get(CONF_NAME)
+            if isinstance(original_name, str) and entity_entry.original_name != original_name:
+                updates["original_name"] = original_name
+            original_icon = entity.get(CONF_ICON)
+            if not isinstance(original_icon, str):
+                original_icon = None
+            if entity_entry.original_icon != original_icon:
+                updates["original_icon"] = original_icon
+
+            if not updates:
+                continue
+            try:
+                entity_registry.async_update_entity(current_entity_id, **updates)
+            except ValueError as err:
+                _LOGGER.warning(
+                    "Unable to synchronize registry metadata for %s: %s",
+                    current_entity_id,
+                    err,
+                )
 
 
 @callback
@@ -332,6 +479,114 @@ def _async_setup_entity_id_guard(hass, entry, entities) -> None:
     )
 
 
+@callback
+def _async_remove_device_metadata_guard(hass, entry_id) -> None:
+    listeners = hass.data.get(_DEVICE_METADATA_GUARD_LISTENERS_DATA)
+    if listeners is None:
+        return
+    remove_listener = listeners.pop(entry_id, None)
+    if remove_listener is not None:
+        remove_listener()
+    if not listeners:
+        hass.data.pop(_DEVICE_METADATA_GUARD_LISTENERS_DATA, None)
+
+
+def _configured_area_id(hass, device: Mapping) -> str | None:
+    """Resolve the configured Home Assistant area ID or name."""
+    configured_area = device.get(CONF_SUGGESTED_AREA)
+    if not isinstance(configured_area, str) or not configured_area.strip():
+        return None
+    area_registry = ar.async_get(hass)
+    area = area_registry.async_get_area(configured_area.strip())
+    if area is None:
+        area = area_registry.async_get_area_by_name(configured_area.strip())
+    return area.id if area is not None else None
+
+
+def _device_registry_updates_for_config(hass, device: Mapping, registry_entry=None) -> dict:
+    """Return registry updates needed to match a Virtual Layer device config."""
+    updates = {}
+    desired = {
+        "name": device.get(CONF_NAME),
+        "manufacturer": device.get(CONF_MANUFACTURER) or COMPONENT_MANUFACTURER,
+        "model": device.get(CONF_MODEL) or COMPONENT_MODEL,
+        "sw_version": device.get(CONF_SW_VERSION) or __version__,
+        "area_id": _configured_area_id(hass, device),
+    }
+    for config_key, registry_key in (
+        (CONF_HW_VERSION, "hw_version"),
+        (CONF_SERIAL_NUMBER, "serial_number"),
+        (CONF_CONFIGURATION_URL, "configuration_url"),
+        (CONF_VIA_DEVICE_ID, "via_device_id"),
+    ):
+        desired[registry_key] = device.get(config_key)
+
+    for registry_key, value in desired.items():
+        current = getattr(registry_entry, registry_key, None) if registry_entry else None
+        if current != value:
+            updates[registry_key] = value
+    return updates
+
+
+@callback
+def _async_setup_device_metadata_guard(hass, entry, devices) -> None:
+    """Keep configured Virtual Layer Device registry metadata aligned."""
+    _async_remove_device_metadata_guard(hass, entry.entry_id)
+    if not isinstance(devices, list):
+        return
+
+    registry = dr.async_get(hass)
+    devices_by_registry_id = {}
+    for device in devices:
+        if not isinstance(device, Mapping):
+            continue
+        virtual_device_id = device.get(ATTR_DEVICE_ID)
+        if not isinstance(virtual_device_id, str) or not virtual_device_id:
+            continue
+        registry_entry = registry.async_get_device(
+            identifiers={(COMPONENT_DOMAIN, virtual_device_id)},
+        )
+        if registry_entry is None:
+            continue
+        devices_by_registry_id[registry_entry.id] = device
+
+    if not devices_by_registry_id:
+        return
+
+    async def _async_restore_device_metadata(device_id) -> None:
+        await asyncio.sleep(0)
+        registry_entry = registry.async_get(device_id)
+        device = devices_by_registry_id.get(device_id)
+        if registry_entry is None or device is None:
+            return
+        updates = _device_registry_updates_for_config(hass, device, registry_entry)
+        if not updates:
+            return
+        try:
+            registry.async_update_device(device_id, **updates)
+        except ValueError as err:
+            _LOGGER.warning(
+                "Unable to restore configured device metadata for %s: %s",
+                device_id,
+                err,
+            )
+
+    @callback
+    def _async_handle_device_registry_update(event) -> None:
+        if event.data.get("action") != "update":
+            return
+        device_id = event.data.get("device_id")
+        if device_id not in devices_by_registry_id:
+            return
+        hass.async_create_task(_async_restore_device_metadata(device_id))
+
+    listeners = hass.data.setdefault(_DEVICE_METADATA_GUARD_LISTENERS_DATA, {})
+    listeners[entry.entry_id] = hass.bus.async_listen(
+        dr.EVENT_DEVICE_REGISTRY_UPDATED,
+        _async_handle_device_registry_update,
+    )
+
+
 def get_entity_configs(hass, group_name, domain):
     return hass.data.get(COMPONENT_DOMAIN, {}).get(group_name, {}).get(ATTR_ENTITIES, {}).get(domain, [])
 
@@ -339,11 +594,11 @@ def get_entity_configs(hass, group_name, domain):
 def get_entity_from_domain(hass, domain, entity_id):
     component = hass.data.get(domain)
     if component is None:
-        raise HomeAssistantError("{} component not set up".format(domain))
+        raise HomeAssistantError(f"{domain} component not set up")
 
     entity = component.get_entity(entity_id)
     if entity is None:
-        raise HomeAssistantError("{} not found".format(entity_id))
+        raise HomeAssistantError(f"{entity_id} not found")
 
     return entity
 
@@ -406,7 +661,8 @@ def _async_remove_state_only_template_listeners(hass, entry_id) -> None:
 
 
 def _state_only_template_variables(hass, entity) -> dict:
-    variables = {}
+    entity_id = entity.get(ATTR_ENTITY_ID)
+    variables = {"this": hass.states.get(entity_id) if entity_id else None}
     template_sources = entity.get(CONF_TEMPLATE_SOURCES, {})
     if not isinstance(template_sources, Mapping):
         return variables
@@ -425,11 +681,91 @@ def _state_only_template_variables(hass, entity) -> dict:
     return variables
 
 
-def _render_state_only_template(hass, entity, template):
+def _render_state_only_template(hass, entity, template, extra_variables=None):
+    variables = _state_only_template_variables(hass, entity)
+    if extra_variables:
+        variables.update(extra_variables)
     return Template(str(template), hass).async_render(
-        variables=_state_only_template_variables(hass, entity),
+        variables=variables,
         parse_result=False,
     )
+
+
+def _state_only_hook_values_match(configured, actual) -> bool:
+    if configured is None:
+        return True
+    values = configured if isinstance(configured, list) else [configured]
+    return str(actual) in {str(value) for value in values}
+
+
+def _state_only_hook_attributes(hook) -> list[str]:
+    attributes = hook.get(CONF_ATTRIBUTE, hook.get("attributes_changed", []))
+    if isinstance(attributes, str):
+        attributes = [attributes]
+    if not isinstance(attributes, list):
+        return []
+    return [
+        attribute
+        for attribute in attributes
+        if isinstance(attribute, str) and attribute
+    ]
+
+
+def _state_only_hook_matches(hook, event) -> bool:
+    old_state = event.data.get("old_state")
+    new_state = event.data.get("new_state")
+    if not _state_only_hook_values_match(
+        hook.get("from"),
+        old_state.state if old_state else None,
+    ):
+        return False
+    if not _state_only_hook_values_match(
+        hook.get("to"),
+        new_state.state if new_state else None,
+    ):
+        return False
+
+    attributes = _state_only_hook_attributes(hook)
+    if not attributes:
+        return True
+    return any(
+        (old_state.attributes.get(attribute) if old_state else None)
+        != (new_state.attributes.get(attribute) if new_state else None)
+        for attribute in attributes
+    )
+
+
+def _state_only_event_hook_matches(hook, event) -> bool:
+    event_data = hook.get("event_data")
+    if not isinstance(event_data, Mapping):
+        return True
+    return all(event.data.get(key) == value for key, value in event_data.items())
+
+
+def _state_only_hook_template_variables(hook, event) -> dict:
+    if str(hook.get("trigger", "state")).lower() == "event":
+        return {
+            "trigger": {
+                "platform": "event",
+                "event": event,
+                "event_type": event.event_type,
+                "data": event.data,
+            },
+        }
+
+    old_state = event.data.get("old_state")
+    new_state = event.data.get("new_state")
+    return {
+        "trigger": {
+            "platform": "state",
+            "event": event,
+            "entity_id": event.data.get(ATTR_ENTITY_ID),
+            "from_state": old_state,
+            "to_state": new_state,
+            "from": old_state.state if old_state else None,
+            "to": new_state.state if new_state else None,
+        },
+    }
 
 
 @callback
@@ -484,7 +820,7 @@ def _async_apply_state_only_templates(hass, entity) -> None:
                 )
                 changed = attributes.get(name) != source_value or changed
                 attributes[name] = source_value
-    except Exception as err:
+    except (TemplateError, KeyError, TypeError, ValueError) as err:
         _LOGGER.warning("Unable to update state-only virtual entity %s: %s", entity_id, err)
         return
 
@@ -493,11 +829,190 @@ def _async_apply_state_only_templates(hass, entity) -> None:
 
 
 @callback
+def _async_apply_state_only_event_hook(hass, entity, hook, event) -> None:
+    """Apply one configured event hook to a state-only virtual entity."""
+    entity_id = entity.get(ATTR_ENTITY_ID)
+    state = hass.states.get(entity_id) if entity_id else None
+    if state is None:
+        return
+
+    value = state.state
+    attributes = dict(state.attributes)
+    domain_options = generic_entity_options(entity)
+    variables = _state_only_hook_template_variables(hook, event)
+    changed = False
+
+    try:
+        if hook.get(CONF_AVAILABILITY_TEMPLATE):
+            available = str(_render_state_only_template(
+                hass,
+                entity,
+                hook[CONF_AVAILABILITY_TEMPLATE],
+                variables,
+            )).lower() in {"y", "yes", "t", "true", "on", "1"}
+            changed = attributes.get(ATTR_AVAILABLE) != available or changed
+            attributes[ATTR_AVAILABLE] = available
+
+        if hook.get(CONF_VALUE_TEMPLATE):
+            value = _render_state_only_template(
+                hass,
+                entity,
+                hook[CONF_VALUE_TEMPLATE],
+                variables,
+            )
+            changed = value != state.state or changed
+
+        configured_attributes = hook.get(CONF_ATTRIBUTES, {})
+        if isinstance(configured_attributes, Mapping):
+            for name, configured_value in configured_attributes.items():
+                if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+                    continue
+                changed = attributes.get(name) != configured_value or changed
+                attributes[name] = configured_value
+
+        attribute_templates = hook.get(CONF_ATTRIBUTE_TEMPLATES, {})
+        if isinstance(attribute_templates, Mapping):
+            for name, template in attribute_templates.items():
+                if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+                    continue
+                rendered = _render_state_only_template(
+                    hass,
+                    entity,
+                    template,
+                    variables,
+                )
+                changed = attributes.get(name) != rendered or changed
+                attributes[name] = rendered
+    except (TemplateError, TypeError, ValueError) as err:
+        _LOGGER.warning(
+            "Unable to apply event hook for state-only virtual entity %s: %s",
+            entity_id,
+            err,
+        )
+        return
+
+    should_refresh = hook.get(
+        "refresh",
+        not any(
+            hook.get(field)
+            for field in (
+                CONF_AVAILABILITY_TEMPLATE,
+                CONF_VALUE_TEMPLATE,
+                CONF_ATTRIBUTES,
+                CONF_ATTRIBUTE_TEMPLATES,
+            )
+        ),
+    )
+    if should_refresh:
+        if changed:
+            hass.states.async_set(entity_id, value, attributes)
+        _async_apply_state_only_templates(hass, entity)
+        return
+
+    if changed:
+        hass.states.async_set(entity_id, value, attributes)
+
+
+@callback
+def _async_setup_state_only_event_hooks(hass, entity, listeners) -> None:
+    """Register state and event hooks for a state-only virtual entity."""
+    entity_id = entity.get(ATTR_ENTITY_ID)
+    hooks = entity.get(CONF_EVENT_HOOKS, [])
+    if not entity_id or not isinstance(hooks, list):
+        return
+
+    debounce_cancelers = {}
+
+    @callback
+    def _cancel_debounce_callbacks():
+        for cancel in debounce_cancelers.values():
+            cancel()
+        debounce_cancelers.clear()
+
+    listeners.append(_cancel_debounce_callbacks)
+
+    @callback
+    def _schedule(index, hook, event):
+        try:
+            delay = float(hook.get("debounce", 0) or 0)
+        except (TypeError, ValueError):
+            delay = 0
+        if not math.isfinite(delay):
+            delay = 0
+        if cancel := debounce_cancelers.pop(index, None):
+            cancel()
+        if delay <= 0:
+            _async_apply_state_only_event_hook(hass, entity, hook, event)
+            return
+
+        @callback
+        def _async_apply_later(_now):
+            debounce_cancelers.pop(index, None)
+            _async_apply_state_only_event_hook(hass, entity, hook, event)
+
+        debounce_cancelers[index] = async_call_later(
+            hass,
+            delay,
+            _async_apply_later,
+        )
+
+    for index, hook in enumerate(hooks):
+        if not isinstance(hook, Mapping) or not hook.get("enabled", True):
+            continue
+        trigger = str(hook.get("trigger", "state")).lower()
+        if trigger == "state":
+            source_entity_ids = hook.get(ATTR_ENTITY_ID, [])
+            if isinstance(source_entity_ids, str):
+                source_entity_ids = [source_entity_ids]
+            if not isinstance(source_entity_ids, (list, tuple, set)):
+                source_entity_ids = []
+            source_entity_ids = {
+                source_entity_id
+                for source_entity_id in source_entity_ids
+                if isinstance(source_entity_id, str)
+                and source_entity_id != entity_id
+            }
+            if not source_entity_ids:
+                continue
+
+            @callback
+            def _async_state_changed(event, hook=hook, index=index):
+                if _state_only_hook_matches(hook, event):
+                    _schedule(index, hook, event)
+
+            listeners.append(async_track_state_change_event(
+                hass,
+                source_entity_ids,
+                _async_state_changed,
+            ))
+            continue
+
+        if trigger == "event":
+            event_type = str(hook.get("event_type", "")).strip()
+            if not event_type:
+                continue
+
+            @callback
+            def _async_event(event, hook=hook, index=index):
+                if _state_only_event_hook_matches(hook, event):
+                    _schedule(index, hook, event)
+
+            listeners.append(hass.bus.async_listen(event_type, _async_event))
+
+
+@callback
 def _async_setup_state_only_templates(hass, entry, entity) -> None:
     entity_id = entity.get(ATTR_ENTITY_ID)
     if not entity_id:
         return
-    source_entities = set(entity.get(CONF_SOURCE_ENTITIES, []))
+    configured_sources = entity.get(CONF_SOURCE_ENTITIES, [])
+    if not isinstance(configured_sources, (list, tuple, set)):
+        configured_sources = []
+    source_entities = {
+        source_entity_id
+        for source_entity_id in configured_sources
+        if isinstance(source_entity_id, str)
+    }
     for source_group in (CONF_ATTRIBUTE_SOURCES, CONF_TEMPLATE_SOURCES):
         sources = entity.get(source_group, {})
         if isinstance(sources, Mapping):
@@ -519,12 +1034,15 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
             lambda _event: _async_apply_state_only_templates(hass, entity),
         ))
 
+    attribute_templates = entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
+    if not isinstance(attribute_templates, Mapping):
+        attribute_templates = {}
     templates = [
         template
         for template in (
             entity.get(CONF_VALUE_TEMPLATE),
             entity.get(CONF_AVAILABILITY_TEMPLATE),
-            *dict(entity.get(CONF_ATTRIBUTE_TEMPLATES, {})).values(),
+            *attribute_templates.values(),
         )
         if template
     ]
@@ -543,6 +1061,7 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
             lambda _now: _async_apply_state_only_templates(hass, entity),
             timedelta(seconds=pull_interval),
         ))
+    _async_setup_state_only_event_hooks(hass, entity, listeners)
     _async_apply_state_only_templates(hass, entity)
 
 
@@ -640,7 +1159,7 @@ def _get_state_only_state(hass, entity_id):
 
     state = hass.states.get(entity_id)
     if state is None:
-        raise HomeAssistantError("{} not found".format(entity_id))
+        raise HomeAssistantError(f"{entity_id} not found")
     return state
 
 
@@ -694,7 +1213,7 @@ async def async_virtual_set_availability_service(hass, call):
 
     for entity_id in call.data['entity_id']:
         domain = entity_id.split(".")[0]
-        _LOGGER.info("{} set_avilable(value={})".format(entity_id, value))
+        _LOGGER.info(f"{entity_id} set_avilable(value={value})")
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, attributes={ATTR_AVAILABLE: value})
             continue
@@ -704,44 +1223,37 @@ async def async_virtual_set_availability_service(hass, call):
 
 @callback
 def _async_register_virtual_services(hass) -> None:
+    # Remove services registered by releases that still exposed file backups.
+    for removed_service in ("backup_devices", "restore_devices"):
+        if hass.services.has_service(COMPONENT_DOMAIN, removed_service):
+            hass.services.async_remove(COMPONENT_DOMAIN, removed_service)
+
     if COMPONENT_DOMAIN in hass.data[COMPONENT_SERVICES]:
         return
 
-    @verify_domain_control(COMPONENT_DOMAIN)
     async def async_virtual_service_set_available(call) -> None:
         """Call virtual availability service handler."""
+        await _async_verify_target_entity_control(hass, call)
         _LOGGER.info(f"{call.service} service called")
         await async_virtual_set_availability_service(hass, call)
 
-    @verify_domain_control(COMPONENT_DOMAIN)
     async def async_virtual_service_set_state(call) -> None:
         """Call virtual state service handler."""
+        await _async_verify_target_entity_control(hass, call)
         _LOGGER.info(f"{call.service} service called")
         await async_virtual_set_state_service(hass, call)
 
-    @verify_domain_control(COMPONENT_DOMAIN)
     async def async_virtual_service_set_attributes(call) -> None:
         """Call virtual attribute service handler."""
+        await _async_verify_target_entity_control(hass, call)
         _LOGGER.info(f"{call.service} service called")
         await async_virtual_set_attributes_service(hass, call)
 
-    @verify_domain_control(COMPONENT_DOMAIN)
     async def async_virtual_service_clear_attributes(call) -> None:
         """Call virtual attribute clearing service handler."""
+        await _async_verify_target_entity_control(hass, call)
         _LOGGER.info(f"{call.service} service called")
         await async_virtual_clear_attributes_service(hass, call)
-
-    @verify_domain_control(COMPONENT_DOMAIN)
-    async def async_virtual_service_backup_devices_handler(call) -> None:
-        """Call virtual backup service handler."""
-        _LOGGER.info(f"{call.service} service called")
-        await async_virtual_backup_devices_service(hass, call)
-
-    @verify_domain_control(COMPONENT_DOMAIN)
-    async def async_virtual_service_restore_devices_handler(call) -> None:
-        """Call virtual restore service handler."""
-        _LOGGER.info(f"{call.service} service called")
-        await async_virtual_restore_devices_service(hass, call)
 
     _LOGGER.debug("installing virtual layer handlers")
     hass.data[COMPONENT_SERVICES][COMPONENT_DOMAIN] = "installed"
@@ -768,18 +1280,6 @@ def _async_register_virtual_services(hass) -> None:
         SERVICE_CLEAR_ATTRIBUTES,
         async_virtual_service_clear_attributes,
         schema=SERVICE_CLEAR_ATTRIBUTES_SCHEMA,
-    )
-    hass.services.async_register(
-        COMPONENT_DOMAIN,
-        SERVICE_BACKUP_DEVICES,
-        async_virtual_service_backup_devices_handler,
-        schema=SERVICE_BACKUP_DEVICES_SCHEMA,
-    )
-    hass.services.async_register(
-        COMPONENT_DOMAIN,
-        SERVICE_RESTORE_DEVICES,
-        async_virtual_service_restore_devices_handler,
-        schema=SERVICE_RESTORE_DEVICES_SCHEMA,
     )
 
 
@@ -822,123 +1322,6 @@ async def async_virtual_clear_attributes_service(hass, call):
             continue
         _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, domain, entity_id).clear_attributes(attributes)
-
-
-async def async_virtual_backup_devices_service(hass, call) -> None:
-    """Back up configured virtual devices."""
-    file_name = call.data[ATTR_FILE_NAME]
-    group_name = call.data.get(ATTR_GROUP_NAME)
-    entries = _entries_for_backup_restore(hass, group_name)
-    backups = [await async_build_entry_backup(entry) for entry in entries]
-    await async_save_backup(file_name, backups)
-    _LOGGER.info(f"backed up {len(backups)} virtual layer group(s) to {file_name}")
-
-
-async def async_virtual_restore_devices_service(hass, call) -> None:
-    """Restore configured virtual devices."""
-    file_name = call.data[ATTR_FILE_NAME]
-    group_name = call.data.get(ATTR_GROUP_NAME)
-    mode = call.data["mode"]
-
-    backup_groups = await async_load_backup(file_name)
-    if not backup_groups:
-        raise HomeAssistantError(f"No virtual layer groups found in {file_name}")
-
-    entries = _entries_for_backup_restore(hass, group_name)
-    reloaded_entries = []
-    for entry in entries:
-        backup_group = _find_backup_group_for_entry(backup_groups, entry, group_name)
-        if backup_group is None:
-            _LOGGER.info(f"no backup group found for {entry.data[ATTR_GROUP_NAME]}")
-            continue
-
-        restored_ui_devices = backup_group.get(ATTR_DEVICES, {})
-        restored_device_attributes = backup_group.get(ATTR_DEVICE_ATTRIBUTES, {})
-        if mode == SERVICE_RESTORE_MODE_MERGE:
-            restored_ui_devices = _merge_device_sets(
-                entry.options.get(ATTR_DEVICES, {}),
-                restored_ui_devices,
-            )
-            restored_device_attributes = _merge_device_attributes(
-                entry.options.get(ATTR_DEVICE_ATTRIBUTES, {}),
-                restored_device_attributes,
-            )
-
-        options = dict(entry.options)
-        options[ATTR_DEVICES] = restored_ui_devices
-        options[ATTR_DEVICE_ATTRIBUTES] = restored_device_attributes
-        hass.config_entries.async_update_entry(entry, options=options)
-        reloaded_entries.append(entry)
-
-    if not reloaded_entries:
-        raise HomeAssistantError(f"No matching virtual layer groups found in {file_name}")
-
-    for entry in reloaded_entries:
-        await hass.config_entries.async_reload(entry.entry_id)
-
-    _LOGGER.info(f"restored {len(reloaded_entries)} virtual layer group(s) from {file_name}")
-
-
-def _entries_for_backup_restore(hass, group_name):
-    entries = list(hass.config_entries.async_entries(COMPONENT_DOMAIN))
-    if group_name is None:
-        return entries
-    matching = [
-        entry
-        for entry in entries
-        if entry.data.get(ATTR_GROUP_NAME) == group_name
-    ]
-    if not matching:
-        raise HomeAssistantError(f"{group_name} virtual layer group not found")
-    return matching
-
-
-def _find_backup_group_for_entry(backup_groups, entry, requested_group_name):
-    if requested_group_name and len(backup_groups) == 1:
-        return backup_groups[0]
-
-    entry_group_name = entry.data[ATTR_GROUP_NAME]
-    for backup_group in backup_groups:
-        if backup_group.get(ATTR_GROUP_NAME) == entry_group_name:
-            return backup_group
-    return None
-
-
-def _merge_device_sets(existing_devices, restored_devices):
-    if not isinstance(existing_devices, Mapping):
-        existing_devices = {}
-    if not isinstance(restored_devices, Mapping):
-        restored_devices = {}
-    merged = {
-        device_name: list(entities or [])
-        for device_name, entities in (existing_devices or {}).items()
-        if isinstance(entities, list)
-    }
-    for device_name, entities in (restored_devices or {}).items():
-        if not isinstance(entities, list):
-            _LOGGER.warning("Skipping invalid restored entity list for %s", device_name)
-            continue
-        merged.setdefault(device_name, [])
-        merged[device_name].extend(clone_entities_with_new_keys(entities))
-    return merged
-
-
-def _merge_device_attributes(existing_attributes, restored_attributes):
-    if not isinstance(existing_attributes, Mapping):
-        existing_attributes = {}
-    if not isinstance(restored_attributes, Mapping):
-        restored_attributes = {}
-    merged = {
-        device_name: dict(attributes or {})
-        for device_name, attributes in (existing_attributes or {}).items()
-        if isinstance(attributes, Mapping)
-    }
-    for device_name, attributes in (restored_attributes or {}).items():
-        if not isinstance(attributes, Mapping):
-            _LOGGER.warning("Skipping invalid restored device attributes for %s", device_name)
-            continue
-        merged[device_name] = dict(attributes or {})
-    return merged
 
 
 async def _async_apply_virtual_state(entity, value):
@@ -1028,12 +1411,21 @@ async def _async_get_or_create_virtual_device_in_registry(
     for config_key, info_key in (
         (CONF_HW_VERSION, "hw_version"),
         (CONF_SERIAL_NUMBER, "serial_number"),
+        (CONF_CONFIGURATION_URL, "configuration_url"),
     ):
         if device.get(config_key):
             device_info[info_key] = device[config_key]
-    registry.async_get_or_create(
-        **device_info,
-    )
+    device_entry = registry.async_get_or_create(**device_info)
+    updates = _device_registry_updates_for_config(hass, device, device_entry)
+    if updates:
+        try:
+            registry.async_update_device(device_entry.id, **updates)
+        except ValueError as err:
+            _LOGGER.warning(
+                "Unable to synchronize device metadata for %s: %s",
+                device_entry.id,
+                err,
+            )
 
 
 @callback

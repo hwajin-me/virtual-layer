@@ -4,15 +4,12 @@ This component provides support for a virtual valve.
 """
 
 import logging
-import voluptuous as vol
 from collections.abc import Callable
 
 import homeassistant.helpers.config_validation as cv
-from homeassistant.components.valve import (
-    ValveEntity,
-    ValveEntityFeature,
-    DOMAIN as PLATFORM_DOMAIN
-)
+import voluptuous as vol
+from homeassistant.components.valve import DOMAIN as PLATFORM_DOMAIN
+from homeassistant.components.valve import ValveEntity, ValveEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
@@ -23,9 +20,9 @@ from . import get_entity_configs
 from .const import *
 from .entity import (
     VirtualOpenableEntity,
-    virtual_schema, positive_tick,
+    positive_tick,
+    virtual_schema,
 )
-
 
 _LOGGER = logging.getLogger(__name__)
 

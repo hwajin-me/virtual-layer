@@ -4,16 +4,13 @@ This component provides support for a virtual cover.
 """
 
 import logging
-import voluptuous as vol
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
 import homeassistant.helpers.config_validation as cv
-from homeassistant.components.cover import (
-    CoverEntity,
-    CoverEntityFeature,
-    DOMAIN as PLATFORM_DOMAIN
-)
+import voluptuous as vol
+from homeassistant.components.cover import DOMAIN as PLATFORM_DOMAIN
+from homeassistant.components.cover import CoverEntity, CoverEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
@@ -22,10 +19,9 @@ from . import get_entity_configs
 from .const import *
 from .entity import (
     VirtualOpenableEntity,
-    virtual_schema,
     positive_tick,
+    virtual_schema,
 )
-
 
 _LOGGER = logging.getLogger(__name__)
 

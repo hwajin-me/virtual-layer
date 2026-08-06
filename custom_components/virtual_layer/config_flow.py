@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import math
 import re
 from collections.abc import Mapping
 from importlib import import_module
@@ -24,16 +25,15 @@ from homeassistant.const import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers import selector
+from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
 from .cfg import (
-    async_build_entry_backup,
-    async_load_backup,
-    async_save_backup,
-    clone_entities_with_new_keys,
+    _rename_meta_data,
     make_entity_key,
 )
 from .const import *
+from .polygon import parse_geojson_zones
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,9 +47,13 @@ CONF_DEVICE_ID = "device_id"
 CONF_DEVICE_MANUFACTURER = "device_manufacturer"
 CONF_DEVICE_MODEL = "device_model"
 CONF_DEVICE_SW_VERSION = "device_sw_version"
+CONF_DEVICE_CONFIGURATION_URL = "device_configuration_url"
 CONF_DOMAIN_OPTIONS_JSON = "domain_options_json"
+CONF_EVENT_HOOKS_JSON = "event_hooks_json"
 CONF_DEVICE_HW_VERSION = "device_hw_version"
 CONF_DEVICE_SERIAL_NUMBER = "device_serial_number"
+CONF_DEVICE_SUGGESTED_AREA = "device_suggested_area"
+CONF_DEVICE_VIA_DEVICE_ID = "device_via_device_id"
 CONF_ENTITY_NAME = "entity_name"
 CONF_ENTITY_KEY = "entity_key"
 CONF_ENTITY_KEYS = "entity_keys"
@@ -58,6 +62,13 @@ CONF_REFERENCE_ENTITY_ID = "reference_entity_id"
 CONF_SOURCE_ENTITIES_TEXT = "source_entities_text"
 CONF_TEMPLATE_SOURCES_JSON = "template_sources_json"
 CONF_TARGET_DEVICE_NAME = "target_device_name"
+CONF_POLYGON_GEOJSON_JSON = "polygon_geojson_json"
+CONF_POLYGON_FILES_TEXT = "polygon_files_text"
+CONF_POLYGON_PERSON = "polygon_person"
+CONF_POLYGON_STRATEGY_INPUT = "polygon_strategy"
+CONF_POLYGON_DISTANCE_INPUT = "polygon_distance_meters"
+CONF_POLYGON_TRACKER_RULES_JSON = "polygon_tracker_rules_json"
+CONF_POLYGON_AWAY_STATE_INPUT = "polygon_away_state"
 CAMERA_SOURCE_ENTITY_OPTION = "source_entity"
 NEW_DEVICE_TARGET = "__new_device__"
 
@@ -67,6 +78,7 @@ _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
     CONF_VALUE_TEMPLATE,
+    CONF_EVENT_HOOKS_JSON,
     CONF_ATTRIBUTES_JSON,
     CONF_ATTRIBUTE_SOURCES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
@@ -74,15 +86,15 @@ _AUTO_HELPER_PROFILE_FIELDS = (
 )
 
 ACTION_ADD_ENTITY = "add_entity"
-ACTION_BACKUP_DEVICES = "backup_devices"
 ACTION_DELETE_ENTITY = "delete_entity"
 ACTION_EDIT_ENTITY = "edit_entity"
 ACTION_FINISH = "finish"
 ACTION_MANAGE_DEVICES = "manage_devices"
-ACTION_RESTORE_DEVICES = "restore_devices"
 
 DEFAULT_ENTITY_DOMAIN = "sensor"
 DEFAULT_ENTITY_VALUE = "unknown"
+MAX_GENERATED_ENTITY_NAME_LENGTH = 80
+MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH = 80
 DEFAULT_NUMBER_MIN = 0
 DEFAULT_NUMBER_MAX = 100
 DEFAULT_INITIAL_VALUES = {
@@ -118,12 +130,17 @@ _DOMAIN_OPTION_RESERVED_KEYS = {
     CONF_AUTO_HELPER,
     CONF_ATTRIBUTE_SOURCES,
     CONF_ATTRIBUTE_TEMPLATES,
+    CONF_EVENT_HOOKS,
+    CONF_POLYGONAL_ZONE,
     ATTR_DEVICE_ID,
     CONF_MANUFACTURER,
     CONF_MODEL,
     CONF_SW_VERSION,
     CONF_HW_VERSION,
     CONF_SERIAL_NUMBER,
+    CONF_CONFIGURATION_URL,
+    CONF_SUGGESTED_AREA,
+    CONF_VIA_DEVICE_ID,
 }
 
 MULTILINE_TEXT_SELECTOR = selector.TextSelector(
@@ -236,11 +253,7 @@ def _options_schema(options: dict[str, Any]) -> vol.Schema:
         actions.append(ACTION_DELETE_ENTITY)
     if _options_devices(options):
         actions.append(ACTION_MANAGE_DEVICES)
-    actions.extend([
-        ACTION_BACKUP_DEVICES,
-        ACTION_RESTORE_DEVICES,
-        ACTION_FINISH,
-    ])
+    actions.append(ACTION_FINISH)
     return vol.Schema({
         vol.Required(CONF_ACTION, default=ACTION_ADD_ENTITY): selector.SelectSelector(
             selector.SelectSelectorConfig(
@@ -249,20 +262,6 @@ def _options_schema(options: dict[str, Any]) -> vol.Schema:
             ),
         ),
     })
-
-
-BACKUP_SCHEMA = vol.Schema({
-    vol.Required(ATTR_FILE_NAME, default="/config/virtual_layer_backup.json"): str,
-})
-RESTORE_SCHEMA = vol.Schema({
-    vol.Required(ATTR_FILE_NAME, default="/config/virtual_layer_backup.json"): str,
-    vol.Optional("mode", default="merge"): selector.SelectSelector(
-        selector.SelectSelectorConfig(
-            options=["merge", "replace"],
-            translation_key="restore_mode",
-        ),
-    ),
-})
 
 
 def _setup_schema(defaults: dict[str, Any], include_entity_toggle: bool = True) -> vol.Schema:
@@ -282,7 +281,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         platform,
         entity_name,
     )
-    return vol.Schema({
+    schema = {
         vol.Required(CONF_DEVICE_NAME, default=defaults.get(CONF_DEVICE_NAME, "Virtual Device")): str,
         vol.Optional(CONF_DEVICE_ID, default=defaults.get(CONF_DEVICE_ID, "")): str,
         vol.Optional(CONF_DEVICE_MANUFACTURER, default=defaults.get(CONF_DEVICE_MANUFACTURER, "")): str,
@@ -290,6 +289,18 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         vol.Optional(CONF_DEVICE_SW_VERSION, default=defaults.get(CONF_DEVICE_SW_VERSION, "")): str,
         vol.Optional(CONF_DEVICE_HW_VERSION, default=defaults.get(CONF_DEVICE_HW_VERSION, "")): str,
         vol.Optional(CONF_DEVICE_SERIAL_NUMBER, default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, "")): str,
+        vol.Optional(
+            CONF_DEVICE_CONFIGURATION_URL,
+            default=defaults.get(CONF_DEVICE_CONFIGURATION_URL, ""),
+        ): str,
+        vol.Optional(
+            CONF_DEVICE_SUGGESTED_AREA,
+            default=defaults.get(CONF_DEVICE_SUGGESTED_AREA, ""),
+        ): str,
+        vol.Optional(
+            CONF_DEVICE_VIA_DEVICE_ID,
+            default=defaults.get(CONF_DEVICE_VIA_DEVICE_ID, ""),
+        ): selector.DeviceSelector(),
         vol.Required(CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")): str,
         vol.Optional(CONF_ICON, default=defaults.get(CONF_ICON, "")): str,
         vol.Optional(ATTR_ENTITY_ID, default=default_entity_id): str,
@@ -302,11 +313,60 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         vol.Optional(CONF_PULL_INTERVAL, default=defaults.get(CONF_PULL_INTERVAL, 0)): vol.All(vol.Coerce(int), vol.Range(min=0)),
         vol.Optional(CONF_VALUE_TEMPLATE, default=defaults.get(CONF_VALUE_TEMPLATE, "")): TEMPLATE_SELECTOR,
         vol.Optional(CONF_AVAILABILITY_TEMPLATE, default=defaults.get(CONF_AVAILABILITY_TEMPLATE, "")): TEMPLATE_SELECTOR,
+        vol.Optional(CONF_EVENT_HOOKS_JSON, default=defaults.get(CONF_EVENT_HOOKS_JSON, "")): MULTILINE_TEXT_SELECTOR,
         vol.Optional(CONF_ATTRIBUTES_JSON, default=defaults.get(CONF_ATTRIBUTES_JSON, "")): MULTILINE_TEXT_SELECTOR,
         vol.Optional(CONF_ATTRIBUTE_SOURCES_JSON, default=defaults.get(CONF_ATTRIBUTE_SOURCES_JSON, "")): MULTILINE_TEXT_SELECTOR,
         vol.Optional(CONF_ATTRIBUTE_TEMPLATES_JSON, default=defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "")): MULTILINE_TEXT_SELECTOR,
         vol.Optional(CONF_DOMAIN_OPTIONS_JSON, default=defaults.get(CONF_DOMAIN_OPTIONS_JSON, "")): MULTILINE_TEXT_SELECTOR,
-    })
+    }
+    if platform == "device_tracker":
+        schema.update({
+            vol.Optional(
+            CONF_POLYGON_GEOJSON_JSON,
+            default=defaults.get(CONF_POLYGON_GEOJSON_JSON, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_POLYGON_FILES_TEXT,
+            default=defaults.get(CONF_POLYGON_FILES_TEXT, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_POLYGON_STRATEGY_INPUT,
+            default=defaults.get(CONF_POLYGON_STRATEGY_INPUT, "majority"),
+        ): selector.SelectSelector(selector.SelectSelectorConfig(
+            options=["majority", "priority", "latest", "median"],
+            translation_key="polygon_strategy",
+        )),
+        vol.Optional(
+            CONF_POLYGON_DISTANCE_INPUT,
+            default=defaults.get(CONF_POLYGON_DISTANCE_INPUT, 300),
+        ): vol.All(vol.Coerce(float), vol.Range(min=1)),
+        vol.Optional(
+            CONF_POLYGON_TRACKER_RULES_JSON,
+            default=defaults.get(CONF_POLYGON_TRACKER_RULES_JSON, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_POLYGON_AWAY_STATE_INPUT,
+            default=defaults.get(CONF_POLYGON_AWAY_STATE_INPUT, "not_home"),
+        ): str,
+        })
+        person_default = defaults.get(CONF_POLYGON_PERSON, "")
+        person_marker = (
+            vol.Optional(CONF_POLYGON_PERSON, default=person_default)
+            if person_default
+            else vol.Optional(CONF_POLYGON_PERSON)
+        )
+        schema[person_marker] = selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="person"),
+        )
+    return vol.Schema(schema)
+
+
+def _needs_domain_specific_form(user_input) -> bool:
+    """Return true when a newly selected domain needs its dedicated fields."""
+    return (
+        user_input.get(CONF_PLATFORM) == "device_tracker"
+        and CONF_POLYGON_STRATEGY_INPUT not in user_input
+    )
 
 
 def _device_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
@@ -335,6 +395,18 @@ def _device_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             CONF_DEVICE_SERIAL_NUMBER,
             default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, ""),
         ): str,
+        vol.Optional(
+            CONF_DEVICE_CONFIGURATION_URL,
+            default=defaults.get(CONF_DEVICE_CONFIGURATION_URL, ""),
+        ): str,
+        vol.Optional(
+            CONF_DEVICE_SUGGESTED_AREA,
+            default=defaults.get(CONF_DEVICE_SUGGESTED_AREA, ""),
+        ): str,
+        vol.Optional(
+            CONF_DEVICE_VIA_DEVICE_ID,
+            default=defaults.get(CONF_DEVICE_VIA_DEVICE_ID, ""),
+        ): selector.DeviceSelector(),
     })
 
 
@@ -345,19 +417,40 @@ def _default_virtual_entity_id(platform: str, entity_name: str) -> str:
     object_id = slugify(str(entity_name).removeprefix("+"))
     if not object_id:
         return ""
+    object_id = object_id[:MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH].rstrip("_")
     return f"{platform}.{object_id}"
+
+
+def _reject_json_constant(value: str):
+    """Reject Python-only JSON constants such as NaN and Infinity."""
+    raise ValueError(f"Invalid JSON constant: {value}")
 
 
 def _parse_json_object(value: str, field_name: str) -> dict[str, Any]:
     if not value:
         return {}
     try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as err:
+        parsed = json.loads(
+            value,
+            parse_constant=_reject_json_constant,
+        )
+    except (json.JSONDecodeError, TypeError, ValueError) as err:
         raise InvalidJson(field_name) from err
     if not isinstance(parsed, dict):
         raise InvalidJson(field_name)
     return parsed
+
+
+def _parse_json_value(value: str, field_name: str):
+    if not value:
+        return None
+    try:
+        return json.loads(
+            value,
+            parse_constant=_reject_json_constant,
+        )
+    except (json.JSONDecodeError, TypeError, ValueError) as err:
+        raise InvalidJson(field_name) from err
 
 
 def _parse_source_entities(value: str) -> list[str]:
@@ -418,6 +511,91 @@ def _parse_domain_options(value: str) -> dict[str, Any]:
     return domain_options
 
 
+def _parse_event_hooks(value: str) -> list[dict[str, Any]]:
+    parsed = _parse_json_value(value, CONF_EVENT_HOOKS_JSON)
+    if parsed in (None, ""):
+        return []
+
+    if isinstance(parsed, dict):
+        parsed = [
+            {**hook, "name": name}
+            if isinstance(hook, dict) and "name" not in hook
+            else hook
+            for name, hook in parsed.items()
+        ]
+    if not isinstance(parsed, list):
+        raise InvalidJson(CONF_EVENT_HOOKS_JSON)
+
+    hooks = []
+    for hook in parsed:
+        if not isinstance(hook, dict):
+            raise InvalidJson(CONF_EVENT_HOOKS_JSON)
+        next_hook = _plain_options(hook)
+        trigger = str(next_hook.get("trigger", "state")).strip().lower()
+        if trigger not in {"state", "event"}:
+            raise InvalidJson(CONF_EVENT_HOOKS_JSON)
+        next_hook["trigger"] = trigger
+
+        if trigger == "state":
+            entity_ids = next_hook.get(ATTR_ENTITY_ID, next_hook.get("entity_ids"))
+            if isinstance(entity_ids, str):
+                entity_ids = [entity_ids]
+            if not isinstance(entity_ids, list) or not entity_ids:
+                raise InvalidEntityReference(CONF_EVENT_HOOKS_JSON)
+            try:
+                entity_ids = list(dict.fromkeys(cv.entity_id(str(entity_id).strip()) for entity_id in entity_ids))
+            except vol.Invalid as err:
+                raise InvalidEntityReference(CONF_EVENT_HOOKS_JSON) from err
+            next_hook[ATTR_ENTITY_ID] = entity_ids
+            next_hook.pop("entity_ids", None)
+
+            attributes = next_hook.get(CONF_ATTRIBUTE, next_hook.get("attributes_changed"))
+            if isinstance(attributes, str):
+                next_hook[CONF_ATTRIBUTE] = [attributes]
+            elif attributes is not None:
+                if not isinstance(attributes, list) or any(not isinstance(attribute, str) for attribute in attributes):
+                    raise InvalidJson(CONF_EVENT_HOOKS_JSON)
+                next_hook[CONF_ATTRIBUTE] = attributes
+            next_hook.pop("attributes_changed", None)
+        else:
+            event_type = str(next_hook.get("event_type", "")).strip()
+            if not event_type:
+                raise InvalidJson(CONF_EVENT_HOOKS_JSON)
+            next_hook["event_type"] = event_type
+            if "event_data" in next_hook and not isinstance(next_hook["event_data"], dict):
+                raise InvalidJson(CONF_EVENT_HOOKS_JSON)
+
+        for field_name in (CONF_ATTRIBUTES, CONF_ATTRIBUTE_TEMPLATES):
+            if field_name in next_hook:
+                field_value = next_hook[field_name]
+                if not isinstance(field_value, dict) or any(
+                    not isinstance(name, str)
+                    or not name.strip()
+                    or name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+                    for name in field_value
+                ):
+                    raise InvalidJson(CONF_EVENT_HOOKS_JSON)
+
+        if "debounce" in next_hook:
+            try:
+                debounce = float(next_hook["debounce"])
+            except (TypeError, ValueError) as err:
+                raise InvalidJson(CONF_EVENT_HOOKS_JSON) from err
+            if not math.isfinite(debounce):
+                raise InvalidJson(CONF_EVENT_HOOKS_JSON)
+            next_hook["debounce"] = max(0, debounce)
+        for boolean_field in ("enabled", "refresh"):
+            if boolean_field not in next_hook:
+                continue
+            try:
+                next_hook[boolean_field] = cv.boolean(next_hook[boolean_field])
+            except vol.Invalid as err:
+                raise InvalidJson(CONF_EVENT_HOOKS_JSON) from err
+
+        hooks.append(next_hook)
+    return hooks
+
+
 def _platform_schema(platform: str):
     module = import_module(f".{platform}", __package__)
     return getattr(module, f"{platform.upper()}_SCHEMA", None) or module.ENTITY_SCHEMA
@@ -443,11 +621,28 @@ def _validate_platform_entity(
             schema = _platform_schema(platform)
             module = import_module(f".{platform}", __package__)
             validate_domain_options = getattr(module, "validate_domain_options", None)
-        schema(schema_entity)
+        validated_entity = schema(schema_entity)
+        if _contains_non_finite_number(validated_entity):
+            raise ValueError("Domain options must contain only finite numbers")
         if validate_domain_options:
-            validate_domain_options(schema_entity)
+            validate_domain_options(validated_entity)
     except (AttributeError, ImportError, TypeError, ValueError, vol.Invalid) as err:
         raise InvalidDomainOptions from err
+
+
+def _contains_non_finite_number(value: Any) -> bool:
+    """Return whether nested user input contains NaN or infinity."""
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, Mapping):
+        return any(
+            _contains_non_finite_number(key)
+            or _contains_non_finite_number(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple, set)):
+        return any(_contains_non_finite_number(item) for item in value)
+    return False
 
 
 def _parse_source_reference(source, field_name: str, default_attribute: str | None = None) -> dict[str, str]:
@@ -501,6 +696,14 @@ def _validate_entity_references(entity: dict[str, Any]) -> None:
             for source in sources.values()
         ):
             raise InvalidEntityReference(field_name)
+    for hook in entity.get(CONF_EVENT_HOOKS, []):
+        if not isinstance(hook, Mapping) or hook.get("trigger") != "state":
+            continue
+        entity_ids = hook.get(ATTR_ENTITY_ID, [])
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        if entity_id in entity_ids:
+            raise InvalidEntityReference(CONF_EVENT_HOOKS_JSON)
 
 
 def _virtual_entity_id(entity: Mapping) -> str | None:
@@ -545,11 +748,20 @@ def _entity_dependency_sources(entity: Mapping) -> dict[str, str]:
     camera_source = entity.get(CAMERA_SOURCE_ENTITY_OPTION)
     if isinstance(camera_source, str):
         sources[camera_source] = CONF_DOMAIN_OPTIONS_JSON
+    for hook in entity.get(CONF_EVENT_HOOKS, []):
+        if not isinstance(hook, Mapping) or hook.get("trigger") != "state":
+            continue
+        entity_ids = hook.get(ATTR_ENTITY_ID, [])
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        for entity_id in entity_ids:
+            if isinstance(entity_id, str):
+                sources[entity_id] = CONF_EVENT_HOOKS_JSON
     return sources
 
 
 def _iter_option_entities(options: Mapping):
-    """Yield well-formed persisted entities without trusting backup payloads."""
+    """Yield well-formed persisted entities without trusting stored payloads."""
     devices = options.get(ATTR_DEVICES, {})
     if not isinstance(devices, Mapping):
         return
@@ -671,6 +883,10 @@ def _build_entity_config(
     if availability_template:
         entity[CONF_AVAILABILITY_TEMPLATE] = availability_template
 
+    event_hooks = _parse_event_hooks(user_input.get(CONF_EVENT_HOOKS_JSON, "").strip())
+    if event_hooks:
+        entity[CONF_EVENT_HOOKS] = event_hooks
+
     attributes = _parse_json_object(user_input.get(CONF_ATTRIBUTES_JSON, "").strip(), CONF_ATTRIBUTES_JSON)
     if any(
         not isinstance(name, str)
@@ -706,6 +922,58 @@ def _build_entity_config(
         user_input.get(CONF_DOMAIN_OPTIONS_JSON, "").strip(),
     )
     entity.update(domain_options)
+
+    polygon_geojson_text = user_input.get(CONF_POLYGON_GEOJSON_JSON, "").strip()
+    polygon_files = [
+        item.strip()
+        for item in user_input.get(CONF_POLYGON_FILES_TEXT, "").splitlines()
+        if item.strip()
+    ]
+    polygon_person = str(user_input.get(CONF_POLYGON_PERSON, "") or "").strip()
+    polygon_rules_text = user_input.get(CONF_POLYGON_TRACKER_RULES_JSON, "").strip()
+    if any((polygon_geojson_text, polygon_files, polygon_person, polygon_rules_text)):
+        if platform != "device_tracker":
+            raise InvalidDomainOptions
+        polygon = {
+            CONF_POLYGON_FILES: polygon_files,
+            CONF_POLYGON_STRATEGY: user_input.get(
+                CONF_POLYGON_STRATEGY_INPUT,
+                "majority",
+            ),
+            CONF_POLYGON_DISTANCE_METERS: user_input.get(
+                CONF_POLYGON_DISTANCE_INPUT,
+                300,
+            ),
+            CONF_POLYGON_AWAY_STATE: str(user_input.get(
+                CONF_POLYGON_AWAY_STATE_INPUT,
+                "not_home",
+            )).strip(),
+            CONF_POLYGON_TRACKER_RULES: _parse_json_object(
+                polygon_rules_text,
+                CONF_POLYGON_TRACKER_RULES_JSON,
+            ),
+        }
+        if polygon_geojson_text:
+            polygon[CONF_POLYGON_GEOJSON] = _parse_json_object(
+                polygon_geojson_text,
+                CONF_POLYGON_GEOJSON_JSON,
+            )
+            try:
+                parse_geojson_zones(polygon[CONF_POLYGON_GEOJSON])
+            except (TypeError, ValueError) as err:
+                raise InvalidJson(CONF_POLYGON_GEOJSON_JSON) from err
+        if polygon_person:
+            polygon[CONF_POLYGON_PERSON_ENTITY] = polygon_person
+        if not source_entities and not polygon_person:
+            raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
+        if any(
+            not source_entity_id.startswith("device_tracker.")
+            for source_entity_id in source_entities
+        ):
+            raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
+        if set(polygon[CONF_POLYGON_TRACKER_RULES]) - set(source_entities):
+            raise InvalidEntityReference(CONF_POLYGON_TRACKER_RULES_JSON)
+        entity[CONF_POLYGONAL_ZONE] = polygon
     _validate_entity_references(entity)
 
     # Number entities require a native range. Keep a practical default for the
@@ -783,6 +1051,9 @@ def _build_device_config(user_input: dict[str, Any], device_name: str) -> dict[s
         CONF_DEVICE_SW_VERSION: CONF_SW_VERSION,
         CONF_DEVICE_HW_VERSION: CONF_HW_VERSION,
         CONF_DEVICE_SERIAL_NUMBER: CONF_SERIAL_NUMBER,
+        CONF_DEVICE_CONFIGURATION_URL: CONF_CONFIGURATION_URL,
+        CONF_DEVICE_SUGGESTED_AREA: CONF_SUGGESTED_AREA,
+        CONF_DEVICE_VIA_DEVICE_ID: CONF_VIA_DEVICE_ID,
     }
     for form_field, config_field in optional_fields.items():
         value = user_input.get(form_field, "").strip()
@@ -911,6 +1182,9 @@ def _with_existing_device_defaults(
         (CONF_SW_VERSION, CONF_DEVICE_SW_VERSION),
         (CONF_HW_VERSION, CONF_DEVICE_HW_VERSION),
         (CONF_SERIAL_NUMBER, CONF_DEVICE_SERIAL_NUMBER),
+        (CONF_CONFIGURATION_URL, CONF_DEVICE_CONFIGURATION_URL),
+        (CONF_SUGGESTED_AREA, CONF_DEVICE_SUGGESTED_AREA),
+        (CONF_VIA_DEVICE_ID, CONF_DEVICE_VIA_DEVICE_ID),
     ):
         updated_defaults[form_field] = device.get(config_field, "")
     return updated_defaults
@@ -1396,6 +1670,33 @@ def _latest_state(states: list) -> str:
     return max(values) if values else "unknown"
 
 
+def _latest_datetime_state(states: list) -> str:
+    """Return the original value with the latest timezone-aware instant."""
+    candidates = []
+    for state in states:
+        if not _source_state_is_known(state):
+            continue
+        value = str(state.state)
+        parsed = dt_util.parse_datetime(value)
+        if parsed is not None:
+            candidates.append((parsed.timestamp(), value))
+    return max(candidates)[1] if candidates else _latest_state(states)
+
+
+def _latest_datetime_helper_template(variable_names: list[str]) -> str:
+    """Build a timezone-correct helper while preserving the selected source text."""
+    return (
+        "{% set ns = namespace(value='unknown', timestamp=none) %}"
+        "{% for value in [" + ", ".join(variable_names) + "] %}"
+        "{% if value not in ['unknown', 'unavailable', 'none', '', none] %}"
+        "{% set timestamp = as_timestamp(value, none) %}"
+        "{% if timestamp is not none and "
+        "(ns.timestamp is none or timestamp > ns.timestamp) %}"
+        "{% set ns.timestamp = timestamp %}{% set ns.value = value %}"
+        "{% endif %}{% endif %}{% endfor %}{{ ns.value }}"
+    )
+
+
 def _location_state(states: list) -> str:
     return "home" if all(str(state.state) == "home" for state in states) else "not_home"
 
@@ -1437,8 +1738,20 @@ def _combined_entity_name(states: list) -> str:
         for state in states
     ]
     if len(names) == 1:
-        return names[0]
-    return "Combined " + " + ".join(names[:3])
+        return _shorten_generated_text(str(names[0]), MAX_GENERATED_ENTITY_NAME_LENGTH)
+
+    combined_name = f"Combined {names[0]}"
+    if len(names) > 1:
+        combined_name = f"{combined_name} + {len(names) - 1} more"
+    return _shorten_generated_text(combined_name, MAX_GENERATED_ENTITY_NAME_LENGTH)
+
+
+def _shorten_generated_text(value: str, max_length: int) -> str:
+    """Shorten generated UI defaults without touching user-submitted values."""
+    value = " ".join(str(value).split())
+    if len(value) <= max_length:
+        return value
+    return value[: max_length - 3].rstrip() + "..."
 
 
 def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
@@ -1473,7 +1786,9 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     safety_boolean_sources = (
         _safety_boolean_sources(entity_ids, states) if all_boolean else False
     )
-    if len(entity_ids) == 1 and source_domains[0] in VIRTUAL_ENTITY_DOMAINS:
+    if all_location:
+        platform = "device_tracker"
+    elif len(entity_ids) == 1 and source_domains[0] in VIRTUAL_ENTITY_DOMAINS:
         platform = source_domains[0]
     elif all_boolean:
         platform = "binary_sensor"
@@ -1483,8 +1798,6 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         platform = "date"
     elif all_time:
         platform = "time"
-    elif all_location:
-        platform = "device_tracker"
     elif all_enum:
         platform = "select"
     else:
@@ -1510,7 +1823,9 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         initial_value = first_state.state
     elif all_number:
         initial_value = _average_known_states(states)
-    elif all_datetime or all_date or all_time:
+    elif all_datetime:
+        initial_value = _latest_datetime_state(states)
+    elif all_date or all_time:
         initial_value = _latest_state(states)
     elif all_location:
         initial_value = _location_state(states)
@@ -1519,19 +1834,22 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     else:
         initial_value = "".join(str(state.state) for state in states)
 
-    attributes = {
-        name: _json_safe(value)
-        for name, value in dict(first_state.attributes).items()
-        if name != ATTR_FRIENDLY_NAME
-    }
+    attributes = {}
+    if len(states) == 1 and not all_location:
+        attributes = {
+            name: _json_safe(value)
+            for name, value in dict(first_state.attributes).items()
+            if name != ATTR_FRIENDLY_NAME
+        }
     defaults = {
         CONF_DEVICE_NAME: _combined_device_name(hass, entity_ids),
         CONF_ENTITY_NAME: _combined_entity_name(states),
         CONF_PLATFORM: platform,
         CONF_INITIAL_VALUE: initial_value,
         CONF_SOURCE_ENTITIES_TEXT: "\n".join(entity_ids),
-        CONF_ATTRIBUTES_JSON: _json_default(attributes),
     }
+    if attributes:
+        defaults[CONF_ATTRIBUTES_JSON] = _json_default(attributes)
 
     source_device_classes = {
         str(state.attributes.get("device_class", "")).lower()
@@ -1574,6 +1892,17 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         )
     elif platform == "binary_sensor" and safety_boolean_sources:
         defaults[CONF_VALUE_TEMPLATE] = _safety_boolean_helper_template(variable_names)
+    elif all_location:
+        # Device tracker coordinates need stateful priority retention after an
+        # outlying device reaches its destination. The platform helper performs
+        # that calculation and keeps this policy visible/editable in the UI.
+        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default({
+            CONF_LOCATION_HELPER: {
+                "distance_threshold_meters": LOCATION_HELPER_DISTANCE_METERS,
+                "priority_window_seconds": LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
+            },
+        })
+        defaults[CONF_VALUE_TEMPLATE] = ""
     elif len(entity_ids) == 1:
         defaults[CONF_VALUE_TEMPLATE] = f"{{{{ {variable_names[0]} }}}}"
     elif platform == "binary_sensor":
@@ -1589,23 +1918,14 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | map('float') | list %}"
             "{{ (values | average) if values else 'unknown' }}"
         )
-    elif all_datetime or all_date or all_time:
+    elif all_datetime:
+        defaults[CONF_VALUE_TEMPLATE] = _latest_datetime_helper_template(variable_names)
+    elif all_date or all_time:
         defaults[CONF_VALUE_TEMPLATE] = (
             "{{ ["
             + ", ".join(variable_names)
             + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | list | sort | last | default('unknown') }}"
         )
-    elif all_location:
-        # Device tracker coordinates need stateful priority retention after an
-        # outlying device reaches its destination. The platform helper performs
-        # that calculation and keeps this policy visible/editable in the UI.
-        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default({
-            CONF_LOCATION_HELPER: {
-                "distance_threshold_meters": LOCATION_HELPER_DISTANCE_METERS,
-                "priority_window_seconds": LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
-            },
-        })
-        defaults[CONF_VALUE_TEMPLATE] = ""
     elif all_enum:
         defaults[CONF_VALUE_TEMPLATE] = (
             "{% set values = ["
@@ -1709,6 +2029,9 @@ def _entity_form_defaults(
         CONF_DEVICE_SW_VERSION: device.get(CONF_SW_VERSION, ""),
         CONF_DEVICE_HW_VERSION: device.get(CONF_HW_VERSION, ""),
         CONF_DEVICE_SERIAL_NUMBER: device.get(CONF_SERIAL_NUMBER, ""),
+        CONF_DEVICE_CONFIGURATION_URL: device.get(CONF_CONFIGURATION_URL, ""),
+        CONF_DEVICE_SUGGESTED_AREA: device.get(CONF_SUGGESTED_AREA, ""),
+        CONF_DEVICE_VIA_DEVICE_ID: device.get(CONF_VIA_DEVICE_ID, ""),
         CONF_ENTITY_NAME: entity.get(CONF_NAME, "Virtual Entity"),
         CONF_ICON: entity.get(CONF_ICON, ""),
         ATTR_ENTITY_ID: entity.get(ATTR_ENTITY_ID, ""),
@@ -1721,10 +2044,25 @@ def _entity_form_defaults(
         CONF_PULL_INTERVAL: entity.get(CONF_PULL_INTERVAL, 0),
         CONF_VALUE_TEMPLATE: entity.get(CONF_VALUE_TEMPLATE, ""),
         CONF_AVAILABILITY_TEMPLATE: entity.get(CONF_AVAILABILITY_TEMPLATE, ""),
+        CONF_EVENT_HOOKS_JSON: _json_default(entity.get(CONF_EVENT_HOOKS)),
         CONF_ATTRIBUTES_JSON: _json_default(entity.get(CONF_ATTRIBUTES)),
         CONF_ATTRIBUTE_SOURCES_JSON: _json_default(entity.get(CONF_ATTRIBUTE_SOURCES)),
         CONF_ATTRIBUTE_TEMPLATES_JSON: _json_default(entity.get(CONF_ATTRIBUTE_TEMPLATES)),
     }
+    polygon = entity.get(CONF_POLYGONAL_ZONE)
+    if not isinstance(polygon, Mapping):
+        polygon = {}
+    defaults.update({
+        CONF_POLYGON_GEOJSON_JSON: _json_default(polygon.get(CONF_POLYGON_GEOJSON)),
+        CONF_POLYGON_FILES_TEXT: "\n".join(polygon.get(CONF_POLYGON_FILES, [])),
+        CONF_POLYGON_PERSON: polygon.get(CONF_POLYGON_PERSON_ENTITY, ""),
+        CONF_POLYGON_STRATEGY_INPUT: polygon.get(CONF_POLYGON_STRATEGY, "majority"),
+        CONF_POLYGON_DISTANCE_INPUT: polygon.get(CONF_POLYGON_DISTANCE_METERS, 300),
+        CONF_POLYGON_TRACKER_RULES_JSON: _json_default(
+            polygon.get(CONF_POLYGON_TRACKER_RULES),
+        ),
+        CONF_POLYGON_AWAY_STATE_INPUT: polygon.get(CONF_POLYGON_AWAY_STATE, "not_home"),
+    })
     domain_options = {
         key: value
         for key, value in entity.items()
@@ -1732,48 +2070,6 @@ def _entity_form_defaults(
     }
     defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
     return defaults
-
-
-def _merge_device_sets(existing_devices, restored_devices):
-    existing_devices = _mapping_or_empty(existing_devices)
-    restored_devices = _mapping_or_empty(restored_devices)
-    merged = {
-        device_name: _entity_list_or_empty(entities)
-        for device_name, entities in (existing_devices or {}).items()
-        if isinstance(entities, list)
-    }
-    for device_name, entities in (restored_devices or {}).items():
-        if not isinstance(entities, list):
-            _LOGGER.warning("Skipping invalid restored entity list for %s", device_name)
-            continue
-        merged.setdefault(device_name, [])
-        merged[device_name].extend(clone_entities_with_new_keys(entities))
-    return merged
-
-
-def _merge_device_attributes(existing_attributes, restored_attributes):
-    merged = {
-        device_name: attributes
-        for device_name, attributes in _mapping_or_empty(existing_attributes).items()
-        if isinstance(attributes, Mapping)
-    }
-    for device_name, attributes in _mapping_or_empty(restored_attributes).items():
-        if not isinstance(attributes, Mapping):
-            _LOGGER.warning("Skipping invalid restored device attributes for %s", device_name)
-            continue
-        merged[device_name] = attributes or {}
-    return merged
-
-
-def _find_backup_group_for_entry(backup_groups, entry):
-    if len(backup_groups) == 1:
-        return backup_groups[0]
-
-    entry_group_name = entry.data[ATTR_GROUP_NAME]
-    for backup_group in backup_groups:
-        if backup_group.get(ATTR_GROUP_NAME) == entry_group_name:
-            return backup_group
-    return None
 
 
 class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
@@ -1853,10 +2149,14 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         if user_input is not None:
             try:
                 await self.validate_input(user_input, current_entry=entry)
+                old_group_name = entry.data[ATTR_GROUP_NAME]
+                new_group_name = user_input[ATTR_GROUP_NAME]
+                await _rename_meta_data(self.hass, old_group_name, new_group_name)
                 return self.async_update_reload_and_abort(
                     entry,
+                    title=f"{new_group_name} - {COMPONENT_DOMAIN}",
                     data_updates={
-                        ATTR_GROUP_NAME: user_input[ATTR_GROUP_NAME],
+                        ATTR_GROUP_NAME: new_group_name,
                     },
                 )
             except GroupNameAlreadyUsed:
@@ -1895,6 +2195,11 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
     async def async_step_entity(self, user_input=None):
         """Add the first UI-managed virtual entity."""
         errors = {}
+        if user_input is not None and _needs_domain_specific_form(user_input):
+            return self.async_show_form(
+                step_id="entity",
+                data_schema=_entity_schema(user_input),
+            )
         if user_input is not None:
             try:
                 device_name, entity = await _async_build_entity_config(self.hass, user_input)
@@ -1961,10 +2266,6 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 return await self.async_step_delete_entities()
             if user_input[CONF_ACTION] == ACTION_MANAGE_DEVICES:
                 return await self.async_step_select_device()
-            if user_input[CONF_ACTION] == ACTION_BACKUP_DEVICES:
-                return await self.async_step_backup()
-            if user_input[CONF_ACTION] == ACTION_RESTORE_DEVICES:
-                return await self.async_step_restore()
             return await self.async_step_entity_source()
 
         return self.async_show_form(
@@ -2061,6 +2362,11 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
     async def async_step_entity(self, user_input=None):
         """Add a UI-managed virtual entity."""
         errors = {}
+        if user_input is not None and _needs_domain_specific_form(user_input):
+            return self.async_show_form(
+                step_id="entity",
+                data_schema=_entity_schema(user_input),
+            )
         if user_input is not None:
             try:
                 device_name, entity = await _async_build_entity_config(self.hass, user_input)
@@ -2214,6 +2520,11 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         if self._edit_device_name is None or self._edit_index is None:
             return await self.async_step_select_entity()
 
+        if user_input is not None and _needs_domain_specific_form(user_input):
+            return self.async_show_form(
+                step_id="edit_entity",
+                data_schema=_entity_schema(user_input),
+            )
         if user_input is not None:
             try:
                 current_entity = _get_ui_entity(
@@ -2281,53 +2592,6 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             data_schema=_entity_schema(defaults),
             errors=errors,
         )
-
-    async def async_step_backup(self, user_input=None):
-        """Back up this config entry."""
-        errors = {}
-        if user_input is not None:
-            backup = await async_build_entry_backup(self.config_entry)
-            await async_save_backup(user_input[ATTR_FILE_NAME], [backup])
-            return self.async_create_entry(data=_plain_options(self.config_entry.options))
-
-        return self.async_show_form(
-            step_id="backup",
-            data_schema=BACKUP_SCHEMA,
-            errors=errors,
-        )
-
-    async def async_step_restore(self, user_input=None):
-        """Restore this config entry."""
-        errors = {}
-        if user_input is not None:
-            backup_groups = await async_load_backup(user_input[ATTR_FILE_NAME])
-            backup_group = _find_backup_group_for_entry(backup_groups, self.config_entry)
-            if backup_group is None:
-                errors["base"] = "backup_group_not_found"
-            else:
-                restored_ui_devices = backup_group.get(ATTR_DEVICES, {})
-                restored_device_attributes = backup_group.get(ATTR_DEVICE_ATTRIBUTES, {})
-                if user_input["mode"] == "merge":
-                    restored_ui_devices = _merge_device_sets(
-                        self.config_entry.options.get(ATTR_DEVICES, {}),
-                        restored_ui_devices,
-                    )
-                    restored_device_attributes = _merge_device_attributes(
-                        self.config_entry.options.get(ATTR_DEVICE_ATTRIBUTES, {}),
-                        restored_device_attributes,
-                    )
-
-                options = _plain_options(self.config_entry.options)
-                options[ATTR_DEVICES] = restored_ui_devices
-                options[ATTR_DEVICE_ATTRIBUTES] = restored_device_attributes
-                return self.async_create_entry(data=options)
-
-        return self.async_show_form(
-            step_id="restore",
-            data_schema=RESTORE_SCHEMA,
-            errors=errors,
-        )
-
 
 class GroupNameAlreadyUsed(exceptions.HomeAssistantError):
     """Error indicating group name already used."""

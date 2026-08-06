@@ -3,13 +3,12 @@
 from unittest.mock import Mock
 
 import pytest
-
-from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.components.vacuum import (
     StateVacuumEntity,
     VacuumActivity,
     VacuumEntityFeature,
 )
+from homeassistant.const import ATTR_ENTITY_ID
 
 from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
 from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClimate
@@ -27,7 +26,6 @@ from custom_components.virtual_layer.light import LIGHT_SCHEMA, VirtualLight
 from custom_components.virtual_layer.lock import LOCK_SCHEMA, VirtualLock
 from custom_components.virtual_layer.switch import SWITCH_SCHEMA, VirtualSwitch
 from custom_components.virtual_layer.vacuum import VACUUM_SCHEMA, VirtualVacuum
-
 
 pytestmark = pytest.mark.unit
 

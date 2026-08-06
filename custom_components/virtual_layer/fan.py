@@ -7,31 +7,32 @@ Borrowed heavily from components/demo/fan.py
 from __future__ import annotations
 
 import logging
+import math
+from collections.abc import Callable
 from typing import Any
 
-import voluptuous as vol
-from collections.abc import Callable
-
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
 from homeassistant.components.fan import (
     ATTR_DIRECTION,
     ATTR_OSCILLATING,
     ATTR_PERCENTAGE,
     ATTR_PRESET_MODE,
-    DOMAIN as PLATFORM_DOMAIN,
     FanEntity,
     FanEntityFeature,
 )
+from homeassistant.components.fan import (
+    DOMAIN as PLATFORM_DOMAIN,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.config_validation import (PLATFORM_SCHEMA)
+from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -102,6 +103,10 @@ class VirtualFan(VirtualEntity, FanEntity):
             self._attr_speed_count = 3
 
         self._enable_turn_on_off_backwards_compatibility = False
+        self._attr_current_direction = None
+        self._attr_oscillating = None
+        self._attr_percentage = None
+        self._attr_preset_mode = None
         self._attr_supported_features = FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
         if self._attr_speed_count > 0:
             self._attr_supported_features |= FanEntityFeature.SET_SPEED
@@ -126,11 +131,35 @@ class VirtualFan(VirtualEntity, FanEntity):
         super()._restore_state(state, config)
 
         if self._attr_supported_features & FanEntityFeature.DIRECTION:
-            self._attr_current_direction = state.attributes.get(ATTR_DIRECTION)
+            direction = state.attributes.get(ATTR_DIRECTION)
+            self._attr_current_direction = (
+                direction if direction in {"forward", "reverse"} else "forward"
+            )
         if self._attr_supported_features & FanEntityFeature.OSCILLATE:
-            self._attr_oscillating = state.attributes.get(ATTR_OSCILLATING)
-        self._attr_percentage = state.attributes.get(ATTR_PERCENTAGE)
-        self._attr_preset_mode = state.attributes.get(ATTR_PRESET_MODE)
+            oscillating = state.attributes.get(ATTR_OSCILLATING)
+            self._attr_oscillating = (
+                oscillating if isinstance(oscillating, bool) else False
+            )
+        self._attr_percentage = self._safe_percentage(
+            state.attributes.get(ATTR_PERCENTAGE)
+        )
+        preset_mode = state.attributes.get(ATTR_PRESET_MODE)
+        self._attr_preset_mode = (
+            preset_mode if preset_mode in self._attr_preset_modes else None
+        )
+
+    @staticmethod
+    def _safe_percentage(value) -> int | None:
+        """Return a valid restored percentage or unknown."""
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed) or not 0 <= parsed <= 100:
+            return None
+        return round(parsed)
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -144,6 +173,9 @@ class VirtualFan(VirtualEntity, FanEntity):
         })
 
     def _set_percentage(self, percentage: int) -> None:
+        percentage = int(percentage)
+        if not 0 <= percentage <= 100:
+            raise ValueError("Fan percentage must be between 0 and 100")
         self._attr_percentage = percentage
         self._attr_preset_mode = None
         self._update_attributes()
@@ -192,6 +224,8 @@ class VirtualFan(VirtualEntity, FanEntity):
     async def async_set_direction(self, direction: str) -> None:
         """Set the direction of the fan."""
         _LOGGER.debug(f"setting direction of {self.name} to {direction}")
+        if direction not in {"forward", "reverse"}:
+            raise ValueError(f"Invalid fan direction: {direction}")
         self._attr_current_direction = direction
         self._update_attributes()
         self.async_write_ha_state()

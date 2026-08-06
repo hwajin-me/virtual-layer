@@ -2,29 +2,39 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
+import math
+import mimetypes
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 import aiofiles
-import voluptuous as vol
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
+from aiohttp import ClientError
 from homeassistant.components.image import (
     DOMAIN as PLATFORM_DOMAIN,
+)
+from homeassistant.components.image import (
     ImageEntity,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import ATTR_FRIENDLY_NAME, ATTR_LATITUDE, ATTR_LONGITUDE
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import dt as dt_util
 
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
-
+from .polygon import load_polygon_zones, render_polygon_map_svg
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +44,7 @@ CONF_CONTENT_TYPE = "content_type"
 CONF_IMAGE_PATH = "image_path"
 CONF_IMAGE_URL = "image_url"
 CONF_SOURCE_ENTITY = "source_entity"
+CONF_SVG = "svg"
 
 DEFAULT_IMAGE_VALUE = "unknown"
 
@@ -50,7 +61,9 @@ BASE_SCHEMA = virtual_schema(DEFAULT_IMAGE_VALUE, {
     vol.Optional(CONF_CONTENT_TYPE): cv.string,
     vol.Optional(CONF_IMAGE_PATH): cv.string,
     vol.Optional(CONF_IMAGE_URL): cv.url,
+    vol.Optional(CONF_POLYGONAL_ZONE): object,
     vol.Optional(CONF_SOURCE_ENTITY): _image_entity_id,
+    vol.Optional(CONF_SVG): cv.string,
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
@@ -90,12 +103,22 @@ class VirtualImage(VirtualEntity, ImageEntity):
 
         self._image_path = config.get(CONF_IMAGE_PATH)
         self._image_url = config.get(CONF_IMAGE_URL)
+        self._inline_svg = config.get(CONF_SVG)
+        self._polygon_config = config.get(CONF_POLYGONAL_ZONE)
         self._source_entity = config.get(CONF_SOURCE_ENTITY)
-        self._attr_content_type = config.get(
-            CONF_CONTENT_TYPE,
-            "image/jpeg",
+        configured_content_type = config.get(CONF_CONTENT_TYPE)
+        guessed_content_type = mimetypes.guess_type(
+            self._image_path or self._image_url or "",
+        )[0]
+        self._attr_content_type = configured_content_type or (
+            "image/svg+xml"
+            if self._inline_svg or self._polygon_config
+            else guessed_content_type or "image/jpeg"
         )
         self._attr_image_last_updated: datetime | None = None
+        self._image_digest: bytes | None = None
+        self._image_refresh_pending = False
+        self._polygon_zones: list[dict[str, Any]] = []
         if self._image_url:
             self._attr_image_url = self._image_url
 
@@ -115,6 +138,9 @@ class VirtualImage(VirtualEntity, ImageEntity):
     def _create_state(self, config):
         super()._create_state(config)
         self._attr_image_last_updated = None
+        self._image_digest = None
+        self._image_refresh_pending = False
+        self._polygon_zones = []
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
@@ -122,11 +148,15 @@ class VirtualImage(VirtualEntity, ImageEntity):
             self._attr_image_last_updated = dt_util.parse_datetime(state.state)
         except (TypeError, ValueError):
             self._attr_image_last_updated = None
+        self._image_digest = None
+        self._image_refresh_pending = False
+        self._polygon_zones = []
 
     def _update_attributes(self):
         super()._update_attributes()
         self._attr_extra_state_attributes.update({
             "content_type": self._attr_content_type,
+            "image_type": "polygon_map" if self._polygon_config else "image",
             "source_entity": self._source_entity,
         })
 
@@ -140,10 +170,69 @@ class VirtualImage(VirtualEntity, ImageEntity):
         source = get_entity(self._source_entity)
         return None if source is self else source
 
-    def _mark_updated(self) -> None:
+    async def async_added_to_hass(self) -> None:
+        """Track image and polygon location sources for cache invalidation."""
+        await super().async_added_to_hass()
+        source_entities = set(self._source_entities)
+        if self._source_entity:
+            source_entities.add(self._source_entity)
+        source_entities.discard(self.entity_id)
+        if source_entities:
+            self._refresh_remove_listeners.append(async_track_state_change_event(
+                self.hass,
+                source_entities,
+                self._async_image_source_changed,
+            ))
+
+    @callback
+    def _async_image_source_changed(self, _event) -> None:
+        """Invalidate the image URL when an aliased or mapped source changes."""
+        self._image_refresh_pending = True
+        self._attr_image_last_updated = dt_util.utcnow()
+        self._update_attributes()
+        self.async_schedule_update_ha_state()
+
+    def _mark_updated(self, image: bytes) -> bool:
+        """Update the image timestamp only when its bytes have changed."""
+        digest = hashlib.sha256(image).digest()
+        if digest == self._image_digest:
+            self._image_refresh_pending = False
+            return False
+        self._image_digest = digest
+        if self._image_refresh_pending:
+            self._image_refresh_pending = False
+            return False
         self._attr_image_last_updated = dt_util.utcnow()
         self._update_attributes()
         self.async_write_ha_state()
+        return True
+
+    def _polygon_markers(self) -> list[dict[str, Any]]:
+        """Return valid current locations from the map's configured sources."""
+        markers = []
+        for entity_id in self._source_entities:
+            state = self.hass.states.get(entity_id)
+            if state is None:
+                continue
+            try:
+                latitude = float(state.attributes[ATTR_LATITUDE])
+                longitude = float(state.attributes[ATTR_LONGITUDE])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (
+                not math.isfinite(latitude)
+                or not math.isfinite(longitude)
+                or not -90 <= latitude <= 90
+                or not -180 <= longitude <= 180
+            ):
+                continue
+            markers.append({
+                "entity_id": entity_id,
+                "label": state.attributes.get(ATTR_FRIENDLY_NAME) or state.name,
+                "latitude": latitude,
+                "longitude": longitude,
+            })
+        return markers
 
     def image(self) -> bytes | None:
         """Return bytes for the synchronous ImageEntity API."""
@@ -162,7 +251,14 @@ class VirtualImage(VirtualEntity, ImageEntity):
         if source is not None:
             try:
                 image = await source.async_image()
-            except (AttributeError, OSError, ValueError) as err:
+            except (
+                asyncio.TimeoutError,
+                AttributeError,
+                ClientError,
+                HomeAssistantError,
+                OSError,
+                ValueError,
+            ) as err:
                 _LOGGER.warning(
                     "Unable to get virtual image from %s: %s",
                     self._source_entity,
@@ -170,7 +266,75 @@ class VirtualImage(VirtualEntity, ImageEntity):
                 )
                 return None
             if image is not None:
-                self._mark_updated()
+                source_content_type = getattr(source, "content_type", None)
+                if isinstance(source_content_type, str) and source_content_type:
+                    self._attr_content_type = source_content_type
+                self._mark_updated(image)
+            return image
+
+        if self._inline_svg:
+            image = self._inline_svg.encode()
+            self._mark_updated(image)
+            return image
+
+        if self._polygon_config:
+            try:
+                zones, load_errors = await load_polygon_zones(
+                    self.hass,
+                    self._polygon_config.get(CONF_POLYGON_GEOJSON),
+                    self._polygon_config.get(CONF_POLYGON_FILES),
+                    return_errors=True,
+                )
+                # A partially unreadable file set must not make an otherwise
+                # working map jump to a different set of zones.  This mirrors
+                # the tracker reload policy and keeps the previous complete map.
+                if not self._polygon_zones or (zones and not load_errors):
+                    self._polygon_zones = zones
+                zones = self._polygon_zones
+                if not zones:
+                    error = "; ".join(load_errors) or "No polygon zones to render"
+                    if self._virtual_attributes.get("polygon_map_error") != error:
+                        self._virtual_attributes["polygon_map_error"] = error
+                        self._virtual_attributes["polygon_zones"] = []
+                        self._update_attributes()
+                        self.async_write_ha_state()
+                    return None
+                image = render_polygon_map_svg(
+                    zones,
+                    markers=self._polygon_markers(),
+                ).encode()
+            except (
+                asyncio.TimeoutError,
+                ClientError,
+                HomeAssistantError,
+                OSError,
+                TypeError,
+                ValueError,
+            ) as err:
+                _LOGGER.warning("Unable to render virtual polygon map: %s", err)
+                error = str(err)
+                if self._virtual_attributes.get("polygon_map_error") != error:
+                    self._virtual_attributes["polygon_map_error"] = error
+                    self._virtual_attributes["polygon_zones"] = [
+                        zone["name"]
+                        for zone in self._polygon_zones
+                        if isinstance(zone, dict) and isinstance(zone.get("name"), str)
+                    ]
+                    self._update_attributes()
+                    self.async_write_ha_state()
+                return None
+            polygon_map_error = "; ".join(load_errors) if load_errors else None
+            polygon_zones = [zone["name"] for zone in zones]
+            metadata_changed = (
+                self._virtual_attributes.get("polygon_map_error") != polygon_map_error
+                or self._virtual_attributes.get("polygon_zones") != polygon_zones
+            )
+            self._virtual_attributes["polygon_map_error"] = polygon_map_error
+            self._virtual_attributes["polygon_zones"] = polygon_zones
+            wrote_state = self._mark_updated(image)
+            if metadata_changed and not wrote_state:
+                self._update_attributes()
+                self.async_write_ha_state()
             return image
 
         if self._image_path:
@@ -180,13 +344,23 @@ class VirtualImage(VirtualEntity, ImageEntity):
             except OSError:
                 _LOGGER.warning("Unable to read virtual image %s", self._image_path)
                 return None
-            self._mark_updated()
+            self._mark_updated(image)
             return image
 
         if self._image_url:
-            image = await ImageEntity.async_image(self)
+            try:
+                image = await ImageEntity.async_image(self)
+            except (
+                asyncio.TimeoutError,
+                ClientError,
+                HomeAssistantError,
+                OSError,
+                ValueError,
+            ) as err:
+                _LOGGER.warning("Unable to fetch virtual image URL %s: %s", self._image_url, err)
+                return None
             if image is not None:
-                self._mark_updated()
+                self._mark_updated(image)
             return image
         return None
 

@@ -1,18 +1,29 @@
 """Coverage for appliance-oriented options and electrical value units."""
 
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
-
-from homeassistant.components.number import NumberDeviceClass
-from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.components.humidifier import HumidifierDeviceClass
+from homeassistant.components.number import NumberDeviceClass, NumberEntity
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME
+from homeassistant.core import State
 
-from custom_components.virtual_layer.const import ATTR_UNIQUE_ID, CONF_INITIAL_VALUE, CONF_MAX, CONF_MIN
+from custom_components.virtual_layer.const import (
+    ATTR_UNIQUE_ID,
+    CONF_INITIAL_VALUE,
+    CONF_MAX,
+    CONF_MIN,
+)
+from custom_components.virtual_layer.entity import VirtualEntity
+from custom_components.virtual_layer.humidifier import (
+    HUMIDIFIER_SCHEMA,
+    VirtualHumidifier,
+)
+from custom_components.virtual_layer.lock import LOCK_SCHEMA, VirtualLock
 from custom_components.virtual_layer.number import NUMBER_SCHEMA, VirtualNumber
 from custom_components.virtual_layer.sensor import SENSOR_SCHEMA, VirtualSensor
-from custom_components.virtual_layer.humidifier import HUMIDIFIER_SCHEMA, VirtualHumidifier
 from custom_components.virtual_layer.valve import VALVE_SCHEMA, VirtualValve
-
 
 pytestmark = pytest.mark.unit
 
@@ -73,7 +84,28 @@ def test_number_electrical_device_classes_get_default_units(device_class, expect
     })
     entity = VirtualNumber(config, False)
 
+    assert isinstance(entity, NumberEntity)
     assert entity._attr_unit_of_measurement == expected_unit
+
+
+async def test_number_uses_native_state_and_clamps_template_and_service_values():
+    config = NUMBER_SCHEMA({
+        CONF_NAME: "Electrical Limit",
+        ATTR_ENTITY_ID: "number.electrical_limit",
+        ATTR_UNIQUE_ID: "electrical_limit",
+        CONF_INITIAL_VALUE: "not-a-number",
+        CONF_MIN: 10,
+        CONF_MAX: 20,
+    })
+    entity = VirtualNumber(config, False)
+    entity._create_state(config)
+    entity.async_schedule_update_ha_state = lambda **_kwargs: None
+
+    assert entity.native_value == 10
+    await entity.async_set_native_value(15)
+    assert entity.native_value == 15
+    entity.set_state(99)
+    assert entity.native_value == 20
 
 
 def test_sensor_accepts_washer_and_dryer_options_as_attributes():
@@ -143,3 +175,116 @@ async def test_valve_can_model_a_pump_with_open_close_commands():
     assert entity.current_valve_position == 100
     await entity.async_close_valve()
     assert entity.current_valve_position == 0
+
+
+def test_openable_retargeting_current_position_clears_motion_and_timer():
+    config = VALVE_SCHEMA({
+        CONF_NAME: "Timed Valve",
+        ATTR_ENTITY_ID: "valve.timed_valve",
+        ATTR_UNIQUE_ID: "timed_valve",
+        CONF_INITIAL_VALUE: "closed",
+        "open_close_duration": 10,
+        "open_close_tick": 1,
+    })
+    entity = VirtualValve(config, False)
+    entity.hass = Mock()
+    entity._create_state(config)
+    entity.async_write_ha_state = Mock()
+    entity.async_schedule_update_ha_state = Mock()
+    cancel_timer = Mock()
+
+    with patch(
+        "custom_components.virtual_layer.entity.async_call_later",
+        return_value=cancel_timer,
+    ):
+        entity._set_position(100)
+        assert entity.is_opening is True
+        entity._set_position(0)
+
+    cancel_timer.assert_called_once_with()
+    assert entity._target_position is None
+    assert entity.is_opening is False
+    assert entity.is_closing is False
+    assert entity.is_closed is True
+
+
+@pytest.mark.parametrize(
+    ("restored_state", "restored_position", "expected_position"),
+    [
+        ("open", None, 100),
+        ("closed", "invalid", 0),
+        ("open", float("nan"), 100),
+        ("open", 150, 100),
+        ("closed", -20, 0),
+    ],
+)
+def test_openable_repairs_invalid_restored_positions(
+    restored_state,
+    restored_position,
+    expected_position,
+):
+    config = VALVE_SCHEMA({
+        CONF_NAME: "Restored Valve",
+        ATTR_ENTITY_ID: "valve.restored_valve",
+        ATTR_UNIQUE_ID: "restored_valve",
+        CONF_INITIAL_VALUE: "closed",
+        "open_close_duration": 0,
+    })
+    entity = VirtualValve(config, False)
+
+    entity._restore_state(
+        State(
+            "valve.restored_valve",
+            restored_state,
+            {"current_position": restored_position},
+        ),
+        config,
+    )
+
+    assert entity.current_valve_position == expected_position
+
+
+async def test_openable_unload_cancels_pending_movement():
+    config = VALVE_SCHEMA({
+        CONF_NAME: "Unload Valve",
+        ATTR_ENTITY_ID: "valve.unload_valve",
+        ATTR_UNIQUE_ID: "unload_valve",
+        CONF_INITIAL_VALUE: "closed",
+        "open_close_duration": 10,
+        "open_close_tick": 1,
+    })
+    entity = VirtualValve(config, False)
+    cancel_timer = Mock()
+    entity._timer_handle = cancel_timer
+
+    with patch.object(
+        VirtualEntity,
+        "async_will_remove_from_hass",
+        AsyncMock(),
+    ):
+        await entity.async_will_remove_from_hass()
+
+    cancel_timer.assert_called_once_with()
+
+
+def test_lock_replacing_delayed_operation_cancels_previous_timer():
+    config = LOCK_SCHEMA({
+        CONF_NAME: "Timed Lock",
+        ATTR_ENTITY_ID: "lock.timed_lock",
+        ATTR_UNIQUE_ID: "timed_lock",
+        CONF_INITIAL_VALUE: "locked",
+        "locking_time": 5,
+    })
+    entity = VirtualLock(Mock(), config, False)
+    first_cancel = Mock()
+    second_cancel = Mock()
+
+    with patch(
+        "custom_components.virtual_layer.lock.async_call_later",
+        side_effect=[first_cancel, second_cancel],
+    ):
+        entity._start_operation()
+        entity._start_operation()
+
+    first_cancel.assert_called_once_with()
+    assert entity._timer_handle is second_cancel
