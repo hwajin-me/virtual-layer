@@ -5,6 +5,7 @@
       "import_not_supported": "파일 기반 설정은 지원하지 않습니다. 통합 구성 UI에서 가상 엔티티를 추가하세요."
     },
     "error": {
+      "device_name_used": "해당 Device 이름은 다른 Device ID가 사용 중입니다. 다른 이름을 입력하거나 기존 Device를 선택하세요.",
       "group_name_used": "이미 사용 중인 장치 이름입니다. 다른 이름을 입력하세요.",
       "invalid_json": "올바른 JSON 객체를 입력하세요.",
       "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
@@ -119,6 +120,7 @@
   },
   "options": {
     "error": {
+      "device_name_used": "해당 Device 이름은 다른 Device ID가 사용 중입니다. 다른 이름을 입력하거나 기존 Device를 선택하세요.",
       "invalid_json": "올바른 JSON 객체를 입력하세요.",
       "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
       "invalid_domain_options": "선택한 엔티티 도메인에 맞는 옵션을 입력하세요.",

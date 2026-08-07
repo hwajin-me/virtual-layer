@@ -35,6 +35,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_EVENT_HOOKS_JSON,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
+    DeviceNameAlreadyUsed,
     InvalidDomainOptions,
     InvalidEntityId,
     InvalidEntityReference,
@@ -58,6 +59,7 @@ from custom_components.virtual_layer.config_flow import (
     _replace_ui_device,
     _replace_ui_entity,
     _set_auto_helper_profile,
+    _stored_entity_ids,
 )
 from custom_components.virtual_layer.const import (
     ATTR_DEVICE_ATTRIBUTES,
@@ -81,6 +83,11 @@ from custom_components.virtual_layer.const import (
     CONF_MIN,
     CONF_MODEL,
     CONF_PERSISTENT,
+    CONF_POLYGON_AWAY_STATE,
+    CONF_POLYGON_DISTANCE_METERS,
+    CONF_POLYGON_FILES,
+    CONF_POLYGON_STRATEGY,
+    CONF_POLYGONAL_ZONE,
     CONF_PULL_INTERVAL,
     CONF_SERIAL_NUMBER,
     CONF_SOURCE_ENTITIES,
@@ -1038,10 +1045,108 @@ def test_custom_helper_fields_are_preserved_and_marked_manual():
     }
     entity = {}
 
-    assert _reference_edit_defaults(current, reference, auto_helper=False) == current
+    refreshed = _reference_edit_defaults(current, reference, auto_helper=False)
+
+    assert refreshed[CONF_SOURCE_ENTITIES_TEXT] == "sensor.new"
+    assert refreshed[CONF_TEMPLATE_SOURCES_JSON] == current[CONF_TEMPLATE_SOURCES_JSON]
+    assert refreshed[CONF_VALUE_TEMPLATE] == current[CONF_VALUE_TEMPLATE]
+    assert refreshed[CONF_INITIAL_VALUE] == current[CONF_INITIAL_VALUE]
     _set_auto_helper_profile(entity, current, reference, _auto_helper_profile(current))
 
     assert entity["auto_helper"] is False
+
+
+def test_auto_helper_profile_normalizes_stored_template_source_references():
+    generated = {
+        CONF_PLATFORM: "binary_sensor",
+        CONF_INITIAL_VALUE: "off",
+        CONF_SOURCE_ENTITIES_TEXT: "binary_sensor.door_5\nbinary_sensor.door_6",
+        CONF_TEMPLATE_SOURCES_JSON: (
+            '{"door_5": "binary_sensor.door_5", '
+            '"door_6": "binary_sensor.door_6"}'
+        ),
+        CONF_VALUE_TEMPLATE: "{{ door_5 and door_6 }}",
+    }
+    stored = {
+        **generated,
+        CONF_TEMPLATE_SOURCES_JSON: (
+            '{"door_5": {"attribute": "state", '
+            '"entity_id": "binary_sensor.door_5"}, '
+            '"door_6": {"attribute": "state", '
+            '"entity_id": "binary_sensor.door_6"}}'
+        ),
+    }
+
+    assert _auto_helper_profile(generated) == _auto_helper_profile(stored)
+
+
+def test_auto_helper_refresh_updates_entity_id_domain_with_platform():
+    current = {
+        ATTR_ENTITY_ID: "sensor.combined_doors",
+        CONF_PLATFORM: "sensor",
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.old",
+    }
+    reference = {
+        CONF_PLATFORM: "binary_sensor",
+        CONF_SOURCE_ENTITIES_TEXT: "binary_sensor.new",
+    }
+
+    refreshed = _reference_edit_defaults(current, reference, auto_helper=True)
+
+    assert refreshed[CONF_PLATFORM] == "binary_sensor"
+    assert refreshed[ATTR_ENTITY_ID] == "binary_sensor.combined_doors"
+
+
+def test_entity_edit_defaults_recover_legacy_scalar_and_null_values():
+    defaults = _entity_form_defaults(
+        "Legacy",
+        {
+            CONF_PLATFORM: "device_tracker",
+            CONF_NAME: None,
+            ATTR_ENTITY_ID: None,
+            CONF_INITIAL_VALUE: None,
+            CONF_INITIAL_AVAILABILITY: "not-a-boolean",
+            CONF_PERSISTENT: None,
+            CONF_SOURCE_ENTITIES: "device_tracker.phone",
+            CONF_PULL_INTERVAL: -10,
+            CONF_VALUE_TEMPLATE: None,
+            CONF_POLYGONAL_ZONE: {
+                CONF_POLYGON_FILES: "/config/zones/home.geojson",
+                CONF_POLYGON_STRATEGY: "broken",
+                CONF_POLYGON_DISTANCE_METERS: "not-a-number",
+                CONF_POLYGON_AWAY_STATE: None,
+            },
+        },
+        {
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Legacy": {
+                    ATTR_DEVICE_ID: None,
+                    CONF_MANUFACTURER: None,
+                    CONF_VIA_DEVICE_ID: None,
+                },
+            },
+        },
+    )
+
+    assert defaults[CONF_ENTITY_NAME] == "Virtual Entity"
+    assert defaults[CONF_DEVICE_ID] == "Legacy"
+    assert defaults[CONF_DEVICE_MANUFACTURER] == ""
+    assert defaults[CONF_INITIAL_VALUE] == "unknown"
+    assert defaults[CONF_INITIAL_AVAILABILITY] is True
+    assert defaults[CONF_PERSISTENT] is True
+    assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "device_tracker.phone"
+    assert defaults[CONF_PULL_INTERVAL] == 0
+    assert defaults["polygon_files_text"] == "/config/zones/home.geojson"
+    assert defaults["polygon_strategy"] == "majority"
+    assert defaults["polygon_distance_meters"] == 300
+    assert defaults["polygon_away_state"] == "not_home"
+    assert _entity_schema(defaults)({})[CONF_PLATFORM] == "device_tracker"
+
+
+def test_stored_entity_ids_keeps_valid_legacy_sources_and_drops_bad_values():
+    assert _stored_entity_ids(
+        "sensor.first, not-an-entity\nbinary_sensor.second",
+    ) == ["sensor.first", "binary_sensor.second"]
 
 
 RICH_DOMAIN_OPTIONS = {
@@ -1557,6 +1662,52 @@ def test_replace_ui_entity_recovers_from_invalid_device_attributes_and_target_li
     assert next_options[ATTR_DEVICE_ATTRIBUTES] == {
         "HVAC": {ATTR_DEVICE_ID: "hvac-1", CONF_NAME: "HVAC"},
     }
+
+
+def test_replace_ui_entity_rejects_existing_device_name_with_different_id():
+    original = {
+        ATTR_DEVICES: {
+            "Laundry": [{CONF_PLATFORM: "sensor", CONF_NAME: "Washer"}],
+            "HVAC": [{CONF_PLATFORM: "climate", CONF_NAME: "Thermostat"}],
+        },
+        ATTR_DEVICE_ATTRIBUTES: {
+            "Laundry": {ATTR_DEVICE_ID: "laundry-1", CONF_NAME: "Laundry"},
+            "HVAC": {ATTR_DEVICE_ID: "hvac-1", CONF_NAME: "HVAC"},
+        },
+    }
+
+    with pytest.raises(DeviceNameAlreadyUsed):
+        _replace_ui_entity(
+            original,
+            "Laundry",
+            0,
+            "HVAC",
+            {CONF_PLATFORM: "sensor", CONF_NAME: "Washer"},
+            {ATTR_DEVICE_ID: "different-id", CONF_NAME: "HVAC"},
+        )
+
+    assert original[ATTR_DEVICE_ATTRIBUTES]["HVAC"][ATTR_DEVICE_ID] == "hvac-1"
+
+
+def test_replace_ui_device_rejects_name_collision_with_different_id():
+    original = {
+        ATTR_DEVICES: {
+            "Laundry": [{CONF_PLATFORM: "sensor", CONF_NAME: "Washer"}],
+            "HVAC": [{CONF_PLATFORM: "climate", CONF_NAME: "Thermostat"}],
+        },
+        ATTR_DEVICE_ATTRIBUTES: {
+            "Laundry": {ATTR_DEVICE_ID: "laundry-1", CONF_NAME: "Laundry"},
+            "HVAC": {ATTR_DEVICE_ID: "hvac-1", CONF_NAME: "HVAC"},
+        },
+    }
+
+    with pytest.raises(DeviceNameAlreadyUsed):
+        _replace_ui_device(
+            original,
+            "Laundry",
+            "HVAC",
+            {ATTR_DEVICE_ID: "different-id", CONF_NAME: "HVAC"},
+        )
 
 
 def test_delete_ui_entities_removes_multiple_entities_and_empty_device_metadata():

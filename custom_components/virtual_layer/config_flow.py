@@ -85,6 +85,15 @@ _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_DOMAIN_OPTIONS_JSON,
 )
 
+_AUTO_HELPER_JSON_FIELDS = frozenset({
+    CONF_TEMPLATE_SOURCES_JSON,
+    CONF_EVENT_HOOKS_JSON,
+    CONF_ATTRIBUTES_JSON,
+    CONF_ATTRIBUTE_SOURCES_JSON,
+    CONF_ATTRIBUTE_TEMPLATES_JSON,
+    CONF_DOMAIN_OPTIONS_JSON,
+})
+
 ACTION_ADD_ENTITY = "add_entity"
 ACTION_DELETE_ENTITY = "delete_entity"
 ACTION_EDIT_ENTITY = "edit_entity"
@@ -367,6 +376,25 @@ def _needs_domain_specific_form(user_input) -> bool:
         user_input.get(CONF_PLATFORM) == "device_tracker"
         and CONF_POLYGON_STRATEGY_INPUT not in user_input
     )
+
+
+def _align_form_entity_id_domain(user_input: dict[str, Any]) -> dict[str, Any]:
+    """Keep a UI entity ID's object ID while aligning its selected domain."""
+    platform = user_input.get(CONF_PLATFORM)
+    entity_id = user_input.get(ATTR_ENTITY_ID)
+    if platform not in VIRTUAL_ENTITY_DOMAINS or not isinstance(entity_id, str):
+        return user_input
+    current_domain, separator, object_id = entity_id.strip().partition(".")
+    if (
+        not separator
+        or not object_id
+        or current_domain == platform
+        or current_domain not in VIRTUAL_ENTITY_DOMAINS
+    ):
+        return user_input
+    updated_input = dict(user_input)
+    updated_input[ATTR_ENTITY_ID] = f"{platform}.{object_id}"
+    return updated_input
 
 
 def _device_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
@@ -1080,6 +1108,66 @@ def _plain_options(value):
     return copy.deepcopy(value)
 
 
+def _text_default(value: Any, default: str = "") -> str:
+    """Return a form-safe text value for legacy or partially corrupt options."""
+    if value is None:
+        return default
+    return value if isinstance(value, str) else str(value)
+
+
+def _multiline_list_default(value: Any) -> str:
+    """Return stored string/list values as editable multiline text."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return "\n".join(item for item in value if isinstance(item, str))
+    return ""
+
+
+def _stored_entity_ids(value: Any) -> list[str]:
+    """Return valid entity IDs from old list, tuple, or text storage shapes."""
+    if isinstance(value, str):
+        values = value.replace(",", "\n").splitlines()
+    elif isinstance(value, (list, tuple)):
+        values = value
+    else:
+        return []
+
+    entity_ids = []
+    for entity_id in values:
+        if not isinstance(entity_id, str):
+            continue
+        try:
+            if normalized_entity_id := entity_id.strip():
+                entity_ids.append(cv.entity_id(normalized_entity_id))
+        except vol.Invalid:
+            continue
+    return list(dict.fromkeys(entity_ids))
+
+
+def _boolean_default(value: Any, default: bool) -> bool:
+    try:
+        return cv.boolean(value)
+    except vol.Invalid:
+        return default
+
+
+def _nonnegative_int_default(value: Any) -> int:
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, value)
+
+
+def _positive_float_default(value: Any, default: float) -> float:
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value >= 1 else default
+
+
 def _mapping_or_empty(value) -> dict[str, Any]:
     return _plain_options(value) if isinstance(value, Mapping) else {}
 
@@ -1175,7 +1263,10 @@ def _with_existing_device_defaults(
 
     updated_defaults = dict(defaults)
     updated_defaults[CONF_DEVICE_NAME] = device_name
-    updated_defaults[CONF_DEVICE_ID] = device.get(ATTR_DEVICE_ID, device_name)
+    updated_defaults[CONF_DEVICE_ID] = _text_default(
+        device.get(ATTR_DEVICE_ID),
+        device_name,
+    )
     for config_field, form_field in (
         (CONF_MANUFACTURER, CONF_DEVICE_MANUFACTURER),
         (CONF_MODEL, CONF_DEVICE_MODEL),
@@ -1186,7 +1277,7 @@ def _with_existing_device_defaults(
         (CONF_SUGGESTED_AREA, CONF_DEVICE_SUGGESTED_AREA),
         (CONF_VIA_DEVICE_ID, CONF_DEVICE_VIA_DEVICE_ID),
     ):
-        updated_defaults[form_field] = device.get(config_field, "")
+        updated_defaults[form_field] = _text_default(device.get(config_field))
     return updated_defaults
 
 
@@ -1208,6 +1299,27 @@ def _canonical_device_name(
     return device_name
 
 
+def _device_name_has_identity_conflict(
+    options: dict[str, Any],
+    device_name: str,
+    device_config: dict[str, Any] | None,
+    allowed_device_name: str | None = None,
+) -> bool:
+    """Return whether a name collision would overwrite another Device ID."""
+    devices = _options_devices(options)
+    if (
+        not device_config
+        or device_name == allowed_device_name
+        or device_name not in devices
+        or not isinstance(devices.get(device_name), list)
+    ):
+        return False
+    requested_device_id = device_config.get(ATTR_DEVICE_ID)
+    existing_device = _get_device_attributes(options, device_name)
+    existing_device_id = existing_device.get(ATTR_DEVICE_ID, device_name)
+    return requested_device_id != existing_device_id
+
+
 def _append_ui_entity(
     options: dict[str, Any],
     device_name: str,
@@ -1215,6 +1327,12 @@ def _append_ui_entity(
     device_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     next_options = _plain_options(options or {})
+    if _device_name_has_identity_conflict(
+        next_options,
+        device_name,
+        device_config,
+    ):
+        raise DeviceNameAlreadyUsed
     canonical_device_name = _canonical_device_name(
         next_options,
         device_name,
@@ -1242,6 +1360,13 @@ def _replace_ui_entity(
     device_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     next_options = _plain_options(options or {})
+    if _device_name_has_identity_conflict(
+        next_options,
+        new_device_name,
+        device_config,
+        old_device_name,
+    ):
+        raise DeviceNameAlreadyUsed
     canonical_device_name = _canonical_device_name(
         next_options,
         new_device_name,
@@ -1303,6 +1428,13 @@ def _replace_ui_device(
     new_device_name = _make_device_name(new_device_name).strip()
     if not new_device_name:
         raise MissingDeviceName
+    if _device_name_has_identity_conflict(
+        next_options,
+        new_device_name,
+        device_config,
+        old_device_name,
+    ):
+        raise DeviceNameAlreadyUsed
 
     # A matching stable ID represents the same physical Device even when the
     # requested display name is new. Do not overwrite its existing metadata.
@@ -1948,41 +2080,81 @@ def _reference_edit_defaults(
     reference_defaults: dict[str, Any],
     auto_helper: bool = False,
 ) -> dict[str, Any]:
-    if not reference_defaults or not auto_helper:
+    if not reference_defaults:
         return current_defaults
 
     merged = dict(current_defaults)
+    # The source selector is authoritative even when the helper/template was
+    # customized. Otherwise changing the selector silently keeps subscriptions
+    # to entities that the user explicitly removed.
+    merged[CONF_SOURCE_ENTITIES_TEXT] = reference_defaults.get(
+        CONF_SOURCE_ENTITIES_TEXT,
+        "",
+    )
+    if not auto_helper:
+        return merged
+
     for key in _AUTO_HELPER_PROFILE_FIELDS:
         merged[key] = reference_defaults.get(key, "")
+
+    old_entity_id = _text_default(current_defaults.get(ATTR_ENTITY_ID)).strip()
+    new_platform = merged.get(CONF_PLATFORM)
+    if old_entity_id and new_platform in VIRTUAL_ENTITY_DOMAINS:
+        _, separator, object_id = old_entity_id.partition(".")
+        if separator and object_id:
+            merged[ATTR_ENTITY_ID] = f"{new_platform}.{object_id}"
     return merged
+
+
+def _canonical_auto_helper_value(field: str, value: Any) -> Any:
+    """Normalize helper values that round-trip through entity storage."""
+    value = _plain_options(value)
+    if field == CONF_SOURCE_ENTITIES_TEXT:
+        try:
+            return "\n".join(_parse_source_entities(value))
+        except (AttributeError, InvalidEntityReference):
+            return value
+
+    if field == CONF_TEMPLATE_SOURCES_JSON:
+        try:
+            return _json_default(_parse_template_sources(value))
+        except (AttributeError, InvalidJson):
+            return value
+
+    if field in _AUTO_HELPER_JSON_FIELDS:
+        try:
+            parsed = _parse_json_value(value, field)
+        except (AttributeError, InvalidJson):
+            return value
+        return _json_default(parsed)
+
+    return value
 
 
 def _auto_helper_profile(defaults: dict[str, Any]) -> dict[str, Any]:
     """Create a stable record of the generated helper fields."""
     return {
-        field: _plain_options(defaults.get(field, ""))
+        field: _canonical_auto_helper_value(field, defaults.get(field, ""))
         for field in _AUTO_HELPER_PROFILE_FIELDS
     }
 
 
 def _matches_auto_helper_profile(defaults: dict[str, Any], profile: Mapping) -> bool:
-    return all(
-        _plain_options(defaults.get(field, "")) == profile.get(field, "")
-        for field in _AUTO_HELPER_PROFILE_FIELDS
-    )
+    return _auto_helper_profile(defaults) == _auto_helper_profile(dict(profile))
 
 
 def _existing_auto_helper_profile(hass, entity, defaults: dict[str, Any]) -> dict[str, Any] | None:
     """Return a validated generated-helper profile, including legacy entries."""
     saved_profile = entity.get(CONF_AUTO_HELPER)
     if isinstance(saved_profile, Mapping):
-        profile = _plain_options(saved_profile)
+        profile = _auto_helper_profile(_plain_options(saved_profile))
         return profile if _matches_auto_helper_profile(defaults, profile) else None
-    if saved_profile is False:
-        return None
     if saved_profile is True:
         return _auto_helper_profile(defaults)
 
+    # Older releases could persist ``False`` after comparing the short JSON
+    # source form with its expanded stored representation. Re-detect a fully
+    # generated helper before treating that value as a customization marker.
     source_entities = entity.get(CONF_SOURCE_ENTITIES, [])
     if not source_entities:
         return None
@@ -2021,29 +2193,42 @@ def _entity_form_defaults(
 ) -> dict[str, Any]:
     entity = _plain_options(entity)
     device = _get_device_attributes(options or {}, device_name)
+    platform = entity.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
+    if platform not in VIRTUAL_ENTITY_DOMAINS:
+        platform = DEFAULT_ENTITY_DOMAIN
     defaults = {
         CONF_DEVICE_NAME: device_name,
-        CONF_DEVICE_ID: device.get(ATTR_DEVICE_ID, device_name),
-        CONF_DEVICE_MANUFACTURER: device.get(CONF_MANUFACTURER, ""),
-        CONF_DEVICE_MODEL: device.get(CONF_MODEL, ""),
-        CONF_DEVICE_SW_VERSION: device.get(CONF_SW_VERSION, ""),
-        CONF_DEVICE_HW_VERSION: device.get(CONF_HW_VERSION, ""),
-        CONF_DEVICE_SERIAL_NUMBER: device.get(CONF_SERIAL_NUMBER, ""),
-        CONF_DEVICE_CONFIGURATION_URL: device.get(CONF_CONFIGURATION_URL, ""),
-        CONF_DEVICE_SUGGESTED_AREA: device.get(CONF_SUGGESTED_AREA, ""),
-        CONF_DEVICE_VIA_DEVICE_ID: device.get(CONF_VIA_DEVICE_ID, ""),
-        CONF_ENTITY_NAME: entity.get(CONF_NAME, "Virtual Entity"),
-        CONF_ICON: entity.get(CONF_ICON, ""),
-        ATTR_ENTITY_ID: entity.get(ATTR_ENTITY_ID, ""),
-        CONF_PLATFORM: entity.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN),
-        CONF_INITIAL_VALUE: str(entity.get(CONF_INITIAL_VALUE, DEFAULT_ENTITY_VALUE)),
-        CONF_INITIAL_AVAILABILITY: entity.get(CONF_INITIAL_AVAILABILITY, True),
-        CONF_PERSISTENT: entity.get(CONF_PERSISTENT, True),
-        CONF_SOURCE_ENTITIES_TEXT: "\n".join(entity.get(CONF_SOURCE_ENTITIES, [])),
+        CONF_DEVICE_ID: _text_default(device.get(ATTR_DEVICE_ID), device_name),
+        CONF_DEVICE_MANUFACTURER: _text_default(device.get(CONF_MANUFACTURER)),
+        CONF_DEVICE_MODEL: _text_default(device.get(CONF_MODEL)),
+        CONF_DEVICE_SW_VERSION: _text_default(device.get(CONF_SW_VERSION)),
+        CONF_DEVICE_HW_VERSION: _text_default(device.get(CONF_HW_VERSION)),
+        CONF_DEVICE_SERIAL_NUMBER: _text_default(device.get(CONF_SERIAL_NUMBER)),
+        CONF_DEVICE_CONFIGURATION_URL: _text_default(device.get(CONF_CONFIGURATION_URL)),
+        CONF_DEVICE_SUGGESTED_AREA: _text_default(device.get(CONF_SUGGESTED_AREA)),
+        CONF_DEVICE_VIA_DEVICE_ID: _text_default(device.get(CONF_VIA_DEVICE_ID)),
+        CONF_ENTITY_NAME: _text_default(entity.get(CONF_NAME), "Virtual Entity"),
+        CONF_ICON: _text_default(entity.get(CONF_ICON)),
+        ATTR_ENTITY_ID: _text_default(entity.get(ATTR_ENTITY_ID)),
+        CONF_PLATFORM: platform,
+        CONF_INITIAL_VALUE: _text_default(
+            entity.get(CONF_INITIAL_VALUE),
+            DEFAULT_ENTITY_VALUE,
+        ),
+        CONF_INITIAL_AVAILABILITY: _boolean_default(
+            entity.get(CONF_INITIAL_AVAILABILITY, True),
+            True,
+        ),
+        CONF_PERSISTENT: _boolean_default(entity.get(CONF_PERSISTENT, True), True),
+        CONF_SOURCE_ENTITIES_TEXT: _multiline_list_default(
+            entity.get(CONF_SOURCE_ENTITIES),
+        ),
         CONF_TEMPLATE_SOURCES_JSON: _json_default(entity.get(CONF_TEMPLATE_SOURCES)),
-        CONF_PULL_INTERVAL: entity.get(CONF_PULL_INTERVAL, 0),
-        CONF_VALUE_TEMPLATE: entity.get(CONF_VALUE_TEMPLATE, ""),
-        CONF_AVAILABILITY_TEMPLATE: entity.get(CONF_AVAILABILITY_TEMPLATE, ""),
+        CONF_PULL_INTERVAL: _nonnegative_int_default(entity.get(CONF_PULL_INTERVAL)),
+        CONF_VALUE_TEMPLATE: _text_default(entity.get(CONF_VALUE_TEMPLATE)),
+        CONF_AVAILABILITY_TEMPLATE: _text_default(
+            entity.get(CONF_AVAILABILITY_TEMPLATE),
+        ),
         CONF_EVENT_HOOKS_JSON: _json_default(entity.get(CONF_EVENT_HOOKS)),
         CONF_ATTRIBUTES_JSON: _json_default(entity.get(CONF_ATTRIBUTES)),
         CONF_ATTRIBUTE_SOURCES_JSON: _json_default(entity.get(CONF_ATTRIBUTE_SOURCES)),
@@ -2054,14 +2239,33 @@ def _entity_form_defaults(
         polygon = {}
     defaults.update({
         CONF_POLYGON_GEOJSON_JSON: _json_default(polygon.get(CONF_POLYGON_GEOJSON)),
-        CONF_POLYGON_FILES_TEXT: "\n".join(polygon.get(CONF_POLYGON_FILES, [])),
-        CONF_POLYGON_PERSON: polygon.get(CONF_POLYGON_PERSON_ENTITY, ""),
-        CONF_POLYGON_STRATEGY_INPUT: polygon.get(CONF_POLYGON_STRATEGY, "majority"),
-        CONF_POLYGON_DISTANCE_INPUT: polygon.get(CONF_POLYGON_DISTANCE_METERS, 300),
+        CONF_POLYGON_FILES_TEXT: _multiline_list_default(
+            polygon.get(CONF_POLYGON_FILES),
+        ),
+        CONF_POLYGON_PERSON: _text_default(
+            polygon.get(CONF_POLYGON_PERSON_ENTITY),
+        ),
+        CONF_POLYGON_STRATEGY_INPUT: (
+            polygon.get(CONF_POLYGON_STRATEGY)
+            if polygon.get(CONF_POLYGON_STRATEGY) in {
+                "majority",
+                "priority",
+                "latest",
+                "median",
+            }
+            else "majority"
+        ),
+        CONF_POLYGON_DISTANCE_INPUT: _positive_float_default(
+            polygon.get(CONF_POLYGON_DISTANCE_METERS),
+            300,
+        ),
         CONF_POLYGON_TRACKER_RULES_JSON: _json_default(
             polygon.get(CONF_POLYGON_TRACKER_RULES),
         ),
-        CONF_POLYGON_AWAY_STATE_INPUT: polygon.get(CONF_POLYGON_AWAY_STATE, "not_home"),
+        CONF_POLYGON_AWAY_STATE_INPUT: (
+            _text_default(polygon.get(CONF_POLYGON_AWAY_STATE), "not_home")
+            or "not_home"
+        ),
     })
     domain_options = {
         key: value
@@ -2195,6 +2399,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
     async def async_step_entity(self, user_input=None):
         """Add the first UI-managed virtual entity."""
         errors = {}
+        if user_input is not None:
+            user_input = _align_form_entity_id_domain(user_input)
         if user_input is not None and _needs_domain_specific_form(user_input):
             return self.async_show_form(
                 step_id="entity",
@@ -2228,6 +2434,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
             except InvalidDomainOptions:
                 errors[CONF_DOMAIN_OPTIONS_JSON] = "invalid_domain_options"
+            except DeviceNameAlreadyUsed:
+                errors[CONF_DEVICE_NAME] = "device_name_used"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -2320,6 +2528,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 return self.async_create_entry(data=options)
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
+            except DeviceNameAlreadyUsed:
+                errors[CONF_DEVICE_NAME] = "device_name_used"
             except InvalidEntitySelection:
                 errors["base"] = "device_not_found"
 
@@ -2362,6 +2572,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
     async def async_step_entity(self, user_input=None):
         """Add a UI-managed virtual entity."""
         errors = {}
+        if user_input is not None:
+            user_input = _align_form_entity_id_domain(user_input)
         if user_input is not None and _needs_domain_specific_form(user_input):
             return self.async_show_form(
                 step_id="entity",
@@ -2391,6 +2603,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
             except InvalidDomainOptions:
                 errors[CONF_DOMAIN_OPTIONS_JSON] = "invalid_domain_options"
+            except DeviceNameAlreadyUsed:
+                errors[CONF_DEVICE_NAME] = "device_name_used"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -2505,9 +2719,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="edit_entity_source",
             data_schema=_reference_entity_schema(
-                entity.get(CONF_SOURCE_ENTITIES, [])
-                if isinstance(entity.get(CONF_SOURCE_ENTITIES), list)
-                else [],
+                _stored_entity_ids(entity.get(CONF_SOURCE_ENTITIES)),
                 _existing_device_options(self.hass, self.config_entry.options),
                 self._edit_device_name,
             ),
@@ -2520,6 +2732,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         if self._edit_device_name is None or self._edit_index is None:
             return await self.async_step_select_entity()
 
+        if user_input is not None:
+            user_input = _align_form_entity_id_domain(user_input)
         if user_input is not None and _needs_domain_specific_form(user_input):
             return self.async_show_form(
                 step_id="edit_entity",
@@ -2561,6 +2775,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
             except InvalidDomainOptions:
                 errors[CONF_DOMAIN_OPTIONS_JSON] = "invalid_domain_options"
+            except DeviceNameAlreadyUsed:
+                errors[CONF_DEVICE_NAME] = "device_name_used"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -2595,6 +2811,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
 class GroupNameAlreadyUsed(exceptions.HomeAssistantError):
     """Error indicating group name already used."""
+
+
+class DeviceNameAlreadyUsed(exceptions.HomeAssistantError):
+    """Error indicating a Device name belongs to another stable ID."""
 
 
 class MissingDeviceName(exceptions.HomeAssistantError):

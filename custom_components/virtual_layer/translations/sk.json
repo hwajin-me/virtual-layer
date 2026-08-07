@@ -2,6 +2,7 @@
   "title": "Virtuálne zariadenia",
   "config": {
     "error": {
+      "device_name_used": "That Device name belongs to a different Device ID. Choose another name or use the existing Device.",
       "group_name_used": "Tento názov zariadenia sa už používa, skúste iný.",
       "invalid_json": "Enter a valid JSON object.",
       "invalid_entity_id": "Enter valid entity IDs.",
@@ -235,6 +236,7 @@
   },
   "options": {
     "error": {
+      "device_name_used": "That Device name belongs to a different Device ID. Choose another name or use the existing Device.",
       "invalid_json": "Enter a valid JSON object.",
       "invalid_entity_id": "Enter valid entity IDs.",
       "invalid_domain_options": "Enter valid options for the selected entity domain.",
