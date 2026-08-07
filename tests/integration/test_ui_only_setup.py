@@ -954,6 +954,94 @@ async def test_options_flow_recovers_stale_helper_after_partial_source_update(
     assert entity[CONF_VALUE_TEMPLATE] == new_defaults[CONF_VALUE_TEMPLATE]
 
 
+async def test_options_flow_recovers_sorted_legacy_boolean_or_helper(hass):
+    """Recognize the old OR helper even when JSON sorting changed source order."""
+    old_sources = [
+        "binary_sensor.door_sensor_6_contact",
+        "binary_sensor.door_sensor_5_contact",
+    ]
+    new_sources = [
+        "binary_sensor.door_sensor_7_contact",
+        "binary_sensor.door_sensor_6_contact",
+    ]
+    for entity_id in {*old_sources, *new_sources}:
+        hass.states.async_set(entity_id, "off", {"device_class": "door"})
+
+    old_defaults = _reference_entity_defaults(hass, old_sources)
+    new_defaults = _reference_entity_defaults(hass, new_sources)
+    old_template_sources = json.loads(old_defaults[CONF_TEMPLATE_SOURCES_JSON])
+    old_or_template = (
+        "{{ ((door_sensor_6_contact | lower) in "
+        "['1', 'on', 'open', 'true', 'unlocked', 'yes']) or "
+        "((door_sensor_5_contact | lower) in "
+        "['1', 'on', 'open', 'true', 'unlocked', 'yes']) }}"
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Doors": [{
+                    CONF_PLATFORM: "binary_sensor",
+                    CONF_NAME: "Combined Doors",
+                    CONF_INITIAL_VALUE: "off",
+                    CONF_INITIAL_AVAILABILITY: True,
+                    CONF_PERSISTENT: True,
+                    CONF_SOURCE_ENTITIES: new_sources,
+                    # JSON round-tripping sorts these as Door 5, then Door 6.
+                    CONF_TEMPLATE_SOURCES: {
+                        variable_name: {
+                            ATTR_ENTITY_ID: source_entity_id,
+                            CONF_ATTRIBUTE: "state",
+                        }
+                        for variable_name, source_entity_id
+                        in old_template_sources.items()
+                    },
+                    # The generated expression retained Door 6, then Door 5.
+                    CONF_VALUE_TEMPLATE: old_or_template,
+                    CONF_AUTO_HELPER: _auto_helper_profile(new_defaults),
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Doors", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: new_sources},
+    )
+
+    assert result["step_id"] == "edit_entity"
+    defaults = result["data_schema"]({})
+    assert defaults[CONF_TEMPLATE_SOURCES_JSON] == new_defaults[
+        CONF_TEMPLATE_SOURCES_JSON
+    ]
+    assert defaults[CONF_VALUE_TEMPLATE] == new_defaults[CONF_VALUE_TEMPLATE]
+    assert "door_sensor_5_contact" not in defaults[CONF_VALUE_TEMPLATE]
+    assert "door_sensor_7_contact" in defaults[CONF_VALUE_TEMPLATE]
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entity = result["data"][ATTR_DEVICES]["Doors"][0]
+    assert entity[CONF_SOURCE_ENTITIES] == new_sources
+    assert entity[CONF_VALUE_TEMPLATE] == new_defaults[CONF_VALUE_TEMPLATE]
+    assert {
+        source[ATTR_ENTITY_ID]
+        for source in entity[CONF_TEMPLATE_SOURCES].values()
+    } == set(new_sources)
+
+
 @pytest.mark.parametrize(("helper_mode", "preserves_custom"), [
     (HELPER_UPDATE_AUTO, True),
     (HELPER_UPDATE_FORCE, False),
