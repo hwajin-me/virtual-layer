@@ -2129,11 +2129,7 @@ def _reference_edit_defaults(
 
     templates_are_generated = force_template_helper or (
         auto_profile is not None
-        and all(
-            _canonical_auto_helper_value(field, current_defaults.get(field, ""))
-            == auto_profile.get(field, "")
-            for field in _AUTO_HELPER_TEMPLATE_FIELDS
-        )
+        and _auto_helper_templates_match(current_defaults, auto_profile)
     )
     for field in _AUTO_HELPER_PROFILE_FIELDS:
         if field == CONF_SOURCE_ENTITIES_TEXT:
@@ -2190,25 +2186,75 @@ def _auto_helper_profile(defaults: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _auto_helper_templates_match(
+    defaults: dict[str, Any],
+    profile: Mapping,
+) -> bool:
+    """Return whether the editable templates still match a helper baseline."""
+    normalized_profile = _auto_helper_profile(dict(profile))
+    return all(
+        _canonical_auto_helper_value(field, defaults.get(field, ""))
+        == normalized_profile.get(field, "")
+        for field in _AUTO_HELPER_TEMPLATE_FIELDS
+    )
+
+
+def _template_source_entity_ids(entity: Mapping) -> list[str]:
+    """Extract source IDs in their stored template-variable order."""
+    template_sources = entity.get(CONF_TEMPLATE_SOURCES)
+    if not isinstance(template_sources, Mapping):
+        return []
+
+    entity_ids = []
+    for source in template_sources.values():
+        if isinstance(source, str):
+            entity_id = source
+        elif isinstance(source, Mapping):
+            entity_id = source.get(ATTR_ENTITY_ID)
+        else:
+            continue
+        if not isinstance(entity_id, str):
+            continue
+        try:
+            entity_ids.append(cv.entity_id(entity_id.strip()))
+        except vol.Invalid:
+            continue
+    return list(dict.fromkeys(entity_ids))
+
+
 def _existing_auto_helper_profile(hass, entity, defaults: dict[str, Any]) -> dict[str, Any] | None:
     """Return the generated baseline used to detect per-field customization."""
     saved_profile = entity.get(CONF_AUTO_HELPER)
     if isinstance(saved_profile, Mapping):
-        return _auto_helper_profile(_plain_options(saved_profile))
-    if saved_profile is True:
-        return _auto_helper_profile(defaults)
+        primary_profile = _auto_helper_profile(_plain_options(saved_profile))
+    elif saved_profile is True:
+        primary_profile = _auto_helper_profile(defaults)
+    else:
+        primary_profile = None
 
-    # Older releases could persist ``False`` after comparing the short JSON
-    # source form with its expanded stored representation. Re-detect a fully
-    # generated helper before treating that value as a customization marker.
-    source_entities = entity.get(CONF_SOURCE_ENTITIES, [])
-    if not source_entities:
-        return None
-    try:
-        reference_defaults = _reference_entity_defaults(hass, source_entities)
-    except InvalidEntityReference:
-        return None
-    return _auto_helper_profile(reference_defaults)
+    if primary_profile and _auto_helper_templates_match(defaults, primary_profile):
+        return primary_profile
+
+    # Recover entries left half-updated by older edit flows: source_entities
+    # and auto_helper may already describe the new selection while the actual
+    # templates still contain an untouched helper for the previous sources.
+    candidate_source_lists = [
+        _template_source_entity_ids(entity),
+        _stored_entity_ids(entity.get(CONF_SOURCE_ENTITIES)),
+    ]
+    for source_entities in candidate_source_lists:
+        if not source_entities:
+            continue
+        try:
+            candidate = _auto_helper_profile(
+                _reference_entity_defaults(hass, source_entities),
+            )
+        except InvalidEntityReference:
+            continue
+        if _auto_helper_templates_match(defaults, candidate):
+            return candidate
+
+    return primary_profile
 
 
 def _set_auto_helper_profile(
