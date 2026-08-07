@@ -69,11 +69,14 @@ from custom_components.virtual_layer.config_flow import (
     CONF_ENTITY_KEY,
     CONF_ENTITY_KEYS,
     CONF_ENTITY_NAME,
+    CONF_HELPER_UPDATE_MODE,
     CONF_MANAGED_DEVICE_NAME,
     CONF_REFERENCE_ENTITY_ID,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TARGET_DEVICE_NAME,
     CONF_TEMPLATE_SOURCES_JSON,
+    HELPER_UPDATE_AUTO,
+    HELPER_UPDATE_FORCE,
     _auto_helper_profile,
     _entity_key,
     _reference_entity_defaults,
@@ -677,7 +680,10 @@ async def test_options_flow_can_edit_existing_entity(hass):
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][ATTR_DEVICES]["Laundry"][0].pop(ATTR_ENTITY_KEY)
-    assert result["data"][ATTR_DEVICES]["Laundry"][0].pop("auto_helper") is False
+    assert isinstance(
+        result["data"][ATTR_DEVICES]["Laundry"][0].pop("auto_helper"),
+        dict,
+    )
     assert result["data"][ATTR_DEVICES]["Laundry"] == [
         {
             CONF_PLATFORM: "sensor",
@@ -746,12 +752,21 @@ async def test_options_flow_aligns_entity_id_when_domain_is_edited(hass):
 
 
 @pytest.mark.parametrize("auto_helper_marker", ["legacy_profile", False])
+@pytest.mark.parametrize(("old_sources", "new_sources"), [
+    (["binary_sensor.door_6"], ["binary_sensor.door_7", "binary_sensor.door_6"]),
+    (
+        ["binary_sensor.door_6", "binary_sensor.door_5"],
+        ["binary_sensor.door_7", "binary_sensor.door_6"],
+    ),
+    (["binary_sensor.door_7", "binary_sensor.door_6"], ["binary_sensor.door_6"]),
+    (["binary_sensor.door_6"], []),
+])
 async def test_options_flow_refreshes_generated_helper_when_sources_change(
     hass,
     auto_helper_marker,
+    old_sources,
+    new_sources,
 ):
-    old_sources = ["binary_sensor.door_5", "binary_sensor.side_door"]
-    new_sources = ["binary_sensor.door_6", "binary_sensor.side_door"]
     for entity_id in {*old_sources, *new_sources}:
         hass.states.async_set(entity_id, "off", {"device_class": "door"})
 
@@ -793,6 +808,11 @@ async def test_options_flow_refreshes_generated_helper_when_sources_change(
         },
     )
     entry.add_to_hass(hass)
+    if auto_helper_marker is False:
+        # A changed source state makes the generated initial value differ from
+        # the stored value. That must not turn an untouched template custom.
+        for entity_id in old_sources:
+            hass.states.async_set(entity_id, "on", {"device_class": "door"})
 
     result = await hass.config_entries.options.async_init(
         entry.entry_id,
@@ -808,13 +828,115 @@ async def test_options_flow_refreshes_generated_helper_when_sources_change(
     )
 
     assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
+
+    assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "edit_entity"
     defaults = result["data_schema"]({})
+    expected_helper = _reference_entity_defaults(hass, new_sources)
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "\n".join(new_sources)
-    assert "door_5" not in defaults[CONF_TEMPLATE_SOURCES_JSON]
-    assert "door_5" not in defaults[CONF_VALUE_TEMPLATE]
-    assert "door_6" in defaults[CONF_TEMPLATE_SOURCES_JSON]
-    assert "door_6" in defaults[CONF_VALUE_TEMPLATE]
+    assert defaults[CONF_TEMPLATE_SOURCES_JSON] == expected_helper.get(
+        CONF_TEMPLATE_SOURCES_JSON,
+        "",
+    )
+    assert defaults[CONF_VALUE_TEMPLATE] == expected_helper.get(CONF_VALUE_TEMPLATE, "")
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entity = result["data"][ATTR_DEVICES]["Doors"][0]
+    assert entity.get(CONF_SOURCE_ENTITIES, []) == new_sources
+    assert entity.get(CONF_VALUE_TEMPLATE, "") == expected_helper.get(
+        CONF_VALUE_TEMPLATE,
+        "",
+    )
+    assert entity[CONF_AUTO_HELPER] is not False
+
+
+@pytest.mark.parametrize(("helper_mode", "preserves_custom"), [
+    (HELPER_UPDATE_AUTO, True),
+    (HELPER_UPDATE_FORCE, False),
+])
+async def test_options_flow_handles_custom_template_when_sources_change(
+    hass,
+    helper_mode,
+    preserves_custom,
+):
+    old_sources = ["binary_sensor.door_6", "binary_sensor.door_5"]
+    new_sources = ["binary_sensor.door_7", "binary_sensor.door_6"]
+    for entity_id in {*old_sources, *new_sources}:
+        hass.states.async_set(entity_id, "off", {"device_class": "door"})
+
+    generated = _reference_entity_defaults(hass, old_sources)
+    template_sources = json.loads(generated[CONF_TEMPLATE_SOURCES_JSON])
+    custom_template = (
+        generated[CONF_VALUE_TEMPLATE][:-3]
+        + " and (door_5 != 'unavailable') }}"
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Doors": [{
+                    CONF_PLATFORM: "binary_sensor",
+                    CONF_NAME: "Custom Combined Doors",
+                    CONF_INITIAL_VALUE: generated[CONF_INITIAL_VALUE],
+                    CONF_INITIAL_AVAILABILITY: True,
+                    CONF_PERSISTENT: True,
+                    CONF_SOURCE_ENTITIES: old_sources,
+                    CONF_TEMPLATE_SOURCES: {
+                        variable_name: {
+                            ATTR_ENTITY_ID: source_entity_id,
+                            CONF_ATTRIBUTE: "state",
+                        }
+                        for variable_name, source_entity_id
+                        in template_sources.items()
+                    },
+                    CONF_VALUE_TEMPLATE: custom_template,
+                    CONF_AUTO_HELPER: _auto_helper_profile(generated),
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Doors", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: new_sources},
+    )
+
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: helper_mode},
+    )
+
+    defaults = result["data_schema"]({})
+    assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "\n".join(new_sources)
+    expected_template = (
+        custom_template
+        if preserves_custom
+        else _reference_entity_defaults(hass, new_sources)[CONF_VALUE_TEMPLATE]
+    )
+    assert defaults[CONF_VALUE_TEMPLATE] == expected_template
+    assert ("door_5" in defaults[CONF_TEMPLATE_SOURCES_JSON]) is preserves_custom
+    assert ("door_7" in defaults[CONF_TEMPLATE_SOURCES_JSON]) is not preserves_custom
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -824,9 +946,8 @@ async def test_options_flow_refreshes_generated_helper_when_sources_change(
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = result["data"][ATTR_DEVICES]["Doors"][0]
     assert entity[CONF_SOURCE_ENTITIES] == new_sources
-    assert "door_5" not in entity[CONF_TEMPLATE_SOURCES]
-    assert "door_5" not in entity[CONF_VALUE_TEMPLATE]
-    assert entity[CONF_AUTO_HELPER] is not False
+    assert entity[CONF_VALUE_TEMPLATE] == expected_template
+    assert ("door_5" in entity[CONF_TEMPLATE_SOURCES]) is preserves_custom
 
 
 async def test_options_flow_refreshes_entity_id_when_source_domain_changes(hass):
@@ -874,6 +995,11 @@ async def test_options_flow_refreshes_entity_id_when_source_domain_changes(hass)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: ["binary_sensor.new_door"]},
+    )
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
     )
 
     defaults = result["data_schema"]({})

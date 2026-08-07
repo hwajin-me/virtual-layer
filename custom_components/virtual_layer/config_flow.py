@@ -59,6 +59,7 @@ CONF_ENTITY_KEY = "entity_key"
 CONF_ENTITY_KEYS = "entity_keys"
 CONF_MANAGED_DEVICE_NAME = "managed_device_name"
 CONF_REFERENCE_ENTITY_ID = "reference_entity_id"
+CONF_HELPER_UPDATE_MODE = "helper_update_mode"
 CONF_SOURCE_ENTITIES_TEXT = "source_entities_text"
 CONF_TEMPLATE_SOURCES_JSON = "template_sources_json"
 CONF_TARGET_DEVICE_NAME = "target_device_name"
@@ -71,6 +72,8 @@ CONF_POLYGON_TRACKER_RULES_JSON = "polygon_tracker_rules_json"
 CONF_POLYGON_AWAY_STATE_INPUT = "polygon_away_state"
 CAMERA_SOURCE_ENTITY_OPTION = "source_entity"
 NEW_DEVICE_TARGET = "__new_device__"
+HELPER_UPDATE_AUTO = "automatic"
+HELPER_UPDATE_FORCE = "force_helper"
 
 _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_PLATFORM,
@@ -92,6 +95,12 @@ _AUTO_HELPER_JSON_FIELDS = frozenset({
     CONF_ATTRIBUTE_SOURCES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
     CONF_DOMAIN_OPTIONS_JSON,
+})
+
+_AUTO_HELPER_TEMPLATE_FIELDS = frozenset({
+    CONF_TEMPLATE_SOURCES_JSON,
+    CONF_VALUE_TEMPLATE,
+    CONF_ATTRIBUTE_TEMPLATES_JSON,
 })
 
 ACTION_ADD_ENTITY = "add_entity"
@@ -193,6 +202,20 @@ def _reference_entity_schema(
             ),
         )
     return vol.Schema(schema)
+
+
+def _helper_update_schema() -> vol.Schema:
+    """Choose how generated templates are handled after source changes."""
+    return vol.Schema({
+        vol.Required(
+            CONF_HELPER_UPDATE_MODE,
+            default=HELPER_UPDATE_AUTO,
+        ): selector.SelectSelector(selector.SelectSelectorConfig(
+            options=[HELPER_UPDATE_AUTO, HELPER_UPDATE_FORCE],
+            translation_key="helper_update_mode",
+            mode=selector.SelectSelectorMode.LIST,
+        )),
+    })
 
 BOOLEAN_SOURCE_DOMAINS = {
     "binary_sensor",
@@ -2078,24 +2101,52 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
 def _reference_edit_defaults(
     current_defaults: dict[str, Any],
     reference_defaults: dict[str, Any],
-    auto_helper: bool = False,
+    auto_helper: Mapping | bool | None = None,
+    *,
+    force_template_helper: bool = False,
+    source_entities_text: str | None = None,
 ) -> dict[str, Any]:
-    if not reference_defaults:
+    if not reference_defaults and source_entities_text is None:
         return current_defaults
 
     merged = dict(current_defaults)
     # The source selector is authoritative even when the helper/template was
     # customized. Otherwise changing the selector silently keeps subscriptions
     # to entities that the user explicitly removed.
-    merged[CONF_SOURCE_ENTITIES_TEXT] = reference_defaults.get(
-        CONF_SOURCE_ENTITIES_TEXT,
-        "",
+    merged[CONF_SOURCE_ENTITIES_TEXT] = (
+        source_entities_text
+        if source_entities_text is not None
+        else reference_defaults.get(CONF_SOURCE_ENTITIES_TEXT, "")
     )
-    if not auto_helper:
+    if isinstance(auto_helper, Mapping):
+        auto_profile = _auto_helper_profile(dict(auto_helper))
+    elif auto_helper is True:
+        auto_profile = _auto_helper_profile(current_defaults)
+    else:
+        auto_profile = None
+    if auto_profile is None and not force_template_helper:
         return merged
 
-    for key in _AUTO_HELPER_PROFILE_FIELDS:
-        merged[key] = reference_defaults.get(key, "")
+    templates_are_generated = force_template_helper or (
+        auto_profile is not None
+        and all(
+            _canonical_auto_helper_value(field, current_defaults.get(field, ""))
+            == auto_profile.get(field, "")
+            for field in _AUTO_HELPER_TEMPLATE_FIELDS
+        )
+    )
+    for field in _AUTO_HELPER_PROFILE_FIELDS:
+        if field == CONF_SOURCE_ENTITIES_TEXT:
+            continue
+        if field in _AUTO_HELPER_TEMPLATE_FIELDS:
+            if templates_are_generated:
+                merged[field] = reference_defaults.get(field, "")
+            continue
+        if reference_defaults and auto_profile is not None and (
+            _canonical_auto_helper_value(field, current_defaults.get(field, ""))
+            == auto_profile.get(field, "")
+        ):
+            merged[field] = reference_defaults.get(field, "")
 
     old_entity_id = _text_default(current_defaults.get(ATTR_ENTITY_ID)).strip()
     new_platform = merged.get(CONF_PLATFORM)
@@ -2139,16 +2190,11 @@ def _auto_helper_profile(defaults: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _matches_auto_helper_profile(defaults: dict[str, Any], profile: Mapping) -> bool:
-    return _auto_helper_profile(defaults) == _auto_helper_profile(dict(profile))
-
-
 def _existing_auto_helper_profile(hass, entity, defaults: dict[str, Any]) -> dict[str, Any] | None:
-    """Return a validated generated-helper profile, including legacy entries."""
+    """Return the generated baseline used to detect per-field customization."""
     saved_profile = entity.get(CONF_AUTO_HELPER)
     if isinstance(saved_profile, Mapping):
-        profile = _auto_helper_profile(_plain_options(saved_profile))
-        return profile if _matches_auto_helper_profile(defaults, profile) else None
+        return _auto_helper_profile(_plain_options(saved_profile))
     if saved_profile is True:
         return _auto_helper_profile(defaults)
 
@@ -2162,17 +2208,16 @@ def _existing_auto_helper_profile(hass, entity, defaults: dict[str, Any]) -> dic
         reference_defaults = _reference_entity_defaults(hass, source_entities)
     except InvalidEntityReference:
         return None
-    profile = _auto_helper_profile(reference_defaults)
-    return profile if _matches_auto_helper_profile(defaults, profile) else None
+    return _auto_helper_profile(reference_defaults)
 
 
 def _set_auto_helper_profile(
     entity: dict[str, Any],
-    submitted_defaults: dict[str, Any],
+    _submitted_defaults: dict[str, Any],
     reference_defaults: dict[str, Any],
     current_profile: dict[str, Any] | None = None,
 ) -> None:
-    """Persist whether submitted values are still generated helper values."""
+    """Persist the generated baseline for later per-field customization checks."""
     if not reference_defaults and current_profile is None:
         return
     expected_profile = (
@@ -2180,10 +2225,8 @@ def _set_auto_helper_profile(
         if reference_defaults
         else current_profile
     )
-    if expected_profile and _matches_auto_helper_profile(submitted_defaults, expected_profile):
+    if expected_profile:
         entity[CONF_AUTO_HELPER] = expected_profile
-    else:
-        entity[CONF_AUTO_HELPER] = False
 
 
 def _entity_form_defaults(
@@ -2462,6 +2505,9 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._entity_defaults: dict[str, Any] | None = None
         self._reference_defaults: dict[str, Any] = {}
         self._edit_auto_helper_profile: dict[str, Any] | None = None
+        self._edit_current_defaults: dict[str, Any] | None = None
+        self._edit_target_device_name: str | None = None
+        self._edit_source_entities: list[str] | None = None
 
     async def async_step_init(self, user_input=None):
         errors = {}
@@ -2698,20 +2744,24 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
         if user_input is not None:
             try:
-                self._reference_defaults = _reference_entity_defaults(
-                    self.hass,
+                selected_sources = _normalize_reference_entity_ids(
                     user_input.get(CONF_REFERENCE_ENTITY_ID),
                 )
-                self._entity_defaults = _reference_edit_defaults(
-                    current_defaults,
-                    self._reference_defaults,
-                    self._edit_auto_helper_profile is not None,
+                self._reference_defaults = _reference_entity_defaults(
+                    self.hass,
+                    selected_sources,
                 )
-                self._entity_defaults = _with_existing_device_defaults(
-                    self._entity_defaults,
-                    self.config_entry.options,
-                    user_input.get(CONF_TARGET_DEVICE_NAME),
+                self._edit_current_defaults = current_defaults
+                self._edit_target_device_name = user_input.get(
+                    CONF_TARGET_DEVICE_NAME,
                 )
+                self._edit_source_entities = selected_sources
+                if selected_sources != _stored_entity_ids(
+                    entity.get(CONF_SOURCE_ENTITIES),
+                ):
+                    return await self.async_step_edit_entity_helper()
+
+                self._prepare_edit_entity_defaults(force_template_helper=False)
                 return await self.async_step_edit_entity()
             except InvalidEntityReference:
                 errors[CONF_REFERENCE_ENTITY_ID] = "invalid_entity_id"
@@ -2724,6 +2774,45 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 self._edit_device_name,
             ),
             errors=errors,
+        )
+
+    def _prepare_edit_entity_defaults(self, *, force_template_helper: bool) -> None:
+        """Apply the selected helper policy to the pending source change."""
+        if self._edit_current_defaults is None or self._edit_source_entities is None:
+            return
+        self._entity_defaults = _reference_edit_defaults(
+            self._edit_current_defaults,
+            self._reference_defaults,
+            self._edit_auto_helper_profile,
+            force_template_helper=force_template_helper,
+            source_entities_text=(
+                "\n".join(self._edit_source_entities)
+                if not self._reference_defaults
+                else None
+            ),
+        )
+        self._entity_defaults = _with_existing_device_defaults(
+            self._entity_defaults,
+            self.config_entry.options,
+            self._edit_target_device_name,
+        )
+
+    async def async_step_edit_entity_helper(self, user_input=None):
+        """Choose automatic detection or forced helper regeneration."""
+        if self._edit_current_defaults is None or self._edit_source_entities is None:
+            return await self.async_step_edit_entity_source()
+
+        if user_input is not None:
+            self._prepare_edit_entity_defaults(
+                force_template_helper=(
+                    user_input[CONF_HELPER_UPDATE_MODE] == HELPER_UPDATE_FORCE
+                ),
+            )
+            return await self.async_step_edit_entity()
+
+        return self.async_show_form(
+            step_id="edit_entity_helper",
+            data_schema=_helper_update_schema(),
         )
 
     async def async_step_edit_entity(self, user_input=None):

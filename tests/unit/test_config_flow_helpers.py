@@ -1023,17 +1023,21 @@ def test_auto_helper_refresh_replaces_only_generated_helper_fields():
     assert refreshed[CONF_DOMAIN_OPTIONS_JSON] == ""
 
 
-def test_custom_helper_fields_are_preserved_and_marked_manual():
-    current = {
+def test_custom_template_fields_are_preserved_while_generated_fields_refresh():
+    generated = {
         CONF_PLATFORM: "sensor",
         CONF_SOURCE_ENTITIES_TEXT: "sensor.old",
         CONF_TEMPLATE_SOURCES_JSON: '{"old": "sensor.old"}',
-        CONF_VALUE_TEMPLATE: "{{ old | float(0) * 2 }}",
+        CONF_VALUE_TEMPLATE: "{{ old }}",
         CONF_ATTRIBUTES_JSON: "",
         CONF_ATTRIBUTE_SOURCES_JSON: "",
         CONF_ATTRIBUTE_TEMPLATES_JSON: "",
         CONF_DOMAIN_OPTIONS_JSON: "",
         CONF_INITIAL_VALUE: "10",
+    }
+    current = {
+        **generated,
+        CONF_VALUE_TEMPLATE: "{{ old | float(0) * 2 }}",
     }
     reference = {
         CONF_PLATFORM: "sensor",
@@ -1044,16 +1048,53 @@ def test_custom_helper_fields_are_preserved_and_marked_manual():
         CONF_INITIAL_VALUE: "20",
     }
     entity = {}
+    generated_profile = _auto_helper_profile(generated)
 
-    refreshed = _reference_edit_defaults(current, reference, auto_helper=False)
+    refreshed = _reference_edit_defaults(current, reference, generated_profile)
 
     assert refreshed[CONF_SOURCE_ENTITIES_TEXT] == "sensor.new"
     assert refreshed[CONF_TEMPLATE_SOURCES_JSON] == current[CONF_TEMPLATE_SOURCES_JSON]
     assert refreshed[CONF_VALUE_TEMPLATE] == current[CONF_VALUE_TEMPLATE]
-    assert refreshed[CONF_INITIAL_VALUE] == current[CONF_INITIAL_VALUE]
-    _set_auto_helper_profile(entity, current, reference, _auto_helper_profile(current))
+    assert refreshed[CONF_INITIAL_VALUE] == reference[CONF_INITIAL_VALUE]
+    _set_auto_helper_profile(entity, current, reference, generated_profile)
 
-    assert entity["auto_helper"] is False
+    assert entity["auto_helper"] == _auto_helper_profile(reference)
+
+
+def test_unrelated_custom_field_does_not_block_generated_template_refresh():
+    generated = {
+        CONF_PLATFORM: "sensor",
+        CONF_INITIAL_VALUE: "10",
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.old",
+        CONF_TEMPLATE_SOURCES_JSON: '{"old": "sensor.old"}',
+        CONF_VALUE_TEMPLATE: "{{ old }}",
+        CONF_ATTRIBUTES_JSON: '{"battery": 50}',
+    }
+    current = {
+        **generated,
+        CONF_INITIAL_VALUE: "manually-set",
+        CONF_ATTRIBUTES_JSON: '{"battery": 75}',
+    }
+    reference = {
+        CONF_PLATFORM: "sensor",
+        CONF_INITIAL_VALUE: "20",
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.new",
+        CONF_TEMPLATE_SOURCES_JSON: '{"new": "sensor.new"}',
+        CONF_VALUE_TEMPLATE: "{{ new }}",
+        CONF_ATTRIBUTES_JSON: '{"battery": 90}',
+    }
+
+    refreshed = _reference_edit_defaults(
+        current,
+        reference,
+        _auto_helper_profile(generated),
+    )
+
+    assert refreshed[CONF_SOURCE_ENTITIES_TEXT] == "sensor.new"
+    assert refreshed[CONF_TEMPLATE_SOURCES_JSON] == '{"new": "sensor.new"}'
+    assert refreshed[CONF_VALUE_TEMPLATE] == "{{ new }}"
+    assert refreshed[CONF_INITIAL_VALUE] == "manually-set"
+    assert refreshed[CONF_ATTRIBUTES_JSON] == '{"battery": 75}'
 
 
 def test_auto_helper_profile_normalizes_stored_template_source_references():

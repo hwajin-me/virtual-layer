@@ -388,6 +388,16 @@
           "target_device_name": "Choose the Device that should contain this entity."
         }
       },
+      "edit_entity_helper": {
+        "title": "Update Generated Templates",
+        "description": "The source entity list changed. Choose whether to preserve custom templates automatically or replace them with newly generated helper templates.",
+        "data": {
+          "helper_update_mode": "Template update"
+        },
+        "data_description": {
+          "helper_update_mode": "Automatic preserves templates you edited and regenerates untouched helper templates. Force helper replaces custom templates using the new source entities."
+        }
+      },
       "entity": {
         "title": "Add Virtual Entity",
         "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional.",
@@ -488,6 +498,12 @@
         "priority": "Priority",
         "latest": "Latest update",
         "median": "Median position"
+      }
+    },
+    "helper_update_mode": {
+      "options": {
+        "automatic": "Automatic detection (recommended)",
+        "force_helper": "Apply template helper again"
       }
     }
   }

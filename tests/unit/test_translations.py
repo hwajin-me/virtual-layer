@@ -13,6 +13,7 @@ from custom_components.virtual_layer.config_flow import (
     _delete_entities_schema,
     _device_schema,
     _entity_schema,
+    _helper_update_schema,
     _options_schema,
     _reference_entity_schema,
     _select_device_schema,
@@ -148,6 +149,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
         "edit_device": _device_schema({CONF_DEVICE_NAME: "Laundry"}),
         "delete_entities": _delete_entities_schema(entity_options),
         "edit_entity": _entity_schema(),
+        "edit_entity_helper": _helper_update_schema(),
         "edit_entity_source": _reference_entity_schema(
             ["sensor.washer_phase"],
             [{"value": "Laundry", "label": "Laundry"}],
@@ -186,6 +188,10 @@ def test_english_translation_covers_config_flow_forms_and_errors():
         _options_schema(entity_options),
         "options_action",
     ) <= set(english["selector"]["options_action"]["options"])
+    assert _selector_options(
+        _helper_update_schema(),
+        "helper_update_mode",
+    ) <= set(english["selector"]["helper_update_mode"]["options"])
 def test_english_service_translations_match_services_yaml():
     english = _english_catalog()
     services = yaml.safe_load(
