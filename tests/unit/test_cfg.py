@@ -27,6 +27,7 @@ from custom_components.virtual_layer.const import (
     CONF_ATTRIBUTE_TEMPLATES,
     CONF_ATTRIBUTES,
     CONF_AVAILABILITY_TEMPLATE,
+    CONF_COMMAND_ACTIONS,
     CONF_EVENT_HOOKS,
     CONF_ICON_TEMPLATE,
     CONF_INITIAL_AVAILABILITY,
@@ -34,6 +35,7 @@ from custom_components.virtual_layer.const import (
     CONF_MAX,
     CONF_MIN,
     CONF_NAME,
+    CONF_NATIVE_TEMPLATES,
     CONF_PERSISTENT,
     CONF_PULL_INTERVAL,
     CONF_SOURCE_ENTITIES,
@@ -373,6 +375,18 @@ async def test_blended_cfg_normalizes_malformed_common_entity_fields(
                     CONF_ATTRIBUTES: ["bad"],
                     CONF_ATTRIBUTE_SOURCES: "bad",
                     CONF_ATTRIBUTE_TEMPLATES: 3,
+                    CONF_NATIVE_TEMPLATES: {
+                        "fan_modes": "{{ ['auto'] }}",
+                        "_private": "{{ true }}",
+                        ATTR_ENTITY_ID: "{{ 'sensor.hijack' }}",
+                        "bad_value": ["not", "a", "template"],
+                    },
+                    CONF_COMMAND_ACTIONS: {
+                        "turn_on": [{"delay": 0}],
+                        "bad-name": [{"delay": 0}],
+                        "turn_off": [],
+                        "toggle": {"sequence": [{"delay": 0}], "extra": True},
+                    },
                     CONF_TEMPLATE_SOURCES: None,
                     CONF_SOURCE_ENTITIES: ["sensor.valid", "invalid"],
                     CONF_PULL_INTERVAL: -30,
@@ -419,6 +433,10 @@ async def test_blended_cfg_normalizes_malformed_common_entity_fields(
     assert entity[CONF_ATTRIBUTES] == {}
     assert entity[CONF_ATTRIBUTE_SOURCES] == {}
     assert entity[CONF_ATTRIBUTE_TEMPLATES] == {}
+    assert entity[CONF_NATIVE_TEMPLATES] == {
+        "fan_modes": "{{ ['auto'] }}",
+    }
+    assert entity[CONF_COMMAND_ACTIONS] == {}
     assert entity[CONF_TEMPLATE_SOURCES] == {}
     assert entity[CONF_SOURCE_ENTITIES] == ["sensor.valid"]
     assert entity[CONF_PULL_INTERVAL] == 0

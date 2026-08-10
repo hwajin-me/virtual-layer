@@ -9,7 +9,10 @@ from collections.abc import Callable
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.components.binary_sensor import DOMAIN as PLATFORM_DOMAIN
-from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_DEVICE_CLASS, ATTR_ENTITY_ID, STATE_ON
 from homeassistant.core import HomeAssistant
@@ -143,6 +146,14 @@ class VirtualBinarySensor(VirtualEntity, BinarySensorEntity):
             self.turn_on()
         else:
             self.turn_off()
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "device_class":
+            try:
+                value = None if value is None or value == "" else BinarySensorDeviceClass(value)
+            except ValueError as err:
+                raise ValueError(f"Invalid binary sensor device class: {value}") from err
+        return super()._apply_native_template_value(name, value)
 
 
 async def async_virtual_on_service(hass, call):

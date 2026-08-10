@@ -33,6 +33,15 @@ RESERVED_VIRTUAL_ATTRIBUTE_NAMES = frozenset({
     ATTR_VIRTUAL_ATTRIBUTES,
 })
 
+RESERVED_NATIVE_TEMPLATE_NAMES = frozenset({
+    "device_info",
+    "entity_id",
+    "hass",
+    "name",
+    "platform",
+    "unique_id",
+})
+
 CONF_CLASS = "class"
 CONF_ATTRIBUTE = "attribute"
 CONF_ATTRIBUTE_SOURCES = "attribute_sources"
@@ -40,6 +49,7 @@ CONF_INITIAL_AVAILABILITY = "initial_availability"
 CONF_ATTRIBUTES = "attributes"
 CONF_AUTO_HELPER = "auto_helper"
 CONF_ATTRIBUTE_TEMPLATES = "attribute_templates"
+CONF_COMMAND_ACTIONS = "command_actions"
 CONF_AVAILABILITY_TEMPLATE = "availability_template"
 CONF_DIAGNOSTIC_SOURCE_ENTITY = "diagnostic_source_entity"
 CONF_EVENT_HOOKS = "event_hooks"
@@ -63,6 +73,7 @@ CONF_PERSISTENT = "persistent"
 CONF_PULL_INTERVAL = "pull_interval"
 CONF_SOURCE_ENTITIES = "source_entities"
 CONF_TEMPLATE_SOURCES = "template_sources"
+CONF_NATIVE_TEMPLATES = "native_templates"
 CONF_VALUE_TEMPLATE = "value_template"
 CONF_MANUFACTURER = "manufacturer"
 CONF_MODEL = "model"
@@ -84,6 +95,7 @@ GENERIC_ENTITY_OPTION_EXCLUDED_KEYS = frozenset({
     ATTR_UNIQUE_ID,
     CONF_ATTRIBUTE_SOURCES,
     CONF_ATTRIBUTE_TEMPLATES,
+    CONF_COMMAND_ACTIONS,
     CONF_ATTRIBUTES,
     CONF_AUTO_HELPER,
     CONF_AVAILABILITY_TEMPLATE,
@@ -106,6 +118,7 @@ GENERIC_ENTITY_OPTION_EXCLUDED_KEYS = frozenset({
     CONF_SOURCE_ENTITIES,
     CONF_SW_VERSION,
     CONF_TEMPLATE_SOURCES,
+    CONF_NATIVE_TEMPLATES,
     CONF_VIA_DEVICE_ID,
     CONF_VALUE_TEMPLATE,
     "unit_of_measurement",
@@ -190,6 +203,55 @@ STATE_ONLY_ENTITY_DOMAINS = [
     "tag",
     "tts",
 ]
+
+# Public native commands implemented by each virtual platform. Config flows and
+# damaged-data recovery use this without importing platform modules on HA's loop.
+VIRTUAL_ENTITY_COMMANDS = {
+    "button": frozenset({"press"}),
+    "camera": frozenset({
+        "disable_motion_detection", "enable_motion_detection", "turn_off", "turn_on",
+    }),
+    "climate": frozenset({
+        "set_fan_mode", "set_humidity", "set_hvac_mode", "set_preset_mode",
+        "set_swing_horizontal_mode", "set_swing_mode", "set_temperature",
+        "turn_off", "turn_on",
+    }),
+    "cover": frozenset({
+        "close_cover", "open_cover", "set_cover_position", "stop_cover",
+    }),
+    "date": frozenset({"set_value"}),
+    "datetime": frozenset({"set_value"}),
+    "fan": frozenset({
+        "oscillate", "set_direction", "set_percentage", "set_preset_mode",
+        "turn_off", "turn_on",
+    }),
+    "humidifier": frozenset({"set_humidity", "set_mode", "turn_off", "turn_on"}),
+    "lawn_mower": frozenset({"dock", "pause", "start_mowing"}),
+    "light": frozenset({"turn_off", "turn_on"}),
+    "lock": frozenset({"lock", "open", "unlock"}),
+    "media_player": frozenset({
+        "media_pause", "media_play", "media_stop", "mute_volume", "select_source",
+        "set_volume_level", "turn_off", "turn_on",
+    }),
+    "number": frozenset({"set_native_value"}),
+    "remote": frozenset({"send_command", "turn_off", "turn_on"}),
+    "select": frozenset({"select_option"}),
+    "siren": frozenset({"turn_off", "turn_on"}),
+    "switch": frozenset({"turn_off", "turn_on"}),
+    "text": frozenset({"set_value"}),
+    "time": frozenset({"set_value"}),
+    "update": frozenset({"install", "release_notes"}),
+    "vacuum": frozenset({
+        "clean_spot", "locate", "pause", "return_to_base", "send_command",
+        "set_fan_speed", "start", "stop",
+    }),
+    "valve": frozenset({
+        "close_valve", "open_valve", "set_valve_position", "stop_valve",
+    }),
+    "water_heater": frozenset({
+        "set_operation_mode", "set_temperature", "turn_off", "turn_on",
+    }),
+}
 
 
 def default_meta_file(hass) -> str:

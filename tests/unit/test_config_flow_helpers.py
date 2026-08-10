@@ -21,6 +21,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_ATTRIBUTE_SOURCES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
     CONF_ATTRIBUTES_JSON,
+    CONF_COMMAND_ACTIONS_JSON,
     CONF_DEVICE_CONFIGURATION_URL,
     CONF_DEVICE_HW_VERSION,
     CONF_DEVICE_ID,
@@ -34,6 +35,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_DOMAIN_OPTIONS_JSON,
     CONF_ENTITY_NAME,
     CONF_EVENT_HOOKS_JSON,
+    CONF_NATIVE_TEMPLATES_JSON,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
     DeviceNameAlreadyUsed,
@@ -56,6 +58,8 @@ from custom_components.virtual_layer.config_flow import (
     _managed_device_choices,
     _needs_domain_specific_form,
     _options_schema,
+    _parse_command_actions,
+    _parse_native_templates,
     _reference_edit_defaults,
     _reference_entity_defaults,
     _replace_ui_device,
@@ -74,6 +78,7 @@ from custom_components.virtual_layer.const import (
     CONF_ATTRIBUTES,
     CONF_AVAILABILITY_TEMPLATE,
     CONF_CLASS,
+    CONF_COMMAND_ACTIONS,
     CONF_CONFIGURATION_URL,
     CONF_EVENT_HOOKS,
     CONF_HW_VERSION,
@@ -85,6 +90,7 @@ from custom_components.virtual_layer.const import (
     CONF_MAX,
     CONF_MIN,
     CONF_MODEL,
+    CONF_NATIVE_TEMPLATES,
     CONF_PERSISTENT,
     CONF_POLYGON_AWAY_STATE,
     CONF_POLYGON_DISTANCE_METERS,
@@ -2872,3 +2878,97 @@ def test_delete_ui_entities_uses_stable_key_after_entity_order_changes():
             ATTR_ENTITY_KEY: "first-key",
         },
     ]
+
+
+def test_native_templates_and_command_actions_parse_complex_values():
+    native_templates = _parse_native_templates(
+        json.dumps(
+            {
+                "fan_modes": "{{ ['auto', 'turbo'] }}",
+                "target_temperature": "{{ states('sensor.target') | float }}",
+            }
+        )
+    )
+    command_actions = _parse_command_actions(
+        json.dumps(
+            {
+                "set_temperature": {
+                    "optimistic": False,
+                    "sequence": [
+                        {
+                            "action": "climate.set_temperature",
+                            "target": {"entity_id": "climate.real"},
+                            "data": {"temperature": "{{ temperature }}"},
+                        }
+                    ],
+                }
+            }
+        )
+    )
+
+    assert native_templates["fan_modes"] == "{{ ['auto', 'turbo'] }}"
+    assert command_actions["set_temperature"]["optimistic"] is False
+
+
+@pytest.mark.parametrize(
+    ("parser", "payload"),
+    [
+        (_parse_native_templates, '{"entity_id": "{{ states(\'sensor.bad\') }}"}'),
+        (_parse_native_templates, '{"fan_modes": ["auto"]}'),
+        (_parse_command_actions, '{"set-temperature": []}'),
+        (_parse_command_actions, '{"turn_on": {"sequence": [], "optimistic": true}}'),
+        (_parse_command_actions, '{"turn_on": {"sequence": [{"action": 1}]}}'),
+    ],
+)
+def test_native_template_and_command_action_bad_input_is_rejected(parser, payload):
+    with pytest.raises(InvalidJson):
+        parser(payload)
+
+
+def test_command_actions_reject_commands_not_implemented_by_selected_domain():
+    with pytest.raises(InvalidJson):
+        _parse_command_actions(
+            '{"set_percentage": [{"action": "fan.turn_on"}]}',
+            "climate",
+        )
+
+    assert _parse_command_actions(
+        '{"set_fan_mode": [{"action": "climate.set_fan_mode"}]}',
+        "climate",
+    )
+
+
+def test_entity_form_round_trips_native_templates_and_command_actions():
+    entity = {
+        CONF_PLATFORM: "climate",
+        CONF_NAME: "Linked HVAC",
+        CONF_INITIAL_VALUE: "off",
+        CONF_NATIVE_TEMPLATES: {
+            "fan_modes": "{{ state_attr('climate.real', 'fan_modes') }}",
+        },
+        CONF_COMMAND_ACTIONS: {
+            "set_fan_mode": [
+                {
+                    "action": "climate.set_fan_mode",
+                    "target": {"entity_id": "climate.real"},
+                    "data": {"fan_mode": "{{ fan_mode }}"},
+                }
+            ],
+        },
+    }
+
+    defaults = _entity_form_defaults("HVAC", entity)
+    built = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "climate",
+                CONF_ENTITY_NAME: "Linked HVAC",
+                CONF_INITIAL_VALUE: "off",
+                CONF_NATIVE_TEMPLATES_JSON: defaults[CONF_NATIVE_TEMPLATES_JSON],
+                CONF_COMMAND_ACTIONS_JSON: defaults[CONF_COMMAND_ACTIONS_JSON],
+            }
+        )
+    )[1]
+
+    assert built[CONF_NATIVE_TEMPLATES] == entity[CONF_NATIVE_TEMPLATES]
+    assert built[CONF_COMMAND_ACTIONS] == entity[CONF_COMMAND_ACTIONS]

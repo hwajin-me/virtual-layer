@@ -364,6 +364,104 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._update_attributes()
         self.async_write_ha_state()
 
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        aliases = {
+            "color_temp": "color_temp_kelvin",
+            "effects": "effect_list",
+        }
+        name = aliases.get(name, name)
+        if name == "supported_color_modes":
+            if not isinstance(value, (list, tuple, set)):
+                raise ValueError("supported_color_modes must render a list")
+            try:
+                value = {ColorMode(str(item)) for item in value}
+            except ValueError as err:
+                raise ValueError("supported_color_modes contains an invalid mode") from err
+            value.discard(ColorMode.UNKNOWN)
+            if not value:
+                value = {ColorMode.ONOFF}
+            if ColorMode.ONOFF in value and len(value) > 1:
+                value.discard(ColorMode.ONOFF)
+            current = self._attr_supported_color_modes
+            if current == value:
+                return False
+            self._attr_supported_color_modes = value
+            return True
+        if name == "color_mode":
+            try:
+                value = ColorMode(str(value))
+            except ValueError as err:
+                raise ValueError(f"Invalid light color mode: {value}") from err
+            if value not in self._attr_supported_color_modes:
+                raise ValueError(f"Unsupported light color mode: {value}")
+        elif name == "brightness":
+            value = _as_brightness(value)
+            if value is None:
+                raise ValueError("brightness must be between 0 and 255")
+        elif name == "hs_color":
+            value = _as_hs_color(value)
+            if value is None:
+                raise ValueError("hs_color must be a valid hue/saturation pair")
+        elif name == "color_temp_kelvin":
+            value = _as_color_temp_kelvin(value)
+        elif name in {"min_color_temp_kelvin", "max_color_temp_kelvin"}:
+            try:
+                value = int(value)
+            except (TypeError, ValueError) as err:
+                raise ValueError(f"{name} must be an integer") from err
+            if not 1000 <= value <= 40000:
+                raise ValueError(f"{name} must be between 1000 and 40000")
+        elif name == "effect_list":
+            if not isinstance(value, (list, tuple, set)):
+                raise ValueError("effect_list must render a list")
+            value = [str(item).strip() for item in value if str(item).strip()]
+            if len(set(value)) != len(value):
+                raise ValueError("effect_list contains duplicate values")
+        elif name == "effect":
+            value = None if value in {None, ""} else str(value)
+            if value is not None and self._attr_effect_list and value not in self._attr_effect_list:
+                raise ValueError(f"Invalid light effect: {value}")
+        elif name in {"state", "is_on"}:
+            old_state = self._attr_is_on
+            self.set_state(value)
+            return old_state != self._attr_is_on
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_min_color_temp_kelvin > self._attr_max_color_temp_kelvin:
+            self._attr_min_color_temp_kelvin, self._attr_max_color_temp_kelvin = (
+                self._attr_max_color_temp_kelvin,
+                self._attr_min_color_temp_kelvin,
+            )
+        if self._attr_color_mode not in self._attr_supported_color_modes:
+            self._attr_color_mode = next(
+                (
+                    mode
+                    for mode in (
+                        ColorMode.COLOR_TEMP,
+                        ColorMode.HS,
+                        ColorMode.BRIGHTNESS,
+                        ColorMode.ONOFF,
+                    )
+                    if mode in self._attr_supported_color_modes
+                ),
+                ColorMode.ONOFF,
+            )
+        if self._attr_brightness is not None:
+            self._attr_brightness = _as_brightness(self._attr_brightness)
+        if self._attr_hs_color is not None:
+            self._attr_hs_color = _as_hs_color(self._attr_hs_color)
+        if self._attr_color_temp_kelvin is not None:
+            self._attr_color_temp_kelvin = max(
+                self._attr_min_color_temp_kelvin,
+                min(self._attr_max_color_temp_kelvin, self._attr_color_temp_kelvin),
+            )
+        if self._attr_effect not in (self._attr_effect_list or []):
+            self._attr_effect = None
+        self._attr_supported_features = LightEntityFeature(0)
+        if self._attr_effect_list:
+            self._attr_supported_features |= LightEntityFeature.EFFECT
+
     def set_state(self, value) -> None:
         self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]
         self._update_attributes()

@@ -29,19 +29,20 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
 from .cfg import (
+    _platform_command_names,
     _rename_meta_data,
     make_entity_key,
 )
 from .climate_options import (
     CLIMATE_CURRENT_MODE_FIELDS,
     CLIMATE_FORM_FIELDS,
-    CLIMATE_MODE_FORM_FIELDS,
     CLIMATE_MODE_LIST_FIELDS,
     CLIMATE_SCALAR_FORM_FIELDS,
     extract_climate_options,
     migrate_legacy_climate_attributes,
 )
 from .const import *
+from .entity import VirtualEntity
 from .fan_options import (
     FAN_FORM_FIELDS,
     FAN_MODE_LIST_FIELD,
@@ -64,6 +65,8 @@ CONF_ADD_FIRST_ENTITY = "add_first_entity"
 CONF_ATTRIBUTE_SOURCES_JSON = "attribute_sources_json"
 CONF_ATTRIBUTES_JSON = "attributes_json"
 CONF_ATTRIBUTE_TEMPLATES_JSON = "attribute_templates_json"
+CONF_NATIVE_TEMPLATES_JSON = "native_templates_json"
+CONF_COMMAND_ACTIONS_JSON = "command_actions_json"
 CONF_DEVICE_NAME = "device_name"
 CONF_DEVICE_ID = "device_id"
 CONF_DEVICE_MANUFACTURER = "device_manufacturer"
@@ -107,6 +110,8 @@ _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_ATTRIBUTES_JSON,
     CONF_ATTRIBUTE_SOURCES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
+    CONF_NATIVE_TEMPLATES_JSON,
+    CONF_COMMAND_ACTIONS_JSON,
     CONF_DOMAIN_OPTIONS_JSON,
     *CLIMATE_FORM_FIELDS,
     *FAN_FORM_FIELDS,
@@ -120,6 +125,8 @@ _AUTO_HELPER_JSON_FIELDS = frozenset(
         CONF_ATTRIBUTES_JSON,
         CONF_ATTRIBUTE_SOURCES_JSON,
         CONF_ATTRIBUTE_TEMPLATES_JSON,
+        CONF_NATIVE_TEMPLATES_JSON,
+        CONF_COMMAND_ACTIONS_JSON,
         CONF_DOMAIN_OPTIONS_JSON,
     }
 )
@@ -129,6 +136,7 @@ _AUTO_HELPER_TEMPLATE_FIELDS = frozenset(
         CONF_TEMPLATE_SOURCES_JSON,
         CONF_VALUE_TEMPLATE,
         CONF_ATTRIBUTE_TEMPLATES_JSON,
+        CONF_NATIVE_TEMPLATES_JSON,
     }
 )
 
@@ -193,6 +201,8 @@ _DOMAIN_OPTION_RESERVED_KEYS = {
     CONF_AUTO_HELPER,
     CONF_ATTRIBUTE_SOURCES,
     CONF_ATTRIBUTE_TEMPLATES,
+    CONF_NATIVE_TEMPLATES,
+    CONF_COMMAND_ACTIONS,
     CONF_EVENT_HOOKS,
     CONF_POLYGONAL_ZONE,
     ATTR_DEVICE_ID,
@@ -462,6 +472,14 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         vol.Optional(
             CONF_ATTRIBUTE_TEMPLATES_JSON,
             default=defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_NATIVE_TEMPLATES_JSON,
+            default=defaults.get(CONF_NATIVE_TEMPLATES_JSON, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_COMMAND_ACTIONS_JSON,
+            default=defaults.get(CONF_COMMAND_ACTIONS_JSON, ""),
         ): MULTILINE_TEXT_SELECTOR,
         vol.Optional(
             CONF_DOMAIN_OPTIONS_JSON, default=defaults.get(CONF_DOMAIN_OPTIONS_JSON, "")
@@ -921,6 +939,49 @@ def _parse_domain_options(value: str) -> dict[str, Any]:
     return domain_options
 
 
+def _parse_native_templates(value: str) -> dict[str, str]:
+    """Parse templates which feed native Home Assistant properties."""
+    parsed = _parse_json_object(value, CONF_NATIVE_TEMPLATES_JSON)
+    if any(
+        not VirtualEntity._valid_native_template_name(name)
+        or not isinstance(template, str)
+        or not template.strip()
+        for name, template in parsed.items()
+    ):
+        raise InvalidJson(CONF_NATIVE_TEMPLATES_JSON)
+    return {name.strip(): template for name, template in parsed.items()}
+
+
+def _parse_command_actions(value: str, platform: str | None = None) -> dict[str, Any]:
+    """Parse and validate command-to-HA-action mappings."""
+    parsed = _parse_json_object(value, CONF_COMMAND_ACTIONS_JSON)
+    valid_commands = _platform_command_names(platform) if platform else None
+    for command, spec in parsed.items():
+        if not isinstance(command, str) or not command.strip().isidentifier():
+            raise InvalidJson(CONF_COMMAND_ACTIONS_JSON)
+        if valid_commands is not None and command.strip() not in valid_commands:
+            raise InvalidJson(CONF_COMMAND_ACTIONS_JSON)
+        if isinstance(spec, list):
+            sequence = spec
+        elif isinstance(spec, dict) and "sequence" in spec:
+            if set(spec) - {"sequence", "optimistic"}:
+                raise InvalidJson(CONF_COMMAND_ACTIONS_JSON)
+            sequence = spec.get("sequence")
+            if not isinstance(spec.get("optimistic", True), bool):
+                raise InvalidJson(CONF_COMMAND_ACTIONS_JSON)
+        elif isinstance(spec, dict):
+            sequence = [spec]
+        else:
+            raise InvalidJson(CONF_COMMAND_ACTIONS_JSON)
+        if not isinstance(sequence, list) or not sequence:
+            raise InvalidJson(CONF_COMMAND_ACTIONS_JSON)
+        try:
+            cv.SCRIPT_SCHEMA(sequence)
+        except vol.Invalid as err:
+            raise InvalidJson(CONF_COMMAND_ACTIONS_JSON) from err
+    return parsed
+
+
 def _parse_event_hooks(value: str) -> list[dict[str, Any]]:
     parsed = _parse_json_value(value, CONF_EVENT_HOOKS_JSON)
     if parsed in (None, ""):
@@ -1347,6 +1408,19 @@ def _build_entity_config(
         raise InvalidJson(CONF_ATTRIBUTE_TEMPLATES_JSON)
     if attribute_templates:
         entity[CONF_ATTRIBUTE_TEMPLATES] = attribute_templates
+
+    native_templates = _parse_native_templates(
+        user_input.get(CONF_NATIVE_TEMPLATES_JSON, "").strip(),
+    )
+    if native_templates:
+        entity[CONF_NATIVE_TEMPLATES] = native_templates
+
+    command_actions = _parse_command_actions(
+        user_input.get(CONF_COMMAND_ACTIONS_JSON, "").strip(),
+        platform,
+    )
+    if command_actions:
+        entity[CONF_COMMAND_ACTIONS] = command_actions
 
     domain_options = _parse_domain_options(
         user_input.get(CONF_DOMAIN_OPTIONS_JSON, "").strip(),
@@ -2938,6 +3012,8 @@ def _entity_form_defaults(
         CONF_ATTRIBUTE_TEMPLATES_JSON: _json_default(
             entity.get(CONF_ATTRIBUTE_TEMPLATES)
         ),
+        CONF_NATIVE_TEMPLATES_JSON: _json_default(entity.get(CONF_NATIVE_TEMPLATES)),
+        CONF_COMMAND_ACTIONS_JSON: _json_default(entity.get(CONF_COMMAND_ACTIONS)),
     }
     polygon = entity.get(CONF_POLYGONAL_ZONE)
     if not isinstance(polygon, Mapping):

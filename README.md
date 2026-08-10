@@ -119,10 +119,12 @@ Every entity supports:
 - static attributes
 - attribute sources
 - attribute templates
+- native property templates
+- command actions
 - pull interval
 
 The UI accepts JSON objects for static attributes, template sources, attribute
-sources, and attribute templates.
+sources, attribute templates, native property templates, and command actions.
 
 Example template source JSON:
 
@@ -154,6 +156,57 @@ Example attribute template JSON:
   "load_score": "{{ (power|float(0) * room_humidity|float(0) / 100)|round(1) }}"
 }
 ```
+
+Native property templates update real Home Assistant entity properties instead
+of adding extra attributes. They work for every domain and may return strings,
+numbers, booleans, dictionaries, or lists. Native validation and dependent
+feature updates are included for climate, fan, humidifier, light, number,
+select, text, date/time, siren, lawn mower, remote, media player, water heater,
+update, vacuum, camera, image, device tracker, cover, valve, lock, sensor,
+binary sensor, and switch entities. For example, changing `source_list`,
+`effect_list`, `operation_list`, `fan_speed_list`, or `options` also updates the
+corresponding Home Assistant controls and clears a stale selected value. Range
+templates revalidate the current value, and GPS templates accept either a
+`gps` pair or separate `latitude` and `longitude` values:
+
+```json
+{
+  "fan_modes": "{{ state_attr('climate.bedroom', 'fan_modes') or [] }}",
+  "fan_mode": "{{ state_attr('climate.bedroom', 'fan_mode') }}",
+  "target_temperature": "{{ states('sensor.preferred_temperature') | float }}"
+}
+```
+
+Common aliases use the names shown by Home Assistant: `state`/`is_on`,
+`temperature`, `humidity`, `position`, `source`, `effect`, `activity`, and
+`location_accuracy`. Domain-specific list and range names can be copied from
+Developer Tools > States, such as `preset_modes`, `available_tones`,
+`supported_color_modes`, `min_temp`, or `native_step`.
+
+Command actions connect virtual controls to real entities. Keys are native
+method names without the `async_` prefix, such as `turn_on`, `set_temperature`,
+`set_fan_mode`, `set_percentage`, or `set_humidity`. All command arguments are
+available to action templates. A value can be one action, an action list, or an
+object with `sequence` and `optimistic`. Set `optimistic` to `false` when native
+property templates should exclusively reflect the real device state:
+
+```json
+{
+  "set_temperature": {
+    "optimistic": false,
+    "sequence": [
+      {
+        "action": "climate.set_temperature",
+        "target": {"entity_id": "climate.bedroom"},
+        "data": {"temperature": "{{ temperature }}"}
+      }
+    ]
+  }
+}
+```
+
+Command actions use Home Assistant's action engine, so conditions, `choose`,
+delays, and templated action data are supported.
 
 Set `pull_interval` to a positive number of seconds to periodically refresh
 source values and templates. Leave it empty or set it to `0` to update from

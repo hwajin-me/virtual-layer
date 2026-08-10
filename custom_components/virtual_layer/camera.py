@@ -223,5 +223,40 @@ class VirtualCamera(VirtualEntity, Camera):
         self._attr_motion_detection_enabled = False
         self.async_write_ha_state()
 
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        backing_fields = {
+            CONF_IMAGE_PATH: "_image_path",
+            CONF_SOURCE_ENTITY: "_source_entity",
+            CONF_STREAM_SOURCE: "_stream_source",
+        }
+        if name in backing_fields:
+            value = None if value is None or value == "" else str(value).strip()
+            if name == CONF_SOURCE_ENTITY and value is not None:
+                value = _camera_entity_id(value)
+            attribute = backing_fields[name]
+            changed = getattr(self, attribute) != value
+            setattr(self, attribute, value)
+            return changed
+        if name in {
+            CONF_IS_RECORDING,
+            CONF_IS_STREAMING,
+            "motion_detection_enabled",
+            CONF_MOTION_DETECTION,
+        }:
+            if name == CONF_MOTION_DETECTION:
+                name = "motion_detection_enabled"
+            value = value if isinstance(value, bool) else self._template_to_bool(value)
+        elif name in {"state", CONF_IS_ON}:
+            old_state = self._attr_is_on
+            self.set_state(value)
+            return old_state != self._attr_is_on
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        features = CameraEntityFeature.ON_OFF
+        if self._stream_source or self._source_entity:
+            features |= CameraEntityFeature.STREAM
+        self._attr_supported_features = features
+
     def set_state(self, value) -> None:
         self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]

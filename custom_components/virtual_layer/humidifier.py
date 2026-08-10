@@ -265,6 +265,51 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             }
         )
 
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "humidity":
+            name = CONF_TARGET_HUMIDITY
+        if name == "available_modes":
+            if not isinstance(value, (list, tuple)):
+                raise ValueError("available_modes must render a list")
+            value = [str(item) for item in value if str(item).strip()]
+            if len(set(value)) != len(value):
+                raise ValueError("available_modes contains duplicate values")
+        elif name == CONF_ACTION:
+            value = _as_action(value)
+            if value is None:
+                raise ValueError("Invalid humidifier action")
+        elif name == "device_class":
+            value = _as_device_class(value)
+        elif name in {CONF_CURRENT_HUMIDITY, CONF_TARGET_HUMIDITY}:
+            value = self._bounded_humidity(value)
+        elif name == CONF_TARGET_HUMIDITY_STEP:
+            value = _finite_float(value, float("nan"))
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError("target_humidity_step must be positive")
+        elif name in {"state", "is_on"}:
+            old_state = self._attr_is_on
+            self.set_state(value)
+            return old_state != self._attr_is_on
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_min_humidity > self._attr_max_humidity:
+            self._attr_min_humidity, self._attr_max_humidity = (
+                self._attr_max_humidity,
+                self._attr_min_humidity,
+            )
+        self._attr_current_humidity = self._bounded_humidity(
+            self._attr_current_humidity
+        )
+        self._attr_target_humidity = self._bounded_humidity(
+            self._attr_target_humidity
+        )
+        if self._attr_mode not in self._attr_available_modes:
+            self._attr_mode = None
+        self._attr_supported_features = HumidifierEntityFeature(0)
+        if self._attr_available_modes or "set_mode" in self._command_actions:
+            self._attr_supported_features |= HumidifierEntityFeature.MODES
+
     @property
     def state_attributes(self):
         data = dict(super().state_attributes or {})

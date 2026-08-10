@@ -219,3 +219,46 @@ class VirtualLock(VirtualEntity, LockEntity):
             self._jam()
         else:
             self._unlock()
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == CONF_SUPPORT_OPEN:
+            value = value if isinstance(value, bool) else self._template_to_bool(value)
+            changed = self._support_open != value
+            self._support_open = value
+            return changed
+        if name in {
+            "is_locked",
+            "is_open",
+            "is_locking",
+            "is_unlocking",
+            "is_jammed",
+        } and not isinstance(value, bool):
+            value = self._template_to_bool(value)
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        active = next(
+            (
+                name
+                for name in (
+                    "is_jammed",
+                    "is_open",
+                    "is_locking",
+                    "is_unlocking",
+                    "is_locked",
+                )
+                if getattr(self, f"_attr_{name}", False)
+            ),
+            None,
+        )
+        for name in (
+            "is_jammed",
+            "is_open",
+            "is_locking",
+            "is_unlocking",
+            "is_locked",
+        ):
+            setattr(self, f"_attr_{name}", name == active)
+        self._attr_supported_features = LockEntityFeature(0)
+        if self._support_open or "open" in self._command_actions:
+            self._attr_supported_features |= LockEntityFeature.OPEN

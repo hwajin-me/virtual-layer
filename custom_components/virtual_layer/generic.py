@@ -108,6 +108,15 @@ class GenericVirtualEntity(VirtualEntity, Entity):
     def set_state(self, value) -> None:
         self._attr_state = value
 
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        changed = super()._apply_native_template_value(name, value)
+        if name not in {"state", "available", "icon"}:
+            rendered = getattr(self, f"_attr_{name}", value)
+            if self._domain_options.get(name) != rendered:
+                self._domain_options[name] = rendered
+                changed = True
+        return changed
+
 
 def _has_value(value) -> bool:
     return value is not None and str(value).lower() not in {
@@ -123,6 +132,16 @@ def _string_list(value, default=()) -> list[str]:
     if not isinstance(value, (list, tuple, set)):
         value = default
     return [str(item) for item in value if str(item).strip()]
+
+
+def _template_string_list(value, name: str) -> list[str]:
+    """Validate and normalize a list rendered by a native template."""
+    if not isinstance(value, (list, tuple, set)):
+        raise TypeError(f"{name} must render a list")
+    result = [str(item).strip() for item in value if str(item).strip()]
+    if len(set(result)) != len(result):
+        raise ValueError(f"{name} contains duplicate values")
+    return result
 
 
 def _safe_float(value, default: float) -> float:
@@ -218,6 +237,23 @@ class VirtualSelect(_NativeGenericMixin, VirtualEntity, SelectEntity):
         self._attr_current_option = option
         self.async_write_ha_state()
 
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "options":
+            value = _template_string_list(value, name)
+        elif name in {"state", "value", "current_option"}:
+            name = "current_option"
+            if not _has_value(value):
+                value = None
+            else:
+                value = str(value)
+                if value not in self._attr_options:
+                    raise ValueError(f"Invalid select option: {value}")
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_current_option not in self._attr_options:
+            self._attr_current_option = None
+
 
 class VirtualText(_NativeGenericMixin, VirtualEntity, TextEntity):
     """Virtual text with native length and pattern capabilities."""
@@ -271,6 +307,58 @@ class VirtualText(_NativeGenericMixin, VirtualEntity, TextEntity):
         self._attr_native_value = value
         self.async_write_ha_state()
 
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        aliases = {
+            "min": "native_min",
+            "max": "native_max",
+            "value": "native_value",
+            "state": "native_value",
+        }
+        name = aliases.get(name, name)
+        if name in {"native_min", "native_max"}:
+            value = _safe_int(value, -1, -1)
+            if value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        elif name == "mode":
+            try:
+                value = TextMode(value)
+            except (TypeError, ValueError) as err:
+                raise ValueError("mode must be text or password") from err
+        elif name == "pattern":
+            if value in {None, ""}:
+                value = None
+                regex = None
+            elif not isinstance(value, str):
+                raise ValueError("pattern must render a string")
+            else:
+                try:
+                    regex = re.compile(value)
+                except re.error as err:
+                    raise ValueError("pattern must be a valid regular expression") from err
+            changed = self._attr_pattern != value
+            self._attr_pattern = value
+            self._pattern_regex = regex
+            return changed
+        elif name == "native_value":
+            value = str(value)
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_native_min > self._attr_native_max:
+            self._attr_native_min, self._attr_native_max = (
+                self._attr_native_max,
+                self._attr_native_min,
+            )
+        value = self._attr_native_value
+        if value is None:
+            return
+        if (
+            not self._attr_native_min <= len(value) <= self._attr_native_max
+            or self._pattern_regex
+            and self._pattern_regex.fullmatch(value) is None
+        ):
+            self._attr_native_value = None
+
 
 class _TemporalEntityMixin(_NativeGenericMixin):
     """Shared state lifecycle for date, time, and datetime entities."""
@@ -292,6 +380,15 @@ class _TemporalEntityMixin(_NativeGenericMixin):
             raise ValueError(f"Invalid {self.PLATFORM_DOMAIN} value: {value}")
         self._attr_native_value = parsed
         self.async_write_ha_state()
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name in {"state", "value", "native_value"}:
+            parsed = self._parse_value(value)
+            if parsed is None and _has_value(value):
+                raise ValueError(f"Invalid {self.PLATFORM_DOMAIN} value: {value}")
+            name = "native_value"
+            value = parsed
+        return super()._apply_native_template_value(name, value)
 
 
 class VirtualDate(_TemporalEntityMixin, VirtualEntity, DateEntity):
@@ -379,15 +476,19 @@ class VirtualSiren(_NativeGenericMixin, VirtualEntity, SirenEntity):
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
         self._attr_available_tones = _string_list(config.get("available_tones"))
-        self._attr_supported_features = (
-            SirenEntityFeature.TURN_ON | SirenEntityFeature.TURN_OFF
-        )
+        self._support_volume = _safe_bool(config.get("support_volume", True), True)
+        self._support_duration = _safe_bool(config.get("support_duration", True), True)
+        self._refresh_supported_features()
+
+    def _refresh_supported_features(self) -> None:
+        features = SirenEntityFeature.TURN_ON | SirenEntityFeature.TURN_OFF
         if self._attr_available_tones:
-            self._attr_supported_features |= SirenEntityFeature.TONES
-        if _safe_bool(config.get("support_volume", True), True):
-            self._attr_supported_features |= SirenEntityFeature.VOLUME_SET
-        if _safe_bool(config.get("support_duration", True), True):
-            self._attr_supported_features |= SirenEntityFeature.DURATION
+            features |= SirenEntityFeature.TONES
+        if self._support_volume:
+            features |= SirenEntityFeature.VOLUME_SET
+        if self._support_duration:
+            features |= SirenEntityFeature.DURATION
+        self._attr_supported_features = features
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -419,6 +520,27 @@ class VirtualSiren(_NativeGenericMixin, VirtualEntity, SirenEntity):
         self._attr_is_on = False
         self._update_attributes()
         self.async_write_ha_state()
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "available_tones":
+            value = _template_string_list(value, name)
+        elif name in {"support_volume", "support_duration"}:
+            value = value if isinstance(value, bool) else self._template_to_bool(value)
+            attribute = f"_{name}"
+            changed = getattr(self, attribute) != value
+            setattr(self, attribute, value)
+            return changed
+        elif name in {"state", "is_on"}:
+            old_state = self._attr_is_on
+            self.set_state(value)
+            return old_state != self._attr_is_on
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        tone = self._virtual_attributes.get("tone")
+        if self._attr_available_tones and tone not in self._attr_available_tones:
+            self._virtual_attributes.pop("tone", None)
+        self._refresh_supported_features()
 
 
 class VirtualLawnMower(_NativeGenericMixin, VirtualEntity, LawnMowerEntity):
@@ -470,6 +592,15 @@ class VirtualLawnMower(_NativeGenericMixin, VirtualEntity, LawnMowerEntity):
     async def async_dock(self) -> None:
         self._attr_activity = LawnMowerActivity.RETURNING
         self.async_write_ha_state()
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name in {"state", "activity"}:
+            activity = self._parse_activity(value)
+            if activity is None and _has_value(value):
+                raise ValueError(f"Invalid lawn mower activity: {value}")
+            name = "activity"
+            value = activity
+        return super()._apply_native_template_value(name, value)
 
 
 class VirtualRemote(_NativeGenericMixin, VirtualEntity, RemoteEntity):
@@ -527,6 +658,26 @@ class VirtualRemote(_NativeGenericMixin, VirtualEntity, RemoteEntity):
             self._virtual_attributes["last_command_options"] = dict(kwargs)
         self._update_attributes()
         self.async_write_ha_state()
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "activity_list":
+            value = _template_string_list(value, name)
+        elif name == "current_activity":
+            value = None if not _has_value(value) else str(value)
+            if value is not None and self._attr_activity_list and value not in self._attr_activity_list:
+                raise ValueError(f"Invalid remote activity: {value}")
+        elif name in {"state", "is_on"}:
+            old_state = self._attr_is_on
+            self.set_state(value)
+            return old_state != self._attr_is_on
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_current_activity not in self._attr_activity_list:
+            self._attr_current_activity = None
+        self._attr_supported_features = RemoteEntityFeature(0)
+        if self._attr_activity_list or "turn_on" in self._command_actions:
+            self._attr_supported_features |= RemoteEntityFeature.ACTIVITY
 
 
 class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
@@ -635,6 +786,44 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             raise ValueError(f"Invalid media source: {source}")
         self._attr_source = source
         self.async_write_ha_state()
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "source_list":
+            value = _template_string_list(value, name)
+        elif name == "source":
+            value = None if not _has_value(value) else str(value)
+            if value is not None and self._attr_source_list and value not in self._attr_source_list:
+                raise ValueError(f"Invalid media source: {value}")
+        elif name == "volume_level":
+            parsed = _safe_float(value, float("nan"))
+            if not math.isfinite(parsed) or not 0 <= parsed <= 1:
+                raise ValueError("volume_level must be between 0 and 1")
+            value = parsed
+        elif name == "is_volume_muted" and not isinstance(value, bool):
+            value = self._template_to_bool(value)
+        elif name in {"state", "media_state"}:
+            state = self._parse_media_state(value)
+            if state is None and _has_value(value):
+                raise ValueError(f"Invalid media player state: {value}")
+            name = "state"
+            value = state
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_source not in self._attr_source_list:
+            self._attr_source = None
+        features = (
+            MediaPlayerEntityFeature.TURN_ON
+            | MediaPlayerEntityFeature.TURN_OFF
+            | MediaPlayerEntityFeature.PLAY
+            | MediaPlayerEntityFeature.PAUSE
+            | MediaPlayerEntityFeature.STOP
+            | MediaPlayerEntityFeature.VOLUME_SET
+            | MediaPlayerEntityFeature.VOLUME_MUTE
+        )
+        if self._attr_source_list or "select_source" in self._command_actions:
+            features |= MediaPlayerEntityFeature.SELECT_SOURCE
+        self._attr_supported_features = features
 
 
 class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
@@ -762,6 +951,62 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
         self._attr_current_operation = STATE_OFF
         self.async_write_ha_state()
 
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        aliases = {
+            "temperature": "target_temperature",
+            "operation_mode": "current_operation",
+            "modes": "operation_list",
+        }
+        name = aliases.get(name, name)
+        if name == "operation_list":
+            value = _template_string_list(value, name)
+            if STATE_OFF not in value:
+                value.insert(0, STATE_OFF)
+        elif name == "current_operation":
+            value = str(value).lower()
+            if value not in self._attr_operation_list:
+                raise ValueError(f"Invalid water heater operation mode: {value}")
+        elif name in {"min_temp", "max_temp"}:
+            value = _safe_float(value, float("nan"))
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be a finite number")
+        elif name in {"current_temperature", "target_temperature"}:
+            value = self._bounded_temperature(value)
+        elif name == "target_temperature_step":
+            value = _safe_float(value, float("nan"))
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError("target_temperature_step must be positive")
+        elif name == "temperature_unit":
+            value = str(value).strip()
+            if not value:
+                raise ValueError("temperature_unit must not be empty")
+        elif name == "state":
+            name = "current_operation"
+            value = str(value).lower()
+            if value not in self._attr_operation_list:
+                raise ValueError(f"Invalid water heater operation mode: {value}")
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_min_temp > self._attr_max_temp:
+            self._attr_min_temp, self._attr_max_temp = (
+                self._attr_max_temp,
+                self._attr_min_temp,
+            )
+        self._attr_current_temperature = self._bounded_temperature(
+            self._attr_current_temperature
+        )
+        self._attr_target_temperature = self._bounded_temperature(
+            self._attr_target_temperature
+        )
+        if self._attr_current_operation not in self._attr_operation_list:
+            self._attr_current_operation = STATE_OFF
+        self._attr_supported_features = (
+            WaterHeaterEntityFeature.TARGET_TEMPERATURE
+            | WaterHeaterEntityFeature.OPERATION_MODE
+            | WaterHeaterEntityFeature.ON_OFF
+        )
+
 
 class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
     """Virtual software update entity."""
@@ -789,10 +1034,15 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
         self._attr_release_summary = config.get("release_summary")
         self._attr_release_url = config.get("release_url")
         self._release_notes = config.get("release_notes")
+        self._versions = _string_list(config.get("versions"))
+        self._support_backup = _safe_bool(config.get("support_backup", True), True)
+        self._refresh_supported_features()
+
+    def _refresh_supported_features(self) -> None:
         self._attr_supported_features = UpdateEntityFeature.INSTALL
-        if config.get("versions"):
+        if self._versions:
             self._attr_supported_features |= UpdateEntityFeature.SPECIFIC_VERSION
-        if _safe_bool(config.get("support_backup", True), True):
+        if self._support_backup:
             self._attr_supported_features |= UpdateEntityFeature.BACKUP
         if self._release_notes is not None:
             self._attr_supported_features |= UpdateEntityFeature.RELEASE_NOTES
@@ -814,8 +1064,7 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
 
     async def async_install(self, version, backup: bool, **kwargs) -> None:
         target_version = version or self._attr_latest_version
-        configured_versions = _string_list(self._config.get("versions"))
-        if configured_versions and str(target_version) not in configured_versions:
+        if self._versions and str(target_version) not in self._versions:
             raise ValueError(f"Invalid update version: {target_version}")
         self._attr_installed_version = str(target_version)
         self._virtual_attributes["last_install_backup"] = backup
@@ -824,6 +1073,32 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
 
     async def async_release_notes(self) -> str | None:
         return self._release_notes
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "versions":
+            value = _template_string_list(value, name)
+            changed = self._versions != value
+            self._versions = value
+            return changed
+        if name == "support_backup":
+            value = value if isinstance(value, bool) else self._template_to_bool(value)
+            changed = self._support_backup != value
+            self._support_backup = value
+            return changed
+        if name == "release_notes":
+            value = None if value is None else str(value)
+            changed = self._release_notes != value
+            self._release_notes = value
+            return changed
+        if name in {"installed_version", "latest_version", "release_summary", "release_url"}:
+            value = None if value is None else str(value)
+        if name == "state":
+            name = "latest_version"
+            value = str(value)
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        self._refresh_supported_features()
 
 
 async def async_setup_generic_platform(hass, config, async_add_entities, domain):

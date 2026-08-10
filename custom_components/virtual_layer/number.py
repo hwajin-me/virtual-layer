@@ -195,6 +195,7 @@ class VirtualNumber(VirtualEntity, NumberEntity):
         self._attr_unit_of_measurement = config.get(CONF_UNIT_OF_MEASUREMENT)
         if not self._attr_unit_of_measurement and self._attr_device_class in UNITS_OF_MEASUREMENT:
             self._attr_unit_of_measurement = UNITS_OF_MEASUREMENT[self._attr_device_class]
+        self._attr_native_unit_of_measurement = self._attr_unit_of_measurement
 
         _LOGGER.debug(f"VirtualNumber: {self.name} created")
 
@@ -259,3 +260,48 @@ class VirtualNumber(VirtualEntity, NumberEntity):
 
     def set_state(self, value) -> None:
         self.set(value)
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        aliases = {
+            "min": "native_min_value",
+            "max": "native_max_value",
+            "step": "native_step",
+            "value": "native_value",
+            "state": "native_value",
+            "unit": "native_unit_of_measurement",
+            "unit_of_measurement": "native_unit_of_measurement",
+        }
+        name = aliases.get(name, name)
+        if name in {"native_min_value", "native_max_value", "native_value"}:
+            value = self._finite_bound(value, float("nan"))
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be a finite number")
+        elif name == "native_step":
+            value = self._finite_bound(value, float("nan"))
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError("native_step must be a positive finite number")
+        elif name == "mode":
+            try:
+                value = NumberMode(value)
+            except (TypeError, ValueError) as err:
+                raise ValueError("mode must be auto, box, or slider") from err
+        elif name == "device_class":
+            try:
+                value = None if value in {None, ""} else NumberDeviceClass(value)
+            except (TypeError, ValueError) as err:
+                raise ValueError(f"Invalid number device class: {value}") from err
+        elif name == "native_unit_of_measurement":
+            value = None if value in {None, ""} else str(value)
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_native_min_value > self._attr_native_max_value:
+            self._attr_native_min_value, self._attr_native_max_value = (
+                self._attr_native_max_value,
+                self._attr_native_min_value,
+            )
+        self._attr_native_value = self._normalize_value(
+            self._attr_native_value,
+            self._attr_native_min_value,
+        )
+        self._attr_unit_of_measurement = self._attr_native_unit_of_measurement

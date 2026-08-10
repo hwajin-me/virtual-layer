@@ -309,40 +309,51 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             config.get(CONF_TARGET_HUMIDITY_STEP),
         )
         self._attr_temperature_unit = config.get(CONF_TEMPERATURE_UNIT)
+        self._attr_fan_modes = config.get(CONF_FAN_MODES)
+        self._attr_preset_modes = config.get(CONF_PRESET_MODES)
+        self._attr_swing_modes = config.get(CONF_SWING_MODES)
+        self._attr_swing_horizontal_modes = config.get(CONF_SWING_HORIZONTAL_MODES)
 
         self._attr_supported_features = ClimateEntityFeature(0)
-        if any(mode != HVACMode.OFF for mode in self._attr_hvac_modes):
-            self._attr_supported_features |= ClimateEntityFeature.TURN_ON
-        if HVACMode.OFF in self._attr_hvac_modes:
-            self._attr_supported_features |= ClimateEntityFeature.TURN_OFF
-        if (
-            config.get(CONF_TARGET_HUMIDITY) is not None
-            or config.get(CONF_TARGET_HUMIDITY_STEP) is not None
-        ):
-            self._attr_supported_features |= ClimateEntityFeature.TARGET_HUMIDITY
-        if (
-            config.get(CONF_TARGET_TEMPERATURE_HIGH) is not None
-            or config.get(CONF_TARGET_TEMPERATURE_LOW) is not None
-        ):
-            self._attr_supported_features |= (
-                ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
-            )
-        else:
-            self._attr_supported_features |= ClimateEntityFeature.TARGET_TEMPERATURE
+        self._refresh_supported_features()
         self._enable_turn_on_off_backwards_compatibility = False
 
-        self._attr_fan_modes = config.get(CONF_FAN_MODES)
-        if self._attr_fan_modes:
-            self._attr_supported_features |= ClimateEntityFeature.FAN_MODE
-        self._attr_preset_modes = config.get(CONF_PRESET_MODES)
-        if self._attr_preset_modes:
-            self._attr_supported_features |= ClimateEntityFeature.PRESET_MODE
-        self._attr_swing_modes = config.get(CONF_SWING_MODES)
-        if self._attr_swing_modes:
-            self._attr_supported_features |= ClimateEntityFeature.SWING_MODE
-        self._attr_swing_horizontal_modes = config.get(CONF_SWING_HORIZONTAL_MODES)
-        if self._attr_swing_horizontal_modes:
-            self._attr_supported_features |= ClimateEntityFeature.SWING_HORIZONTAL_MODE
+    def _refresh_supported_features(self) -> None:
+        """Recalculate features after static or templated capabilities change."""
+        features = ClimateEntityFeature(0)
+        if any(mode != HVACMode.OFF for mode in self._attr_hvac_modes):
+            features |= ClimateEntityFeature.TURN_ON
+        if HVACMode.OFF in self._attr_hvac_modes:
+            features |= ClimateEntityFeature.TURN_OFF
+        if (
+            self._config.get(CONF_TARGET_HUMIDITY) is not None
+            or self._config.get(CONF_TARGET_HUMIDITY_STEP) is not None
+            or CONF_TARGET_HUMIDITY in self._native_templates
+            or "humidity" in self._native_templates
+            or "set_humidity" in self._command_actions
+        ):
+            features |= ClimateEntityFeature.TARGET_HUMIDITY
+        if (
+            self._config.get(CONF_TARGET_TEMPERATURE_HIGH) is not None
+            or self._config.get(CONF_TARGET_TEMPERATURE_LOW) is not None
+            or CONF_TARGET_TEMPERATURE_HIGH in self._native_templates
+            or CONF_TARGET_TEMPERATURE_LOW in self._native_templates
+        ):
+            features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+        else:
+            features |= ClimateEntityFeature.TARGET_TEMPERATURE
+        if self._attr_fan_modes or "set_fan_mode" in self._command_actions:
+            features |= ClimateEntityFeature.FAN_MODE
+        if self._attr_preset_modes or "set_preset_mode" in self._command_actions:
+            features |= ClimateEntityFeature.PRESET_MODE
+        if self._attr_swing_modes or "set_swing_mode" in self._command_actions:
+            features |= ClimateEntityFeature.SWING_MODE
+        if (
+            self._attr_swing_horizontal_modes
+            or "set_swing_horizontal_mode" in self._command_actions
+        ):
+            features |= ClimateEntityFeature.SWING_HORIZONTAL_MODE
+        self._attr_supported_features = features
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -469,6 +480,91 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             config.get(CONF_SWING_HORIZONTAL_MODE),
             self._attr_swing_horizontal_modes,
         )
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        name = {
+            "humidity": CONF_TARGET_HUMIDITY,
+            "target_temp_step": CONF_TARGET_TEMPERATURE_STEP,
+            "temperature": CONF_TARGET_TEMPERATURE,
+        }.get(name, name)
+        if name == CONF_HVAC_MODES:
+            if not isinstance(value, (list, tuple)) or not value:
+                raise ValueError("hvac_modes must render a non-empty list")
+            modes = [_as_hvac_mode(mode) for mode in value]
+            if any(mode is None for mode in modes) or len(set(modes)) != len(modes):
+                raise ValueError("hvac_modes contains invalid or duplicate modes")
+            value = modes
+        elif name in {
+            CONF_FAN_MODES,
+            CONF_PRESET_MODES,
+            CONF_SWING_MODES,
+            CONF_SWING_HORIZONTAL_MODES,
+        }:
+            if not isinstance(value, (list, tuple)):
+                raise ValueError(f"{name} must render a list")
+            value = [str(item) for item in value if str(item).strip()]
+            if len(set(value)) != len(value):
+                raise ValueError(f"{name} contains duplicate modes")
+        elif name == "hvac_mode":
+            value = _as_hvac_mode(value)
+            if value not in self._attr_hvac_modes:
+                raise ValueError(f"Unsupported HVAC mode: {value}")
+        elif name == CONF_HVAC_ACTION:
+            value = _as_hvac_action(value)
+            if value is None:
+                raise ValueError("Invalid HVAC action")
+        elif name in {
+            CONF_CURRENT_TEMPERATURE,
+            CONF_TARGET_TEMPERATURE,
+            CONF_TARGET_TEMPERATURE_HIGH,
+            CONF_TARGET_TEMPERATURE_LOW,
+        }:
+            value = self._bounded_temperature(value)
+        elif name in {CONF_CURRENT_HUMIDITY, CONF_TARGET_HUMIDITY}:
+            value = self._bounded_humidity(value)
+        elif name in {CONF_TARGET_TEMPERATURE_STEP, CONF_TARGET_HUMIDITY_STEP}:
+            value = _finite_step(value)
+            if value is None:
+                raise ValueError(f"{name} must render a positive number")
+        elif name == CONF_TEMPERATURE_UNIT:
+            value = str(value)
+            if value not in set(UnitOfTemperature):
+                raise ValueError("Invalid temperature unit")
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_min_temp > self._attr_max_temp:
+            self._attr_min_temp, self._attr_max_temp = (
+                self._attr_max_temp,
+                self._attr_min_temp,
+            )
+        if self._attr_min_humidity > self._attr_max_humidity:
+            self._attr_min_humidity, self._attr_max_humidity = (
+                self._attr_max_humidity,
+                self._attr_min_humidity,
+            )
+        for attribute in (
+            "_attr_current_temperature",
+            "_attr_target_temperature",
+            "_attr_target_temperature_high",
+            "_attr_target_temperature_low",
+        ):
+            setattr(self, attribute, self._bounded_temperature(getattr(self, attribute, None)))
+        for attribute in ("_attr_current_humidity", "_attr_target_humidity"):
+            setattr(self, attribute, self._bounded_humidity(getattr(self, attribute, None)))
+        if self._attr_hvac_mode not in self._attr_hvac_modes:
+            self._attr_hvac_mode = self._default_hvac_mode()
+        for current_name, modes_name in (
+            ("_attr_fan_mode", "_attr_fan_modes"),
+            ("_attr_preset_mode", "_attr_preset_modes"),
+            ("_attr_swing_mode", "_attr_swing_modes"),
+            ("_attr_swing_horizontal_mode", "_attr_swing_horizontal_modes"),
+        ):
+            if getattr(self, current_name, None) not in getattr(self, modes_name, []):
+                setattr(self, current_name, None)
+        if self._attr_hvac_mode == HVACMode.OFF:
+            self._attr_hvac_action = HVACAction.OFF
+        self._refresh_supported_features()
 
     @property
     def state_attributes(self):

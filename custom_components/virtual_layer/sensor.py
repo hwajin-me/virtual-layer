@@ -295,6 +295,39 @@ class VirtualSensor(VirtualEntity, SensorEntity):
     def set_state(self, value) -> None:
         self.set(value)
 
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        aliases = {
+            "unit": "native_unit_of_measurement",
+            "unit_of_measurement": "native_unit_of_measurement",
+            "value": "state",
+            "native_value": "state",
+        }
+        name = aliases.get(name, name)
+        if name == "device_class":
+            value = _as_device_class(value)
+        elif name == "state_class":
+            try:
+                value = _as_state_class(value)
+            except ValueError as err:
+                raise ValueError(f"Invalid sensor state class: {value}") from err
+        elif name == "options":
+            if not isinstance(value, (list, tuple, set)):
+                raise ValueError("options must render a list")
+            value = [str(item).strip() for item in value if str(item).strip()]
+            if len(set(value)) != len(value):
+                raise ValueError("options contains duplicate values")
+        elif name == "native_unit_of_measurement":
+            value = None if value is None or value == "" else str(value)
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        self._attr_unit_of_measurement = self._attr_native_unit_of_measurement
+        self._attr_native_value = self._safe_native_value(self._attr_native_value)
+        self._attr_state = self._attr_native_value
+        if self._attr_options is not None and str(self._attr_native_value) not in self._attr_options:
+            self._attr_native_value = None
+            self._attr_state = None
+
 
 class VirtualDiagnosticSensor(VirtualSensor):
     """Expose a source entity's current state and attributes for diagnostics."""

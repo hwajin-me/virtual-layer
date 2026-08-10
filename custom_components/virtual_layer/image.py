@@ -364,6 +364,33 @@ class VirtualImage(VirtualEntity, ImageEntity):
             return image
         return None
 
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        backing_fields = {
+            CONF_IMAGE_PATH: "_image_path",
+            CONF_SOURCE_ENTITY: "_source_entity",
+            CONF_SVG: "_inline_svg",
+        }
+        if name in backing_fields:
+            value = None if value is None or value == "" else str(value)
+            if name == CONF_SOURCE_ENTITY and value is not None:
+                value = _image_entity_id(value)
+            attribute = backing_fields[name]
+            changed = getattr(self, attribute) != value
+            setattr(self, attribute, value)
+            return changed
+        if name == CONF_IMAGE_URL:
+            value = None if value is None or value == "" else cv.url(str(value))
+            changed = self._image_url != value
+            self._image_url = value
+            self._attr_image_url = value
+            return changed
+        if name == CONF_CONTENT_TYPE:
+            value = str(value).strip()
+            if not value.startswith("image/"):
+                raise ValueError("content_type must be an image MIME type")
+            name = "content_type"
+        return super()._apply_native_template_value(name, value)
+
     def set_state(self, value) -> None:
         """Keep generic/template state updates harmless for image entities."""
         self.async_schedule_update_ha_state()

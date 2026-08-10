@@ -13,6 +13,7 @@ from homeassistant.components.switch import (
     DOMAIN as PLATFORM_DOMAIN,
 )
 from homeassistant.components.switch import (
+    SwitchDeviceClass,
     SwitchEntity,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -108,3 +109,11 @@ class VirtualSwitch(VirtualEntity, SwitchEntity):
 
     def set_state(self, value) -> None:
         self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "device_class":
+            try:
+                value = None if value is None or value == "" else SwitchDeviceClass(value)
+            except ValueError as err:
+                raise ValueError(f"Invalid switch device class: {value}") from err
+        return super()._apply_native_template_value(name, value)

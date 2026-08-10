@@ -169,18 +169,24 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
         self._attr_activity = _as_activity(config.get(CONF_ACTIVITY))
         self._battery_level = _as_battery_level(config.get(CONF_BATTERY_LEVEL))
         self._attr_fan_speed = config.get(CONF_FAN_SPEED)
-        self._attr_fan_speed_list = config.get(CONF_FAN_SPEED_LIST, [])
-        self._attr_supported_features = config.get(
+        self._attr_fan_speed_list = list(config.get(CONF_FAN_SPEED_LIST, []))
+        self._base_supported_features = config.get(
             CONF_SUPPORTED_FEATURES, DEFAULT_SUPPORTED_FEATURES
         )
-        if self._attr_fan_speed_list:
-            self._attr_supported_features |= VacuumEntityFeature.FAN_SPEED
-        # HA removes the legacy vacuum battery feature in 2026.8. A linked
-        # battery sensor is generated from this configuration instead.
-        self._attr_supported_features &= ~VacuumEntityFeature.BATTERY
+        self._attr_supported_features = VacuumEntityFeature(0)
+        self._refresh_supported_features()
 
         self._last_command: dict[str, Any] | None = None
         _LOGGER.debug("VirtualVacuum: %s created", self.name)
+
+    def _refresh_supported_features(self) -> None:
+        features = VacuumEntityFeature(self._base_supported_features)
+        if self._attr_fan_speed_list or "set_fan_speed" in self._command_actions:
+            features |= VacuumEntityFeature.FAN_SPEED
+        # HA removes the legacy vacuum battery feature in 2026.8. A linked
+        # battery sensor is generated from this configuration instead.
+        features &= ~VacuumEntityFeature.BATTERY
+        self._attr_supported_features = features
 
     @property
     def activity(self) -> VacuumActivity | None:
@@ -287,3 +293,39 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
             } else VacuumActivity.IDLE
         self._attr_activity = activity
         self.async_schedule_update_ha_state()
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name in {"state", CONF_ACTIVITY, "activity"}:
+            activity = _as_activity(value)
+            if activity is None:
+                raise ValueError(f"Invalid vacuum activity: {value}")
+            name = "activity"
+            value = activity
+        elif name == CONF_BATTERY_LEVEL:
+            value = _as_battery_level(value)
+            if value is None:
+                raise ValueError("battery_level must be between 0 and 100")
+            changed = self._battery_level != value
+            self._battery_level = value
+            return changed
+        elif name == CONF_FAN_SPEED_LIST:
+            if not isinstance(value, (list, tuple, set)):
+                raise ValueError("fan_speed_list must render a list")
+            value = [str(item).strip() for item in value if str(item).strip()]
+            if len(set(value)) != len(value):
+                raise ValueError("fan_speed_list contains duplicate values")
+        elif name == CONF_FAN_SPEED:
+            value = None if value is None or value == "" else str(value)
+            if value is not None and self._attr_fan_speed_list and value not in self._attr_fan_speed_list:
+                raise ValueError(f"Unsupported vacuum fan speed: {value}")
+        elif name == CONF_SUPPORTED_FEATURES:
+            value = _as_supported_features(value)
+            changed = self._base_supported_features != value
+            self._base_supported_features = value
+            return changed
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_fan_speed not in self._attr_fan_speed_list:
+            self._attr_fan_speed = None
+        self._refresh_supported_features()

@@ -4,10 +4,13 @@ This component provides support for a virtual sensor.
 This class adds persistence to an entity.
 """
 
+import inspect
 import logging
 import math
 import pprint
 from datetime import timedelta
+from enum import Enum
+from functools import wraps
 from math import isfinite
 
 import homeassistant.helpers.config_validation as cv
@@ -19,7 +22,7 @@ from homeassistant.const import (
     CONF_ICON,
     STATE_CLOSED,
 )
-from homeassistant.core import callback
+from homeassistant.core import Context, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import (
     TrackTemplate,
@@ -29,6 +32,8 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.script import Script
+from homeassistant.helpers.script_variables import ScriptRunVariables
 from homeassistant.helpers.template import Template, TemplateError
 from homeassistant.util import slugify
 
@@ -49,6 +54,8 @@ def virtual_schema(default_initial_value: str, extra_attrs):
         vol.Optional(CONF_AUTO_HELPER): object,
         vol.Optional(CONF_ATTRIBUTE_SOURCES, default=dict): dict,
         vol.Optional(CONF_ATTRIBUTE_TEMPLATES, default=dict): dict,
+        vol.Optional(CONF_NATIVE_TEMPLATES, default=dict): dict,
+        vol.Optional(CONF_COMMAND_ACTIONS, default=dict): dict,
         vol.Optional(CONF_AVAILABILITY_TEMPLATE): cv.template,
         vol.Optional(CONF_EVENT_HOOKS, default=list): vol.All(cv.ensure_list, [dict]),
         vol.Optional(CONF_PERSISTENT, default=DEFAULT_PERSISTENT): cv.boolean,
@@ -79,6 +86,50 @@ class VirtualEntity(RestoreEntity):
     # Are we saving/restoring this entity
     _persistent: bool = True
 
+    _COMMAND_METHOD_EXCLUSIONS = frozenset({
+        "async_added_to_hass",
+        "async_will_remove_from_hass",
+        "async_camera_image",
+        "async_image",
+    })
+    _NATIVE_TEMPLATE_RESERVED_NAMES = RESERVED_NATIVE_TEMPLATE_NAMES
+
+    def __init_subclass__(cls, **kwargs):
+        """Add configurable actions to native entity commands."""
+        super().__init_subclass__(**kwargs)
+        methods = dict(cls.__dict__)
+        for base in cls.__mro__[1:]:
+            if base is VirtualEntity:
+                break
+            for method_name, method in base.__dict__.items():
+                methods.setdefault(method_name, method)
+        for method_name, method in tuple(methods.items()):
+            if (
+                not method_name.startswith("async_")
+                or method_name.startswith("async_virtual_")
+                or method_name in cls._COMMAND_METHOD_EXCLUSIONS
+                or not inspect.iscoroutinefunction(method)
+                or getattr(method, "_virtual_action_wrapped", False)
+            ):
+                continue
+
+            command = method_name.removeprefix("async_")
+
+            @wraps(method)
+            async def _with_command_action(self, *args, __method=method, __command=command, **kwargs):
+                action_result = await self._async_run_command_action(
+                    __command,
+                    __method,
+                    args,
+                    kwargs,
+                )
+                if action_result is False:
+                    return None
+                return await __method(self, *args, **kwargs)
+
+            _with_command_action._virtual_action_wrapped = True
+            setattr(cls, method_name, _with_command_action)
+
     def __init__(self, config, domain, old_style : bool = False):
         """Initialize an Virtual Sensor."""
         _LOGGER.debug(f"creating-virtual-{domain}={config}")
@@ -102,6 +153,14 @@ class VirtualEntity(RestoreEntity):
             for name, template in dict(config.get(CONF_ATTRIBUTE_TEMPLATES, {})).items()
             if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
         }
+        self._native_templates = {
+            str(name).strip(): template
+            for name, template in dict(config.get(CONF_NATIVE_TEMPLATES, {})).items()
+            if self._valid_native_template_name(name)
+        }
+        self._command_actions = dict(config.get(CONF_COMMAND_ACTIONS, {}))
+        self._command_scripts = {}
+        self._running_command_actions = set()
         self._pull_interval = config.get(CONF_PULL_INTERVAL, 0)
         self._source_entities = config.get(CONF_SOURCE_ENTITIES, [])
         self._template_sources = {
@@ -214,6 +273,9 @@ class VirtualEntity(RestoreEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Call when entity is being removed from hass."""
+        for script in self._command_scripts.values():
+            await script.async_stop()
+        self._command_scripts = {}
         for remove_listener in self._refresh_remove_listeners:
             remove_listener()
         for remove_listener in self._hook_debounce_cancelers.values():
@@ -283,6 +345,7 @@ class VirtualEntity(RestoreEntity):
                 self._availability_template,
                 self._icon_template,
                 *self._attribute_templates.values(),
+                *self._native_templates.values(),
             )
             if template
         ]
@@ -464,14 +527,161 @@ class VirtualEntity(RestoreEntity):
             CONF_ATTRIBUTE: source.get(CONF_ATTRIBUTE, "state"),
         }
 
-    def _render_template(self, template, extra_variables=None):
+    def _render_template(self, template, extra_variables=None, *, parse_result=False):
         variables = self._template_variables()
         if extra_variables:
             variables.update(extra_variables)
         if isinstance(template, Template):
             template.hass = self.hass
-            return template.async_render(variables=variables, parse_result=False)
-        return Template(str(template), self.hass).async_render(variables=variables, parse_result=False)
+            return template.async_render(variables=variables, parse_result=parse_result)
+        return Template(str(template), self.hass).async_render(
+            variables=variables,
+            parse_result=parse_result,
+        )
+
+    @classmethod
+    def _valid_native_template_name(cls, name) -> bool:
+        """Return whether a native template can safely target this name."""
+        return (
+            isinstance(name, str)
+            and name.strip().isidentifier()
+            and not name.strip().startswith("_")
+            and name.strip() not in cls._NATIVE_TEMPLATE_RESERVED_NAMES
+        )
+
+    @staticmethod
+    def _coerce_like(current, value):
+        """Preserve native property types when a template returns text."""
+        if value is None:
+            return None
+        if current is None:
+            return value
+        if isinstance(current, Enum):
+            return type(current)(value)
+        if isinstance(current, bool):
+            if isinstance(value, bool):
+                return value
+            normalized = str(value).strip().lower()
+            if normalized in {"1", "on", "true", "yes", "y", "t"}:
+                return True
+            if normalized in {"0", "off", "false", "no", "n", "f"}:
+                return False
+            raise ValueError(f"Expected a boolean, got {value!r}")
+        if isinstance(current, int) and not isinstance(current, bool):
+            return int(value)
+        if isinstance(current, float):
+            value = float(value)
+            if not math.isfinite(value):
+                raise ValueError("Native template returned a non-finite number")
+            return value
+        if isinstance(current, (list, tuple)):
+            if not isinstance(value, (list, tuple)):
+                raise TypeError("Native list template must return a list")
+            return list(value)
+        return value
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        """Apply a rendered value to a Home Assistant native property."""
+        if name == "state":
+            self.set_state(value)
+            return True
+        if name == "available":
+            value = self._template_to_bool(value)
+            if self._attr_available == value:
+                return False
+            self._attr_available = value
+            return True
+        if name == "icon":
+            value = str(value).strip() or self._configured_icon
+            if self._attr_icon == value:
+                return False
+            self._attr_icon = value
+            return True
+
+        attribute_name = f"_attr_{name}"
+        current = getattr(self, attribute_name, None)
+        value = self._coerce_like(current, value)
+        if current == value:
+            return False
+        setattr(self, attribute_name, value)
+        return True
+
+    def _native_templates_applied(self) -> None:
+        """Allow a platform to reconcile dependent native properties."""
+
+    def _native_template_priority(self, name: str) -> int:
+        """Apply capabilities and ranges before values which depend on them."""
+        if name.endswith(("_modes", "_list")) or name in {
+            "available_modes",
+            "modes",
+            "options",
+            "source_list",
+            "sound_mode_list",
+        }:
+            return 0
+        if name.startswith(("min_", "max_")) or name.endswith(("_step", "_count")):
+            return 1
+        if name in {"state", "is_on"}:
+            return 3
+        return 2
+
+    def _command_action_spec(self, command: str):
+        spec = self._command_actions.get(command)
+        if spec is None:
+            return None
+        if isinstance(spec, list):
+            return spec, True
+        if not isinstance(spec, dict):
+            return None
+        if "sequence" in spec:
+            return spec.get("sequence", []), bool(spec.get("optimistic", True))
+        return [spec], True
+
+    async def _async_run_command_action(self, command, method, args, kwargs):
+        """Run the configured HA action sequence before a native command."""
+        action_spec = self._command_action_spec(command)
+        if action_spec is None or command in self._running_command_actions:
+            return True
+        sequence, optimistic = action_spec
+        if not sequence:
+            return optimistic
+
+        script = self._command_scripts.get(command)
+        if script is None:
+            script = Script(
+                self.hass,
+                cv.SCRIPT_SCHEMA(sequence),
+                f"{self.entity_id} {command}",
+                COMPONENT_DOMAIN,
+                logger=_LOGGER,
+                top_level=False,
+            )
+            self._command_scripts[command] = script
+
+        try:
+            signature = inspect.signature(method)
+            bound = signature.bind_partial(self, *args, **kwargs)
+            variables = {}
+            for name, value in bound.arguments.items():
+                if name == "self":
+                    continue
+                if signature.parameters[name].kind is inspect.Parameter.VAR_KEYWORD:
+                    variables.update(value)
+                else:
+                    variables[name] = value
+            variables.update({
+                "command": command,
+                "entity_id": self.entity_id,
+                "this": self.hass.states.get(self.entity_id),
+            })
+            context = self._context or Context()
+            run_variables = ScriptRunVariables.create_top_level(variables)
+            run_variables["context"] = context
+            self._running_command_actions.add(command)
+            await script.async_run(run_variables, context=context)
+        finally:
+            self._running_command_actions.discard(command)
+        return optimistic
 
     def _hook_template_variables(self, hook, event):
         trigger = str(hook.get("trigger", "state")).lower()
@@ -554,10 +764,34 @@ class VirtualEntity(RestoreEntity):
 
         for name, template in self._attribute_templates.items():
             try:
-                self._virtual_attributes[name] = self._render_template(template)
+                self._virtual_attributes[name] = self._render_template(
+                    template,
+                    parse_result=True,
+                )
                 changed = True
             except (TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to render attribute template {name} for {self.entity_id}: {e}")
+
+        native_changed = False
+        for name, template in sorted(
+            self._native_templates.items(),
+            key=lambda item: self._native_template_priority(item[0]),
+        ):
+            try:
+                native_changed = self._apply_native_template_value(
+                    name,
+                    self._render_template(template, parse_result=True),
+                ) or native_changed
+            except (TemplateError, TypeError, ValueError) as e:
+                _LOGGER.warning(
+                    "Unable to render native template %s for %s: %s",
+                    name,
+                    self.entity_id,
+                    e,
+                )
+        if native_changed:
+            self._native_templates_applied()
+            changed = True
 
         if self._attribute_sources:
             try:
@@ -628,7 +862,11 @@ class VirtualEntity(RestoreEntity):
                 if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES:
                     continue
                 try:
-                    self._virtual_attributes[name] = self._render_template(template, variables)
+                    self._virtual_attributes[name] = self._render_template(
+                        template,
+                        variables,
+                        parse_result=True,
+                    )
                     changed = True
                 except (TemplateError, TypeError, ValueError) as e:
                     _LOGGER.warning(f"Unable to render event hook attribute template {name} for {self.entity_id}: {e}")
@@ -804,6 +1042,40 @@ class VirtualOpenableEntity(VirtualEntity):
             self._set_position(0)
         else:
             self._set_position(int(value))
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name in {
+            "current_position",
+            "current_cover_position",
+            "current_valve_position",
+            "position",
+        }:
+            try:
+                position = float(value)
+            except (TypeError, ValueError) as err:
+                raise ValueError("position must be between 0 and 100") from err
+            if not isfinite(position) or not 0 <= position <= 100:
+                raise ValueError("position must be between 0 and 100")
+            changed = self._current_position != position
+            self._cancel_timer()
+            self._current_position = position
+            self._target_position = None
+            self._positions_per_tick = None
+            self._attr_is_closed = position == 0
+            self._attr_is_opening = False
+            self._attr_is_closing = False
+            return changed
+        if name in {"is_opening", "is_closing", "is_closed"}:
+            value = value if isinstance(value, bool) else self._template_to_bool(value)
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_is_opening and self._attr_is_closing:
+            self._attr_is_closing = False
+        if self._attr_is_opening or self._attr_is_closing:
+            self._attr_is_closed = False
+        elif self._current_position == 0:
+            self._attr_is_closed = True
 
     @callback
     def _update_position(self, _now) -> None:

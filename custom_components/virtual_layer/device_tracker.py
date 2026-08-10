@@ -893,6 +893,73 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             return
         self.move_to_location(value)
 
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name in {"state", "location"}:
+            value = None if value is None or value == "" else str(value)
+            changed = self._location != value or bool(self._coords)
+            self._location = value
+            if value is not None:
+                self._coords = {}
+                self._gps_accuracy = 0
+            return changed
+        if name == CONF_GPS:
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                raise ValueError("gps must render [latitude, longitude]")
+            latitude, longitude = self._validated_coordinates(*value)
+            coords = {ATTR_LATITUDE: latitude, ATTR_LONGITUDE: longitude, ATTR_RADIUS: 0}
+            changed = self._coords != coords or self._location is not None
+            self._coords = coords
+            self._location = None
+            return changed
+        if name in {ATTR_LATITUDE, ATTR_LONGITUDE}:
+            latitude = value if name == ATTR_LATITUDE else self.latitude
+            longitude = value if name == ATTR_LONGITUDE else self.longitude
+            if latitude is None or longitude is None:
+                try:
+                    parsed = float(value)
+                except (TypeError, ValueError) as err:
+                    raise ValueError(f"{name} must be numeric") from err
+                limit = 90 if name == ATTR_LATITUDE else 180
+                if not isfinite(parsed) or not -limit <= parsed <= limit:
+                    raise ValueError(f"Invalid {name}: {value}")
+                changed = self._coords.get(name) != parsed
+                self._coords[name] = parsed
+                self._location = None
+                return changed
+            latitude, longitude = self._validated_coordinates(latitude, longitude)
+            coords = {ATTR_LATITUDE: latitude, ATTR_LONGITUDE: longitude, ATTR_RADIUS: 0}
+            changed = self._coords != coords or self._location is not None
+            self._coords = coords
+            self._location = None
+            return changed
+        if name in {CONF_GPS_ACCURACY, "location_accuracy"}:
+            try:
+                value = int(value)
+            except (TypeError, ValueError) as err:
+                raise ValueError("location_accuracy must be a non-negative integer") from err
+            if value < 0:
+                raise ValueError("location_accuracy must be a non-negative integer")
+            changed = self._gps_accuracy != value
+            self._gps_accuracy = value
+            return changed
+        return super()._apply_native_template_value(name, value)
+
+    @staticmethod
+    def _validated_coordinates(latitude, longitude) -> tuple[float, float]:
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except (TypeError, ValueError) as err:
+            raise ValueError("GPS coordinates must be numeric") from err
+        if (
+            not isfinite(latitude)
+            or not isfinite(longitude)
+            or not -90 <= latitude <= 90
+            or not -180 <= longitude <= 180
+        ):
+            raise ValueError("GPS coordinates are outside valid latitude/longitude ranges")
+        return latitude, longitude
+
 
 async def async_virtual_move_service(hass, call):
     for entity_id in call.data['entity_id']:

@@ -144,17 +144,35 @@ class VirtualFan(VirtualEntity, FanEntity):
             config.get(CONF_PERCENTAGE)
         )
         self._configured_preset_mode = config.get(CONF_PRESET_MODE)
-        self._attr_supported_features = FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
-        if self._attr_speed_count > 0:
-            self._attr_supported_features |= FanEntityFeature.SET_SPEED
-        if config.get(CONF_OSCILLATE, False):
-            self._attr_supported_features |= FanEntityFeature.OSCILLATE
-        if config.get(CONF_DIRECTION, False):
-            self._attr_supported_features |= FanEntityFeature.DIRECTION
-        if self._attr_preset_modes:
-            self._attr_supported_features |= FanEntityFeature.PRESET_MODE
+        self._attr_supported_features = FanEntityFeature(0)
+        self._refresh_supported_features()
 
         _LOGGER.debug(f"VirtualFan: {self.name} created")
+
+    def _refresh_supported_features(self) -> None:
+        """Recalculate features after a capability template changes."""
+        features = FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
+        if (
+            self._attr_speed_count > 0
+            or "percentage" in self._native_templates
+            or "set_percentage" in self._command_actions
+        ):
+            features |= FanEntityFeature.SET_SPEED
+        if (
+            self._config.get(CONF_OSCILLATE, False)
+            or "oscillating" in self._native_templates
+            or "oscillate" in self._command_actions
+        ):
+            features |= FanEntityFeature.OSCILLATE
+        if (
+            self._config.get(CONF_DIRECTION, False)
+            or "current_direction" in self._native_templates
+            or "set_direction" in self._command_actions
+        ):
+            features |= FanEntityFeature.DIRECTION
+        if self._attr_preset_modes or "set_preset_mode" in self._command_actions:
+            features |= FanEntityFeature.PRESET_MODE
+        self._attr_supported_features = features
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -250,6 +268,40 @@ class VirtualFan(VirtualEntity, FanEntity):
             }
         )
 
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "modes":
+            name = "preset_modes"
+        if name == "preset_modes":
+            if not isinstance(value, (list, tuple)):
+                raise ValueError("preset_modes must render a list")
+            value = [str(item) for item in value if str(item).strip()]
+            if len(set(value)) != len(value):
+                raise ValueError("preset_modes contains duplicate values")
+        elif name == "percentage":
+            value = self._safe_percentage(value)
+            if value is None:
+                raise ValueError("percentage must be between 0 and 100")
+        elif name == "speed_count":
+            value = int(value)
+            if value < 0:
+                raise ValueError("speed_count cannot be negative")
+        elif name == "current_direction":
+            value = str(value)
+            if value not in {"forward", "reverse"}:
+                raise ValueError("current_direction must be forward or reverse")
+        elif name == "oscillating" and not isinstance(value, bool):
+            value = self._template_to_bool(value)
+        elif name in {"state", "is_on"}:
+            old_percentage = self._attr_percentage
+            self.set_state(value)
+            return old_percentage != self._attr_percentage
+        return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        if self._attr_preset_mode not in self._attr_preset_modes:
+            self._attr_preset_mode = None
+        self._refresh_supported_features()
+
     def _set_percentage(self, percentage: int) -> None:
         percentage = int(percentage)
         if not 0 <= percentage <= 100:
@@ -315,7 +367,7 @@ class VirtualFan(VirtualEntity, FanEntity):
         """Set oscillation."""
         _LOGGER.debug(f"setting oscillate of {self.name} to {oscillating}")
         if not isinstance(oscillating, bool):
-            raise ValueError("Oscillating must be a boolean")
+            raise TypeError("Oscillating must be a boolean")
         self._attr_oscillating = oscillating
         self._update_attributes()
         self.async_write_ha_state()

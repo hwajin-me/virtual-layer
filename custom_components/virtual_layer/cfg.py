@@ -484,7 +484,7 @@ def _normalize_common_entity_config(entity, device_name, index):
             entity[CONF_MIN] = _DEFAULT_NUMBER_MIN
             entity[CONF_MAX] = _DEFAULT_NUMBER_MAX
 
-    for key in (CONF_ATTRIBUTES, CONF_ATTRIBUTE_TEMPLATES):
+    for key in (CONF_ATTRIBUTES, CONF_ATTRIBUTE_TEMPLATES, CONF_NATIVE_TEMPLATES):
         if key in entity and not isinstance(entity[key], Mapping):
             _LOGGER.warning(
                 "Resetting invalid %s for device %s at index %s",
@@ -493,6 +493,54 @@ def _normalize_common_entity_config(entity, device_name, index):
                 index,
             )
             entity[key] = {}
+
+    native_templates = entity.get(CONF_NATIVE_TEMPLATES, {})
+    if isinstance(native_templates, Mapping):
+        entity[CONF_NATIVE_TEMPLATES] = {
+            name.strip(): template
+            for name, template in native_templates.items()
+            if isinstance(name, str)
+            and name.strip().isidentifier()
+            and not name.strip().startswith("_")
+            and name.strip() not in RESERVED_NATIVE_TEMPLATE_NAMES
+            and isinstance(template, str)
+            and template.strip()
+        }
+
+    command_actions = entity.get(CONF_COMMAND_ACTIONS)
+    if command_actions is not None:
+        if not isinstance(command_actions, Mapping):
+            _LOGGER.warning(
+                "Resetting invalid command actions for device %s at index %s",
+                device_name,
+                index,
+            )
+            entity[CONF_COMMAND_ACTIONS] = {}
+        else:
+            normalized_actions = {}
+            valid_commands = _platform_command_names(entity.get(CONF_PLATFORM))
+            for command, spec in command_actions.items():
+                if not isinstance(command, str) or not command.strip().isidentifier():
+                    continue
+                if command.strip() not in valid_commands:
+                    continue
+                sequence = spec
+                if isinstance(spec, Mapping) and "sequence" in spec:
+                    if set(spec) - {"sequence", "optimistic"}:
+                        continue
+                    if not isinstance(spec.get("optimistic", True), bool):
+                        continue
+                    sequence = spec.get("sequence")
+                elif isinstance(spec, Mapping):
+                    sequence = [dict(spec)]
+                if not isinstance(sequence, list) or not sequence:
+                    continue
+                try:
+                    cv.SCRIPT_SCHEMA(sequence)
+                except vol.Invalid:
+                    continue
+                normalized_actions[command.strip()] = spec
+            entity[CONF_COMMAND_ACTIONS] = normalized_actions
 
     for key, default_attribute in (
         (CONF_ATTRIBUTE_SOURCES, None),
@@ -599,6 +647,11 @@ def _normalize_common_entity_config(entity, device_name, index):
     return entity
 
 
+def _platform_command_names(platform) -> set[str]:
+    """Return action-capable native commands implemented for a domain."""
+    return set(VIRTUAL_ENTITY_COMMANDS.get(platform, ()))
+
+
 def _sanitize_stored_value(value):
     """Make damaged config-entry values JSON-safe without dropping the entity."""
     if isinstance(value, Mapping):
@@ -671,6 +724,8 @@ def _diagnostic_configuration(entity, platform):
         "template_sources": copy.deepcopy(entity.get(CONF_TEMPLATE_SOURCES, {})),
         "attribute_sources": copy.deepcopy(entity.get(CONF_ATTRIBUTE_SOURCES, {})),
         "attribute_templates": copy.deepcopy(entity.get(CONF_ATTRIBUTE_TEMPLATES, {})),
+        "native_templates": copy.deepcopy(entity.get(CONF_NATIVE_TEMPLATES, {})),
+        "command_actions": copy.deepcopy(entity.get(CONF_COMMAND_ACTIONS, {})),
         "attributes": copy.deepcopy(entity.get(CONF_ATTRIBUTES, {})),
         "event_hooks": copy.deepcopy(entity.get(CONF_EVENT_HOOKS, [])),
     }

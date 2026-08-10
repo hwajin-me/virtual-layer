@@ -62,6 +62,7 @@ from custom_components.virtual_layer.config_flow import (
     ACTION_FINISH,
     ACTION_MANAGE_DEVICES,
     CONF_ACTION,
+    CONF_COMMAND_ACTIONS_JSON,
     CONF_DEVICE_ID,
     CONF_DEVICE_MANUFACTURER,
     CONF_DEVICE_MODEL,
@@ -72,6 +73,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_ENTITY_NAME,
     CONF_HELPER_UPDATE_MODE,
     CONF_MANAGED_DEVICE_NAME,
+    CONF_NATIVE_TEMPLATES_JSON,
     CONF_REFERENCE_ENTITY_ID,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TARGET_DEVICE_NAME,
@@ -103,6 +105,7 @@ from custom_components.virtual_layer.const import (
     CONF_AUTO_HELPER,
     CONF_AVAILABILITY_TEMPLATE,
     CONF_CLASS,
+    CONF_COMMAND_ACTIONS,
     CONF_CONFIGURATION_URL,
     CONF_EVENT_HOOKS,
     CONF_ICON_TEMPLATE,
@@ -113,6 +116,7 @@ from custom_components.virtual_layer.const import (
     CONF_MAX,
     CONF_MIN,
     CONF_MODEL,
+    CONF_NATIVE_TEMPLATES,
     CONF_PERSISTENT,
     CONF_PULL_INTERVAL,
     CONF_SOURCE_ENTITIES,
@@ -125,6 +129,67 @@ from custom_components.virtual_layer.const import (
 from custom_components.virtual_layer.sensor import VirtualSensor
 
 pytestmark = pytest.mark.integration
+
+
+async def test_options_flow_persists_native_templates_and_command_actions(hass):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: []},
+    )
+    defaults = result["data_schema"]({})
+    native_templates = {
+        "fan_modes": "{{ state_attr('climate.real', 'fan_modes') }}",
+        "fan_mode": "{{ state_attr('climate.real', 'fan_mode') }}",
+    }
+    command_actions = {
+        "set_fan_mode": [
+            {
+                "action": "climate.set_fan_mode",
+                "target": {"entity_id": "climate.real"},
+                "data": {"fan_mode": "{{ fan_mode }}"},
+            }
+        ]
+    }
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_DEVICE_NAME: "Linked HVAC",
+            CONF_ENTITY_NAME: "Linked HVAC",
+            ATTR_ENTITY_ID: "climate.linked_hvac",
+            CONF_PLATFORM: "climate",
+            CONF_INITIAL_VALUE: "off",
+            CONF_NATIVE_TEMPLATES_JSON: json.dumps(native_templates),
+            CONF_COMMAND_ACTIONS_JSON: json.dumps(command_actions),
+        },
+    )
+    if result["type"] == FlowResultType.FORM:
+        defaults = result["data_schema"]({})
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                **defaults,
+                CONF_NATIVE_TEMPLATES_JSON: json.dumps(native_templates),
+                CONF_COMMAND_ACTIONS_JSON: json.dumps(command_actions),
+            },
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entity = result["data"][ATTR_DEVICES]["Linked HVAC"][0]
+    assert entity[CONF_NATIVE_TEMPLATES] == native_templates
+    assert entity[CONF_COMMAND_ACTIONS] == command_actions
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
@@ -3010,7 +3075,7 @@ async def test_custom_state_hook_updates_virtual_entity_from_configured_event(ha
 
     assert entity._attr_state == "wash"
     assert entity.extra_state_attributes["hook_entity"] == "sensor.hook_source"
-    assert entity.extra_state_attributes["previous_state"] == "None"
+    assert entity.extra_state_attributes["previous_state"] is None
     await entity.async_will_remove_from_hass()
 
 
@@ -3679,7 +3744,7 @@ async def test_virtual_entity_template_failures_do_not_block_other_templates(has
     entity.hass = hass
     entity.async_schedule_update_ha_state = Mock()
 
-    def render_template(template):
+    def render_template(template, _variables=None, *, parse_result=False):
         if template == "bad-template":
             raise ValueError("broken template")
         if template == "value-template":

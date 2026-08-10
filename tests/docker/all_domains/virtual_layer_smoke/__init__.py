@@ -141,6 +141,19 @@ def _entity_config(domain: str) -> dict:
             "swing_horizontal_mode": "left",
             "target_temperature": 22,
             "target_humidity": 45,
+            "native_templates": {
+                "fan_modes": "{{ ['low', 'medium', 'high', 'auto', 'turbo'] }}",
+                "preset_modes": "{{ ['none', 'eco', 'sleep', 'away'] }}",
+            },
+            "command_actions": {
+                "set_temperature": [{
+                    "action": "virtual_layer_smoke.capture",
+                    "data": {
+                        "command": "set_temperature",
+                        "value": "{{ temperature }}",
+                    },
+                }],
+            },
         },
         "cover": {"open_close_duration": 0},
         "fan": {
@@ -148,6 +161,18 @@ def _entity_config(domain: str) -> dict:
             "oscillate": True,
             "direction": True,
             "modes": ["eco", "boost"],
+            "native_templates": {
+                "preset_modes": "{{ ['eco', 'boost'] }}",
+            },
+            "command_actions": {
+                "set_percentage": [{
+                    "action": "virtual_layer_smoke.capture",
+                    "data": {
+                        "command": "set_percentage",
+                        "value": "{{ percentage }}",
+                    },
+                }],
+            },
         },
         "humidifier": {
             "min_humidity": 30,
@@ -155,6 +180,9 @@ def _entity_config(domain: str) -> dict:
             "target_humidity": 50,
             "modes": ["normal", "eco"],
             "mode": "normal",
+            "native_templates": {
+                "available_modes": "{{ ['normal', 'eco'] }}",
+            },
         },
         "light": {
             "support_brightness": True,
@@ -165,31 +193,83 @@ def _entity_config(domain: str) -> dict:
             "support_effect": True,
             "initial_effect_list": ["none", "rainbow"],
             "initial_effect": "none",
+            "native_templates": {
+                "supported_color_modes": "{{ ['hs', 'color_temp'] }}",
+                "effect_list": "{{ ['none', 'rainbow'] }}",
+            },
         },
         "lock": {"support_open": True},
         "media_player": {
             "source_list": ["TV", "Radio"],
             "source": "TV",
+            "native_templates": {
+                "source_list": "{{ ['TV', 'Radio'] }}",
+            },
         },
-        "number": {"min": 0, "max": 100, "step": 0.5, "mode": "slider"},
-        "remote": {"activity_list": ["TV", "Music"]},
-        "select": {"options": ["eco", "boost"]},
-        "siren": {"available_tones": ["alarm"]},
-        "text": {"min": 1, "max": 32},
+        "number": {
+            "min": 0,
+            "max": 100,
+            "step": 0.5,
+            "mode": "slider",
+            "native_templates": {
+                "min": "{{ 0 }}",
+                "max": "{{ 100 }}",
+                "step": "{{ 0.5 }}",
+            },
+        },
+        "remote": {
+            "activity_list": ["TV", "Music"],
+            "native_templates": {"activity_list": "{{ ['TV', 'Music'] }}"},
+        },
+        "select": {
+            "options": ["eco", "boost"],
+            "native_templates": {"options": "{{ ['eco', 'boost'] }}"},
+        },
+        "siren": {
+            "available_tones": ["alarm"],
+            "native_templates": {
+                "available_tones": "{{ ['alarm'] }}",
+                "support_volume": "{{ true }}",
+                "support_duration": "{{ true }}",
+            },
+        },
+        "text": {
+            "min": 1,
+            "max": 32,
+            "native_templates": {
+                "min": "{{ 1 }}",
+                "max": "{{ 32 }}",
+                "pattern": "{{ '[A-Za-z]+' }}",
+            },
+        },
         "update": {
             "installed_version": "1.0.0",
             "latest_version": "1.1.0",
             "versions": ["1.0.0", "1.1.0"],
+            "native_templates": {
+                "versions": "{{ ['1.0.0', '1.1.0'] }}",
+                "release_notes": "{{ 'Docker integration notes' }}",
+            },
         },
         "vacuum": {
             "battery_level": 80,
             "fan_speed": "normal",
             "fan_speed_list": ["normal", "turbo"],
+            "native_templates": {
+                "battery_level": "{{ 80 }}",
+                "fan_speed_list": "{{ ['normal', 'turbo'] }}",
+            },
         },
         "valve": {"open_close_duration": 0},
         "water_heater": {
             "operation_list": ["off", "eco", "heat"],
             "target_temperature": 50,
+            "native_templates": {
+                "operation_list": "{{ ['off', 'eco', 'heat'] }}",
+                "min_temp": "{{ 35 }}",
+                "max_temp": "{{ 85 }}",
+                "target_temperature_step": "{{ 1 }}",
+            },
         },
     }
     entity.update(domain_options.get(domain, {}))
@@ -1888,6 +1968,8 @@ async def _async_test_removed_option_restore(
         },
     }
     for config in updated_configs:
+        if config["entity_id"] in option_changes:
+            config.pop("native_templates", None)
         config.update(option_changes.get(config["entity_id"], {}))
 
     hass.config_entries.async_update_entry(
@@ -2094,6 +2176,16 @@ async def _async_run(hass: HomeAssistant) -> None:
     logging.getLogger().addHandler(deprecation_handler)
     logging.getLogger().addHandler(warning_handler)
     try:
+        command_action_calls: list[dict] = []
+
+        async def _async_capture_command_action(call) -> None:
+            command_action_calls.append(dict(call.data))
+
+        hass.services.async_register(
+            DOMAIN,
+            "capture",
+            _async_capture_command_action,
+        )
         for entry in hass.config_entries.async_entries(COMPONENT_DOMAIN):
             await hass.config_entries.async_remove(entry.entry_id)
 
@@ -2192,6 +2284,15 @@ async def _async_run(hass: HomeAssistant) -> None:
             and not feature_reload_missing_entities
             else []
         )
+        command_action_errors = []
+        for expected in (
+            {"command": "set_percentage", "value": 33},
+            {"command": "set_temperature", "value": 24},
+        ):
+            if expected not in command_action_calls:
+                command_action_errors.append(
+                    f"missing command action call {expected!r}: {command_action_calls!r}"
+                )
         invalid_service_errors = (
             await _async_test_invalid_services(hass)
             if not missing_entities
@@ -2301,6 +2402,7 @@ async def _async_run(hass: HomeAssistant) -> None:
                 "feature_reload_missing_entities": feature_reload_missing_entities,
                 "feature_restore_errors": feature_restore_errors,
                 "climate_fan_matrix_errors": climate_fan_matrix_errors,
+                "command_action_errors": command_action_errors,
                 "invalid_service_errors": invalid_service_errors,
                 "removed_option_restore_errors": removed_option_restore_errors,
                 "nonpersistent_reset_errors": nonpersistent_reset_errors,
@@ -2331,6 +2433,7 @@ async def _async_run(hass: HomeAssistant) -> None:
                     feature_reload_missing_entities,
                     feature_restore_errors,
                     climate_fan_matrix_errors,
+                    command_action_errors,
                     invalid_service_errors,
                     removed_option_restore_errors,
                     nonpersistent_reset_errors,
