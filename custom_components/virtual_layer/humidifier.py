@@ -2,6 +2,7 @@
 This component provides support for a virtual humidifier or dehumidifier.
 
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,6 +31,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
+from .humidifier_options import migrate_legacy_humidifier_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,41 +77,85 @@ def _finite_float(value, default: float) -> float:
     return result if math.isfinite(result) else default
 
 
-BASE_SCHEMA = virtual_schema(DEFAULT_HUMIDIFIER_VALUE, {
-    vol.Optional(CONF_ACTION): cv.string,
-    vol.Optional(CONF_CLASS, default=HumidifierDeviceClass.HUMIDIFIER): _as_device_class,
-    vol.Optional(CONF_CURRENT_HUMIDITY): vol.Coerce(float),
-    vol.Optional(CONF_MAX_HUMIDITY, default=100): vol.Coerce(float),
-    vol.Optional(CONF_MIN_HUMIDITY, default=0): vol.Coerce(float),
-    vol.Optional(CONF_MODE): cv.string,
-    vol.Optional(CONF_MODES, default=list): vol.All(cv.ensure_list, [cv.string]),
-    vol.Optional(CONF_TARGET_HUMIDITY): vol.Coerce(float),
-    vol.Optional(CONF_TARGET_HUMIDITY_STEP): vol.Coerce(float),
-})
+BASE_SCHEMA = virtual_schema(
+    DEFAULT_HUMIDIFIER_VALUE,
+    {
+        vol.Optional(CONF_ACTION): cv.string,
+        vol.Optional(
+            CONF_CLASS, default=HumidifierDeviceClass.HUMIDIFIER
+        ): _as_device_class,
+        vol.Optional(CONF_CURRENT_HUMIDITY): vol.Coerce(float),
+        vol.Optional(CONF_MAX_HUMIDITY, default=100): vol.Coerce(float),
+        vol.Optional(CONF_MIN_HUMIDITY, default=0): vol.Coerce(float),
+        vol.Optional(CONF_MODE): cv.string,
+        vol.Optional(CONF_MODES, default=list): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional(CONF_TARGET_HUMIDITY): vol.Coerce(float),
+        vol.Optional(CONF_TARGET_HUMIDITY_STEP): vol.Coerce(float),
+    },
+)
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
 HUMIDIFIER_SCHEMA = vol.Schema(BASE_SCHEMA)
 
 
+def validate_domain_options(config) -> None:
+    """Validate humidifier ranges, modes, and initial values."""
+    if str(config.get(CONF_INITIAL_VALUE, "off")).lower() not in {"on", "off"}:
+        raise vol.Invalid("initial_value must be on or off")
+    action = config.get(CONF_ACTION)
+    if action is not None and _as_action(action) is None:
+        raise vol.Invalid("action is invalid")
+    modes = config.get(CONF_MODES, [])
+    if any(not str(mode).strip() for mode in modes):
+        raise vol.Invalid("modes cannot contain empty values")
+    if len(set(modes)) != len(modes):
+        raise vol.Invalid("modes cannot contain duplicate values")
+    mode = config.get(CONF_MODE)
+    if mode is not None and mode not in modes:
+        raise vol.Invalid("mode must be included in modes")
+
+    minimum = _finite_float(config.get(CONF_MIN_HUMIDITY), float("nan"))
+    maximum = _finite_float(config.get(CONF_MAX_HUMIDITY), float("nan"))
+    if not math.isfinite(minimum) or not math.isfinite(maximum) or minimum > maximum:
+        raise vol.Invalid("humidity range is invalid")
+    for field_name in (CONF_CURRENT_HUMIDITY, CONF_TARGET_HUMIDITY):
+        if field_name not in config:
+            continue
+        value = _finite_float(config[field_name], float("nan"))
+        if not math.isfinite(value) or not minimum <= value <= maximum:
+            raise vol.Invalid(f"{field_name} must be within the humidity range")
+    if CONF_TARGET_HUMIDITY_STEP in config:
+        step = _finite_float(config[CONF_TARGET_HUMIDITY_STEP], 0)
+        if step <= 0:
+            raise vol.Invalid("target_humidity_step must be positive")
+
+
 async def async_setup_platform(
-        hass: HomeAssistant,
-        config: ConfigType,
-        async_add_entities: AddEntitiesCallback,
-        _discovery_info: DiscoveryInfoType | None = None,
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    _discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
     """Ignore platform setup; Virtual Layer entities are config-entry only."""
     _LOGGER.debug("ignoring platform setup")
 
 
 async def async_setup_entry(
-        hass: HomeAssistant,
-        entry: ConfigEntry,
-        async_add_entities: Callable[[list], None],
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: Callable[[list], None],
 ) -> None:
     _LOGGER.debug("setting up the entries...")
     entities = []
-    for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN):
-        entities.append(VirtualHumidifier(HUMIDIFIER_SCHEMA(entity), False))
+    for entity in get_entity_configs(
+        hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
+    ):
+        entities.append(
+            VirtualHumidifier(
+                HUMIDIFIER_SCHEMA(migrate_legacy_humidifier_attributes(entity)),
+                False,
+            )
+        )
     async_add_entities(entities)
 
 
@@ -135,8 +181,7 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         target_step = config.get(CONF_TARGET_HUMIDITY_STEP)
         self._attr_target_humidity_step = (
             step
-            if target_step is not None
-            and (step := _finite_float(target_step, 0)) > 0
+            if target_step is not None and (step := _finite_float(target_step, 0)) > 0
             else None
         )
 
@@ -146,6 +191,8 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         super()._create_state(config)
         self._attr_is_on = config.get(CONF_INITIAL_VALUE).lower() == STATE_ON
         self._attr_action = _as_action(config.get(CONF_ACTION))
+        if not self._attr_is_on:
+            self._attr_action = HumidifierAction.OFF
         self._attr_current_humidity = self._bounded_humidity(
             config.get(CONF_CURRENT_HUMIDITY),
         )
@@ -162,7 +209,11 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
         self._attr_is_on = state.state.lower() == STATE_ON
-        self._attr_action = _as_action(state.attributes.get(CONF_ACTION, config.get(CONF_ACTION)))
+        self._attr_action = _as_action(
+            state.attributes.get(CONF_ACTION, config.get(CONF_ACTION))
+        )
+        if not self._attr_is_on:
+            self._attr_action = HumidifierAction.OFF
         self._attr_current_humidity = self._bounded_humidity(
             state.attributes.get(
                 CONF_CURRENT_HUMIDITY,
@@ -178,9 +229,16 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
                 ),
             )
         )
-        restored_mode = state.attributes.get(CONF_MODE, config.get(CONF_MODE))
+        restored_mode = state.attributes.get(CONF_MODE)
+        configured_mode = config.get(CONF_MODE)
         self._attr_mode = (
-            restored_mode if restored_mode in self._attr_available_modes else None
+            restored_mode
+            if restored_mode in self._attr_available_modes
+            else configured_mode
+            if configured_mode in self._attr_available_modes
+            else self._attr_available_modes[0]
+            if self._attr_available_modes
+            else None
         )
 
     def _bounded_humidity(self, humidity):
@@ -199,11 +257,13 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
 
     def _update_attributes(self):
         super()._update_attributes()
-        self._attr_extra_state_attributes.update({
-            name: value for name, value in (
-                (ATTR_DEVICE_CLASS, self._attr_device_class),
-            ) if value is not None
-        })
+        self._attr_extra_state_attributes.update(
+            {
+                name: value
+                for name, value in ((ATTR_DEVICE_CLASS, self._attr_device_class),)
+                if value is not None
+            }
+        )
 
     @property
     def state_attributes(self):
@@ -213,10 +273,17 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         self._attr_is_on = True
+        if self._attr_action in {None, HumidifierAction.OFF}:
+            self._attr_action = (
+                HumidifierAction.DRYING
+                if self._attr_device_class == HumidifierDeviceClass.DEHUMIDIFIER
+                else HumidifierAction.HUMIDIFYING
+            )
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         self._attr_is_on = False
+        self._attr_action = HumidifierAction.OFF
         self.async_write_ha_state()
 
     async def async_set_humidity(self, humidity: int) -> None:
@@ -238,3 +305,11 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
 
     def set_state(self, value) -> None:
         self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]
+        if not self._attr_is_on:
+            self._attr_action = HumidifierAction.OFF
+        elif self._attr_action in {None, HumidifierAction.OFF}:
+            self._attr_action = (
+                HumidifierAction.DRYING
+                if self._attr_device_class == HumidifierDeviceClass.DEHUMIDIFIER
+                else HumidifierAction.HUMIDIFYING
+            )

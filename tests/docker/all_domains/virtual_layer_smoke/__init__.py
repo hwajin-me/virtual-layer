@@ -10,6 +10,8 @@ from pathlib import Path
 
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
+from homeassistant.components.climate import ClimateEntityFeature
+from homeassistant.components.fan import FanEntityFeature
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, STATE_UNAVAILABLE
 from homeassistant.const import __version__ as HA_VERSION
@@ -61,6 +63,24 @@ class _VirtualLayerDeprecationHandler(logging.Handler):
             self.messages.append(message)
 
 
+class _VirtualLayerWarningHandler(logging.Handler):
+    """Collect integration and entity contract warnings from live HA."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        message = self.format(record)
+        if record.name.startswith("custom_components.virtual_layer"):
+            self.messages.append(message)
+            return
+        if record.name == "homeassistant.loader":
+            return
+        if "docker_" in message or "virtual_layer" in message.lower():
+            self.messages.append(f"{record.name}: {message}")
+
+
 def _entity_config(domain: str) -> dict:
     """Return valid, feature-rich UI options for a supported domain."""
     initial_values = {
@@ -102,12 +122,20 @@ def _entity_config(domain: str) -> dict:
     }
     domain_options = {
         "climate": {
-            "hvac_modes": ["off", "heat", "cool"],
-            "fan_modes": ["auto", "turbo"],
+            "hvac_modes": [
+                "off",
+                "heat",
+                "cool",
+                "heat_cool",
+                "auto",
+                "dry",
+                "fan_only",
+            ],
+            "fan_modes": ["low", "medium", "high", "auto", "turbo"],
             "fan_mode": "auto",
-            "preset_modes": ["none", "eco"],
+            "preset_modes": ["none", "eco", "sleep", "away"],
             "preset_mode": "none",
-            "swing_modes": ["off", "vertical"],
+            "swing_modes": ["off", "vertical", "both"],
             "swing_mode": "off",
             "swing_horizontal_modes": ["left", "right"],
             "swing_horizontal_mode": "left",
@@ -243,6 +271,12 @@ def _variant_entity_configs() -> list[dict]:
             door_locked=True,
         ),
         _variant_config(
+            "sensor",
+            "non_persistent",
+            "initial",
+            persistent=False,
+        ),
+        _variant_config(
             "number",
             "power_limit",
             "1",
@@ -301,6 +335,66 @@ def _variant_entity_configs() -> list[dict]:
             target_temperature_high=26,
         ),
         _variant_config(
+            "climate",
+            "legacy_fan_climate",
+            "cool",
+            hvac_modes=["off", "cool"],
+            fan_modes=[],
+            fan_mode="",
+            preset_modes=[],
+            preset_mode="",
+            swing_modes=[],
+            swing_mode="",
+            attributes={
+                "fan_modes": ["auto", "turbo"],
+                "fan_mode": "auto",
+                "preset_modes": ["none", "sleep"],
+                "preset_mode": "none",
+                "swing_modes": ["off", "vertical"],
+                "swing_mode": "vertical",
+                "supported_features": 441,
+            },
+        ),
+        _variant_config(
+            "climate",
+            "off_only_climate",
+            "off",
+            hvac_modes=["off"],
+        ),
+        _variant_config(
+            "climate",
+            "cool_only_climate",
+            "cool",
+            hvac_modes=["cool"],
+        ),
+        _variant_config(
+            "fan",
+            "no_speed_fan",
+            "on",
+            speed_count=0,
+        ),
+        _variant_config(
+            "fan",
+            "configured_fan",
+            "on",
+            speed_count=4,
+            percentage=25,
+            modes=["eco", "boost"],
+            preset_mode="eco",
+            oscillate=True,
+            oscillating=True,
+            direction=True,
+            current_direction="reverse",
+        ),
+        _variant_config(
+            "fan",
+            "preset_only_fan",
+            "on",
+            speed_count=0,
+            modes=["eco", "boost"],
+            preset_mode="eco",
+        ),
+        _variant_config(
             "cover",
             "garage_cover",
             "closed",
@@ -326,6 +420,231 @@ async def _async_call(
         await hass.services.async_call(domain, service, data, blocking=True)
     except Exception as err:  # noqa: BLE001 - report every HA service failure
         service_errors.append(f"{domain}.{service}: {type(err).__name__}: {err}")
+
+
+async def _async_test_climate_fan_matrix(hass: HomeAssistant) -> list[str]:
+    """Exercise every configured HVAC, humidity, and fan feature value."""
+    errors: list[str] = []
+
+    async def call_and_expect(domain, service, data, attribute, expected) -> None:
+        previous_error_count = len(errors)
+        await _async_call(hass, errors, domain, service, data)
+        if len(errors) != previous_error_count:
+            return
+        await asyncio.sleep(0)
+        state = hass.states.get(data["entity_id"])
+        actual = state.state if attribute == "state" else state.attributes.get(attribute)
+        if actual != expected:
+            errors.append(
+                f"{domain}.{service}: expected {attribute}={expected!r}, got {actual!r}"
+            )
+
+    climate_id = "climate.docker_climate"
+    for hvac_mode in ("off", "heat", "cool", "heat_cool", "auto", "dry", "fan_only"):
+        await call_and_expect(
+            "climate",
+            "set_hvac_mode",
+            {"entity_id": climate_id, "hvac_mode": hvac_mode},
+            "state",
+            hvac_mode,
+        )
+    for fan_mode in ("low", "medium", "high", "auto", "turbo"):
+        await call_and_expect(
+            "climate",
+            "set_fan_mode",
+            {"entity_id": climate_id, "fan_mode": fan_mode},
+            "fan_mode",
+            fan_mode,
+        )
+    for preset_mode in ("none", "eco", "sleep", "away"):
+        await call_and_expect(
+            "climate",
+            "set_preset_mode",
+            {"entity_id": climate_id, "preset_mode": preset_mode},
+            "preset_mode",
+            preset_mode,
+        )
+    for swing_mode in ("off", "vertical", "both"):
+        await call_and_expect(
+            "climate",
+            "set_swing_mode",
+            {"entity_id": climate_id, "swing_mode": swing_mode},
+            "swing_mode",
+            swing_mode,
+        )
+    for swing_mode in ("left", "right"):
+        await call_and_expect(
+            "climate",
+            "set_swing_horizontal_mode",
+            {"entity_id": climate_id, "swing_horizontal_mode": swing_mode},
+            "swing_horizontal_mode",
+            swing_mode,
+        )
+
+    fan_id = "fan.docker_fan"
+    for percentage in (0, 33, 67, 100):
+        await call_and_expect(
+            "fan",
+            "set_percentage",
+            {"entity_id": fan_id, "percentage": percentage},
+            "percentage",
+            percentage,
+        )
+    for preset_mode in ("eco", "boost"):
+        await call_and_expect(
+            "fan",
+            "set_preset_mode",
+            {"entity_id": fan_id, "preset_mode": preset_mode},
+            "preset_mode",
+            preset_mode,
+        )
+    for direction in ("forward", "reverse"):
+        await call_and_expect(
+            "fan",
+            "set_direction",
+            {"entity_id": fan_id, "direction": direction},
+            "direction",
+            direction,
+        )
+    for oscillating in (False, True):
+        await call_and_expect(
+            "fan",
+            "oscillate",
+            {"entity_id": fan_id, "oscillating": oscillating},
+            "oscillating",
+            oscillating,
+        )
+
+    off_only = hass.states.get("climate.docker_off_only_climate")
+    cool_only = hass.states.get("climate.docker_cool_only_climate")
+    if off_only is None or (
+        int(off_only.attributes.get("supported_features", 0))
+        & int(ClimateEntityFeature.TURN_ON)
+    ):
+        errors.append("off-only climate incorrectly advertises turn_on")
+    if cool_only is None or (
+        int(cool_only.attributes.get("supported_features", 0))
+        & int(ClimateEntityFeature.TURN_OFF)
+    ):
+        errors.append("cool-only climate incorrectly advertises turn_off")
+
+    no_speed = hass.states.get("fan.docker_no_speed_fan")
+    if no_speed is None or no_speed.state != "on":
+        errors.append("fan without speed support did not preserve its initial on state")
+    elif (
+        int(no_speed.attributes.get("supported_features", 0))
+        & int(FanEntityFeature.SET_SPEED)
+    ) or "percentage" in no_speed.attributes:
+        errors.append("fan without speed support exposed percentage controls")
+
+    configured = hass.states.get("fan.docker_configured_fan")
+    if configured is None or configured.state != "on":
+        errors.append("configured fan did not start on")
+    else:
+        for name, expected in {
+            "preset_mode": "eco",
+            "oscillating": True,
+            "direction": "reverse",
+        }.items():
+            if configured.attributes.get(name) != expected:
+                errors.append(
+                    f"configured fan expected {name}={expected!r}, "
+                    f"got {configured.attributes.get(name)!r}"
+                )
+
+    await call_and_expect(
+        "fan",
+        "set_preset_mode",
+        {"entity_id": "fan.docker_preset_only_fan", "preset_mode": "boost"},
+        "preset_mode",
+        "boost",
+    )
+
+    humidifier_id = "humidifier.docker_humidifier"
+    await call_and_expect(
+        "humidifier",
+        "turn_off",
+        {"entity_id": humidifier_id},
+        "action",
+        "off",
+    )
+    await call_and_expect(
+        "humidifier",
+        "turn_on",
+        {"entity_id": humidifier_id},
+        "action",
+        "humidifying",
+    )
+    for mode in ("normal", "eco"):
+        await call_and_expect(
+            "humidifier",
+            "set_mode",
+            {"entity_id": humidifier_id, "mode": mode},
+            "mode",
+            mode,
+        )
+    for humidity in (30, 50, 70):
+        await call_and_expect(
+            "humidifier",
+            "set_humidity",
+            {"entity_id": humidifier_id, "humidity": humidity},
+            "humidity",
+            humidity,
+        )
+
+    dehumidifier_id = "humidifier.docker_dehumidifier"
+    await call_and_expect(
+        "humidifier",
+        "turn_off",
+        {"entity_id": dehumidifier_id},
+        "action",
+        "off",
+    )
+    await call_and_expect(
+        "humidifier",
+        "turn_on",
+        {"entity_id": dehumidifier_id},
+        "action",
+        "drying",
+    )
+    for mode in ("auto", "sleep"):
+        await call_and_expect(
+            "humidifier",
+            "set_mode",
+            {"entity_id": dehumidifier_id, "mode": mode},
+            "mode",
+            mode,
+        )
+
+    await _async_call(
+        hass,
+        errors,
+        "climate",
+        "set_hvac_mode",
+        {"entity_id": climate_id, "hvac_mode": "heat"},
+    )
+    await _async_call(
+        hass,
+        errors,
+        "fan",
+        "set_percentage",
+        {"entity_id": fan_id, "percentage": 33},
+    )
+    await _async_call(
+        hass,
+        errors,
+        "humidifier",
+        "set_humidity",
+        {"entity_id": humidifier_id, "humidity": 55},
+    )
+    await _async_call(
+        hass,
+        errors,
+        "humidifier",
+        "set_mode",
+        {"entity_id": humidifier_id, "mode": "eco"},
+    )
+    return errors
 
 
 async def _async_test_services(hass: HomeAssistant) -> list[str]:
@@ -603,37 +922,53 @@ def _state_contract_errors(hass: HomeAssistant) -> list[str]:
     expected = {
         "binary_sensor": ("on", {}),
         "camera": ("idle", {}),
-        "climate": ("heat", {
-            "temperature": 24.0,
-            "humidity": 48,
-            "fan_mode": "turbo",
-            "preset_mode": "eco",
-            "swing_mode": "vertical",
-            "swing_horizontal_mode": "right",
-        }),
+        "climate": (
+            "heat",
+            {
+                "hvac_action": "idle",
+                "temperature": 24.0,
+                "humidity": 48,
+                "fan_mode": "turbo",
+                "preset_mode": "eco",
+                "swing_mode": "vertical",
+                "swing_horizontal_mode": "right",
+            },
+        ),
         "cover": ("open", {"current_position": 35}),
         "date": ("2026-08-09", {}),
-        "device_tracker": ("not_home", {
-            "latitude": 37.5,
-            "longitude": 127.0,
-            "gps_accuracy": 8,
-            "source_type": "gps",
-        }),
-        "fan": ("on", {
-            "direction": "reverse",
-            "oscillating": True,
-            "preset_mode": "boost",
-            "supported_features": 63,
-        }),
-        "humidifier": ("on", {"humidity": 55, "mode": "eco"}),
+        "device_tracker": (
+            "not_home",
+            {
+                "latitude": 37.5,
+                "longitude": 127.0,
+                "gps_accuracy": 8,
+                "source_type": "gps",
+            },
+        ),
+        "fan": (
+            "on",
+            {
+                "direction": "reverse",
+                "oscillating": True,
+                "preset_mode": "boost",
+                "supported_features": 63,
+            },
+        ),
+        "humidifier": (
+            "on",
+            {"action": "humidifying", "humidity": 55, "mode": "eco"},
+        ),
         "lawn_mower": ("mowing", {}),
         "light": ("on", {"brightness": 128, "effect": "rainbow"}),
         "lock": ("open", {}),
-        "media_player": ("playing", {
-            "volume_level": 0.7,
-            "is_volume_muted": True,
-            "source": "Radio",
-        }),
+        "media_player": (
+            "playing",
+            {
+                "volume_level": 0.7,
+                "is_volume_muted": True,
+                "source": "Radio",
+            },
+        ),
         "number": ("42.0", {"step": 0.5, "mode": "slider"}),
         "remote": ("on", {"current_activity": "Music", "last_command": ["POWER"]}),
         "select": ("boost", {"options": ["eco", "boost"]}),
@@ -642,10 +977,13 @@ def _state_contract_errors(hass: HomeAssistant) -> list[str]:
         "switch": ("on", {}),
         "text": ("updated", {}),
         "time": ("01:02:03", {}),
-        "update": ("off", {
-            "installed_version": "1.1.0",
-            "latest_version": "1.1.0",
-        }),
+        "update": (
+            "off",
+            {
+                "installed_version": "1.1.0",
+                "latest_version": "1.1.0",
+            },
+        ),
         "vacuum": ("paused", {"fan_speed": "turbo", "battery_level": 80}),
         "valve": ("open", {"current_position": 35}),
         "water_heater": ("heat", {"temperature": 55.0}),
@@ -669,11 +1007,15 @@ def _state_contract_errors(hass: HomeAssistant) -> list[str]:
                     f"got {actual_value!r}"
                 )
 
-    for domain in set(VIRTUAL_ENTITY_DOMAINS) - set(expected) - {
-        "button",
-        "datetime",
-        "image",
-    }:
+    for domain in (
+        set(VIRTUAL_ENTITY_DOMAINS)
+        - set(expected)
+        - {
+            "button",
+            "datetime",
+            "image",
+        }
+    ):
         state = hass.states.get(f"{domain}.docker_{domain}")
         if state is None or state.state != "docker_smoke":
             errors.append(
@@ -916,6 +1258,7 @@ def _variant_contract_errors(hass: HomeAssistant) -> list[str]:
         "humidifier.docker_dehumidifier": (
             "on",
             {
+                "action": "drying",
                 "device_class": "dehumidifier",
                 "humidity": 40.0,
                 "mode": "sleep",
@@ -924,6 +1267,40 @@ def _variant_contract_errors(hass: HomeAssistant) -> list[str]:
         "climate.docker_climate_range": (
             "heat_cool",
             {"target_temp_low": 18.0, "target_temp_high": 27.0},
+        ),
+        "climate.docker_legacy_fan_climate": (
+            "cool",
+            {
+                "fan_modes": ["auto", "turbo"],
+                "fan_mode": "auto",
+                "preset_modes": ["none", "sleep"],
+                "preset_mode": "none",
+                "swing_modes": ["off", "vertical"],
+                "swing_mode": "vertical",
+            },
+        ),
+        "climate.docker_off_only_climate": (
+            "off",
+            {"hvac_modes": ["off"]},
+        ),
+        "climate.docker_cool_only_climate": (
+            "cool",
+            {"hvac_modes": ["cool"]},
+        ),
+        "fan.docker_no_speed_fan": ("on", {}),
+        "fan.docker_configured_fan": (
+            "on",
+            {
+                "percentage": None,
+                "preset_mode": "eco",
+                "preset_modes": ["eco", "boost"],
+                "oscillating": True,
+                "direction": "reverse",
+            },
+        ),
+        "fan.docker_preset_only_fan": (
+            "on",
+            {"preset_mode": "eco", "preset_modes": ["eco", "boost"]},
         ),
         "cover.docker_garage_cover": (
             "open",
@@ -942,8 +1319,7 @@ def _variant_contract_errors(hass: HomeAssistant) -> list[str]:
             continue
         if state.state != expected_state:
             errors.append(
-                f"{entity_id}: expected state {expected_state!r}, "
-                f"got {state.state!r}"
+                f"{entity_id}: expected state {expected_state!r}, got {state.state!r}"
             )
         for name, expected_value in expected_attributes.items():
             actual_value = state.attributes.get(name)
@@ -994,8 +1370,20 @@ async def _async_test_feature_sequences(hass: HomeAssistant) -> list[str]:
         (COMPONENT_DOMAIN, "toggle", "binary_sensor.docker_binary_sensor", "on", {}),
         ("climate", "turn_off", "climate.docker_climate", "off", {}),
         ("climate", "turn_on", "climate.docker_climate", "heat", {}),
-        ("cover", "close_cover", "cover.docker_cover", "closed", {"current_position": 0}),
-        ("cover", "open_cover", "cover.docker_cover", "open", {"current_position": 100}),
+        (
+            "cover",
+            "close_cover",
+            "cover.docker_cover",
+            "closed",
+            {"current_position": 0},
+        ),
+        (
+            "cover",
+            "open_cover",
+            "cover.docker_cover",
+            "open",
+            {"current_position": 100},
+        ),
         ("fan", "turn_off", "fan.docker_fan", "off", {"percentage": 0}),
         (
             "fan",
@@ -1038,7 +1426,13 @@ async def _async_test_feature_sequences(hass: HomeAssistant) -> list[str]:
         ("lock", "lock", "lock.docker_lock", "locked", {}),
         ("lock", "unlock", "lock.docker_lock", "unlocked", {}),
         ("lock", "open", "lock.docker_lock", "open", {}),
-        ("media_player", "media_pause", "media_player.docker_media_player", "paused", {}),
+        (
+            "media_player",
+            "media_pause",
+            "media_player.docker_media_player",
+            "paused",
+            {},
+        ),
         ("media_player", "media_stop", "media_player.docker_media_player", "idle", {}),
         ("media_player", "turn_off", "media_player.docker_media_player", "off", {}),
         ("media_player", "turn_on", "media_player.docker_media_player", "on", {}),
@@ -1068,8 +1462,20 @@ async def _async_test_feature_sequences(hass: HomeAssistant) -> list[str]:
             {"last_command": {"command": "locate"}},
         ),
         ("vacuum", "return_to_base", "vacuum.docker_vacuum", "returning", {}),
-        ("valve", "close_valve", "valve.docker_valve", "closed", {"current_position": 0}),
-        ("valve", "open_valve", "valve.docker_valve", "open", {"current_position": 100}),
+        (
+            "valve",
+            "close_valve",
+            "valve.docker_valve",
+            "closed",
+            {"current_position": 0},
+        ),
+        (
+            "valve",
+            "open_valve",
+            "valve.docker_valve",
+            "open",
+            {"current_position": 100},
+        ),
         ("water_heater", "turn_off", "water_heater.docker_water_heater", "off", {}),
         ("water_heater", "turn_on", "water_heater.docker_water_heater", "eco", {}),
     ]
@@ -1115,10 +1521,10 @@ def _feature_sequence_restore_errors(hass: HomeAssistant) -> list[str]:
     """Check that the final command in each feature sequence survives reload."""
     expected = {
         "binary_sensor.docker_binary_sensor": ("on", {}),
-        "climate.docker_climate": ("heat", {}),
+        "climate.docker_climate": ("heat", {"hvac_action": "idle"}),
         "cover.docker_cover": ("open", {"current_position": 100}),
         "fan.docker_fan": ("on", {"percentage": 33, "preset_mode": None}),
-        "humidifier.docker_humidifier": ("on", {}),
+        "humidifier.docker_humidifier": ("on", {"action": "humidifying"}),
         "lawn_mower.docker_lawn_mower": ("returning", {}),
         "light.docker_light": (
             "on",
@@ -1160,7 +1566,9 @@ def _feature_sequence_restore_errors(hass: HomeAssistant) -> list[str]:
     if camera_entity is None or not camera_entity.is_on:
         errors.append("camera.docker_camera: power was not restored after feature test")
     if camera_entity is None or camera_entity.motion_detection_enabled:
-        errors.append("camera.docker_camera: motion flag was not restored after feature test")
+        errors.append(
+            "camera.docker_camera: motion flag was not restored after feature test"
+        )
     return errors
 
 
@@ -1183,7 +1591,10 @@ async def _async_test_common_controls(
     await asyncio.sleep(0.1)
     for entity_id in entity_ids:
         state = hass.states.get(entity_id)
-        if state is None or state.attributes.get("docker_integration_probe") != "present":
+        if (
+            state is None
+            or state.attributes.get("docker_integration_probe") != "present"
+        ):
             errors.append(f"{entity_id}: set_attributes was not applied")
 
     await _async_call(
@@ -1213,13 +1624,10 @@ async def _async_test_common_controls(
     for entity_id in entity_ids:
         state = hass.states.get(entity_id)
         domain = entity_id.partition(".")[0]
-        unavailable = (
-            state is not None
-            and (
-                state.attributes.get("available") is False
-                if domain in STATE_ONLY_ENTITY_DOMAINS
-                else state.state == STATE_UNAVAILABLE
-            )
+        unavailable = state is not None and (
+            state.attributes.get("available") is False
+            if domain in STATE_ONLY_ENTITY_DOMAINS
+            else state.state == STATE_UNAVAILABLE
         )
         if not unavailable:
             errors.append(f"{entity_id}: unavailable state was not applied")
@@ -1235,16 +1643,431 @@ async def _async_test_common_controls(
     for entity_id in entity_ids:
         state = hass.states.get(entity_id)
         domain = entity_id.partition(".")[0]
-        available = (
-            state is not None
-            and (
-                state.attributes.get("available") is True
-                if domain in STATE_ONLY_ENTITY_DOMAINS
-                else state.state != STATE_UNAVAILABLE
-            )
+        available = state is not None and (
+            state.attributes.get("available") is True
+            if domain in STATE_ONLY_ENTITY_DOMAINS
+            else state.state != STATE_UNAVAILABLE
         )
         if not available:
             errors.append(f"{entity_id}: available state was not restored")
+    return errors
+
+
+async def _async_test_invalid_services(hass: HomeAssistant) -> list[str]:
+    """Ensure invalid native commands are rejected without partial updates."""
+    errors: list[str] = []
+    cases = [
+        (
+            "climate",
+            "set_hvac_mode",
+            {"entity_id": "climate.docker_climate", "hvac_mode": "removed"},
+        ),
+        (
+            "climate",
+            "set_fan_mode",
+            {"entity_id": "climate.docker_climate", "fan_mode": "removed"},
+        ),
+        (
+            "climate",
+            "set_preset_mode",
+            {"entity_id": "climate.docker_climate", "preset_mode": "removed"},
+        ),
+        (
+            "climate",
+            "set_swing_mode",
+            {"entity_id": "climate.docker_climate", "swing_mode": "removed"},
+        ),
+        (
+            "climate",
+            "set_swing_horizontal_mode",
+            {
+                "entity_id": "climate.docker_climate",
+                "swing_horizontal_mode": "removed",
+            },
+        ),
+        (
+            "climate",
+            "set_temperature",
+            {"entity_id": "climate.docker_climate", "temperature": 100},
+        ),
+        (
+            "climate",
+            "set_temperature",
+            {
+                "entity_id": "climate.docker_climate_range",
+                "target_temp_low": 30,
+                "target_temp_high": 20,
+            },
+        ),
+        (
+            "fan",
+            "set_direction",
+            {"entity_id": "fan.docker_fan", "direction": "sideways"},
+        ),
+        (
+            "fan",
+            "set_preset_mode",
+            {"entity_id": "fan.docker_fan", "preset_mode": "invalid"},
+        ),
+        (
+            "fan",
+            "set_percentage",
+            {"entity_id": "fan.docker_fan", "percentage": 101},
+        ),
+        (
+            "humidifier",
+            "set_humidity",
+            {"entity_id": "humidifier.docker_humidifier", "humidity": 99},
+        ),
+        (
+            "humidifier",
+            "set_mode",
+            {"entity_id": "humidifier.docker_humidifier", "mode": "invalid"},
+        ),
+        (
+            "light",
+            "turn_on",
+            {"entity_id": "light.docker_light", "effect": "invalid"},
+        ),
+        (
+            "media_player",
+            "volume_set",
+            {"entity_id": "media_player.docker_media_player", "volume_level": 2},
+        ),
+        (
+            "media_player",
+            "select_source",
+            {"entity_id": "media_player.docker_media_player", "source": "invalid"},
+        ),
+        (
+            "number",
+            "set_value",
+            {"entity_id": "number.docker_number", "value": 999},
+        ),
+        (
+            "remote",
+            "turn_on",
+            {"entity_id": "remote.docker_remote", "activity": "invalid"},
+        ),
+        (
+            "select",
+            "select_option",
+            {"entity_id": "select.docker_select", "option": "invalid"},
+        ),
+        (
+            "siren",
+            "turn_on",
+            {"entity_id": "siren.docker_siren", "tone": "invalid"},
+        ),
+        (
+            "text",
+            "set_value",
+            {"entity_id": "text.docker_text", "value": "x" * 33},
+        ),
+        (
+            "update",
+            "install",
+            {
+                "entity_id": "update.docker_update",
+                "version": "9.9.9",
+                "backup": False,
+            },
+        ),
+        (
+            "vacuum",
+            "set_fan_speed",
+            {"entity_id": "vacuum.docker_vacuum", "fan_speed": "invalid"},
+        ),
+        (
+            "cover",
+            "set_cover_position",
+            {"entity_id": "cover.docker_cover", "position": 101},
+        ),
+        (
+            "valve",
+            "set_valve_position",
+            {"entity_id": "valve.docker_valve", "position": 101},
+        ),
+        (
+            "water_heater",
+            "set_temperature",
+            {"entity_id": "water_heater.docker_water_heater", "temperature": 999},
+        ),
+        (
+            "water_heater",
+            "set_operation_mode",
+            {
+                "entity_id": "water_heater.docker_water_heater",
+                "operation_mode": "invalid",
+            },
+        ),
+        (
+            COMPONENT_DOMAIN,
+            "set_state",
+            {"entity_id": "select.docker_select", "value": "invalid"},
+        ),
+        (
+            COMPONENT_DOMAIN,
+            "set_state",
+            {"entity_id": "water_heater.docker_water_heater", "value": "invalid"},
+        ),
+    ]
+
+    for domain, service, data in cases:
+        entity_id = data["entity_id"]
+        before = hass.states.get(entity_id)
+        if before is None:
+            errors.append(f"{domain}.{service}: {entity_id} is missing")
+            continue
+        before_state = before.state
+        before_attributes = dict(before.attributes)
+        rejected = False
+        try:
+            await hass.services.async_call(domain, service, data, blocking=True)
+        except Exception:  # noqa: BLE001 - every invalid call must fail
+            rejected = True
+        if not rejected:
+            errors.append(f"{domain}.{service}: invalid input was accepted")
+            continue
+
+        after = hass.states.get(entity_id)
+        if after is None:
+            errors.append(f"{domain}.{service}: invalid input removed {entity_id}")
+        elif after.state != before_state or dict(after.attributes) != before_attributes:
+            errors.append(f"{domain}.{service}: invalid input changed {entity_id}")
+    return errors
+
+
+async def _async_test_removed_option_restore(
+    hass: HomeAssistant,
+    entry,
+    entity_configs: list[dict],
+    entity_ids: list[str],
+) -> list[str]:
+    """Ensure stale restored choices cannot reappear after options are removed."""
+    errors: list[str] = []
+    updated_configs = [dict(config) for config in entity_configs]
+    option_changes = {
+        "climate.docker_climate": {
+            "fan_modes": ["auto"],
+            "fan_mode": "auto",
+            "preset_modes": ["none"],
+            "preset_mode": "none",
+            "swing_modes": ["off"],
+            "swing_mode": "off",
+            "swing_horizontal_modes": ["left"],
+            "swing_horizontal_mode": "left",
+        },
+        "humidifier.docker_humidifier": {
+            "modes": ["normal"],
+            "mode": "normal",
+        },
+        "light.docker_light": {
+            "initial_effect_list": ["none"],
+            "initial_effect": "none",
+        },
+        "media_player.docker_media_player": {
+            "source_list": ["TV"],
+            "source": "TV",
+        },
+        "remote.docker_remote": {
+            "activity_list": ["Music"],
+            "current_activity": "Music",
+        },
+        "select.docker_select": {
+            "options": ["eco"],
+            CONF_INITIAL_VALUE: "eco",
+        },
+        "vacuum.docker_vacuum": {
+            "fan_speed_list": ["normal"],
+            "fan_speed": "normal",
+        },
+        "water_heater.docker_water_heater": {
+            "operation_list": ["off", "heat"],
+            CONF_INITIAL_VALUE: "off",
+        },
+    }
+    for config in updated_configs:
+        config.update(option_changes.get(config["entity_id"], {}))
+
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            ATTR_DEVICES: {DEVICE_NAME: updated_configs},
+            ATTR_DEVICE_ATTRIBUTES: {
+                DEVICE_NAME: {
+                    ATTR_DEVICE_ID: "docker-all-domains-device",
+                    CONF_NAME: DEVICE_NAME,
+                },
+            },
+        },
+    )
+    if not await hass.config_entries.async_reload(entry.entry_id):
+        return ["removed-option restore reload failed"]
+    missing = await _async_wait_for_states(hass, entity_ids)
+    if missing:
+        return [f"removed-option restore reload missing entities: {missing}"]
+    await asyncio.sleep(1)
+
+    expected = {
+        "climate.docker_climate": (
+            "heat",
+            {
+                "fan_mode": "auto",
+                "fan_modes": ["auto"],
+                "preset_mode": "none",
+                "preset_modes": ["none"],
+                "swing_mode": "off",
+                "swing_modes": ["off"],
+                "swing_horizontal_mode": "left",
+                "swing_horizontal_modes": ["left"],
+            },
+        ),
+        "humidifier.docker_humidifier": (
+            "on",
+            {"mode": "normal", "available_modes": ["normal"]},
+        ),
+        "light.docker_light": (
+            "on",
+            {"effect": "none", "effect_list": ["none"]},
+        ),
+        "media_player.docker_media_player": (
+            "on",
+            {"source": "TV", "source_list": ["TV"]},
+        ),
+        "remote.docker_remote": (
+            "on",
+            {"current_activity": "Music", "activity_list": ["Music"]},
+        ),
+        "select.docker_select": ("eco", {"options": ["eco"]}),
+        "vacuum.docker_vacuum": (
+            "returning",
+            {"fan_speed": "normal", "fan_speed_list": ["normal"]},
+        ),
+        "water_heater.docker_water_heater": (
+            "off",
+            {"operation_list": ["off", "heat"]},
+        ),
+    }
+    for entity_id, (expected_state, expected_attributes) in expected.items():
+        state = hass.states.get(entity_id)
+        if state is None:
+            errors.append(f"{entity_id}: missing after removed-option reload")
+            continue
+        if state.state != expected_state:
+            errors.append(
+                f"{entity_id}: removed-option expected {expected_state!r}, "
+                f"got {state.state!r}"
+            )
+        for name, expected_value in expected_attributes.items():
+            actual_value = state.attributes.get(name)
+            if actual_value != expected_value:
+                errors.append(
+                    f"{entity_id}.{name}: removed-option expected "
+                    f"{expected_value!r}, got {actual_value!r}"
+                )
+    return errors
+
+
+async def _async_test_nonpersistent_reset(
+    hass: HomeAssistant,
+    entry,
+    entity_ids: list[str],
+) -> list[str]:
+    """Ensure a non-persistent entity returns to its configured initial value."""
+    errors: list[str] = []
+    entity_id = "sensor.docker_non_persistent"
+    await _async_call(
+        hass,
+        errors,
+        COMPONENT_DOMAIN,
+        "set",
+        {"entity_id": entity_id, "value": "changed"},
+    )
+    changed = hass.states.get(entity_id)
+    if changed is None or changed.state != "changed":
+        errors.append(f"{entity_id}: non-persistent runtime update was not applied")
+        return errors
+    if not await hass.config_entries.async_reload(entry.entry_id):
+        errors.append("non-persistent reset reload failed")
+        return errors
+    missing = await _async_wait_for_states(hass, entity_ids)
+    if missing:
+        errors.append(f"non-persistent reset reload missing entities: {missing}")
+        return errors
+    await asyncio.sleep(1)
+    restored = hass.states.get(entity_id)
+    if restored is None or restored.state != "initial":
+        errors.append(
+            f"{entity_id}: expected initial value after reload, got "
+            f"{None if restored is None else restored.state!r}"
+        )
+    return errors
+
+
+async def _async_test_variant_removal(
+    hass: HomeAssistant,
+    entry,
+    primary_entity_configs: list[dict],
+    removed_entity_ids: list[str],
+) -> list[str]:
+    """Ensure removing selected entities cleans live states and registry rows."""
+    errors: list[str] = []
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            ATTR_DEVICES: {DEVICE_NAME: primary_entity_configs},
+            ATTR_DEVICE_ATTRIBUTES: {
+                DEVICE_NAME: {
+                    ATTR_DEVICE_ID: "docker-all-domains-device",
+                    CONF_NAME: DEVICE_NAME,
+                },
+            },
+        },
+    )
+    if not await hass.config_entries.async_reload(entry.entry_id):
+        return ["variant removal reload failed"]
+    await asyncio.sleep(1)
+
+    entity_registry = er.async_get(hass)
+    for entity_id in removed_entity_ids:
+        if hass.states.get(entity_id) is not None:
+            errors.append(f"{entity_id}: removed entity still has a live state")
+        if entity_registry.async_get(entity_id) is not None:
+            errors.append(f"{entity_id}: removed entity still exists in registry")
+
+    primary_ids = [entity["entity_id"] for entity in primary_entity_configs]
+    missing_primary = await _async_wait_for_states(hass, primary_ids)
+    if missing_primary:
+        errors.append(f"variant removal lost primary entities: {missing_primary}")
+    return errors
+
+
+async def _async_test_entry_removal(
+    hass: HomeAssistant,
+    entry,
+    entity_ids: list[str],
+    device_ids: set[str],
+) -> list[str]:
+    """Ensure deleting the config entry leaves no runtime or registry data."""
+    errors: list[str] = []
+    if not await hass.config_entries.async_remove(entry.entry_id):
+        return ["config entry removal failed"]
+    await asyncio.sleep(1)
+
+    entity_registry = er.async_get(hass)
+    for entity_id in [*entity_ids, "sensor.docker_vacuum_battery"]:
+        if hass.states.get(entity_id) is not None:
+            errors.append(f"{entity_id}: state survived config entry removal")
+        if entity_registry.async_get(entity_id) is not None:
+            errors.append(f"{entity_id}: registry row survived config entry removal")
+
+    device_registry = dr.async_get(hass)
+    for device_id in device_ids:
+        if device_registry.async_get(device_id) is not None:
+            errors.append(f"{device_id}: device survived config entry removal")
+    if hass.config_entries.async_get_entry(entry.entry_id) is not None:
+        errors.append("config entry still exists after removal")
     return errors
 
 
@@ -1254,9 +2077,7 @@ async def _async_wait_for_states(
 ) -> list[str]:
     for _attempt in range(60):
         missing = [
-            entity_id
-            for entity_id in entity_ids
-            if hass.states.get(entity_id) is None
+            entity_id for entity_id in entity_ids if hass.states.get(entity_id) is None
         ]
         if not missing:
             return []
@@ -1268,8 +2089,10 @@ async def _async_run(hass: HomeAssistant) -> None:
     result: dict = {"success": False}
     error_handler = _VirtualLayerErrorHandler()
     deprecation_handler = _VirtualLayerDeprecationHandler()
+    warning_handler = _VirtualLayerWarningHandler()
     logging.getLogger().addHandler(error_handler)
     logging.getLogger().addHandler(deprecation_handler)
+    logging.getLogger().addHandler(warning_handler)
     try:
         for entry in hass.config_entries.async_entries(COMPONENT_DOMAIN):
             await hass.config_entries.async_remove(entry.entry_id)
@@ -1283,17 +2106,12 @@ async def _async_run(hass: HomeAssistant) -> None:
             raise RuntimeError(f"Config flow failed: {flow_result}")
         entry = flow_result["result"]
 
-        entity_configs = [
-            *[
-                _entity_config(domain)
-                for domain in VIRTUAL_ENTITY_DOMAINS
-            ],
-            *_variant_entity_configs(),
+        primary_entity_configs = [
+            _entity_config(domain) for domain in VIRTUAL_ENTITY_DOMAINS
         ]
-        configured_entity_ids = [
-            entity["entity_id"]
-            for entity in entity_configs
-        ]
+        variant_entity_configs = _variant_entity_configs()
+        entity_configs = [*primary_entity_configs, *variant_entity_configs]
+        configured_entity_ids = [entity["entity_id"] for entity in entity_configs]
         options = {
             ATTR_DEVICES: {
                 DEVICE_NAME: entity_configs,
@@ -1310,15 +2128,14 @@ async def _async_run(hass: HomeAssistant) -> None:
             raise RuntimeError("Virtual Layer config entry reload failed")
 
         missing_entities = await _async_wait_for_states(hass, configured_entity_ids)
-        missing_domains = sorted({
-            entity_id.partition(".")[0]
-            for entity_id in missing_entities
-        })
-        service_errors = await _async_test_services(hass) if not missing_entities else []
+        missing_domains = sorted(
+            {entity_id.partition(".")[0] for entity_id in missing_entities}
+        )
+        service_errors = (
+            await _async_test_services(hass) if not missing_entities else []
+        )
         variant_service_errors = (
-            await _async_test_variant_services(hass)
-            if not missing_entities
-            else []
+            await _async_test_variant_services(hass) if not missing_entities else []
         )
         await asyncio.sleep(1)
         state_contract_errors = (
@@ -1333,10 +2150,9 @@ async def _async_run(hass: HomeAssistant) -> None:
             hass,
             configured_entity_ids,
         )
-        reload_missing_domains = sorted({
-            entity_id.partition(".")[0]
-            for entity_id in reload_missing_entities
-        })
+        reload_missing_domains = sorted(
+            {entity_id.partition(".")[0] for entity_id in reload_missing_entities}
+        )
         await asyncio.sleep(1)
         restore_contract_errors = (
             _state_contract_errors(hass)
@@ -1369,6 +2185,44 @@ async def _async_run(hass: HomeAssistant) -> None:
                 if not feature_reload_missing_entities
                 else []
             )
+        climate_fan_matrix_errors = (
+            await _async_test_climate_fan_matrix(hass)
+            if not missing_entities
+            and not reload_missing_entities
+            and not feature_reload_missing_entities
+            else []
+        )
+        invalid_service_errors = (
+            await _async_test_invalid_services(hass)
+            if not missing_entities
+            and not reload_missing_entities
+            and not feature_reload_missing_entities
+            else []
+        )
+        removed_option_restore_errors = (
+            await _async_test_removed_option_restore(
+                hass,
+                entry,
+                entity_configs,
+                configured_entity_ids,
+            )
+            if not missing_entities
+            and not reload_missing_entities
+            and not feature_reload_missing_entities
+            and not invalid_service_errors
+            else []
+        )
+        nonpersistent_reset_errors = (
+            await _async_test_nonpersistent_reset(
+                hass,
+                entry,
+                configured_entity_ids,
+            )
+            if not missing_entities
+            and not reload_missing_entities
+            and not feature_reload_missing_entities
+            else []
+        )
         common_control_errors = (
             await _async_test_common_controls(hass, configured_entity_ids)
             if not missing_entities
@@ -1397,9 +2251,8 @@ async def _async_run(hass: HomeAssistant) -> None:
         incorrect_state_only_states = [
             domain
             for domain in STATE_ONLY_ENTITY_DOMAINS
-            if (
-                state := hass.states.get(f"{domain}.docker_{domain}")
-            ) is None or state.state != "docker_smoke"
+            if (state := hass.states.get(f"{domain}.docker_{domain}")) is None
+            or state.state != "docker_smoke"
         ]
         battery_state = hass.states.get("sensor.docker_vacuum_battery")
         battery_entry = entity_registry.async_get("sensor.docker_vacuum_battery")
@@ -1411,56 +2264,92 @@ async def _async_run(hass: HomeAssistant) -> None:
             and battery_entry is not None
             and battery_entry.device_id in device_ids
         )
-        result.update({
-            "home_assistant_version": HA_VERSION,
-            "domain_count": len(VIRTUAL_ENTITY_DOMAINS),
-            "entity_count": len(configured_entity_ids),
-            "missing_domains": missing_domains,
-            "missing_entities": missing_entities,
-            "missing_registry_entries": missing_registry_entries,
-            "device_count": len(device_ids),
-            "missing_devices": missing_devices,
-            "incorrect_state_only_states": incorrect_state_only_states,
-            "battery_sensor_valid": battery_sensor_valid,
-            "service_errors": service_errors,
-            "variant_service_errors": variant_service_errors,
-            "state_contract_errors": state_contract_errors,
-            "variant_contract_errors": variant_contract_errors,
-            "reload_missing_domains": reload_missing_domains,
-            "reload_missing_entities": reload_missing_entities,
-            "restore_contract_errors": restore_contract_errors,
-            "variant_restore_contract_errors": variant_restore_contract_errors,
-            "feature_sequence_errors": feature_sequence_errors,
-            "feature_reload_missing_entities": feature_reload_missing_entities,
-            "feature_restore_errors": feature_restore_errors,
-            "common_control_errors": common_control_errors,
-            "logged_errors": error_handler.messages,
-            "deprecation_warnings": deprecation_handler.messages,
-        })
-        result["success"] = battery_sensor_valid and not any((
-            missing_entities,
-            missing_registry_entries,
-            missing_devices,
-            incorrect_state_only_states,
-            service_errors,
-            variant_service_errors,
-            state_contract_errors,
-            variant_contract_errors,
-            reload_missing_entities,
-            restore_contract_errors,
-            variant_restore_contract_errors,
-            feature_sequence_errors,
-            feature_reload_missing_entities,
-            feature_restore_errors,
-            common_control_errors,
-            error_handler.messages,
-            deprecation_handler.messages,
-        )) and len(device_ids) == 1
+        removed_entity_ids = [entity["entity_id"] for entity in variant_entity_configs]
+        removal_errors = await _async_test_variant_removal(
+            hass,
+            entry,
+            primary_entity_configs,
+            removed_entity_ids,
+        )
+        entry_removal_errors = await _async_test_entry_removal(
+            hass,
+            entry,
+            [entity["entity_id"] for entity in primary_entity_configs],
+            device_ids,
+        )
+        result.update(
+            {
+                "home_assistant_version": HA_VERSION,
+                "domain_count": len(VIRTUAL_ENTITY_DOMAINS),
+                "entity_count": len(configured_entity_ids),
+                "missing_domains": missing_domains,
+                "missing_entities": missing_entities,
+                "missing_registry_entries": missing_registry_entries,
+                "device_count": len(device_ids),
+                "missing_devices": missing_devices,
+                "incorrect_state_only_states": incorrect_state_only_states,
+                "battery_sensor_valid": battery_sensor_valid,
+                "service_errors": service_errors,
+                "variant_service_errors": variant_service_errors,
+                "state_contract_errors": state_contract_errors,
+                "variant_contract_errors": variant_contract_errors,
+                "reload_missing_domains": reload_missing_domains,
+                "reload_missing_entities": reload_missing_entities,
+                "restore_contract_errors": restore_contract_errors,
+                "variant_restore_contract_errors": variant_restore_contract_errors,
+                "feature_sequence_errors": feature_sequence_errors,
+                "feature_reload_missing_entities": feature_reload_missing_entities,
+                "feature_restore_errors": feature_restore_errors,
+                "climate_fan_matrix_errors": climate_fan_matrix_errors,
+                "invalid_service_errors": invalid_service_errors,
+                "removed_option_restore_errors": removed_option_restore_errors,
+                "nonpersistent_reset_errors": nonpersistent_reset_errors,
+                "common_control_errors": common_control_errors,
+                "removal_errors": removal_errors,
+                "entry_removal_errors": entry_removal_errors,
+                "logged_errors": error_handler.messages,
+                "deprecation_warnings": deprecation_handler.messages,
+                "logged_warnings": warning_handler.messages,
+            }
+        )
+        result["success"] = (
+            battery_sensor_valid
+            and not any(
+                (
+                    missing_entities,
+                    missing_registry_entries,
+                    missing_devices,
+                    incorrect_state_only_states,
+                    service_errors,
+                    variant_service_errors,
+                    state_contract_errors,
+                    variant_contract_errors,
+                    reload_missing_entities,
+                    restore_contract_errors,
+                    variant_restore_contract_errors,
+                    feature_sequence_errors,
+                    feature_reload_missing_entities,
+                    feature_restore_errors,
+                    climate_fan_matrix_errors,
+                    invalid_service_errors,
+                    removed_option_restore_errors,
+                    nonpersistent_reset_errors,
+                    common_control_errors,
+                    removal_errors,
+                    entry_removal_errors,
+                    error_handler.messages,
+                    deprecation_handler.messages,
+                    warning_handler.messages,
+                )
+            )
+            and len(device_ids) == 1
+        )
     except Exception:  # noqa: BLE001 - serialize failures from the live container
         result["exception"] = traceback.format_exc()
     finally:
         logging.getLogger().removeHandler(error_handler)
         logging.getLogger().removeHandler(deprecation_handler)
+        logging.getLogger().removeHandler(warning_handler)
         result_path = Path(hass.config.path(RESULT_FILE))
         await hass.async_add_executor_job(
             result_path.write_text,

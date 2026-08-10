@@ -87,17 +87,17 @@ class VirtualValve(VirtualOpenableEntity, ValveEntity):
         return round(self._current_position)
 
     async def async_open_valve(self) -> None:
-        _LOGGER.info(f"opening {self.name}")
+        _LOGGER.debug(f"opening {self.name}")
         self._set_position(100)
 
     async def async_close_valve(self) -> None:
-        _LOGGER.info(f"closing {self.name}")
+        _LOGGER.debug(f"closing {self.name}")
         self._set_position(0)
 
     async def async_stop_valve(self) -> None:
-        _LOGGER.info(f"stopping {self.name}")
+        _LOGGER.debug(f"stopping {self.name}")
         self._stop()
 
     async def async_set_valve_position(self, position: int) -> None:
-        _LOGGER.info(f"setting {self.name} position {position}")
+        _LOGGER.debug(f"setting {self.name} position {position}")
         self._set_position(position)

@@ -56,11 +56,14 @@ CONF_STATE_CLASS = "state_class"
 
 DEFAULT_GENERIC_VALUE = "unknown"
 
-GENERIC_SCHEMA = virtual_schema(DEFAULT_GENERIC_VALUE, {
-    vol.Optional(CONF_CLASS): cv.string,
-    vol.Optional(CONF_ICON): cv.string,
-    vol.Optional(CONF_STATE_CLASS): cv.string,
-})
+GENERIC_SCHEMA = virtual_schema(
+    DEFAULT_GENERIC_VALUE,
+    {
+        vol.Optional(CONF_CLASS): cv.string,
+        vol.Optional(CONF_ICON): cv.string,
+        vol.Optional(CONF_STATE_CLASS): cv.string,
+    },
+)
 ENTITY_SCHEMA = vol.Schema(GENERIC_SCHEMA, extra=vol.ALLOW_EXTRA)
 
 
@@ -90,12 +93,16 @@ class GenericVirtualEntity(VirtualEntity, Entity):
 
     def _update_attributes(self):
         super()._update_attributes()
-        self._attr_extra_state_attributes.update({
-            name: value for name, value in (
-                (ATTR_DEVICE_CLASS, self._attr_device_class),
-                (CONF_STATE_CLASS, self._attr_state_class),
-            ) if value is not None
-        })
+        self._attr_extra_state_attributes.update(
+            {
+                name: value
+                for name, value in (
+                    (ATTR_DEVICE_CLASS, self._attr_device_class),
+                    (CONF_STATE_CLASS, self._attr_state_class),
+                )
+                if value is not None
+            }
+        )
         self._attr_extra_state_attributes.update(self._domain_options)
 
     def set_state(self, value) -> None:
@@ -186,7 +193,15 @@ class VirtualSelect(_NativeGenericMixin, VirtualEntity, SelectEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        self.set_state(state.state)
+        restored = str(state.state)
+        initial = str(config.get(CONF_INITIAL_VALUE, ""))
+        self._attr_current_option = (
+            restored
+            if restored in self._attr_options
+            else initial
+            if initial in self._attr_options
+            else None
+        )
 
     def set_state(self, value) -> None:
         if not _has_value(value):
@@ -194,7 +209,7 @@ class VirtualSelect(_NativeGenericMixin, VirtualEntity, SelectEntity):
             return
         option = str(value)
         if option not in self._attr_options:
-            self._attr_options.append(option)
+            raise ValueError(f"Invalid select option: {option}")
         self._attr_current_option = option
 
     async def async_select_option(self, option: str) -> None:
@@ -225,7 +240,9 @@ class VirtualText(_NativeGenericMixin, VirtualEntity, TextEntity):
             self._attr_mode = TextMode.TEXT
         pattern = config.get("pattern")
         try:
-            self._pattern_regex = re.compile(pattern) if isinstance(pattern, str) else None
+            self._pattern_regex = (
+                re.compile(pattern) if isinstance(pattern, str) else None
+            )
         except re.error:
             self._pattern_regex = None
         self._attr_pattern = pattern if self._pattern_regex is not None else None
@@ -246,7 +263,10 @@ class VirtualText(_NativeGenericMixin, VirtualEntity, TextEntity):
             raise TypeError("Text value must be a string")
         if not self._attr_native_min <= len(value) <= self._attr_native_max:
             raise ValueError("Text value is outside the configured length range")
-        if self._pattern_regex is not None and self._pattern_regex.fullmatch(value) is None:
+        if (
+            self._pattern_regex is not None
+            and self._pattern_regex.fullmatch(value) is None
+        ):
             raise ValueError("Text value does not match the configured pattern")
         self._attr_native_value = value
         self.async_write_ha_state()
@@ -333,10 +353,13 @@ class VirtualButton(_NativeGenericMixin, VirtualEntity, ButtonEntity):
         self._virtual_attributes["last_value"] = value
 
     async def async_press(self) -> None:
-        self._virtual_attributes["press_count"] = _safe_int(
-            self._virtual_attributes.get("press_count", 0),
-            0,
-        ) + 1
+        self._virtual_attributes["press_count"] = (
+            _safe_int(
+                self._virtual_attributes.get("press_count", 0),
+                0,
+            )
+            + 1
+        )
         self._update_attributes()
         self.async_write_ha_state()
 
@@ -345,11 +368,13 @@ class VirtualSiren(_NativeGenericMixin, VirtualEntity, SirenEntity):
     """Virtual siren with tone, volume, and duration capabilities."""
 
     PLATFORM_DOMAIN = "siren"
-    NATIVE_OPTION_KEYS = frozenset({
-        "available_tones",
-        "support_duration",
-        "support_volume",
-    })
+    NATIVE_OPTION_KEYS = frozenset(
+        {
+            "available_tones",
+            "support_duration",
+            "support_volume",
+        }
+    )
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
@@ -508,12 +533,14 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
     """Virtual media player with common playback and volume services."""
 
     PLATFORM_DOMAIN = "media_player"
-    NATIVE_OPTION_KEYS = frozenset({
-        "is_volume_muted",
-        "source",
-        "source_list",
-        "volume_level",
-    })
+    NATIVE_OPTION_KEYS = frozenset(
+        {
+            "is_volume_muted",
+            "source",
+            "source_list",
+            "volume_level",
+        }
+    )
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
@@ -614,15 +641,17 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
     """Virtual water heater with target temperature and operation modes."""
 
     PLATFORM_DOMAIN = "water_heater"
-    NATIVE_OPTION_KEYS = frozenset({
-        "current_temperature",
-        "max_temp",
-        "min_temp",
-        "operation_list",
-        "target_temperature",
-        "target_temperature_step",
-        "temperature_unit",
-    })
+    NATIVE_OPTION_KEYS = frozenset(
+        {
+            "current_temperature",
+            "max_temp",
+            "min_temp",
+            "operation_list",
+            "target_temperature",
+            "target_temperature_step",
+            "temperature_unit",
+        }
+    )
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
@@ -671,11 +700,22 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
 
     def _create_state(self, config):
         super()._create_state(config)
-        self.set_state(config.get(CONF_INITIAL_VALUE))
+        operation = str(config.get(CONF_INITIAL_VALUE, STATE_OFF)).lower()
+        self._attr_current_operation = (
+            operation if operation in self._attr_operation_list else STATE_OFF
+        )
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        self.set_state(state.state)
+        restored_operation = str(state.state).lower()
+        configured_operation = str(config.get(CONF_INITIAL_VALUE, STATE_OFF)).lower()
+        self._attr_current_operation = (
+            restored_operation
+            if restored_operation in self._attr_operation_list
+            else configured_operation
+            if configured_operation in self._attr_operation_list
+            else STATE_OFF
+        )
         self._attr_current_temperature = self._bounded_temperature(
             state.attributes.get(
                 "current_temperature",
@@ -695,7 +735,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             if not _has_value(value):
                 operation = STATE_OFF
             else:
-                self._attr_operation_list.append(operation)
+                raise ValueError(f"Invalid water heater operation mode: {operation}")
         self._attr_current_operation = operation
 
     async def async_set_temperature(self, **kwargs) -> None:
@@ -727,15 +767,17 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
     """Virtual software update entity."""
 
     PLATFORM_DOMAIN = "update"
-    NATIVE_OPTION_KEYS = frozenset({
-        "installed_version",
-        "latest_version",
-        "release_notes",
-        "release_summary",
-        "release_url",
-        "support_backup",
-        "versions",
-    })
+    NATIVE_OPTION_KEYS = frozenset(
+        {
+            "installed_version",
+            "latest_version",
+            "release_notes",
+            "release_summary",
+            "release_url",
+            "support_backup",
+            "versions",
+        }
+    )
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)

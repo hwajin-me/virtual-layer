@@ -141,20 +141,24 @@ def _entity_input(overrides=None):
 
 
 def test_entity_form_defaults_to_the_selected_domain_prefix():
-    defaults = _entity_schema({
-        CONF_PLATFORM: "sensor",
-        CONF_ENTITY_NAME: "Washer Phase",
-    })({})
+    defaults = _entity_schema(
+        {
+            CONF_PLATFORM: "sensor",
+            CONF_ENTITY_NAME: "Washer Phase",
+        }
+    )({})
 
     assert defaults[ATTR_ENTITY_ID] == "sensor.washer_phase"
 
 
 def test_entity_form_preserves_an_existing_entity_id():
-    defaults = _entity_schema({
-        CONF_PLATFORM: "sensor",
-        CONF_ENTITY_NAME: "Washer Phase",
-        ATTR_ENTITY_ID: "sensor.custom_washer_phase",
-    })({})
+    defaults = _entity_schema(
+        {
+            CONF_PLATFORM: "sensor",
+            CONF_ENTITY_NAME: "Washer Phase",
+            ATTR_ENTITY_ID: "sensor.custom_washer_phase",
+        }
+    )({})
 
     assert defaults[ATTR_ENTITY_ID] == "sensor.custom_washer_phase"
 
@@ -162,8 +166,7 @@ def test_entity_form_preserves_an_existing_entity_id():
 def test_entity_form_uses_icon_and_template_selectors():
     schema = _entity_schema({CONF_PLATFORM: "sensor"})
     validators = {
-        marker.schema: validator
-        for marker, validator in schema.schema.items()
+        marker.schema: validator for marker, validator in schema.schema.items()
     }
 
     assert isinstance(validators[CONF_ICON], selector.IconSelector)
@@ -188,15 +191,46 @@ def test_climate_domain_selection_reopens_form_with_mode_fields():
     assert not _needs_domain_specific_form(climate_defaults)
 
 
+def test_fan_domain_selection_reopens_form_with_native_feature_fields():
+    first_submission = _entity_input({CONF_PLATFORM: "fan"})
+
+    assert _needs_domain_specific_form(first_submission)
+
+    fan_defaults = _entity_schema(first_submission)({})
+    assert fan_defaults["speed_count"] == 0
+    assert fan_defaults["oscillate"] is False
+    assert fan_defaults["direction"] is False
+    assert fan_defaults["modes"] == []
+    assert fan_defaults["oscillating"] is False
+    assert not _needs_domain_specific_form(fan_defaults)
+
+
+def test_humidifier_domain_selection_reopens_form_with_native_feature_fields():
+    first_submission = _entity_input({CONF_PLATFORM: "humidifier"})
+
+    assert _needs_domain_specific_form(first_submission)
+
+    defaults = _entity_schema(first_submission)({})
+    assert defaults["class"] == "humidifier"
+    assert defaults["min_humidity"] == 0
+    assert defaults["max_humidity"] == 100
+    assert defaults["modes"] == []
+    assert not _needs_domain_specific_form(defaults)
+
+
 def test_build_entity_config_supports_composite_templates_and_attributes():
-    device_name, entity = _build_entity_config(_entity_input({
-        ATTR_ENTITY_ID: "sensor.washer_phase",
-        CONF_SOURCE_ENTITIES_TEXT: "sensor.washer_power, binary_sensor.washer_door",
-        CONF_VALUE_TEMPLATE: "{{ states('sensor.washer_power') }}",
-        CONF_AVAILABILITY_TEMPLATE: "{{ is_state('sensor.washer_power', 'on') }}",
-        CONF_ATTRIBUTES_JSON: '{"source": "simulation"}',
-        CONF_ATTRIBUTE_TEMPLATES_JSON: '{"door": "{{ states(\\\"binary_sensor.washer_door\\\") }}"}',
-    }))
+    device_name, entity = _build_entity_config(
+        _entity_input(
+            {
+                ATTR_ENTITY_ID: "sensor.washer_phase",
+                CONF_SOURCE_ENTITIES_TEXT: "sensor.washer_power, binary_sensor.washer_door",
+                CONF_VALUE_TEMPLATE: "{{ states('sensor.washer_power') }}",
+                CONF_AVAILABILITY_TEMPLATE: "{{ is_state('sensor.washer_power', 'on') }}",
+                CONF_ATTRIBUTES_JSON: '{"source": "simulation"}',
+                CONF_ATTRIBUTE_TEMPLATES_JSON: '{"door": "{{ states(\\"binary_sensor.washer_door\\") }}"}',
+            }
+        )
+    )
 
     assert device_name == "Laundry"
     assert entity == {
@@ -214,35 +248,41 @@ def test_build_entity_config_supports_composite_templates_and_attributes():
         CONF_AVAILABILITY_TEMPLATE: "{{ is_state('sensor.washer_power', 'on') }}",
         CONF_ATTRIBUTES: {"source": "simulation"},
         CONF_ATTRIBUTE_TEMPLATES: {
-            "door": "{{ states(\"binary_sensor.washer_door\") }}",
+            "door": '{{ states("binary_sensor.washer_door") }}',
         },
     }
 
 
 def test_build_entity_config_supports_custom_event_hooks():
-    _, entity = _build_entity_config(_entity_input({
-        ATTR_ENTITY_ID: "sensor.washer_phase",
-        CONF_EVENT_HOOKS_JSON: json.dumps({
-            "door_hook": {
-                "trigger": "state",
-                "entity_ids": ["binary_sensor.washer_door"],
-                "attribute": "battery",
-                "value_template": "{{ trigger.to }}",
-                "attribute_templates": {
-                    "source_battery": "{{ trigger.to_state.attributes.battery }}",
-                },
-                "debounce": 0.5,
-                "enabled": "false",
-            },
-            "manual_event": {
-                "trigger": "event",
-                "event_type": "virtual_layer_manual_update",
-                "event_data": {"target": "washer"},
-                "attributes": {"hooked": True},
-                "refresh": "no",
-            },
-        }),
-    }))
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                ATTR_ENTITY_ID: "sensor.washer_phase",
+                CONF_EVENT_HOOKS_JSON: json.dumps(
+                    {
+                        "door_hook": {
+                            "trigger": "state",
+                            "entity_ids": ["binary_sensor.washer_door"],
+                            "attribute": "battery",
+                            "value_template": "{{ trigger.to }}",
+                            "attribute_templates": {
+                                "source_battery": "{{ trigger.to_state.attributes.battery }}",
+                            },
+                            "debounce": 0.5,
+                            "enabled": "false",
+                        },
+                        "manual_event": {
+                            "trigger": "event",
+                            "event_type": "virtual_layer_manual_update",
+                            "event_data": {"target": "washer"},
+                            "attributes": {"hooked": True},
+                            "refresh": "no",
+                        },
+                    }
+                ),
+            }
+        )
+    )
 
     assert entity[CONF_EVENT_HOOKS] == [
         {
@@ -270,35 +310,55 @@ def test_build_entity_config_supports_custom_event_hooks():
 
 def test_build_entity_config_rejects_invalid_custom_event_hooks():
     with pytest.raises(InvalidEntityReference) as err:
-        _build_entity_config(_entity_input({
-            CONF_EVENT_HOOKS_JSON: '[{"trigger": "state", "entity_id": ["not-an-entity"]}]',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_EVENT_HOOKS_JSON: '[{"trigger": "state", "entity_id": ["not-an-entity"]}]',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_EVENT_HOOKS_JSON
 
     with pytest.raises(InvalidJson) as err:
-        _build_entity_config(_entity_input({
-            CONF_EVENT_HOOKS_JSON: json.dumps([{
-                "trigger": "event",
-                "event_type": "virtual_layer_manual_update",
-                "enabled": "sometimes",
-            }]),
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_EVENT_HOOKS_JSON: json.dumps(
+                        [
+                            {
+                                "trigger": "event",
+                                "event_type": "virtual_layer_manual_update",
+                                "enabled": "sometimes",
+                            }
+                        ]
+                    ),
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_EVENT_HOOKS_JSON
 
     with pytest.raises(InvalidJson) as err:
-        _build_entity_config(_entity_input({
-            CONF_EVENT_HOOKS_JSON: '[{"trigger": "event"}]',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_EVENT_HOOKS_JSON: '[{"trigger": "event"}]',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_EVENT_HOOKS_JSON
 
     with pytest.raises(InvalidEntityReference) as err:
-        _build_entity_config(_entity_input({
-            ATTR_ENTITY_ID: "sensor.washer_phase",
-            CONF_EVENT_HOOKS_JSON: '[{"trigger": "state", "entity_id": ["sensor.washer_phase"]}]',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    ATTR_ENTITY_ID: "sensor.washer_phase",
+                    CONF_EVENT_HOOKS_JSON: '[{"trigger": "state", "entity_id": ["sensor.washer_phase"]}]',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_EVENT_HOOKS_JSON
 
@@ -306,41 +366,59 @@ def test_build_entity_config_rejects_invalid_custom_event_hooks():
 @pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
 def test_build_entity_config_rejects_non_standard_json_numbers(constant):
     with pytest.raises(InvalidJson) as err:
-        _build_entity_config(_entity_input({
-            CONF_ATTRIBUTES_JSON: f'{{"bad": {constant}}}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_ATTRIBUTES_JSON: f'{{"bad": {constant}}}',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_ATTRIBUTES_JSON
 
 
 def test_build_entity_config_rejects_non_finite_numeric_strings():
     with pytest.raises(InvalidJson) as err:
-        _build_entity_config(_entity_input({
-            CONF_EVENT_HOOKS_JSON: json.dumps([{
-                "trigger": "event",
-                "event_type": "virtual_layer_update",
-                "debounce": "Infinity",
-            }]),
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_EVENT_HOOKS_JSON: json.dumps(
+                        [
+                            {
+                                "trigger": "event",
+                                "event_type": "virtual_layer_update",
+                                "debounce": "Infinity",
+                            }
+                        ]
+                    ),
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_EVENT_HOOKS_JSON
 
     with pytest.raises(InvalidDomainOptions):
-        _build_entity_config(_entity_input({
-            CONF_PLATFORM: "number",
-            CONF_INITIAL_VALUE: "1",
-            CONF_DOMAIN_OPTIONS_JSON: '{"min": "NaN", "max": 100}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_PLATFORM: "number",
+                    CONF_INITIAL_VALUE: "1",
+                    CONF_DOMAIN_OPTIONS_JSON: '{"min": "NaN", "max": 100}',
+                }
+            )
+        )
 
 
 def test_climate_schema_rejects_unknown_hvac_modes():
     from custom_components.virtual_layer.climate import CLIMATE_SCHEMA
 
     with pytest.raises(vol.Invalid):
-        CLIMATE_SCHEMA({
-            CONF_NAME: "Invalid climate",
-            "hvac_modes": ["off", "removed_mode"],
-        })
+        CLIMATE_SCHEMA(
+            {
+                CONF_NAME: "Invalid climate",
+                "hvac_modes": ["off", "removed_mode"],
+            }
+        )
 
 
 @pytest.mark.parametrize(
@@ -356,10 +434,14 @@ def test_climate_schema_rejects_unknown_hvac_modes():
 )
 def test_build_entity_config_rejects_malformed_light_options(domain_options):
     with pytest.raises(InvalidDomainOptions):
-        _build_entity_config(_entity_input({
-            CONF_PLATFORM: "light",
-            CONF_DOMAIN_OPTIONS_JSON: json.dumps(domain_options),
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_PLATFORM: "light",
+                    CONF_DOMAIN_OPTIONS_JSON: json.dumps(domain_options),
+                }
+            )
+        )
 
 
 @pytest.mark.parametrize(
@@ -372,38 +454,58 @@ def test_build_entity_config_rejects_malformed_light_options(domain_options):
 )
 def test_build_entity_config_rejects_malformed_vacuum_options(domain_options):
     with pytest.raises(InvalidDomainOptions):
-        _build_entity_config(_entity_input({
-            CONF_PLATFORM: "vacuum",
-            CONF_DOMAIN_OPTIONS_JSON: json.dumps(domain_options),
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_PLATFORM: "vacuum",
+                    CONF_DOMAIN_OPTIONS_JSON: json.dumps(domain_options),
+                }
+            )
+        )
 
 
 def test_build_entity_config_deduplicates_sources_and_rejects_invalid_template_variables():
-    _, entity = _build_entity_config(_entity_input({
-        CONF_SOURCE_ENTITIES_TEXT: "sensor.power, sensor.power\nsensor.door",
-        CONF_TEMPLATE_SOURCES_JSON: '{"power": "sensor.power"}',
-    }))
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_SOURCE_ENTITIES_TEXT: "sensor.power, sensor.power\nsensor.door",
+                CONF_TEMPLATE_SOURCES_JSON: '{"power": "sensor.power"}',
+            }
+        )
+    )
 
     assert entity[CONF_SOURCE_ENTITIES] == ["sensor.power", "sensor.door"]
 
     with pytest.raises(InvalidJson) as err:
-        _build_entity_config(_entity_input({
-            CONF_TEMPLATE_SOURCES_JSON: '{"not-valid": "sensor.power"}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_TEMPLATE_SOURCES_JSON: '{"not-valid": "sensor.power"}',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_TEMPLATE_SOURCES_JSON
 
     with pytest.raises(InvalidJson) as err:
-        _build_entity_config(_entity_input({
-            CONF_ATTRIBUTES_JSON: '{"available": false}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_ATTRIBUTES_JSON: '{"available": false}',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_ATTRIBUTES_JSON
 
     with pytest.raises(InvalidJson) as err:
-        _build_entity_config(_entity_input({
-            CONF_TEMPLATE_SOURCES_JSON: '{"none": "sensor.power"}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_TEMPLATE_SOURCES_JSON: '{"none": "sensor.power"}',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_TEMPLATE_SOURCES_JSON
 
@@ -422,11 +524,15 @@ def test_reference_entity_defaults_avoids_jinja_reserved_source_variable_names(h
 
 
 def test_build_entity_config_preserves_domain_options_and_normalizes_climate_default():
-    _, entity = _build_entity_config(_entity_input({
-        CONF_PLATFORM: "climate",
-        CONF_INITIAL_VALUE: "unknown",
-        CONF_DOMAIN_OPTIONS_JSON: '{"hvac_modes": ["off", "heat"], "target_temperature": 21}',
-    }))
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "climate",
+                CONF_INITIAL_VALUE: "unknown",
+                CONF_DOMAIN_OPTIONS_JSON: '{"hvac_modes": ["off", "heat"], "target_temperature": 21}',
+            }
+        )
+    )
 
     assert entity[CONF_INITIAL_VALUE] == "off"
     assert entity["hvac_modes"] == ["off", "heat"]
@@ -434,31 +540,43 @@ def test_build_entity_config_preserves_domain_options_and_normalizes_climate_def
 
 
 def test_climate_mode_fields_override_or_clear_advanced_json_values():
-    _, overridden = _build_entity_config(_entity_input({
-        CONF_PLATFORM: "climate",
-        CONF_INITIAL_VALUE: "cool",
-        CONF_DOMAIN_OPTIONS_JSON: json.dumps({
-            "hvac_modes": ["off", "cool"],
-            "fan_modes": ["old"],
-            "fan_mode": "old",
-        }),
-        "fan_modes": ["auto", "turbo"],
-        "fan_mode": "auto",
-    }))
+    _, overridden = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "climate",
+                CONF_INITIAL_VALUE: "cool",
+                CONF_DOMAIN_OPTIONS_JSON: json.dumps(
+                    {
+                        "hvac_modes": ["off", "cool"],
+                        "fan_modes": ["old"],
+                        "fan_mode": "old",
+                    }
+                ),
+                "fan_modes": ["auto", "turbo"],
+                "fan_mode": "auto",
+            }
+        )
+    )
     assert overridden["fan_modes"] == ["auto", "turbo"]
     assert overridden["fan_mode"] == "auto"
 
-    _, cleared = _build_entity_config(_entity_input({
-        CONF_PLATFORM: "climate",
-        CONF_INITIAL_VALUE: "cool",
-        CONF_DOMAIN_OPTIONS_JSON: json.dumps({
-            "hvac_modes": ["off", "cool"],
-            "fan_modes": ["old"],
-            "fan_mode": "old",
-        }),
-        "fan_modes": [],
-        "fan_mode": "",
-    }))
+    _, cleared = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "climate",
+                CONF_INITIAL_VALUE: "cool",
+                CONF_DOMAIN_OPTIONS_JSON: json.dumps(
+                    {
+                        "hvac_modes": ["off", "cool"],
+                        "fan_modes": ["old"],
+                        "fan_mode": "old",
+                    }
+                ),
+                "fan_modes": [],
+                "fan_mode": "",
+            }
+        )
+    )
     assert cleared["fan_modes"] == []
     assert "fan_mode" not in cleared
 
@@ -489,10 +607,14 @@ def test_climate_mode_fields_override_or_clear_advanced_json_values():
 )
 def test_build_entity_config_rejects_invalid_climate_mode_relationships(overrides):
     with pytest.raises(InvalidDomainOptions):
-        _build_entity_config(_entity_input({
-            CONF_PLATFORM: "climate",
-            **overrides,
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_PLATFORM: "climate",
+                    **overrides,
+                }
+            )
+        )
 
 
 def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
@@ -522,13 +644,12 @@ def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
 
     assert defaults[CONF_PLATFORM] == "climate"
     assert defaults[CONF_INITIAL_VALUE] == "cool"
-    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
-        "current_temperature": 24.0,
-        "max_temp": 30.0,
-        "min_temp": 18.0,
-        "target_temperature": 23.0,
-        "target_temperature_step": 1.0,
-    }
+    assert defaults["current_temperature"] == 24.0
+    assert defaults["max_temp"] == 30.0
+    assert defaults["min_temp"] == 18.0
+    assert defaults["target_temperature"] == 23.0
+    assert defaults["target_temperature_step"] == 1.0
+    assert CONF_DOMAIN_OPTIONS_JSON not in defaults
     assert defaults["hvac_modes"] == ["off", "cool", "dry", "fan_only"]
     assert defaults["fan_mode"] == "auto"
     assert defaults["fan_modes"] == ["medium", "high", "turbo", "auto"]
@@ -560,21 +681,22 @@ def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
 
 
 def test_climate_entity_form_uses_editable_mode_selectors():
-    schema = _entity_schema({
-        CONF_PLATFORM: "climate",
-        "hvac_modes": ["off", "cool"],
-        "fan_modes": ["auto", "turbo"],
-        "fan_mode": "auto",
-        "preset_modes": ["none", "sleep"],
-        "preset_mode": "none",
-        "swing_modes": ["off", "vertical"],
-        "swing_mode": "off",
-        "swing_horizontal_modes": ["off", "horizontal"],
-        "swing_horizontal_mode": "off",
-    })
+    schema = _entity_schema(
+        {
+            CONF_PLATFORM: "climate",
+            "hvac_modes": ["off", "cool"],
+            "fan_modes": ["auto", "turbo"],
+            "fan_mode": "auto",
+            "preset_modes": ["none", "sleep"],
+            "preset_mode": "none",
+            "swing_modes": ["off", "vertical"],
+            "swing_mode": "off",
+            "swing_horizontal_modes": ["off", "horizontal"],
+            "swing_horizontal_mode": "off",
+        }
+    )
     validators = {
-        marker.schema: validator
-        for marker, validator in schema.schema.items()
+        marker.schema: validator for marker, validator in schema.schema.items()
     }
 
     for field_name in (
@@ -592,41 +714,490 @@ def test_climate_entity_form_uses_editable_mode_selectors():
     assert validators["fan_modes"].config["multiple"] is True
     assert validators["fan_modes"].config["custom_value"] is True
     assert validators["fan_mode"].config["options"] == ["auto", "turbo"]
+    for field_name in (
+        "current_humidity",
+        "current_temperature",
+        "max_humidity",
+        "max_temp",
+        "min_humidity",
+        "min_temp",
+        "target_humidity",
+        "target_humidity_step",
+        "target_temperature",
+        "target_temperature_high",
+        "target_temperature_low",
+        "target_temperature_step",
+    ):
+        assert isinstance(validators[field_name], selector.NumberSelector)
+    assert isinstance(validators["hvac_action"], selector.SelectSelector)
+    assert isinstance(validators["temperature_unit"], selector.SelectSelector)
+
+
+def test_build_climate_config_uses_all_native_hvac_fields():
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "climate",
+                CONF_INITIAL_VALUE: "cool",
+                "hvac_modes": ["off", "cool", "dry", "fan_only"],
+                "fan_modes": ["auto", "turbo"],
+                "fan_mode": "auto",
+                "preset_modes": ["none", "sleep"],
+                "preset_mode": "none",
+                "swing_modes": ["off", "vertical"],
+                "swing_mode": "off",
+                "swing_horizontal_modes": ["left", "right"],
+                "swing_horizontal_mode": "left",
+                "current_temperature": 24,
+                "target_temperature": 23,
+                "min_temp": 18,
+                "max_temp": 30,
+                "target_temperature_step": 1,
+                "current_humidity": 55,
+                "target_humidity": 50,
+                "min_humidity": 30,
+                "max_humidity": 80,
+                "target_humidity_step": 1,
+                "hvac_action": "cooling",
+                "temperature_unit": "°C",
+            }
+        )
+    )
+
+    assert entity["hvac_modes"] == ["off", "cool", "dry", "fan_only"]
+    assert entity["fan_modes"] == ["auto", "turbo"]
+    assert entity["preset_modes"] == ["none", "sleep"]
+    assert entity["swing_modes"] == ["off", "vertical"]
+    assert entity["swing_horizontal_modes"] == ["left", "right"]
+    assert entity["current_temperature"] == 24
+    assert entity["target_temperature"] == 23
+    assert entity["target_humidity"] == 50
+    assert entity["hvac_action"] == "cooling"
+    assert entity["temperature_unit"] == "°C"
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"min_temp": 30, "max_temp": 20},
+        {"min_humidity": 70, "max_humidity": 30},
+        {"min_temp": 10, "max_temp": 30, "target_temperature": 31},
+        {
+            "min_temp": 10,
+            "max_temp": 30,
+            "target_temperature_low": 25,
+            "target_temperature_high": 20,
+        },
+        {"target_temperature_step": 0},
+        {"temperature_unit": "rankine"},
+        {"hvac_action": "teleporting"},
+    ],
+)
+def test_build_entity_config_rejects_invalid_climate_scalar_options(options):
+    with pytest.raises(InvalidDomainOptions):
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_PLATFORM: "climate",
+                    CONF_INITIAL_VALUE: "off",
+                    "hvac_modes": ["off", "cool"],
+                    **options,
+                }
+            )
+        )
+
+
+def test_humidifier_entity_form_and_builder_use_native_controls():
+    form = _entity_schema(
+        {
+            CONF_PLATFORM: "humidifier",
+            "class": "dehumidifier",
+            "action": "drying",
+            "current_humidity": 65,
+            "min_humidity": 30,
+            "max_humidity": 80,
+            "target_humidity": 50,
+            "target_humidity_step": 1,
+            "modes": ["auto", "sleep"],
+            "mode": "auto",
+        }
+    )
+    validators = {
+        marker.schema: validator for marker, validator in form.schema.items()
+    }
+    assert isinstance(validators["class"], selector.SelectSelector)
+    assert isinstance(validators["action"], selector.SelectSelector)
+    assert isinstance(validators["modes"], selector.SelectSelector)
+    assert validators["modes"].config["multiple"] is True
+    assert isinstance(validators["mode"], selector.SelectSelector)
+    for field_name in (
+        "current_humidity",
+        "min_humidity",
+        "max_humidity",
+        "target_humidity",
+        "target_humidity_step",
+    ):
+        assert isinstance(validators[field_name], selector.NumberSelector)
+
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "humidifier",
+                CONF_INITIAL_VALUE: "on",
+                "class": "dehumidifier",
+                "action": "drying",
+                "current_humidity": 65,
+                "min_humidity": 30,
+                "max_humidity": 80,
+                "target_humidity": 50,
+                "target_humidity_step": 1,
+                "modes": ["auto", "sleep"],
+                "mode": "auto",
+            }
+        )
+    )
+    assert entity["class"] == "dehumidifier"
+    assert entity["action"] == "drying"
+    assert entity["target_humidity"] == 50
+    assert entity["modes"] == ["auto", "sleep"]
+    assert entity["mode"] == "auto"
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {CONF_INITIAL_VALUE: "idle"},
+        {"min_humidity": 80, "max_humidity": 30},
+        {"min_humidity": 30, "max_humidity": 80, "target_humidity": 90},
+        {"target_humidity_step": 0},
+        {"modes": ["auto", "auto"]},
+        {"modes": ["auto"], "mode": "sleep"},
+        {"action": "cooling"},
+    ],
+)
+def test_build_entity_config_rejects_invalid_humidifier_options(options):
+    with pytest.raises(InvalidDomainOptions):
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_PLATFORM: "humidifier",
+                    CONF_INITIAL_VALUE: "off",
+                    **options,
+                }
+            )
+        )
+
+
+def test_fan_entity_form_uses_native_feature_controls():
+    schema = _entity_schema(
+        {
+            CONF_PLATFORM: "fan",
+            "speed_count": 4,
+            "oscillate": True,
+            "direction": True,
+            "modes": ["eco", "boost"],
+            "percentage": 25,
+            "preset_mode": "eco",
+            "oscillating": True,
+            "current_direction": "reverse",
+        }
+    )
+    validators = {
+        marker.schema: validator for marker, validator in schema.schema.items()
+    }
+
+    assert isinstance(validators["speed_count"], selector.NumberSelector)
+    assert isinstance(validators["percentage"], selector.NumberSelector)
+    assert isinstance(validators["oscillate"], selector.BooleanSelector)
+    assert isinstance(validators["direction"], selector.BooleanSelector)
+    assert isinstance(validators["oscillating"], selector.BooleanSelector)
+    assert isinstance(validators["modes"], selector.SelectSelector)
+    assert validators["modes"].config["multiple"] is True
+    assert validators["modes"].config["custom_value"] is True
+    assert validators["preset_mode"].config["options"] == ["eco", "boost"]
+    assert validators["current_direction"].config["options"] == [
+        "forward",
+        "reverse",
+    ]
+
+
+def test_build_fan_config_uses_native_fields_and_normalizes_default_state():
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "fan",
+                CONF_INITIAL_VALUE: "unknown",
+                CONF_DOMAIN_OPTIONS_JSON: json.dumps(
+                    {"speed_count": 2, "modes": ["old"]}
+                ),
+                "speed_count": 4,
+                "oscillate": True,
+                "direction": True,
+                "modes": ["eco", "boost"],
+                "percentage": 25,
+                "preset_mode": "eco",
+                "oscillating": True,
+                "current_direction": "reverse",
+            }
+        )
+    )
+
+    assert entity[CONF_INITIAL_VALUE] == "off"
+    assert entity["speed_count"] == 4
+    assert entity["modes"] == ["eco", "boost"]
+    assert entity["percentage"] == 25
+    assert entity["preset_mode"] == "eco"
+    assert entity["oscillate"] is True
+    assert entity["oscillating"] is True
+    assert entity["direction"] is True
+    assert entity["current_direction"] == "reverse"
+
+
+def test_build_default_fan_form_accepts_disabled_optional_features():
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "fan",
+                CONF_INITIAL_VALUE: "unknown",
+                "speed_count": 0,
+                "oscillate": False,
+                "direction": False,
+                "modes": [],
+                "oscillating": False,
+            }
+        )
+    )
+
+    assert entity[CONF_INITIAL_VALUE] == "off"
+    assert entity["oscillate"] is False
+    assert entity["oscillating"] is False
+
+
+@pytest.mark.parametrize(
+    "fan_options",
+    [
+        {CONF_INITIAL_VALUE: "idle"},
+        {"modes": ["eco", "eco"]},
+        {"modes": ["eco", ""]},
+        {"modes": ["eco"], "preset_mode": "boost"},
+        {"direction": False, "current_direction": "reverse"},
+        {"oscillate": False, "oscillating": True},
+    ],
+)
+def test_build_entity_config_rejects_invalid_fan_feature_relationships(fan_options):
+    with pytest.raises(InvalidDomainOptions):
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_PLATFORM: "fan",
+                    CONF_INITIAL_VALUE: "off",
+                    **fan_options,
+                }
+            )
+        )
+
+
+def test_reference_fan_promotes_native_speed_preset_and_motion_options(hass):
+    hass.states.async_set(
+        "fan.bedroom",
+        "on",
+        {
+            ATTR_FRIENDLY_NAME: "Bedroom Fan",
+            "percentage": 50,
+            "percentage_step": 25.0,
+            "preset_mode": "eco",
+            "preset_modes": ["eco", "boost"],
+            "oscillating": True,
+            "direction": "reverse",
+            "supported_features": 15,
+            "vendor": "kept",
+        },
+    )
+
+    defaults = _reference_entity_defaults(hass, ["fan.bedroom"])
+    assert defaults[CONF_PLATFORM] == "fan"
+    assert defaults["speed_count"] == 4
+    assert defaults["modes"] == ["eco", "boost"]
+    assert defaults["percentage"] == 50
+    assert defaults["preset_mode"] == "eco"
+    assert defaults["oscillate"] is True
+    assert defaults["oscillating"] is True
+    assert defaults["direction"] is True
+    assert defaults["current_direction"] == "reverse"
+    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "kept"}
+
+
+def test_fan_edit_form_migrates_legacy_native_attributes():
+    defaults = _entity_form_defaults(
+        "Bedroom",
+        {
+            CONF_PLATFORM: "fan",
+            CONF_NAME: "Legacy Fan",
+            CONF_INITIAL_VALUE: "on",
+            "speed_count": 0,
+            "modes": [],
+            CONF_ATTRIBUTES: {
+                "percentage": 50,
+                "percentage_step": 25.0,
+                "preset_modes": ["eco", "boost"],
+                "preset_mode": "eco",
+                "oscillating": True,
+                "direction": "reverse",
+                "vendor": "preserved",
+            },
+        },
+    )
+
+    assert defaults["speed_count"] == 4
+    assert defaults["modes"] == ["eco", "boost"]
+    assert defaults["percentage"] == 50
+    assert defaults["preset_mode"] == "eco"
+    assert defaults["oscillate"] is True
+    assert defaults["oscillating"] is True
+    assert defaults["direction"] is True
+    assert defaults["current_direction"] == "reverse"
+    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {
+        "vendor": "preserved"
+    }
+
+
+def test_climate_edit_form_migrates_legacy_fan_attributes_over_empty_fields():
+    defaults = _entity_form_defaults(
+        "Bedroom",
+        {
+            CONF_PLATFORM: "climate",
+            CONF_NAME: "Legacy AC",
+            CONF_INITIAL_VALUE: "cool",
+            "hvac_modes": ["off", "cool"],
+            "fan_modes": [],
+            "fan_mode": "",
+            CONF_ATTRIBUTES: {
+                "fan_modes": ["auto", "turbo"],
+                "fan_mode": "auto",
+                "supported_features": 441,
+                "vendor_attribute": "preserved",
+            },
+        },
+    )
+
+    assert defaults["fan_modes"] == ["auto", "turbo"]
+    assert defaults["fan_mode"] == "auto"
+    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {
+        "vendor_attribute": "preserved"
+    }
+
+
+def test_reference_humidifier_promotes_native_options(hass):
+    hass.states.async_set(
+        "humidifier.basement",
+        "on",
+        {
+            ATTR_FRIENDLY_NAME: "Basement Dehumidifier",
+            "action": "drying",
+            "available_modes": ["auto", "sleep"],
+            "current_humidity": 65,
+            "device_class": "dehumidifier",
+            "humidity": 50,
+            "max_humidity": 80,
+            "min_humidity": 30,
+            "mode": "auto",
+            "target_humidity_step": 1,
+            "supported_features": 1,
+            "vendor": "preserved",
+        },
+    )
+
+    defaults = _reference_entity_defaults(hass, ["humidifier.basement"])
+    assert defaults[CONF_PLATFORM] == "humidifier"
+    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults["class"] == "dehumidifier"
+    assert defaults["action"] == "drying"
+    assert defaults["current_humidity"] == 65
+    assert defaults["target_humidity"] == 50
+    assert defaults["modes"] == ["auto", "sleep"]
+    assert defaults["mode"] == "auto"
+    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "preserved"}
+
+
+def test_humidifier_edit_form_migrates_legacy_native_attributes():
+    defaults = _entity_form_defaults(
+        "Basement",
+        {
+            CONF_PLATFORM: "humidifier",
+            CONF_NAME: "Legacy Dehumidifier",
+            CONF_INITIAL_VALUE: "on",
+            "modes": [],
+            "mode": "",
+            CONF_ATTRIBUTES: {
+                "action": "drying",
+                "available_modes": ["auto", "sleep"],
+                "current_humidity": 65,
+                "device_class": "dehumidifier",
+                "humidity": 50,
+                "mode": "auto",
+                "vendor": "preserved",
+            },
+        },
+    )
+
+    assert defaults["class"] == "dehumidifier"
+    assert defaults["action"] == "drying"
+    assert defaults["current_humidity"] == 65
+    assert defaults["target_humidity"] == 50
+    assert defaults["modes"] == ["auto", "sleep"]
+    assert defaults["mode"] == "auto"
+    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "preserved"}
 
 
 def test_build_entity_config_validates_location_helper_options():
-    _, entity = _build_entity_config(_entity_input({
-        CONF_PLATFORM: "device_tracker",
-        CONF_INITIAL_VALUE: "not_home",
-        CONF_SOURCE_ENTITIES_TEXT: "device_tracker.first, person.second",
-        CONF_DOMAIN_OPTIONS_JSON: (
-            '{"location_helper": {'
-            '"distance_threshold_meters": 300, '
-            '"priority_window_seconds": 1800}}'
-        ),
-    }))
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "device_tracker",
+                CONF_INITIAL_VALUE: "not_home",
+                CONF_SOURCE_ENTITIES_TEXT: "device_tracker.first, person.second",
+                CONF_DOMAIN_OPTIONS_JSON: (
+                    '{"location_helper": {'
+                    '"distance_threshold_meters": 300, '
+                    '"priority_window_seconds": 1800}}'
+                ),
+            }
+        )
+    )
 
     assert entity[CONF_LOCATION_HELPER]["distance_threshold_meters"] == 300
 
     with pytest.raises(InvalidDomainOptions):
-        _build_entity_config(_entity_input({
-            CONF_PLATFORM: "device_tracker",
-            CONF_DOMAIN_OPTIONS_JSON: '{"location_helper": {"distance_threshold_meters": 0}}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_PLATFORM: "device_tracker",
+                    CONF_DOMAIN_OPTIONS_JSON: '{"location_helper": {"distance_threshold_meters": 0}}',
+                }
+            )
+        )
 
 
 def test_build_entity_config_rejects_reserved_domain_options():
     with pytest.raises(InvalidJson) as err:
-        _build_entity_config(_entity_input({
-            CONF_DOMAIN_OPTIONS_JSON: '{"name": "must not override"}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_DOMAIN_OPTIONS_JSON: '{"name": "must not override"}',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_DOMAIN_OPTIONS_JSON
 
     with pytest.raises(InvalidJson) as err:
-        _build_entity_config(_entity_input({
-            CONF_DOMAIN_OPTIONS_JSON: '{"friendly_name": "must not override"}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_DOMAIN_OPTIONS_JSON: '{"friendly_name": "must not override"}',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_DOMAIN_OPTIONS_JSON
 
@@ -642,7 +1213,10 @@ def test_reference_entity_defaults_combines_boolean_sources_with_and_template(ha
 
     assert defaults[CONF_PLATFORM] == "binary_sensor"
     assert defaults[CONF_INITIAL_VALUE] == "on"
-    assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "binary_sensor.front_door\nswitch.alarm_ready"
+    assert (
+        defaults[CONF_SOURCE_ENTITIES_TEXT]
+        == "binary_sensor.front_door\nswitch.alarm_ready"
+    )
     assert defaults[CONF_TEMPLATE_SOURCES_JSON] == (
         '{"alarm_ready": "switch.alarm_ready", "front_door": "binary_sensor.front_door"}'
     )
@@ -651,7 +1225,9 @@ def test_reference_entity_defaults_combines_boolean_sources_with_and_template(ha
     assert "alarm_ready | lower" in defaults[CONF_VALUE_TEMPLATE]
 
 
-def test_presence_motion_helper_uses_majority_and_delayed_all_off_clear(hass, monkeypatch):
+def test_presence_motion_helper_uses_majority_and_delayed_all_off_clear(
+    hass, monkeypatch
+):
     source_ids = [
         "binary_sensor.hall_motion",
         "binary_sensor.kitchen_motion",
@@ -716,8 +1292,12 @@ def test_presence_motion_helper_uses_majority_and_delayed_all_off_clear(hass, mo
 
 
 def test_presence_motion_helper_requires_binary_sensor_sources(hass):
-    hass.states.async_set("light.invalid_motion_source", "on", {"device_class": "motion"})
-    hass.states.async_set("switch.invalid_motion_source", "on", {"device_class": "motion"})
+    hass.states.async_set(
+        "light.invalid_motion_source", "on", {"device_class": "motion"}
+    )
+    hass.states.async_set(
+        "switch.invalid_motion_source", "on", {"device_class": "motion"}
+    )
 
     defaults = _reference_entity_defaults(
         hass,
@@ -783,10 +1363,13 @@ def test_reference_entity_defaults_preserves_water_usage_class_and_unit(hass):
         {"device_class": "water", "unit_of_measurement": "L"},
     )
 
-    defaults = _reference_entity_defaults(hass, [
-        "sensor.water_meter_one",
-        "sensor.water_meter_two",
-    ])
+    defaults = _reference_entity_defaults(
+        hass,
+        [
+            "sensor.water_meter_one",
+            "sensor.water_meter_two",
+        ],
+    )
 
     assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         "class": "water",
@@ -866,16 +1449,21 @@ def test_reference_entity_defaults_combines_datetime_sources_with_latest_templat
     assert defaults[CONF_PLATFORM] == "datetime"
     assert defaults[CONF_INITIAL_VALUE] == "2026-08-03T20:00:00+00:00"
     assert "as_timestamp" in defaults[CONF_VALUE_TEMPLATE]
-    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
-        variables={
-            "first_seen": "2026-08-04T00:30:00+09:00",
-            "last_seen": "2026-08-03T20:00:00+00:00",
-        },
-        parse_result=False,
-    ) == "2026-08-03T20:00:00+00:00"
+    assert (
+        Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+            variables={
+                "first_seen": "2026-08-04T00:30:00+09:00",
+                "last_seen": "2026-08-03T20:00:00+00:00",
+            },
+            parse_result=False,
+        )
+        == "2026-08-03T20:00:00+00:00"
+    )
 
 
-def test_reference_entity_defaults_combines_enum_sources_with_first_available_template(hass):
+def test_reference_entity_defaults_combines_enum_sources_with_first_available_template(
+    hass,
+):
     hass.states.async_set("select.primary_mode", "unknown")
     hass.states.async_set("input_select.fallback_mode", "eco")
 
@@ -918,7 +1506,9 @@ def test_reference_entity_defaults_creates_location_median_helper(hass):
     assert defaults.get(CONF_ATTRIBUTES_JSON, "") == ""
 
 
-def test_reference_entity_defaults_uses_location_helper_for_single_location_source(hass):
+def test_reference_entity_defaults_uses_location_helper_for_single_location_source(
+    hass,
+):
     hass.states.async_set(
         "device_tracker.phone",
         "home",
@@ -969,7 +1559,9 @@ def test_reference_entity_defaults_shortens_generated_combined_location_names(ha
         },
     )
 
-    defaults = _reference_entity_defaults(hass, ["device_tracker.phone", "person.owner"])
+    defaults = _reference_entity_defaults(
+        hass, ["device_tracker.phone", "person.owner"]
+    )
 
     assert defaults[CONF_ENTITY_NAME].startswith(
         "Combined Hwajin's iPhone 14 Pro (iCloud)",
@@ -991,17 +1583,22 @@ def test_default_virtual_entity_id_shortens_generated_slug():
 
 
 def test_build_device_config_supports_device_registry_metadata():
-    device = _build_device_config(_entity_input({
-        CONF_DEVICE_ID: "laundry-appliance-1",
-        CONF_DEVICE_MANUFACTURER: "Acme",
-        CONF_DEVICE_MODEL: "Washer 9000",
-        CONF_DEVICE_SW_VERSION: "2026.8",
-        CONF_DEVICE_HW_VERSION: "rev-a",
-        CONF_DEVICE_SERIAL_NUMBER: "SN-123",
-        CONF_DEVICE_CONFIGURATION_URL: "https://example.test/laundry",
-        CONF_DEVICE_SUGGESTED_AREA: "Laundry Room",
-        CONF_DEVICE_VIA_DEVICE_ID: "parent-device-id",
-    }), "Laundry")
+    device = _build_device_config(
+        _entity_input(
+            {
+                CONF_DEVICE_ID: "laundry-appliance-1",
+                CONF_DEVICE_MANUFACTURER: "Acme",
+                CONF_DEVICE_MODEL: "Washer 9000",
+                CONF_DEVICE_SW_VERSION: "2026.8",
+                CONF_DEVICE_HW_VERSION: "rev-a",
+                CONF_DEVICE_SERIAL_NUMBER: "SN-123",
+                CONF_DEVICE_CONFIGURATION_URL: "https://example.test/laundry",
+                CONF_DEVICE_SUGGESTED_AREA: "Laundry Room",
+                CONF_DEVICE_VIA_DEVICE_ID: "parent-device-id",
+            }
+        ),
+        "Laundry",
+    )
 
     assert device == {
         ATTR_DEVICE_ID: "laundry-appliance-1",
@@ -1026,39 +1623,55 @@ def test_build_device_config_defaults_device_id_to_device_name():
 
 def test_build_entity_config_requires_entity_id_domain_to_match_platform():
     with pytest.raises(InvalidEntityId):
-        _build_entity_config(_entity_input({
-            ATTR_ENTITY_ID: "switch.washer_phase",
-            CONF_PLATFORM: "sensor",
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    ATTR_ENTITY_ID: "switch.washer_phase",
+                    CONF_PLATFORM: "sensor",
+                }
+            )
+        )
 
 
 def test_build_entity_config_rejects_non_object_json_fields():
     with pytest.raises(InvalidJson) as err:
-        _build_entity_config(_entity_input({
-            CONF_ATTRIBUTES_JSON: '["not", "object"]',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_ATTRIBUTES_JSON: '["not", "object"]',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_ATTRIBUTES_JSON
 
 
 def test_build_entity_config_adds_number_defaults():
-    _, entity = _build_entity_config(_entity_input({
-        CONF_PLATFORM: "number",
-        CONF_INITIAL_VALUE: "10",
-    }))
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "number",
+                CONF_INITIAL_VALUE: "10",
+            }
+        )
+    )
 
     assert entity[CONF_MIN] == 0
     assert entity[CONF_MAX] == 100
 
 
 def test_build_entity_config_supports_attribute_sources_and_pull_interval():
-    _, entity = _build_entity_config(_entity_input({
-        CONF_PULL_INTERVAL: 30,
-        CONF_ATTRIBUTE_SOURCES_JSON: (
-            '{"battery": "sensor.remote.battery_level", '
-            '"phase": {"entity_id": "sensor.washer", "attribute": "state"}}'
-        ),
-    }))
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PULL_INTERVAL: 30,
+                CONF_ATTRIBUTE_SOURCES_JSON: (
+                    '{"battery": "sensor.remote.battery_level", '
+                    '"phase": {"entity_id": "sensor.washer", "attribute": "state"}}'
+                ),
+            }
+        )
+    )
 
     assert entity[CONF_PULL_INTERVAL] == 30
     assert entity[CONF_ATTRIBUTE_SOURCES] == {
@@ -1074,20 +1687,24 @@ def test_build_entity_config_supports_attribute_sources_and_pull_interval():
 
 
 def test_build_entity_config_supports_template_sources_for_composite_values():
-    _, entity = _build_entity_config(_entity_input({
-        CONF_TEMPLATE_SOURCES_JSON: (
-            '{"power": "sensor.washer_power", '
-            '"door": "binary_sensor.washer_door.state", '
-            '"humidity": {"entity_id": "sensor.laundry", "attribute": "humidity"}}'
-        ),
-        CONF_VALUE_TEMPLATE: (
-            "{% if power|float(0) > 10 and door == 'off' %}"
-            "running"
-            "{% else %}"
-            "idle"
-            "{% endif %}"
-        ),
-    }))
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_TEMPLATE_SOURCES_JSON: (
+                    '{"power": "sensor.washer_power", '
+                    '"door": "binary_sensor.washer_door.state", '
+                    '"humidity": {"entity_id": "sensor.laundry", "attribute": "humidity"}}'
+                ),
+                CONF_VALUE_TEMPLATE: (
+                    "{% if power|float(0) > 10 and door == 'off' %}"
+                    "running"
+                    "{% else %}"
+                    "idle"
+                    "{% endif %}"
+                ),
+            }
+        )
+    )
 
     assert entity[CONF_TEMPLATE_SOURCES] == {
         "power": {
@@ -1107,11 +1724,15 @@ def test_build_entity_config_supports_template_sources_for_composite_values():
 
 
 def test_build_camera_alias_adds_source_subscription_and_state_template():
-    _, entity = _build_entity_config(_entity_input({
-        CONF_PLATFORM: "camera",
-        CONF_INITIAL_VALUE: "off",
-        CONF_DOMAIN_OPTIONS_JSON: '{"source_entity": "camera.front_door"}',
-    }))
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "camera",
+                CONF_INITIAL_VALUE: "off",
+                CONF_DOMAIN_OPTIONS_JSON: '{"source_entity": "camera.front_door"}',
+            }
+        )
+    )
 
     assert entity["source_entity"] == "camera.front_door"
     assert entity[CONF_SOURCE_ENTITIES] == ["camera.front_door"]
@@ -1119,13 +1740,17 @@ def test_build_camera_alias_adds_source_subscription_and_state_template():
 
 
 def test_build_entity_config_accepts_common_icon_and_template_for_native_domains():
-    _, entity = _build_entity_config(_entity_input({
-        CONF_PLATFORM: "binary_sensor",
-        CONF_ICON: "mdi:door-open",
-        CONF_ICON_TEMPLATE: (
-            "{{ 'mdi:door-open' if this.state == 'on' else 'mdi:door-closed' }}"
-        ),
-    }))
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "binary_sensor",
+                CONF_ICON: "mdi:door-open",
+                CONF_ICON_TEMPLATE: (
+                    "{{ 'mdi:door-open' if this.state == 'on' else 'mdi:door-closed' }}"
+                ),
+            }
+        )
+    )
 
     assert entity[CONF_ICON] == "mdi:door-open"
     assert entity[CONF_ICON_TEMPLATE] == (
@@ -1135,41 +1760,57 @@ def test_build_entity_config_accepts_common_icon_and_template_for_native_domains
 
 def test_build_camera_alias_rejects_non_camera_source():
     with pytest.raises(InvalidDomainOptions):
-        _build_entity_config(_entity_input({
-            CONF_PLATFORM: "camera",
-            CONF_DOMAIN_OPTIONS_JSON: '{"source_entity": "sensor.front_door"}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_PLATFORM: "camera",
+                    CONF_DOMAIN_OPTIONS_JSON: '{"source_entity": "sensor.front_door"}',
+                }
+            )
+        )
 
 
 def test_build_entity_config_rejects_explicit_self_references():
     with pytest.raises(InvalidEntityReference) as err:
-        _build_entity_config(_entity_input({
-            ATTR_ENTITY_ID: "sensor.self_referencing",
-            CONF_SOURCE_ENTITIES_TEXT: "sensor.self_referencing",
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    ATTR_ENTITY_ID: "sensor.self_referencing",
+                    CONF_SOURCE_ENTITIES_TEXT: "sensor.self_referencing",
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_SOURCE_ENTITIES_TEXT
 
 
 def test_build_camera_alias_rejects_itself_as_source():
     with pytest.raises(InvalidEntityReference) as err:
-        _build_entity_config(_entity_input({
-            ATTR_ENTITY_ID: "camera.self_alias",
-            CONF_PLATFORM: "camera",
-            CONF_DOMAIN_OPTIONS_JSON: '{"source_entity": "camera.self_alias"}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    ATTR_ENTITY_ID: "camera.self_alias",
+                    CONF_PLATFORM: "camera",
+                    CONF_DOMAIN_OPTIONS_JSON: '{"source_entity": "camera.self_alias"}',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_DOMAIN_OPTIONS_JSON
 
 
 def test_build_generic_entity_keeps_direct_domain_options():
-    _, entity = _build_entity_config(_entity_input({
-        CONF_PLATFORM: "weather",
-        CONF_DOMAIN_OPTIONS_JSON: (
-            '{"temperature": 21.5, "humidity": 48, '
-            '"forecast_provider": "virtual"}'
-        ),
-    }))
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "weather",
+                CONF_DOMAIN_OPTIONS_JSON: (
+                    '{"temperature": 21.5, "humidity": 48, '
+                    '"forecast_provider": "virtual"}'
+                ),
+            }
+        )
+    )
 
     assert entity["temperature"] == 21.5
     assert entity["humidity"] == 48
@@ -1177,12 +1818,15 @@ def test_build_generic_entity_keeps_direct_domain_options():
 
 
 def test_entity_form_preserves_generic_direct_domain_options_for_editing():
-    defaults = _entity_form_defaults("Weather", {
-        CONF_PLATFORM: "weather",
-        CONF_NAME: "Virtual Forecast",
-        "temperature": 21.5,
-        "humidity": 48,
-    })
+    defaults = _entity_form_defaults(
+        "Weather",
+        {
+            CONF_PLATFORM: "weather",
+            CONF_NAME: "Virtual Forecast",
+            "temperature": 21.5,
+            "humidity": 48,
+        },
+    )
 
     assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         "humidity": 48,
@@ -1357,8 +2001,7 @@ def test_auto_helper_profile_normalizes_stored_template_source_references():
         CONF_INITIAL_VALUE: "off",
         CONF_SOURCE_ENTITIES_TEXT: "binary_sensor.door_5\nbinary_sensor.door_6",
         CONF_TEMPLATE_SOURCES_JSON: (
-            '{"door_5": "binary_sensor.door_5", '
-            '"door_6": "binary_sensor.door_6"}'
+            '{"door_5": "binary_sensor.door_5", "door_6": "binary_sensor.door_6"}'
         ),
         CONF_VALUE_TEMPLATE: "{{ door_5 and door_6 }}",
     }
@@ -1468,7 +2111,7 @@ def test_every_supported_domain_accepts_direct_ui_options(domain):
         CONF_PLATFORM: domain,
         CONF_DOMAIN_OPTIONS_JSON: json.dumps(options),
     }
-    if domain == "climate":
+    if domain in {"climate", "fan", "humidifier"}:
         overrides[CONF_INITIAL_VALUE] = "off"
 
     _, entity = _build_entity_config(_entity_input(overrides))
@@ -1479,27 +2122,39 @@ def test_every_supported_domain_accepts_direct_ui_options(domain):
 
 def test_build_entity_config_rejects_invalid_template_source_entity_id():
     with pytest.raises(InvalidEntityReference) as err:
-        _build_entity_config(_entity_input({
-            CONF_TEMPLATE_SOURCES_JSON: '{"power": "not_an_entity"}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_TEMPLATE_SOURCES_JSON: '{"power": "not_an_entity"}',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_TEMPLATE_SOURCES_JSON
 
 
 def test_build_entity_config_rejects_invalid_attribute_source_shape():
     with pytest.raises(InvalidJson) as err:
-        _build_entity_config(_entity_input({
-            CONF_ATTRIBUTE_SOURCES_JSON: '{"battery": {"entity_id": "sensor.remote"}}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_ATTRIBUTE_SOURCES_JSON: '{"battery": {"entity_id": "sensor.remote"}}',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_ATTRIBUTE_SOURCES_JSON
 
 
 def test_build_entity_config_rejects_invalid_attribute_source_entity_id():
     with pytest.raises(InvalidEntityReference) as err:
-        _build_entity_config(_entity_input({
-            CONF_ATTRIBUTE_SOURCES_JSON: '{"battery": "not_an_entity.battery_level"}',
-        }))
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_ATTRIBUTE_SOURCES_JSON: '{"battery": "not_an_entity.battery_level"}',
+                }
+            )
+        )
 
     assert err.value.field_name == CONF_ATTRIBUTE_SOURCES_JSON
 
@@ -1579,24 +2234,32 @@ def test_append_ui_entity_reuses_existing_device_with_matching_device_id():
 
 
 def test_append_ui_entity_accepts_home_assistant_read_only_options():
-    original = MappingProxyType({
-        ATTR_DEVICES: MappingProxyType({
-            "Existing": [
-                MappingProxyType({
-                    CONF_PLATFORM: "sensor",
-                    CONF_NAME: "Existing Sensor",
-                }),
-            ],
-        }),
-    })
+    original = MappingProxyType(
+        {
+            ATTR_DEVICES: MappingProxyType(
+                {
+                    "Existing": [
+                        MappingProxyType(
+                            {
+                                CONF_PLATFORM: "sensor",
+                                CONF_NAME: "Existing Sensor",
+                            }
+                        ),
+                    ],
+                }
+            ),
+        }
+    )
 
     next_options = _append_ui_entity(
         original,
         "Laundry",
-        MappingProxyType({
-            CONF_PLATFORM: "sensor",
-            CONF_NAME: "Washer Phase",
-        }),
+        MappingProxyType(
+            {
+                CONF_PLATFORM: "sensor",
+                CONF_NAME: "Washer Phase",
+            }
+        ),
     )
 
     assert next_options[ATTR_DEVICES]["Laundry"][0].pop(ATTR_ENTITY_KEY)
@@ -1649,23 +2312,27 @@ def test_append_ui_entity_recovers_from_invalid_target_list_and_device_attribute
 
 def test_entity_choices_ignores_invalid_stored_options():
     assert _entity_choices({ATTR_DEVICES: "bad-shape"}) == {}
-    assert _entity_choices({
-        ATTR_DEVICES: {
-            "Laundry": [
-                "bad-entity",
-                {CONF_PLATFORM: "sensor", CONF_NAME: "Washer Phase"},
-            ],
-            "Broken": "not-a-list",
-        },
-    }) == {
+    assert _entity_choices(
+        {
+            ATTR_DEVICES: {
+                "Laundry": [
+                    "bad-entity",
+                    {CONF_PLATFORM: "sensor", CONF_NAME: "Washer Phase"},
+                ],
+                "Broken": "not-a-list",
+            },
+        }
+    ) == {
         _entity_key("Laundry", 1): "Laundry / Washer Phase (sensor)",
     }
 
 
 def test_options_schema_allows_deleting_but_not_editing_invalid_stored_entity():
-    schema = _options_schema({
-        ATTR_DEVICES: {"Broken": ["bad-entity"]},
-    })
+    schema = _options_schema(
+        {
+            ATTR_DEVICES: {"Broken": ["bad-entity"]},
+        }
+    )
     action_selector = next(iter(schema.schema.values()))
 
     assert action_selector.config["translation_key"] == "options_action"
@@ -1678,14 +2345,19 @@ def test_options_schema_allows_deleting_but_not_editing_invalid_stored_entity():
 
 
 def test_managed_device_choices_show_stable_id_and_entity_count():
-    choices = _managed_device_choices({
-        ATTR_DEVICES: {
-            "Laundry": [{CONF_PLATFORM: "sensor"}, {CONF_PLATFORM: "binary_sensor"}],
-        },
-        ATTR_DEVICE_ATTRIBUTES: {
-            "Laundry": {ATTR_DEVICE_ID: "laundry-1"},
-        },
-    })
+    choices = _managed_device_choices(
+        {
+            ATTR_DEVICES: {
+                "Laundry": [
+                    {CONF_PLATFORM: "sensor"},
+                    {CONF_PLATFORM: "binary_sensor"},
+                ],
+            },
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Laundry": {ATTR_DEVICE_ID: "laundry-1"},
+            },
+        }
+    )
 
     assert choices == {"Laundry": "Laundry (laundry-1, 2 entities)"}
 
@@ -2086,11 +2758,13 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
             },
             CONF_PULL_INTERVAL: 30,
             CONF_VALUE_TEMPLATE: "{{ power }}",
-            CONF_EVENT_HOOKS: [{
-                "trigger": "event",
-                "event_type": "virtual_layer_manual_update",
-                CONF_VALUE_TEMPLATE: "{{ trigger.data.value }}",
-            }],
+            CONF_EVENT_HOOKS: [
+                {
+                    "trigger": "event",
+                    "event_type": "virtual_layer_manual_update",
+                    CONF_VALUE_TEMPLATE: "{{ trigger.data.value }}",
+                }
+            ],
             CONF_ATTRIBUTES: {"source": "simulation"},
         },
         {
@@ -2132,11 +2806,13 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
     assert '"power"' in defaults[CONF_TEMPLATE_SOURCES_JSON]
     assert defaults[CONF_PULL_INTERVAL] == 30
     assert defaults[CONF_VALUE_TEMPLATE] == "{{ power }}"
-    assert json.loads(defaults[CONF_EVENT_HOOKS_JSON]) == [{
-        "trigger": "event",
-        "event_type": "virtual_layer_manual_update",
-        CONF_VALUE_TEMPLATE: "{{ trigger.data.value }}",
-    }]
+    assert json.loads(defaults[CONF_EVENT_HOOKS_JSON]) == [
+        {
+            "trigger": "event",
+            "event_type": "virtual_layer_manual_update",
+            CONF_VALUE_TEMPLATE: "{{ trigger.data.value }}",
+        }
+    ]
     assert defaults[CONF_ATTRIBUTES_JSON] == '{"source": "simulation"}'
 
 

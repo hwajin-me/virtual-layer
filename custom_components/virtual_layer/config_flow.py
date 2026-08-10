@@ -34,11 +34,27 @@ from .cfg import (
 )
 from .climate_options import (
     CLIMATE_CURRENT_MODE_FIELDS,
+    CLIMATE_FORM_FIELDS,
     CLIMATE_MODE_FORM_FIELDS,
     CLIMATE_MODE_LIST_FIELDS,
+    CLIMATE_SCALAR_FORM_FIELDS,
     extract_climate_options,
+    migrate_legacy_climate_attributes,
 )
 from .const import *
+from .fan_options import (
+    FAN_FORM_FIELDS,
+    FAN_MODE_LIST_FIELD,
+    extract_fan_options,
+    migrate_legacy_fan_attributes,
+)
+from .humidifier_options import (
+    HUMIDIFIER_CURRENT_MODE_FIELD,
+    HUMIDIFIER_FORM_FIELDS,
+    HUMIDIFIER_MODE_LIST_FIELD,
+    extract_humidifier_options,
+    migrate_legacy_humidifier_attributes,
+)
 from .polygon import parse_geojson_zones
 
 _LOGGER = logging.getLogger(__name__)
@@ -92,23 +108,29 @@ _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_ATTRIBUTE_SOURCES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
     CONF_DOMAIN_OPTIONS_JSON,
-    *CLIMATE_MODE_FORM_FIELDS,
+    *CLIMATE_FORM_FIELDS,
+    *FAN_FORM_FIELDS,
+    *HUMIDIFIER_FORM_FIELDS,
 )
 
-_AUTO_HELPER_JSON_FIELDS = frozenset({
-    CONF_TEMPLATE_SOURCES_JSON,
-    CONF_EVENT_HOOKS_JSON,
-    CONF_ATTRIBUTES_JSON,
-    CONF_ATTRIBUTE_SOURCES_JSON,
-    CONF_ATTRIBUTE_TEMPLATES_JSON,
-    CONF_DOMAIN_OPTIONS_JSON,
-})
+_AUTO_HELPER_JSON_FIELDS = frozenset(
+    {
+        CONF_TEMPLATE_SOURCES_JSON,
+        CONF_EVENT_HOOKS_JSON,
+        CONF_ATTRIBUTES_JSON,
+        CONF_ATTRIBUTE_SOURCES_JSON,
+        CONF_ATTRIBUTE_TEMPLATES_JSON,
+        CONF_DOMAIN_OPTIONS_JSON,
+    }
+)
 
-_AUTO_HELPER_TEMPLATE_FIELDS = frozenset({
-    CONF_TEMPLATE_SOURCES_JSON,
-    CONF_VALUE_TEMPLATE,
-    CONF_ATTRIBUTE_TEMPLATES_JSON,
-})
+_AUTO_HELPER_TEMPLATE_FIELDS = frozenset(
+    {
+        CONF_TEMPLATE_SOURCES_JSON,
+        CONF_VALUE_TEMPLATE,
+        CONF_ATTRIBUTE_TEMPLATES_JSON,
+    }
+)
 
 ACTION_ADD_ENTITY = "add_entity"
 ACTION_DELETE_ENTITY = "delete_entity"
@@ -124,6 +146,8 @@ DEFAULT_NUMBER_MIN = 0
 DEFAULT_NUMBER_MAX = 100
 DEFAULT_INITIAL_VALUES = {
     "climate": "off",
+    "fan": "off",
+    "humidifier": "off",
 }
 CLIMATE_INITIAL_VALUES = (
     "off",
@@ -134,6 +158,19 @@ CLIMATE_INITIAL_VALUES = (
     "dry",
     "fan_only",
 )
+CLIMATE_ACTION_VALUES = (
+    "off",
+    "heating",
+    "cooling",
+    "drying",
+    "fan",
+    "idle",
+    "preheating",
+    "defrosting",
+)
+TEMPERATURE_UNIT_VALUES = ("°C", "°F", "K")
+HUMIDIFIER_ACTION_VALUES = ("off", "humidifying", "drying", "idle")
+HUMIDIFIER_CLASS_VALUES = ("humidifier", "dehumidifier")
 
 _DOMAIN_OPTION_RESERVED_KEYS = {
     ATTR_ENTITY_ID,
@@ -201,10 +238,12 @@ def _reference_entity_schema(
             if default_device_name in valid_device_names
             else NEW_DEVICE_TARGET
         )
-        schema[vol.Optional(
-            CONF_TARGET_DEVICE_NAME,
-            default=default_device_name,
-        )] = selector.SelectSelector(
+        schema[
+            vol.Optional(
+                CONF_TARGET_DEVICE_NAME,
+                default=default_device_name,
+            )
+        ] = selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=device_options,
                 mode=selector.SelectSelectorMode.DROPDOWN,
@@ -215,16 +254,21 @@ def _reference_entity_schema(
 
 def _helper_update_schema() -> vol.Schema:
     """Choose how generated templates are handled after source changes."""
-    return vol.Schema({
-        vol.Required(
-            CONF_HELPER_UPDATE_MODE,
-            default=HELPER_UPDATE_AUTO,
-        ): selector.SelectSelector(selector.SelectSelectorConfig(
-            options=[HELPER_UPDATE_AUTO, HELPER_UPDATE_FORCE],
-            translation_key="helper_update_mode",
-            mode=selector.SelectSelectorMode.LIST,
-        )),
-    })
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_HELPER_UPDATE_MODE,
+                default=HELPER_UPDATE_AUTO,
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[HELPER_UPDATE_AUTO, HELPER_UPDATE_FORCE],
+                    translation_key="helper_update_mode",
+                    mode=selector.SelectSelectorMode.LIST,
+                )
+            ),
+        }
+    )
+
 
 BOOLEAN_SOURCE_DOMAINS = {
     "binary_sensor",
@@ -245,14 +289,16 @@ LOCATION_HELPER_DISTANCE_METERS = 300
 LOCATION_HELPER_PRIORITY_WINDOW_SECONDS = 30 * 60
 PRESENCE_MOTION_CLEAR_DELAY_SECONDS = 5 * 60
 PRESENCE_MOTION_DEVICE_CLASSES = frozenset({"motion", "presence"})
-SAFETY_BOOLEAN_DEVICE_CLASSES = frozenset({
-    "carbon_monoxide",
-    "gas",
-    "moisture",
-    "problem",
-    "safety",
-    "smoke",
-})
+SAFETY_BOOLEAN_DEVICE_CLASSES = frozenset(
+    {
+        "carbon_monoxide",
+        "gas",
+        "moisture",
+        "problem",
+        "safety",
+        "smoke",
+    }
+)
 NON_MERGEABLE_SOURCE_DOMAINS = frozenset({"camera", "image"})
 UNKNOWN_STATES = {"", "none", "unknown", "unavailable"}
 TEMPLATE_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -286,6 +332,7 @@ JINJA_RESERVED_VARIABLE_NAMES = {
     "with",
 }
 
+
 def _options_schema(options: dict[str, Any]) -> vol.Schema:
     actions = [ACTION_ADD_ENTITY]
     if _entity_choices(options):
@@ -295,17 +342,23 @@ def _options_schema(options: dict[str, Any]) -> vol.Schema:
     if _options_devices(options):
         actions.append(ACTION_MANAGE_DEVICES)
     actions.append(ACTION_FINISH)
-    return vol.Schema({
-        vol.Required(CONF_ACTION, default=ACTION_ADD_ENTITY): selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=actions,
-                translation_key="options_action",
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_ACTION, default=ACTION_ADD_ENTITY
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=actions,
+                    translation_key="options_action",
+                ),
             ),
-        ),
-    })
+        }
+    )
 
 
-def _setup_schema(defaults: dict[str, Any], include_entity_toggle: bool = True) -> vol.Schema:
+def _setup_schema(
+    defaults: dict[str, Any], include_entity_toggle: bool = True
+) -> vol.Schema:
     schema = {
         vol.Required(ATTR_GROUP_NAME, default=defaults[ATTR_GROUP_NAME]): str,
     }
@@ -323,13 +376,26 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         entity_name,
     )
     schema = {
-        vol.Required(CONF_DEVICE_NAME, default=defaults.get(CONF_DEVICE_NAME, "Virtual Device")): str,
+        vol.Required(
+            CONF_DEVICE_NAME, default=defaults.get(CONF_DEVICE_NAME, "Virtual Device")
+        ): str,
         vol.Optional(CONF_DEVICE_ID, default=defaults.get(CONF_DEVICE_ID, "")): str,
-        vol.Optional(CONF_DEVICE_MANUFACTURER, default=defaults.get(CONF_DEVICE_MANUFACTURER, "")): str,
-        vol.Optional(CONF_DEVICE_MODEL, default=defaults.get(CONF_DEVICE_MODEL, "")): str,
-        vol.Optional(CONF_DEVICE_SW_VERSION, default=defaults.get(CONF_DEVICE_SW_VERSION, "")): str,
-        vol.Optional(CONF_DEVICE_HW_VERSION, default=defaults.get(CONF_DEVICE_HW_VERSION, "")): str,
-        vol.Optional(CONF_DEVICE_SERIAL_NUMBER, default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, "")): str,
+        vol.Optional(
+            CONF_DEVICE_MANUFACTURER, default=defaults.get(CONF_DEVICE_MANUFACTURER, "")
+        ): str,
+        vol.Optional(
+            CONF_DEVICE_MODEL, default=defaults.get(CONF_DEVICE_MODEL, "")
+        ): str,
+        vol.Optional(
+            CONF_DEVICE_SW_VERSION, default=defaults.get(CONF_DEVICE_SW_VERSION, "")
+        ): str,
+        vol.Optional(
+            CONF_DEVICE_HW_VERSION, default=defaults.get(CONF_DEVICE_HW_VERSION, "")
+        ): str,
+        vol.Optional(
+            CONF_DEVICE_SERIAL_NUMBER,
+            default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, ""),
+        ): str,
         vol.Optional(
             CONF_DEVICE_CONFIGURATION_URL,
             default=defaults.get(CONF_DEVICE_CONFIGURATION_URL, ""),
@@ -342,58 +408,99 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             CONF_DEVICE_VIA_DEVICE_ID,
             default=defaults.get(CONF_DEVICE_VIA_DEVICE_ID, ""),
         ): selector.DeviceSelector(),
-        vol.Required(CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")): str,
+        vol.Required(
+            CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")
+        ): str,
         vol.Optional(CONF_ICON, default=defaults.get(CONF_ICON, "")): ICON_SELECTOR,
         vol.Optional(
             CONF_ICON_TEMPLATE,
             default=defaults.get(CONF_ICON_TEMPLATE, ""),
         ): TEMPLATE_SELECTOR,
         vol.Optional(ATTR_ENTITY_ID, default=default_entity_id): str,
-        vol.Required(CONF_PLATFORM, default=defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)): vol.In(VIRTUAL_ENTITY_DOMAINS),
-        vol.Required(CONF_INITIAL_VALUE, default=defaults.get(CONF_INITIAL_VALUE, DEFAULT_ENTITY_VALUE)): str,
-        vol.Optional(CONF_INITIAL_AVAILABILITY, default=defaults.get(CONF_INITIAL_AVAILABILITY, True)): cv.boolean,
-        vol.Optional(CONF_PERSISTENT, default=defaults.get(CONF_PERSISTENT, True)): cv.boolean,
-        vol.Optional(CONF_SOURCE_ENTITIES_TEXT, default=defaults.get(CONF_SOURCE_ENTITIES_TEXT, "")): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(CONF_TEMPLATE_SOURCES_JSON, default=defaults.get(CONF_TEMPLATE_SOURCES_JSON, "")): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(CONF_PULL_INTERVAL, default=defaults.get(CONF_PULL_INTERVAL, 0)): vol.All(vol.Coerce(int), vol.Range(min=0)),
-        vol.Optional(CONF_VALUE_TEMPLATE, default=defaults.get(CONF_VALUE_TEMPLATE, "")): TEMPLATE_SELECTOR,
-        vol.Optional(CONF_AVAILABILITY_TEMPLATE, default=defaults.get(CONF_AVAILABILITY_TEMPLATE, "")): TEMPLATE_SELECTOR,
-        vol.Optional(CONF_EVENT_HOOKS_JSON, default=defaults.get(CONF_EVENT_HOOKS_JSON, "")): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(CONF_ATTRIBUTES_JSON, default=defaults.get(CONF_ATTRIBUTES_JSON, "")): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(CONF_ATTRIBUTE_SOURCES_JSON, default=defaults.get(CONF_ATTRIBUTE_SOURCES_JSON, "")): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(CONF_ATTRIBUTE_TEMPLATES_JSON, default=defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "")): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(CONF_DOMAIN_OPTIONS_JSON, default=defaults.get(CONF_DOMAIN_OPTIONS_JSON, "")): MULTILINE_TEXT_SELECTOR,
+        vol.Required(
+            CONF_PLATFORM, default=defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
+        ): vol.In(VIRTUAL_ENTITY_DOMAINS),
+        vol.Required(
+            CONF_INITIAL_VALUE,
+            default=defaults.get(CONF_INITIAL_VALUE, DEFAULT_ENTITY_VALUE),
+        ): str,
+        vol.Optional(
+            CONF_INITIAL_AVAILABILITY,
+            default=defaults.get(CONF_INITIAL_AVAILABILITY, True),
+        ): cv.boolean,
+        vol.Optional(
+            CONF_PERSISTENT, default=defaults.get(CONF_PERSISTENT, True)
+        ): cv.boolean,
+        vol.Optional(
+            CONF_SOURCE_ENTITIES_TEXT,
+            default=defaults.get(CONF_SOURCE_ENTITIES_TEXT, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_TEMPLATE_SOURCES_JSON,
+            default=defaults.get(CONF_TEMPLATE_SOURCES_JSON, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_PULL_INTERVAL, default=defaults.get(CONF_PULL_INTERVAL, 0)
+        ): vol.All(vol.Coerce(int), vol.Range(min=0)),
+        vol.Optional(
+            CONF_VALUE_TEMPLATE, default=defaults.get(CONF_VALUE_TEMPLATE, "")
+        ): TEMPLATE_SELECTOR,
+        vol.Optional(
+            CONF_AVAILABILITY_TEMPLATE,
+            default=defaults.get(CONF_AVAILABILITY_TEMPLATE, ""),
+        ): TEMPLATE_SELECTOR,
+        vol.Optional(
+            CONF_EVENT_HOOKS_JSON, default=defaults.get(CONF_EVENT_HOOKS_JSON, "")
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_ATTRIBUTES_JSON, default=defaults.get(CONF_ATTRIBUTES_JSON, "")
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_ATTRIBUTE_SOURCES_JSON,
+            default=defaults.get(CONF_ATTRIBUTE_SOURCES_JSON, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_ATTRIBUTE_TEMPLATES_JSON,
+            default=defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_DOMAIN_OPTIONS_JSON, default=defaults.get(CONF_DOMAIN_OPTIONS_JSON, "")
+        ): MULTILINE_TEXT_SELECTOR,
     }
     if platform == "device_tracker":
-        schema.update({
-            vol.Optional(
-            CONF_POLYGON_GEOJSON_JSON,
-            default=defaults.get(CONF_POLYGON_GEOJSON_JSON, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_POLYGON_FILES_TEXT,
-            default=defaults.get(CONF_POLYGON_FILES_TEXT, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_POLYGON_STRATEGY_INPUT,
-            default=defaults.get(CONF_POLYGON_STRATEGY_INPUT, "majority"),
-        ): selector.SelectSelector(selector.SelectSelectorConfig(
-            options=["majority", "priority", "latest", "median"],
-            translation_key="polygon_strategy",
-        )),
-        vol.Optional(
-            CONF_POLYGON_DISTANCE_INPUT,
-            default=defaults.get(CONF_POLYGON_DISTANCE_INPUT, 300),
-        ): vol.All(vol.Coerce(float), vol.Range(min=1)),
-        vol.Optional(
-            CONF_POLYGON_TRACKER_RULES_JSON,
-            default=defaults.get(CONF_POLYGON_TRACKER_RULES_JSON, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_POLYGON_AWAY_STATE_INPUT,
-            default=defaults.get(CONF_POLYGON_AWAY_STATE_INPUT, "not_home"),
-        ): str,
-        })
+        schema.update(
+            {
+                vol.Optional(
+                    CONF_POLYGON_GEOJSON_JSON,
+                    default=defaults.get(CONF_POLYGON_GEOJSON_JSON, ""),
+                ): MULTILINE_TEXT_SELECTOR,
+                vol.Optional(
+                    CONF_POLYGON_FILES_TEXT,
+                    default=defaults.get(CONF_POLYGON_FILES_TEXT, ""),
+                ): MULTILINE_TEXT_SELECTOR,
+                vol.Optional(
+                    CONF_POLYGON_STRATEGY_INPUT,
+                    default=defaults.get(CONF_POLYGON_STRATEGY_INPUT, "majority"),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=["majority", "priority", "latest", "median"],
+                        translation_key="polygon_strategy",
+                    )
+                ),
+                vol.Optional(
+                    CONF_POLYGON_DISTANCE_INPUT,
+                    default=defaults.get(CONF_POLYGON_DISTANCE_INPUT, 300),
+                ): vol.All(vol.Coerce(float), vol.Range(min=1)),
+                vol.Optional(
+                    CONF_POLYGON_TRACKER_RULES_JSON,
+                    default=defaults.get(CONF_POLYGON_TRACKER_RULES_JSON, ""),
+                ): MULTILINE_TEXT_SELECTOR,
+                vol.Optional(
+                    CONF_POLYGON_AWAY_STATE_INPUT,
+                    default=defaults.get(CONF_POLYGON_AWAY_STATE_INPUT, "not_home"),
+                ): str,
+            }
+        )
         person_default = defaults.get(CONF_POLYGON_PERSON, "")
         person_marker = (
             vol.Optional(CONF_POLYGON_PERSON, default=person_default)
@@ -438,6 +545,196 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     custom_value=True,
                 ),
             )
+        climate_number_defaults = {
+            "max_humidity": 99,
+            "max_temp": 35,
+            "min_humidity": 30,
+            "min_temp": 7,
+            "target_temperature_step": 0.1,
+        }
+        climate_number_fields = {
+            "current_humidity": (0, 100, 1),
+            "current_temperature": (-273, 1000, 0.1),
+            "max_humidity": (0, 100, 1),
+            "max_temp": (-273, 1000, 0.1),
+            "min_humidity": (0, 100, 1),
+            "min_temp": (-273, 1000, 0.1),
+            "target_humidity": (0, 100, 1),
+            "target_humidity_step": (0.1, 100, 0.1),
+            "target_temperature": (-273, 1000, 0.1),
+            "target_temperature_high": (-273, 1000, 0.1),
+            "target_temperature_low": (-273, 1000, 0.1),
+            "target_temperature_step": (0.01, 100, 0.01),
+        }
+        for field_name, (minimum, maximum, step) in climate_number_fields.items():
+            default = defaults.get(field_name, climate_number_defaults.get(field_name))
+            marker = (
+                vol.Optional(field_name, default=default)
+                if default is not None
+                else vol.Optional(field_name)
+            )
+            schema[marker] = selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=minimum,
+                    max=maximum,
+                    step=step,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            )
+        action_marker = (
+            vol.Optional("hvac_action", default=defaults["hvac_action"])
+            if defaults.get("hvac_action") in CLIMATE_ACTION_VALUES
+            else vol.Optional("hvac_action")
+        )
+        schema[action_marker] = selector.SelectSelector(
+            selector.SelectSelectorConfig(options=list(CLIMATE_ACTION_VALUES)),
+        )
+        schema[
+            vol.Optional(
+                "temperature_unit",
+                default=defaults.get("temperature_unit", "°C"),
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(options=list(TEMPERATURE_UNIT_VALUES)),
+        )
+    elif platform == "fan":
+        schema.update(
+            {
+                vol.Optional(
+                    "speed_count", default=defaults.get("speed_count", 0)
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        max=100,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Optional(
+                    "oscillate", default=defaults.get("oscillate", False)
+                ): selector.BooleanSelector(),
+                vol.Optional(
+                    "direction", default=defaults.get("direction", False)
+                ): selector.BooleanSelector(),
+                vol.Optional(
+                    FAN_MODE_LIST_FIELD,
+                    default=list(defaults.get(FAN_MODE_LIST_FIELD, [])),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(defaults.get(FAN_MODE_LIST_FIELD, [])),
+                        multiple=True,
+                        custom_value=True,
+                    )
+                ),
+            }
+        )
+        if defaults.get("percentage") is not None:
+            percentage_marker = vol.Optional(
+                "percentage", default=defaults["percentage"]
+            )
+        else:
+            percentage_marker = vol.Optional("percentage")
+        schema[percentage_marker] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=100,
+                step=1,
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        )
+        preset_marker = (
+            vol.Optional("preset_mode", default=defaults["preset_mode"])
+            if defaults.get("preset_mode") not in (None, "")
+            else vol.Optional("preset_mode")
+        )
+        schema[preset_marker] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(defaults.get(FAN_MODE_LIST_FIELD, [])),
+                custom_value=True,
+            )
+        )
+        schema[
+            vol.Optional(
+                "oscillating", default=defaults.get("oscillating", False)
+            )
+        ] = selector.BooleanSelector()
+        direction_marker = (
+            vol.Optional(
+                "current_direction", default=defaults["current_direction"]
+            )
+            if defaults.get("current_direction") in {"forward", "reverse"}
+            else vol.Optional("current_direction")
+        )
+        schema[direction_marker] = selector.SelectSelector(
+            selector.SelectSelectorConfig(options=["forward", "reverse"]),
+        )
+    elif platform == "humidifier":
+        schema[
+            vol.Optional(
+                "class", default=defaults.get("class", "humidifier")
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(options=list(HUMIDIFIER_CLASS_VALUES)),
+        )
+        action_marker = (
+            vol.Optional("action", default=defaults["action"])
+            if defaults.get("action") in HUMIDIFIER_ACTION_VALUES
+            else vol.Optional("action")
+        )
+        schema[action_marker] = selector.SelectSelector(
+            selector.SelectSelectorConfig(options=list(HUMIDIFIER_ACTION_VALUES)),
+        )
+        schema[
+            vol.Optional(
+                HUMIDIFIER_MODE_LIST_FIELD,
+                default=list(defaults.get(HUMIDIFIER_MODE_LIST_FIELD, [])),
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(defaults.get(HUMIDIFIER_MODE_LIST_FIELD, [])),
+                multiple=True,
+                custom_value=True,
+            )
+        )
+        mode_marker = (
+            vol.Optional(
+                HUMIDIFIER_CURRENT_MODE_FIELD,
+                default=defaults[HUMIDIFIER_CURRENT_MODE_FIELD],
+            )
+            if defaults.get(HUMIDIFIER_CURRENT_MODE_FIELD) not in (None, "")
+            else vol.Optional(HUMIDIFIER_CURRENT_MODE_FIELD)
+        )
+        schema[mode_marker] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(defaults.get(HUMIDIFIER_MODE_LIST_FIELD, [])),
+                custom_value=True,
+            )
+        )
+        humidifier_number_defaults = {"min_humidity": 0, "max_humidity": 100}
+        for field_name in (
+            "current_humidity",
+            "min_humidity",
+            "max_humidity",
+            "target_humidity",
+            "target_humidity_step",
+        ):
+            default = defaults.get(
+                field_name,
+                humidifier_number_defaults.get(field_name),
+            )
+            marker = (
+                vol.Optional(field_name, default=default)
+                if default is not None
+                else vol.Optional(field_name)
+            )
+            schema[marker] = selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0.1 if field_name == "target_humidity_step" else 0,
+                    max=100,
+                    step=0.1 if field_name == "target_humidity_step" else 1,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            )
     return vol.Schema(schema)
 
 
@@ -448,8 +745,13 @@ def _needs_domain_specific_form(user_input) -> bool:
         return CONF_POLYGON_STRATEGY_INPUT not in user_input
     if platform == "climate":
         return not any(
-            field_name in user_input
-            for field_name in CLIMATE_MODE_FORM_FIELDS
+            field_name in user_input for field_name in CLIMATE_FORM_FIELDS
+        )
+    if platform == "fan":
+        return not any(field_name in user_input for field_name in FAN_FORM_FIELDS)
+    if platform == "humidifier":
+        return not any(
+            field_name in user_input for field_name in HUMIDIFIER_FORM_FIELDS
         )
     return False
 
@@ -476,42 +778,46 @@ def _align_form_entity_id_domain(user_input: dict[str, Any]) -> dict[str, Any]:
 def _device_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     """Build the Device-only metadata form used by the options flow."""
     defaults = defaults or {}
-    return vol.Schema({
-        vol.Required(
-            CONF_DEVICE_NAME,
-            default=defaults.get(CONF_DEVICE_NAME, "Virtual Device"),
-        ): str,
-        vol.Optional(CONF_DEVICE_ID, default=defaults.get(CONF_DEVICE_ID, "")): str,
-        vol.Optional(
-            CONF_DEVICE_MANUFACTURER,
-            default=defaults.get(CONF_DEVICE_MANUFACTURER, ""),
-        ): str,
-        vol.Optional(CONF_DEVICE_MODEL, default=defaults.get(CONF_DEVICE_MODEL, "")): str,
-        vol.Optional(
-            CONF_DEVICE_SW_VERSION,
-            default=defaults.get(CONF_DEVICE_SW_VERSION, ""),
-        ): str,
-        vol.Optional(
-            CONF_DEVICE_HW_VERSION,
-            default=defaults.get(CONF_DEVICE_HW_VERSION, ""),
-        ): str,
-        vol.Optional(
-            CONF_DEVICE_SERIAL_NUMBER,
-            default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, ""),
-        ): str,
-        vol.Optional(
-            CONF_DEVICE_CONFIGURATION_URL,
-            default=defaults.get(CONF_DEVICE_CONFIGURATION_URL, ""),
-        ): str,
-        vol.Optional(
-            CONF_DEVICE_SUGGESTED_AREA,
-            default=defaults.get(CONF_DEVICE_SUGGESTED_AREA, ""),
-        ): str,
-        vol.Optional(
-            CONF_DEVICE_VIA_DEVICE_ID,
-            default=defaults.get(CONF_DEVICE_VIA_DEVICE_ID, ""),
-        ): selector.DeviceSelector(),
-    })
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_DEVICE_NAME,
+                default=defaults.get(CONF_DEVICE_NAME, "Virtual Device"),
+            ): str,
+            vol.Optional(CONF_DEVICE_ID, default=defaults.get(CONF_DEVICE_ID, "")): str,
+            vol.Optional(
+                CONF_DEVICE_MANUFACTURER,
+                default=defaults.get(CONF_DEVICE_MANUFACTURER, ""),
+            ): str,
+            vol.Optional(
+                CONF_DEVICE_MODEL, default=defaults.get(CONF_DEVICE_MODEL, "")
+            ): str,
+            vol.Optional(
+                CONF_DEVICE_SW_VERSION,
+                default=defaults.get(CONF_DEVICE_SW_VERSION, ""),
+            ): str,
+            vol.Optional(
+                CONF_DEVICE_HW_VERSION,
+                default=defaults.get(CONF_DEVICE_HW_VERSION, ""),
+            ): str,
+            vol.Optional(
+                CONF_DEVICE_SERIAL_NUMBER,
+                default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, ""),
+            ): str,
+            vol.Optional(
+                CONF_DEVICE_CONFIGURATION_URL,
+                default=defaults.get(CONF_DEVICE_CONFIGURATION_URL, ""),
+            ): str,
+            vol.Optional(
+                CONF_DEVICE_SUGGESTED_AREA,
+                default=defaults.get(CONF_DEVICE_SUGGESTED_AREA, ""),
+            ): str,
+            vol.Optional(
+                CONF_DEVICE_VIA_DEVICE_ID,
+                default=defaults.get(CONF_DEVICE_VIA_DEVICE_ID, ""),
+            ): selector.DeviceSelector(),
+        }
+    )
 
 
 def _default_virtual_entity_id(platform: str, entity_name: str) -> str:
@@ -647,17 +953,25 @@ def _parse_event_hooks(value: str) -> list[dict[str, Any]]:
             if not isinstance(entity_ids, list) or not entity_ids:
                 raise InvalidEntityReference(CONF_EVENT_HOOKS_JSON)
             try:
-                entity_ids = list(dict.fromkeys(cv.entity_id(str(entity_id).strip()) for entity_id in entity_ids))
+                entity_ids = list(
+                    dict.fromkeys(
+                        cv.entity_id(str(entity_id).strip()) for entity_id in entity_ids
+                    )
+                )
             except vol.Invalid as err:
                 raise InvalidEntityReference(CONF_EVENT_HOOKS_JSON) from err
             next_hook[ATTR_ENTITY_ID] = entity_ids
             next_hook.pop("entity_ids", None)
 
-            attributes = next_hook.get(CONF_ATTRIBUTE, next_hook.get("attributes_changed"))
+            attributes = next_hook.get(
+                CONF_ATTRIBUTE, next_hook.get("attributes_changed")
+            )
             if isinstance(attributes, str):
                 next_hook[CONF_ATTRIBUTE] = [attributes]
             elif attributes is not None:
-                if not isinstance(attributes, list) or any(not isinstance(attribute, str) for attribute in attributes):
+                if not isinstance(attributes, list) or any(
+                    not isinstance(attribute, str) for attribute in attributes
+                ):
                     raise InvalidJson(CONF_EVENT_HOOKS_JSON)
                 next_hook[CONF_ATTRIBUTE] = attributes
             next_hook.pop("attributes_changed", None)
@@ -666,7 +980,9 @@ def _parse_event_hooks(value: str) -> list[dict[str, Any]]:
             if not event_type:
                 raise InvalidJson(CONF_EVENT_HOOKS_JSON)
             next_hook["event_type"] = event_type
-            if "event_data" in next_hook and not isinstance(next_hook["event_data"], dict):
+            if "event_data" in next_hook and not isinstance(
+                next_hook["event_data"], dict
+            ):
                 raise InvalidJson(CONF_EVENT_HOOKS_JSON)
 
         for field_name in (CONF_ATTRIBUTES, CONF_ATTRIBUTE_TEMPLATES):
@@ -740,8 +1056,7 @@ def _contains_non_finite_number(value: Any) -> bool:
         return not math.isfinite(value)
     if isinstance(value, Mapping):
         return any(
-            _contains_non_finite_number(key)
-            or _contains_non_finite_number(item)
+            _contains_non_finite_number(key) or _contains_non_finite_number(item)
             for key, item in value.items()
         )
     if isinstance(value, (list, tuple, set)):
@@ -749,7 +1064,9 @@ def _contains_non_finite_number(value: Any) -> bool:
     return False
 
 
-def _parse_source_reference(source, field_name: str, default_attribute: str | None = None) -> dict[str, str]:
+def _parse_source_reference(
+    source, field_name: str, default_attribute: str | None = None
+) -> dict[str, str]:
     if isinstance(source, str):
         source = source.strip()
         if default_attribute is not None:
@@ -795,10 +1112,7 @@ def _validate_entity_references(entity: dict[str, Any]) -> None:
         (CONF_ATTRIBUTE_SOURCES_JSON, entity.get(CONF_ATTRIBUTE_SOURCES, {})),
         (CONF_TEMPLATE_SOURCES_JSON, entity.get(CONF_TEMPLATE_SOURCES, {})),
     ):
-        if any(
-            source.get(ATTR_ENTITY_ID) == entity_id
-            for source in sources.values()
-        ):
+        if any(source.get(ATTR_ENTITY_ID) == entity_id for source in sources.values()):
             raise InvalidEntityReference(field_name)
     for hook in entity.get(CONF_EVENT_HOOKS, []):
         if not isinstance(hook, Mapping) or hook.get("trigger") != "state":
@@ -846,7 +1160,9 @@ def _entity_dependency_sources(entity: Mapping) -> dict[str, str]:
         if not isinstance(source_group, Mapping):
             continue
         for source in source_group.values():
-            if isinstance(source, Mapping) and isinstance(source.get(ATTR_ENTITY_ID), str):
+            if isinstance(source, Mapping) and isinstance(
+                source.get(ATTR_ENTITY_ID), str
+            ):
                 sources[source[ATTR_ENTITY_ID]] = field_name
 
     camera_source = entity.get(CAMERA_SOURCE_ENTITY_OPTION)
@@ -877,7 +1193,9 @@ def _iter_option_entities(options: Mapping):
                 yield entity
 
 
-def _dependency_graph(hass, ignored_entity_id: str | None = None) -> dict[str, set[str]]:
+def _dependency_graph(
+    hass, ignored_entity_id: str | None = None
+) -> dict[str, set[str]]:
     """Build the explicit Virtual Layer entity dependency graph."""
     graph = {}
     for entry in hass.config_entries.async_entries(COMPONENT_DOMAIN):
@@ -938,7 +1256,7 @@ def _build_entity_config(
         raise MissingEntityName
 
     initial_value = user_input[CONF_INITIAL_VALUE]
-    if platform == "climate" and initial_value == DEFAULT_ENTITY_VALUE:
+    if platform in DEFAULT_INITIAL_VALUES and initial_value == DEFAULT_ENTITY_VALUE:
         initial_value = DEFAULT_INITIAL_VALUES[platform]
     if platform == "climate" and initial_value.lower() not in CLIMATE_INITIAL_VALUES:
         raise InvalidDomainOptions
@@ -969,7 +1287,9 @@ def _build_entity_config(
             raise InvalidEntityId
         entity[ATTR_ENTITY_ID] = entity_id
 
-    source_entities = _parse_source_entities(user_input.get(CONF_SOURCE_ENTITIES_TEXT, ""))
+    source_entities = _parse_source_entities(
+        user_input.get(CONF_SOURCE_ENTITIES_TEXT, "")
+    )
     if source_entities:
         entity[CONF_SOURCE_ENTITIES] = source_entities
 
@@ -995,7 +1315,9 @@ def _build_entity_config(
     if event_hooks:
         entity[CONF_EVENT_HOOKS] = event_hooks
 
-    attributes = _parse_json_object(user_input.get(CONF_ATTRIBUTES_JSON, "").strip(), CONF_ATTRIBUTES_JSON)
+    attributes = _parse_json_object(
+        user_input.get(CONF_ATTRIBUTES_JSON, "").strip(), CONF_ATTRIBUTES_JSON
+    )
     if any(
         not isinstance(name, str)
         or not name.strip()
@@ -1042,6 +1364,55 @@ def _build_entity_config(
                 value = str(user_input.get(field_name, "") or "").strip()
                 if value:
                     domain_options[field_name] = value
+        for field_name in CLIMATE_SCALAR_FORM_FIELDS:
+            if field_name not in user_input:
+                continue
+            domain_options.pop(field_name, None)
+            value = user_input[field_name]
+            if field_name in {"hvac_action", "temperature_unit"}:
+                value = str(value or "").strip()
+                if value:
+                    domain_options[field_name] = value
+            elif value is not None:
+                domain_options[field_name] = value
+    elif platform == "fan":
+        for field_name in FAN_FORM_FIELDS:
+            if field_name not in user_input:
+                continue
+            domain_options.pop(field_name, None)
+            value = user_input[field_name]
+            if field_name == FAN_MODE_LIST_FIELD:
+                if not isinstance(value, list):
+                    raise InvalidDomainOptions
+                domain_options[field_name] = list(value)
+            elif field_name in {"preset_mode", "current_direction"}:
+                value = str(value or "").strip()
+                if value:
+                    domain_options[field_name] = value
+            elif field_name == "percentage" and value is None:
+                continue
+            else:
+                domain_options[field_name] = value
+    elif platform == "humidifier":
+        for field_name in HUMIDIFIER_FORM_FIELDS:
+            if field_name not in user_input:
+                continue
+            domain_options.pop(field_name, None)
+            value = user_input[field_name]
+            if field_name == HUMIDIFIER_MODE_LIST_FIELD:
+                if not isinstance(value, list):
+                    raise InvalidDomainOptions
+                domain_options[field_name] = list(value)
+            elif field_name in {
+                "class",
+                "action",
+                HUMIDIFIER_CURRENT_MODE_FIELD,
+            }:
+                value = str(value or "").strip()
+                if value:
+                    domain_options[field_name] = value
+            elif value is not None:
+                domain_options[field_name] = value
     entity.update(domain_options)
 
     polygon_geojson_text = user_input.get(CONF_POLYGON_GEOJSON_JSON, "").strip()
@@ -1065,10 +1436,12 @@ def _build_entity_config(
                 CONF_POLYGON_DISTANCE_INPUT,
                 300,
             ),
-            CONF_POLYGON_AWAY_STATE: str(user_input.get(
-                CONF_POLYGON_AWAY_STATE_INPUT,
-                "not_home",
-            )).strip(),
+            CONF_POLYGON_AWAY_STATE: str(
+                user_input.get(
+                    CONF_POLYGON_AWAY_STATE_INPUT,
+                    "not_home",
+                )
+            ).strip(),
             CONF_POLYGON_TRACKER_RULES: _parse_json_object(
                 polygon_rules_text,
                 CONF_POLYGON_TRACKER_RULES_JSON,
@@ -1108,7 +1481,9 @@ def _build_entity_config(
     # A camera alias remains a normal virtual entity, but follows the source
     # camera state and subscribes to it without requiring a handwritten Jinja
     # template in the UI.
-    if platform == "camera" and (source_entity := entity.get(CAMERA_SOURCE_ENTITY_OPTION)):
+    if platform == "camera" and (
+        source_entity := entity.get(CAMERA_SOURCE_ENTITY_OPTION)
+    ):
         if source_entity == entity.get(ATTR_ENTITY_ID):
             raise InvalidEntityReference(CONF_DOMAIN_OPTIONS_JSON)
         source_entities = list(entity.get(CONF_SOURCE_ENTITIES, []))
@@ -1150,13 +1525,17 @@ def _make_entity_key() -> str:
     return make_entity_key()
 
 
-def _ensure_entity_key(entity: dict[str, Any], fallback: str | None = None) -> dict[str, Any]:
+def _ensure_entity_key(
+    entity: dict[str, Any], fallback: str | None = None
+) -> dict[str, Any]:
     entity = _plain_options(entity)
     entity.setdefault(ATTR_ENTITY_KEY, fallback or _make_entity_key())
     return entity
 
 
-def _build_device_config(user_input: dict[str, Any], device_name: str) -> dict[str, Any]:
+def _build_device_config(
+    user_input: dict[str, Any], device_name: str
+) -> dict[str, Any]:
     """Build Home Assistant device metadata from the UI form."""
     device_id = user_input.get(CONF_DEVICE_ID, "").strip() or device_name
     if not device_id:
@@ -1190,10 +1569,7 @@ def _make_device_name(device_name: str) -> str:
 def _plain_options(value):
     """Convert Home Assistant read-only option mappings to mutable containers."""
     if isinstance(value, Mapping):
-        return {
-            key: _plain_options(item)
-            for key, item in value.items()
-        }
+        return {key: _plain_options(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_plain_options(item) for item in value]
     if isinstance(value, tuple):
@@ -1299,21 +1675,25 @@ def _get_device_attributes(options: dict[str, Any], device_name: str) -> dict[st
 
 def _existing_device_options(hass, options: dict[str, Any]) -> list[dict[str, str]]:
     """Return selectable virtual Devices, including the explicit new-Device choice."""
-    device_options = [{
-        "value": NEW_DEVICE_TARGET,
-        "label": (
-            "새 장치 만들기"
-            if hass.config.language.lower().startswith("ko")
-            else "Create a new Device"
-        ),
-    }]
+    device_options = [
+        {
+            "value": NEW_DEVICE_TARGET,
+            "label": (
+                "새 장치 만들기"
+                if hass.config.language.lower().startswith("ko")
+                else "Create a new Device"
+            ),
+        }
+    ]
     for device_name in _options_devices(options):
         device = _get_device_attributes(options, device_name)
         device_id = device.get(ATTR_DEVICE_ID, device_name)
-        device_options.append({
-            "value": device_name,
-            "label": f"{device_name} ({device_id})",
-        })
+        device_options.append(
+            {
+                "value": device_name,
+                "label": f"{device_name} ({device_id})",
+            }
+        )
     return device_options
 
 
@@ -1329,9 +1709,13 @@ def _managed_device_choices(options: dict[str, Any]) -> dict[str, str]:
 
 
 def _select_device_schema(options: dict[str, Any]) -> vol.Schema:
-    return vol.Schema({
-        vol.Required(CONF_MANAGED_DEVICE_NAME): vol.In(_managed_device_choices(options)),
-    })
+    return vol.Schema(
+        {
+            vol.Required(CONF_MANAGED_DEVICE_NAME): vol.In(
+                _managed_device_choices(options)
+            ),
+        }
+    )
 
 
 def _device_form_defaults(
@@ -1497,7 +1881,9 @@ def _replace_ui_entity(
         next_options[ATTR_DEVICE_ATTRIBUTES] = device_attributes
     if not isinstance(devices.get(new_device_name), list):
         devices[new_device_name] = []
-    devices[new_device_name].append(_ensure_entity_key(entity, old_entity.get(ATTR_ENTITY_KEY)))
+    devices[new_device_name].append(
+        _ensure_entity_key(entity, old_entity.get(ATTR_ENTITY_KEY))
+    )
     if not reusing_existing_device:
         _set_device_attributes(next_options, new_device_name, device_config)
     return next_options
@@ -1567,7 +1953,9 @@ def _entity_key_from_stable_key(entity_key: str) -> str:
     return json.dumps(["key", entity_key], separators=(",", ":"))
 
 
-def _selection_key_for_entity(device_name: str, index: int, entity: dict[str, Any]) -> str:
+def _selection_key_for_entity(
+    device_name: str, index: int, entity: dict[str, Any]
+) -> str:
     if entity.get(ATTR_ENTITY_KEY):
         return _entity_key_from_stable_key(entity[ATTR_ENTITY_KEY])
     return _entity_key(device_name, index)
@@ -1588,7 +1976,9 @@ def _parse_entity_key(value: str) -> tuple[str, int]:
     return parsed[0], parsed[1]
 
 
-def _find_entity_by_selection_key(options: dict[str, Any], value: str) -> tuple[str, int]:
+def _find_entity_by_selection_key(
+    options: dict[str, Any], value: str
+) -> tuple[str, int]:
     try:
         parsed = json.loads(value)
     except (TypeError, json.JSONDecodeError):
@@ -1604,7 +1994,10 @@ def _find_entity_by_selection_key(options: dict[str, Any], value: str) -> tuple[
         devices = _options_devices(options)
         for device_name, entities in devices.items():
             for index, entity in enumerate(_entity_list_or_empty(entities)):
-                if isinstance(entity, Mapping) and entity.get(ATTR_ENTITY_KEY) == wanted_key:
+                if (
+                    isinstance(entity, Mapping)
+                    and entity.get(ATTR_ENTITY_KEY) == wanted_key
+                ):
                     return device_name, index
         raise InvalidEntitySelection
 
@@ -1628,33 +2021,41 @@ def _entity_choices(
                 continue
             platform = entity.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
             name = entity.get(CONF_NAME, "Virtual Entity")
-            choices[_selection_key_for_entity(device_name, index, entity)] = f"{device_name} / {name} ({platform})"
+            choices[_selection_key_for_entity(device_name, index, entity)] = (
+                f"{device_name} / {name} ({platform})"
+            )
     return choices
 
 
 def _select_entity_schema(options: dict[str, Any]) -> vol.Schema:
-    return vol.Schema({
-        vol.Required(CONF_ENTITY_KEY): vol.In(_entity_choices(options)),
-    })
+    return vol.Schema(
+        {
+            vol.Required(CONF_ENTITY_KEY): vol.In(_entity_choices(options)),
+        }
+    )
 
 
 def _delete_entities_schema(options: dict[str, Any]) -> vol.Schema:
     choices = _entity_choices(options, include_invalid=True)
-    return vol.Schema({
-        vol.Required(CONF_ENTITY_KEYS): selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=[
-                    {"value": value, "label": label}
-                    for value, label in choices.items()
-                ],
-                multiple=True,
-                mode=selector.SelectSelectorMode.LIST,
+    return vol.Schema(
+        {
+            vol.Required(CONF_ENTITY_KEYS): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": value, "label": label}
+                        for value, label in choices.items()
+                    ],
+                    multiple=True,
+                    mode=selector.SelectSelectorMode.LIST,
+                ),
             ),
-        ),
-    })
+        }
+    )
 
 
-def _get_ui_entity(options: dict[str, Any], device_name: str, index: int) -> dict[str, Any]:
+def _get_ui_entity(
+    options: dict[str, Any], device_name: str, index: int
+) -> dict[str, Any]:
     devices = _options_devices(options)
     entities = _entity_list_or_empty(devices.get(device_name))
     if index < 0 or index >= len(entities):
@@ -1664,7 +2065,9 @@ def _get_ui_entity(options: dict[str, Any], device_name: str, index: int) -> dic
     return entities[index]
 
 
-def _delete_ui_entities(options: dict[str, Any], entity_keys: list[str]) -> dict[str, Any]:
+def _delete_ui_entities(
+    options: dict[str, Any], entity_keys: list[str]
+) -> dict[str, Any]:
     parsed_keys = [
         _find_entity_by_selection_key(options, entity_key)
         for entity_key in (entity_keys or [])
@@ -1711,10 +2114,7 @@ def _json_safe(value):
         return value
     except (TypeError, ValueError):
         if isinstance(value, Mapping):
-            return {
-                str(key): _json_safe(item)
-                for key, item in value.items()
-            }
+            return {str(key): _json_safe(item) for key, item in value.items()}
         if isinstance(value, list):
             return [_json_safe(item) for item in value]
         if isinstance(value, tuple):
@@ -1783,8 +2183,7 @@ def _presence_or_motion_device_class(entity_ids: list[str], states: list) -> str
     if not all(entity_id.startswith("binary_sensor.") for entity_id in entity_ids):
         return None
     device_classes = {
-        str(state.attributes.get("device_class", "")).lower()
-        for state in states
+        str(state.attributes.get("device_class", "")).lower() for state in states
     }
     if not device_classes or not device_classes <= PRESENCE_MOTION_DEVICE_CLASSES:
         return None
@@ -1796,8 +2195,7 @@ def _safety_boolean_sources(entity_ids: list[str], states: list) -> bool:
     if not all(entity_id.startswith("binary_sensor.") for entity_id in entity_ids):
         return False
     device_classes = {
-        str(state.attributes.get("device_class", "")).lower()
-        for state in states
+        str(state.attributes.get("device_class", "")).lower() for state in states
     }
     return bool(device_classes) and device_classes <= SAFETY_BOOLEAN_DEVICE_CLASSES
 
@@ -1821,23 +2219,25 @@ def _presence_motion_helper_template(
         for variable_name in variable_names
     )
     off_checks = ", ".join(
-        f"(({variable_name} | lower) == 'off')"
-        for variable_name in variable_names
+        f"(({variable_name} | lower) == 'off')" for variable_name in variable_names
     )
     last_changed_values = ", ".join(
-        f"as_timestamp(states[{entity_id!r}].last_changed)"
-        for entity_id in entity_ids
+        f"as_timestamp(states[{entity_id!r}].last_changed)" for entity_id in entity_ids
     )
     return (
         "{% set active = [" + active_checks + "] | select | list %}"
-        "{% set all_off = ([" + off_checks + "] | select | list | count) == "
-        + str(len(variable_names)) + " %}"
+        "{% set all_off = (["
+        + off_checks
+        + "] | select | list | count) == "
+        + str(len(variable_names))
+        + " %}"
         "{% set all_off_since = [" + last_changed_values + "] | max %}"
         "{% if (active | count) > " + str(len(variable_names)) + " / 2 %}true"
         "{% elif this is not none and this.state == 'on' and "
         "((active | count) > 0 or not all_off or "
         "(as_timestamp(now()) - all_off_since) < "
-        + str(PRESENCE_MOTION_CLEAR_DELAY_SECONDS) + ") %}true"
+        + str(PRESENCE_MOTION_CLEAR_DELAY_SECONDS)
+        + ") %}true"
         "{% else %}false{% endif %}"
     )
 
@@ -1887,11 +2287,7 @@ def _first_known_state(states: list, default: str = "unknown") -> str:
 
 
 def _latest_state(states: list) -> str:
-    values = [
-        str(state.state)
-        for state in states
-        if _source_state_is_known(state)
-    ]
+    values = [str(state.state) for state in states if _source_state_is_known(state)]
     return max(values) if values else "unknown"
 
 
@@ -1949,8 +2345,7 @@ def _device_name_for_source_entity(hass, entity_id: str) -> str:
 
 def _combined_device_name(hass, entity_ids: list[str]) -> str:
     device_names = {
-        _device_name_for_source_entity(hass, entity_id)
-        for entity_id in entity_ids
+        _device_name_for_source_entity(hass, entity_id) for entity_id in entity_ids
     }
     if len(device_names) == 1:
         return next(iter(device_names))
@@ -1959,7 +2354,8 @@ def _combined_device_name(hass, entity_ids: list[str]) -> str:
 
 def _combined_entity_name(states: list) -> str:
     names = [
-        state.attributes.get(ATTR_FRIENDLY_NAME) or _fallback_entity_name(state.entity_id)
+        state.attributes.get(ATTR_FRIENDLY_NAME)
+        or _fallback_entity_name(state.entity_id)
         for state in states
     ]
     if len(names) == 1:
@@ -2033,17 +2429,18 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         if presence_or_motion_class:
             initial_value = (
                 "on"
-                if sum(_source_state_is_true(state) for state in states) > len(states) / 2
+                if sum(_source_state_is_true(state) for state in states)
+                > len(states) / 2
                 else "off"
             )
         elif safety_boolean_sources:
             initial_value = (
-                "on"
-                if any(_source_state_is_true(state) for state in states)
-                else "off"
+                "on" if any(_source_state_is_true(state) for state in states) else "off"
             )
         else:
-            initial_value = "on" if all(_source_state_is_true(state) for state in states) else "off"
+            initial_value = (
+                "on" if all(_source_state_is_true(state) for state in states) else "off"
+            )
     elif len(states) == 1:
         initial_value = first_state.state
     elif all_number:
@@ -2074,12 +2471,10 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         CONF_SOURCE_ENTITIES_TEXT: "\n".join(entity_ids),
     }
     source_device_classes = {
-        str(state.attributes.get("device_class", "")).lower()
-        for state in states
+        str(state.attributes.get("device_class", "")).lower() for state in states
     }
     source_units = {
-        str(state.attributes.get(CONF_UNIT_OF_MEASUREMENT, ""))
-        for state in states
+        str(state.attributes.get(CONF_UNIT_OF_MEASUREMENT, "")) for state in states
     }
     if (
         platform == "sensor"
@@ -2092,20 +2487,38 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
     elif platform == "climate" and len(states) == 1:
         domain_options, consumed_attributes = extract_climate_options(attributes)
-        defaults.update({
-            key: value
-            for key, value in domain_options.items()
-            if key in CLIMATE_MODE_FORM_FIELDS
-        })
+        defaults.update(
+            {
+                key: value
+                for key, value in domain_options.items()
+                if key in CLIMATE_FORM_FIELDS
+            }
+        )
         advanced_domain_options = {
             key: value
             for key, value in domain_options.items()
-            if key not in CLIMATE_MODE_FORM_FIELDS
+            if key not in CLIMATE_FORM_FIELDS
         }
         if advanced_domain_options:
             defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(
                 advanced_domain_options,
             )
+        attributes = {
+            key: value
+            for key, value in attributes.items()
+            if key not in consumed_attributes
+        }
+    elif platform == "fan" and len(states) == 1:
+        domain_options, consumed_attributes = extract_fan_options(attributes)
+        defaults.update(domain_options)
+        attributes = {
+            key: value
+            for key, value in attributes.items()
+            if key not in consumed_attributes
+        }
+    elif platform == "humidifier" and len(states) == 1:
+        domain_options, consumed_attributes = extract_humidifier_options(attributes)
+        defaults.update(domain_options)
         attributes = {
             key: value
             for key, value in attributes.items()
@@ -2125,13 +2538,17 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
 
     defaults[CONF_TEMPLATE_SOURCES_JSON] = _json_default(template_sources)
     if platform == "camera" and len(entity_ids) == 1 and source_domains[0] == "camera":
-        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default({
-            CAMERA_SOURCE_ENTITY_OPTION: entity_ids[0],
-        })
+        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(
+            {
+                CAMERA_SOURCE_ENTITY_OPTION: entity_ids[0],
+            }
+        )
     if platform == "binary_sensor" and presence_or_motion_class:
-        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default({
-            CONF_CLASS: presence_or_motion_class,
-        })
+        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(
+            {
+                CONF_CLASS: presence_or_motion_class,
+            }
+        )
         defaults[CONF_VALUE_TEMPLATE] = _presence_motion_helper_template(
             entity_ids,
             variable_names,
@@ -2142,12 +2559,14 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         # Device tracker coordinates need stateful priority retention after an
         # outlying device reaches its destination. The platform helper performs
         # that calculation and keeps this policy visible/editable in the UI.
-        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default({
-            CONF_LOCATION_HELPER: {
-                "distance_threshold_meters": LOCATION_HELPER_DISTANCE_METERS,
-                "priority_window_seconds": LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
-            },
-        })
+        defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(
+            {
+                CONF_LOCATION_HELPER: {
+                    "distance_threshold_meters": LOCATION_HELPER_DISTANCE_METERS,
+                    "priority_window_seconds": LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
+                },
+            }
+        )
         defaults[CONF_VALUE_TEMPLATE] = ""
     elif len(entity_ids) == 1:
         defaults[CONF_VALUE_TEMPLATE] = f"{{{{ {variable_names[0]} }}}}"
@@ -2181,10 +2600,12 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         )
     else:
         defaults[CONF_VALUE_TEMPLATE] = "{{ " + " ~ ".join(variable_names) + " }}"
-        defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] = _json_default({
-            variable_name: f"{{{{ {variable_name} }}}}"
-            for variable_name in variable_names
-        })
+        defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] = _json_default(
+            {
+                variable_name: f"{{{{ {variable_name} }}}}"
+                for variable_name in variable_names
+            }
+        )
 
     return defaults
 
@@ -2229,17 +2650,21 @@ def _reference_edit_defaults(
             if templates_are_generated:
                 merged[field] = reference_defaults.get(field, "")
             continue
-        if reference_defaults and auto_profile is not None and (
-            _canonical_auto_helper_value(
-                field,
-                current_defaults.get(
+        if (
+            reference_defaults
+            and auto_profile is not None
+            and (
+                _canonical_auto_helper_value(
+                    field,
+                    current_defaults.get(
+                        field,
+                        [] if field in CLIMATE_MODE_LIST_FIELDS else "",
+                    ),
+                )
+                == auto_profile.get(
                     field,
                     [] if field in CLIMATE_MODE_LIST_FIELDS else "",
-                ),
-            )
-            == auto_profile.get(
-                field,
-                [] if field in CLIMATE_MODE_LIST_FIELDS else "",
+                )
             )
         ):
             merged[field] = reference_defaults.get(
@@ -2392,13 +2817,13 @@ def _legacy_auto_helper_profiles(
         for variable_name in variable_names
     ]
     legacy_defaults = dict(reference_defaults)
-    legacy_defaults[CONF_VALUE_TEMPLATE] = (
-        "{{ " + " or ".join(boolean_checks) + " }}"
-    )
+    legacy_defaults[CONF_VALUE_TEMPLATE] = "{{ " + " or ".join(boolean_checks) + " }}"
     return [_auto_helper_profile(legacy_defaults)]
 
 
-def _existing_auto_helper_profile(hass, entity, defaults: dict[str, Any]) -> dict[str, Any] | None:
+def _existing_auto_helper_profile(
+    hass, entity, defaults: dict[str, Any]
+) -> dict[str, Any] | None:
     """Return the generated baseline used to detect per-field customization."""
     saved_profile = entity.get(CONF_AUTO_HELPER)
     if isinstance(saved_profile, Mapping):
@@ -2461,6 +2886,12 @@ def _entity_form_defaults(
     options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     entity = _plain_options(entity)
+    if entity.get(CONF_PLATFORM) == "climate":
+        entity = migrate_legacy_climate_attributes(entity)
+    elif entity.get(CONF_PLATFORM) == "fan":
+        entity = migrate_legacy_fan_attributes(entity)
+    elif entity.get(CONF_PLATFORM) == "humidifier":
+        entity = migrate_legacy_humidifier_attributes(entity)
     device = _get_device_attributes(options or {}, device_name)
     platform = entity.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
     if platform not in VIRTUAL_ENTITY_DOMAINS:
@@ -2473,7 +2904,9 @@ def _entity_form_defaults(
         CONF_DEVICE_SW_VERSION: _text_default(device.get(CONF_SW_VERSION)),
         CONF_DEVICE_HW_VERSION: _text_default(device.get(CONF_HW_VERSION)),
         CONF_DEVICE_SERIAL_NUMBER: _text_default(device.get(CONF_SERIAL_NUMBER)),
-        CONF_DEVICE_CONFIGURATION_URL: _text_default(device.get(CONF_CONFIGURATION_URL)),
+        CONF_DEVICE_CONFIGURATION_URL: _text_default(
+            device.get(CONF_CONFIGURATION_URL)
+        ),
         CONF_DEVICE_SUGGESTED_AREA: _text_default(device.get(CONF_SUGGESTED_AREA)),
         CONF_DEVICE_VIA_DEVICE_ID: _text_default(device.get(CONF_VIA_DEVICE_ID)),
         CONF_ENTITY_NAME: _text_default(entity.get(CONF_NAME), "Virtual Entity"),
@@ -2502,56 +2935,89 @@ def _entity_form_defaults(
         CONF_EVENT_HOOKS_JSON: _json_default(entity.get(CONF_EVENT_HOOKS)),
         CONF_ATTRIBUTES_JSON: _json_default(entity.get(CONF_ATTRIBUTES)),
         CONF_ATTRIBUTE_SOURCES_JSON: _json_default(entity.get(CONF_ATTRIBUTE_SOURCES)),
-        CONF_ATTRIBUTE_TEMPLATES_JSON: _json_default(entity.get(CONF_ATTRIBUTE_TEMPLATES)),
+        CONF_ATTRIBUTE_TEMPLATES_JSON: _json_default(
+            entity.get(CONF_ATTRIBUTE_TEMPLATES)
+        ),
     }
     polygon = entity.get(CONF_POLYGONAL_ZONE)
     if not isinstance(polygon, Mapping):
         polygon = {}
-    defaults.update({
-        CONF_POLYGON_GEOJSON_JSON: _json_default(polygon.get(CONF_POLYGON_GEOJSON)),
-        CONF_POLYGON_FILES_TEXT: _multiline_list_default(
-            polygon.get(CONF_POLYGON_FILES),
-        ),
-        CONF_POLYGON_PERSON: _text_default(
-            polygon.get(CONF_POLYGON_PERSON_ENTITY),
-        ),
-        CONF_POLYGON_STRATEGY_INPUT: (
-            polygon.get(CONF_POLYGON_STRATEGY)
-            if polygon.get(CONF_POLYGON_STRATEGY) in {
-                "majority",
-                "priority",
-                "latest",
-                "median",
-            }
-            else "majority"
-        ),
-        CONF_POLYGON_DISTANCE_INPUT: _positive_float_default(
-            polygon.get(CONF_POLYGON_DISTANCE_METERS),
-            300,
-        ),
-        CONF_POLYGON_TRACKER_RULES_JSON: _json_default(
-            polygon.get(CONF_POLYGON_TRACKER_RULES),
-        ),
-        CONF_POLYGON_AWAY_STATE_INPUT: (
-            _text_default(polygon.get(CONF_POLYGON_AWAY_STATE), "not_home")
-            or "not_home"
-        ),
-    })
+    defaults.update(
+        {
+            CONF_POLYGON_GEOJSON_JSON: _json_default(polygon.get(CONF_POLYGON_GEOJSON)),
+            CONF_POLYGON_FILES_TEXT: _multiline_list_default(
+                polygon.get(CONF_POLYGON_FILES),
+            ),
+            CONF_POLYGON_PERSON: _text_default(
+                polygon.get(CONF_POLYGON_PERSON_ENTITY),
+            ),
+            CONF_POLYGON_STRATEGY_INPUT: (
+                polygon.get(CONF_POLYGON_STRATEGY)
+                if polygon.get(CONF_POLYGON_STRATEGY)
+                in {
+                    "majority",
+                    "priority",
+                    "latest",
+                    "median",
+                }
+                else "majority"
+            ),
+            CONF_POLYGON_DISTANCE_INPUT: _positive_float_default(
+                polygon.get(CONF_POLYGON_DISTANCE_METERS),
+                300,
+            ),
+            CONF_POLYGON_TRACKER_RULES_JSON: _json_default(
+                polygon.get(CONF_POLYGON_TRACKER_RULES),
+            ),
+            CONF_POLYGON_AWAY_STATE_INPUT: (
+                _text_default(polygon.get(CONF_POLYGON_AWAY_STATE), "not_home")
+                or "not_home"
+            ),
+        }
+    )
     domain_options = {
         key: value
         for key, value in entity.items()
         if key not in _DOMAIN_OPTION_RESERVED_KEYS
     }
     if platform == "climate":
-        defaults.update({
-            key: value
-            for key, value in domain_options.items()
-            if key in CLIMATE_MODE_FORM_FIELDS
-        })
+        defaults.update(
+            {
+                key: value
+                for key, value in domain_options.items()
+                if key in CLIMATE_FORM_FIELDS
+            }
+        )
         domain_options = {
             key: value
             for key, value in domain_options.items()
-            if key not in CLIMATE_MODE_FORM_FIELDS
+            if key not in CLIMATE_FORM_FIELDS
+        }
+    elif platform == "fan":
+        defaults.update(
+            {
+                key: value
+                for key, value in domain_options.items()
+                if key in FAN_FORM_FIELDS
+            }
+        )
+        domain_options = {
+            key: value
+            for key, value in domain_options.items()
+            if key not in FAN_FORM_FIELDS
+        }
+    elif platform == "humidifier":
+        defaults.update(
+            {
+                key: value
+                for key, value in domain_options.items()
+                if key in HUMIDIFIER_FORM_FIELDS
+            }
+        )
+        domain_options = {
+            key: value
+            for key, value in domain_options.items()
+            if key not in HUMIDIFIER_FORM_FIELDS
         }
     defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
     return defaults
@@ -2582,17 +3048,13 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 raise GroupNameAlreadyUsed
 
         if current_entry:
-            return {
-                "title": f"{user_input[ATTR_GROUP_NAME]} - {COMPONENT_DOMAIN}"
-            }
+            return {"title": f"{user_input[ATTR_GROUP_NAME]} - {COMPONENT_DOMAIN}"}
 
         for group in self.hass.data.get(COMPONENT_DOMAIN, {}):
             _LOGGER.debug(f"checking {group}")
             if group == user_input[ATTR_GROUP_NAME]:
                 raise GroupNameAlreadyUsed
-        return {
-            "title": f"{user_input[ATTR_GROUP_NAME]} - {COMPONENT_DOMAIN}"
-        }
+        return {"title": f"{user_input[ATTR_GROUP_NAME]} - {COMPONENT_DOMAIN}"}
 
     async def async_step_user(self, user_input=None):
         _LOGGER.debug(f"step user {user_input}")
@@ -2689,7 +3151,9 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             )
         if user_input is not None:
             try:
-                device_name, entity = await _async_build_entity_config(self.hass, user_input)
+                device_name, entity = await _async_build_entity_config(
+                    self.hass, user_input
+                )
                 _set_auto_helper_profile(
                     entity,
                     user_input,
@@ -2751,7 +3215,9 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         errors = {}
         if user_input is not None:
             if user_input[CONF_ACTION] == ACTION_FINISH:
-                return self.async_create_entry(data=_plain_options(self.config_entry.options))
+                return self.async_create_entry(
+                    data=_plain_options(self.config_entry.options)
+                )
             if user_input[CONF_ACTION] == ACTION_EDIT_ENTITY:
                 return await self.async_step_select_entity()
             if user_input[CONF_ACTION] == ACTION_DELETE_ENTITY:
@@ -2848,7 +3314,9 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="entity_source",
             data_schema=_reference_entity_schema(
-                device_options=_existing_device_options(self.hass, self.config_entry.options),
+                device_options=_existing_device_options(
+                    self.hass, self.config_entry.options
+                ),
             ),
             errors=errors,
         )
@@ -2865,7 +3333,9 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             )
         if user_input is not None:
             try:
-                device_name, entity = await _async_build_entity_config(self.hass, user_input)
+                device_name, entity = await _async_build_entity_config(
+                    self.hass, user_input
+                )
                 _set_auto_helper_profile(
                     entity,
                     user_input,
@@ -3135,6 +3605,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             data_schema=_entity_schema(defaults),
             errors=errors,
         )
+
 
 class GroupNameAlreadyUsed(exceptions.HomeAssistantError):
     """Error indicating group name already used."""

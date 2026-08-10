@@ -728,7 +728,7 @@ class VirtualOpenableEntity(VirtualEntity):
             self._timer_handle = None
 
     def _stop(self) -> None:
-        _LOGGER.info(f"stopping {self.name} at position {self._current_position}")
+        _LOGGER.debug(f"stopping {self.name} at position {self._current_position}")
 
         self._cancel_timer()
 
@@ -753,7 +753,7 @@ class VirtualOpenableEntity(VirtualEntity):
         self.async_write_ha_state()
 
     def _set_position(self, position: int) -> None:
-        _LOGGER.info(f"setting {self.name} position {position}")
+        _LOGGER.debug(f"setting {self.name} position {position}")
 
         self._cancel_timer()
 

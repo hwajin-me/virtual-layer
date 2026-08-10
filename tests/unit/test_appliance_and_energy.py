@@ -10,6 +10,9 @@ from homeassistant.components.number import (
     NumberEntity,
     NumberMode,
 )
+from homeassistant.components.number import (
+    DEVICE_CLASS_UNITS as NUMBER_DEVICE_CLASS_UNITS,
+)
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import ATTR_ENTITY_ID, CONF_MODE, CONF_NAME
 from homeassistant.core import State
@@ -26,7 +29,13 @@ from custom_components.virtual_layer.humidifier import (
     VirtualHumidifier,
 )
 from custom_components.virtual_layer.lock import LOCK_SCHEMA, VirtualLock
-from custom_components.virtual_layer.number import NUMBER_SCHEMA, VirtualNumber
+from custom_components.virtual_layer.number import (
+    NUMBER_SCHEMA,
+    VirtualNumber,
+)
+from custom_components.virtual_layer.number import (
+    UNITS_OF_MEASUREMENT as NUMBER_UNITS_OF_MEASUREMENT,
+)
 from custom_components.virtual_layer.sensor import SENSOR_SCHEMA, VirtualSensor
 from custom_components.virtual_layer.valve import VALVE_SCHEMA, VirtualValve
 
@@ -49,14 +58,18 @@ pytestmark = pytest.mark.unit
         (SensorDeviceClass.MOISTURE, "%"),
     ],
 )
-def test_sensor_electrical_device_classes_get_default_units(device_class, expected_unit):
-    config = SENSOR_SCHEMA({
-        CONF_NAME: "Electrical Sensor",
-        ATTR_ENTITY_ID: f"sensor.electrical_{device_class}",
-        ATTR_UNIQUE_ID: f"electrical_{device_class}",
-        CONF_INITIAL_VALUE: "1",
-        "class": device_class,
-    })
+def test_sensor_electrical_device_classes_get_default_units(
+    device_class, expected_unit
+):
+    config = SENSOR_SCHEMA(
+        {
+            CONF_NAME: "Electrical Sensor",
+            ATTR_ENTITY_ID: f"sensor.electrical_{device_class}",
+            ATTR_UNIQUE_ID: f"electrical_{device_class}",
+            CONF_INITIAL_VALUE: "1",
+            "class": device_class,
+        }
+    )
     entity = VirtualSensor(config, False)
 
     assert entity._attr_unit_of_measurement == expected_unit
@@ -79,31 +92,42 @@ def test_sensor_electrical_device_classes_get_default_units(device_class, expect
         (NumberDeviceClass.FREQUENCY, "Hz"),
     ],
 )
-def test_number_electrical_device_classes_get_default_units(device_class, expected_unit):
-    config = NUMBER_SCHEMA({
-        CONF_NAME: "Electrical Number",
-        ATTR_ENTITY_ID: f"number.electrical_{device_class}",
-        ATTR_UNIQUE_ID: f"electrical_number_{device_class}",
-        CONF_INITIAL_VALUE: "1",
-        CONF_MIN: 0,
-        CONF_MAX: 100,
-        "class": device_class,
-    })
+def test_number_electrical_device_classes_get_default_units(
+    device_class, expected_unit
+):
+    config = NUMBER_SCHEMA(
+        {
+            CONF_NAME: "Electrical Number",
+            ATTR_ENTITY_ID: f"number.electrical_{device_class}",
+            ATTR_UNIQUE_ID: f"electrical_number_{device_class}",
+            CONF_INITIAL_VALUE: "1",
+            CONF_MIN: 0,
+            CONF_MAX: 100,
+            "class": device_class,
+        }
+    )
     entity = VirtualNumber(config, False)
 
     assert isinstance(entity, NumberEntity)
     assert entity._attr_unit_of_measurement == expected_unit
 
 
+def test_all_default_number_units_are_valid_for_their_device_class():
+    for device_class, unit in NUMBER_UNITS_OF_MEASUREMENT.items():
+        assert unit in NUMBER_DEVICE_CLASS_UNITS[device_class]
+
+
 async def test_number_uses_native_state_and_clamps_template_and_service_values():
-    config = NUMBER_SCHEMA({
-        CONF_NAME: "Electrical Limit",
-        ATTR_ENTITY_ID: "number.electrical_limit",
-        ATTR_UNIQUE_ID: "electrical_limit",
-        CONF_INITIAL_VALUE: "not-a-number",
-        CONF_MIN: 10,
-        CONF_MAX: 20,
-    })
+    config = NUMBER_SCHEMA(
+        {
+            CONF_NAME: "Electrical Limit",
+            ATTR_ENTITY_ID: "number.electrical_limit",
+            ATTR_UNIQUE_ID: "electrical_limit",
+            CONF_INITIAL_VALUE: "not-a-number",
+            CONF_MIN: 10,
+            CONF_MAX: 20,
+        }
+    )
     entity = VirtualNumber(config, False)
     entity._create_state(config)
     entity.async_schedule_update_ha_state = lambda **_kwargs: None
@@ -116,16 +140,18 @@ async def test_number_uses_native_state_and_clamps_template_and_service_values()
 
 
 def test_number_supports_step_and_input_mode():
-    config = NUMBER_SCHEMA({
-        CONF_NAME: "Dimmer Limit",
-        ATTR_ENTITY_ID: "number.dimmer_limit",
-        ATTR_UNIQUE_ID: "dimmer_limit",
-        CONF_INITIAL_VALUE: 12.5,
-        CONF_MIN: 0,
-        CONF_MAX: 100,
-        ATTR_STEP: 0.5,
-        CONF_MODE: "slider",
-    })
+    config = NUMBER_SCHEMA(
+        {
+            CONF_NAME: "Dimmer Limit",
+            ATTR_ENTITY_ID: "number.dimmer_limit",
+            ATTR_UNIQUE_ID: "dimmer_limit",
+            CONF_INITIAL_VALUE: 12.5,
+            CONF_MIN: 0,
+            CONF_MAX: 100,
+            ATTR_STEP: 0.5,
+            CONF_MODE: "slider",
+        }
+    )
 
     entity = VirtualNumber(config, False)
     entity._create_state(config)
@@ -137,16 +163,18 @@ def test_number_supports_step_and_input_mode():
 
 
 def test_sensor_accepts_washer_and_dryer_options_as_attributes():
-    config = SENSOR_SCHEMA({
-        CONF_NAME: "Washer Status",
-        ATTR_ENTITY_ID: "sensor.washer_status",
-        ATTR_UNIQUE_ID: "washer_status",
-        CONF_INITIAL_VALUE: "washing",
-        "appliance_type": "washer",
-        "program": "cotton",
-        "remaining_time": 1800,
-        "door_locked": True,
-    })
+    config = SENSOR_SCHEMA(
+        {
+            CONF_NAME: "Washer Status",
+            ATTR_ENTITY_ID: "sensor.washer_status",
+            ATTR_UNIQUE_ID: "washer_status",
+            CONF_INITIAL_VALUE: "washing",
+            "appliance_type": "washer",
+            "program": "cotton",
+            "remaining_time": 1800,
+            "door_locked": True,
+        }
+    )
     entity = VirtualSensor(config, False)
     entity._create_state(config)
     entity._update_attributes()
@@ -158,17 +186,19 @@ def test_sensor_accepts_washer_and_dryer_options_as_attributes():
 
 
 async def test_dehumidifier_supports_humidity_and_mode_commands():
-    config = HUMIDIFIER_SCHEMA({
-        CONF_NAME: "Dehumidifier",
-        ATTR_ENTITY_ID: "humidifier.dehumidifier",
-        ATTR_UNIQUE_ID: "dehumidifier",
-        CONF_INITIAL_VALUE: "off",
-        "class": HumidifierDeviceClass.DEHUMIDIFIER,
-        "target_humidity": 45,
-        "current_humidity": 60,
-        "modes": ["auto", "sleep"],
-        "mode": "auto",
-    })
+    config = HUMIDIFIER_SCHEMA(
+        {
+            CONF_NAME: "Dehumidifier",
+            ATTR_ENTITY_ID: "humidifier.dehumidifier",
+            ATTR_UNIQUE_ID: "dehumidifier",
+            CONF_INITIAL_VALUE: "off",
+            "class": HumidifierDeviceClass.DEHUMIDIFIER,
+            "target_humidity": 45,
+            "current_humidity": 60,
+            "modes": ["auto", "sleep"],
+            "mode": "auto",
+        }
+    )
     entity = VirtualHumidifier(config, False)
     entity._create_state(config)
     entity.async_write_ha_state = lambda: None
@@ -186,13 +216,15 @@ async def test_dehumidifier_supports_humidity_and_mode_commands():
 
 
 async def test_valve_can_model_a_pump_with_open_close_commands():
-    config = VALVE_SCHEMA({
-        CONF_NAME: "Pool Pump Valve",
-        ATTR_ENTITY_ID: "valve.pool_pump",
-        ATTR_UNIQUE_ID: "pool_pump",
-        CONF_INITIAL_VALUE: "closed",
-        "open_close_duration": 0,
-    })
+    config = VALVE_SCHEMA(
+        {
+            CONF_NAME: "Pool Pump Valve",
+            ATTR_ENTITY_ID: "valve.pool_pump",
+            ATTR_UNIQUE_ID: "pool_pump",
+            CONF_INITIAL_VALUE: "closed",
+            "open_close_duration": 0,
+        }
+    )
     entity = VirtualValve(config, False)
     entity._create_state(config)
     entity.async_write_ha_state = lambda: None
@@ -207,14 +239,16 @@ async def test_valve_can_model_a_pump_with_open_close_commands():
 
 
 def test_openable_retargeting_current_position_clears_motion_and_timer():
-    config = VALVE_SCHEMA({
-        CONF_NAME: "Timed Valve",
-        ATTR_ENTITY_ID: "valve.timed_valve",
-        ATTR_UNIQUE_ID: "timed_valve",
-        CONF_INITIAL_VALUE: "closed",
-        "open_close_duration": 10,
-        "open_close_tick": 1,
-    })
+    config = VALVE_SCHEMA(
+        {
+            CONF_NAME: "Timed Valve",
+            ATTR_ENTITY_ID: "valve.timed_valve",
+            ATTR_UNIQUE_ID: "timed_valve",
+            CONF_INITIAL_VALUE: "closed",
+            "open_close_duration": 10,
+            "open_close_tick": 1,
+        }
+    )
     entity = VirtualValve(config, False)
     entity.hass = Mock()
     entity._create_state(config)
@@ -252,13 +286,15 @@ def test_openable_repairs_invalid_restored_positions(
     restored_position,
     expected_position,
 ):
-    config = VALVE_SCHEMA({
-        CONF_NAME: "Restored Valve",
-        ATTR_ENTITY_ID: "valve.restored_valve",
-        ATTR_UNIQUE_ID: "restored_valve",
-        CONF_INITIAL_VALUE: "closed",
-        "open_close_duration": 0,
-    })
+    config = VALVE_SCHEMA(
+        {
+            CONF_NAME: "Restored Valve",
+            ATTR_ENTITY_ID: "valve.restored_valve",
+            ATTR_UNIQUE_ID: "restored_valve",
+            CONF_INITIAL_VALUE: "closed",
+            "open_close_duration": 0,
+        }
+    )
     entity = VirtualValve(config, False)
 
     entity._restore_state(
@@ -274,14 +310,16 @@ def test_openable_repairs_invalid_restored_positions(
 
 
 async def test_openable_unload_cancels_pending_movement():
-    config = VALVE_SCHEMA({
-        CONF_NAME: "Unload Valve",
-        ATTR_ENTITY_ID: "valve.unload_valve",
-        ATTR_UNIQUE_ID: "unload_valve",
-        CONF_INITIAL_VALUE: "closed",
-        "open_close_duration": 10,
-        "open_close_tick": 1,
-    })
+    config = VALVE_SCHEMA(
+        {
+            CONF_NAME: "Unload Valve",
+            ATTR_ENTITY_ID: "valve.unload_valve",
+            ATTR_UNIQUE_ID: "unload_valve",
+            CONF_INITIAL_VALUE: "closed",
+            "open_close_duration": 10,
+            "open_close_tick": 1,
+        }
+    )
     entity = VirtualValve(config, False)
     cancel_timer = Mock()
     entity._timer_handle = cancel_timer
@@ -297,13 +335,15 @@ async def test_openable_unload_cancels_pending_movement():
 
 
 def test_lock_replacing_delayed_operation_cancels_previous_timer():
-    config = LOCK_SCHEMA({
-        CONF_NAME: "Timed Lock",
-        ATTR_ENTITY_ID: "lock.timed_lock",
-        ATTR_UNIQUE_ID: "timed_lock",
-        CONF_INITIAL_VALUE: "locked",
-        "locking_time": 5,
-    })
+    config = LOCK_SCHEMA(
+        {
+            CONF_NAME: "Timed Lock",
+            ATTR_ENTITY_ID: "lock.timed_lock",
+            ATTR_UNIQUE_ID: "timed_lock",
+            CONF_INITIAL_VALUE: "locked",
+            "locking_time": 5,
+        }
+    )
     entity = VirtualLock(Mock(), config, False)
     first_cancel = Mock()
     second_cancel = Mock()

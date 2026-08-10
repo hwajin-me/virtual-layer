@@ -44,9 +44,17 @@ from custom_components.virtual_layer.const import (
     CONF_NAME,
 )
 from custom_components.virtual_layer.fan import FAN_SCHEMA, VirtualFan
+from custom_components.virtual_layer.fan_options import (
+    extract_fan_options,
+    migrate_legacy_fan_attributes,
+)
 from custom_components.virtual_layer.humidifier import (
     HUMIDIFIER_SCHEMA,
     VirtualHumidifier,
+)
+from custom_components.virtual_layer.humidifier_options import (
+    extract_humidifier_options,
+    migrate_legacy_humidifier_attributes,
 )
 from custom_components.virtual_layer.light import (
     CONF_INITIAL_COLOR_TEMP,
@@ -66,34 +74,38 @@ pytestmark = pytest.mark.unit
 
 
 def _config(schema, domain: str, initial_value: str = "unknown", **options):
-    return schema({
-        CONF_NAME: f"Native {domain}",
-        ATTR_ENTITY_ID: f"{domain}.native",
-        ATTR_UNIQUE_ID: f"{domain}.native.unique",
-        CONF_INITIAL_VALUE: initial_value,
-        **options,
-    })
+    return schema(
+        {
+            CONF_NAME: f"Native {domain}",
+            ATTR_ENTITY_ID: f"{domain}.native",
+            ATTR_UNIQUE_ID: f"{domain}.native.unique",
+            CONF_INITIAL_VALUE: initial_value,
+            **options,
+        }
+    )
 
 
 async def test_climate_migrates_native_modes_from_legacy_virtual_attributes():
-    migrated = migrate_legacy_climate_attributes({
-        CONF_NAME: "Legacy Climate",
-        ATTR_ENTITY_ID: "climate.legacy",
-        ATTR_UNIQUE_ID: "climate.legacy.unique",
-        CONF_INITIAL_VALUE: "cool",
-        CONF_ATTRIBUTES: {
-            "fan_mode": "auto",
-            "fan_modes": ["medium", "high", "turbo", "auto"],
-            "hvac_modes": ["off", "cool", "dry", "fan_only"],
-            "preset_mode": "none",
-            "preset_modes": ["none", "sleep", "quiet"],
-            "supported_features": 441,
-            "swing_mode": "vertical",
-            "swing_modes": ["off", "vertical"],
-            "temperature": 23,
-            "vendor_attribute": "kept",
-        },
-    })
+    migrated = migrate_legacy_climate_attributes(
+        {
+            CONF_NAME: "Legacy Climate",
+            ATTR_ENTITY_ID: "climate.legacy",
+            ATTR_UNIQUE_ID: "climate.legacy.unique",
+            CONF_INITIAL_VALUE: "cool",
+            CONF_ATTRIBUTES: {
+                "fan_mode": "auto",
+                "fan_modes": ["medium", "high", "turbo", "auto"],
+                "hvac_modes": ["off", "cool", "dry", "fan_only"],
+                "preset_mode": "none",
+                "preset_modes": ["none", "sleep", "quiet"],
+                "supported_features": 441,
+                "swing_mode": "vertical",
+                "swing_modes": ["off", "vertical"],
+                "temperature": 23,
+                "vendor_attribute": "kept",
+            },
+        }
+    )
     climate = VirtualClimate(CLIMATE_SCHEMA(migrated), False)
     climate._create_state(climate._config)
     climate.async_write_ha_state = Mock()
@@ -119,6 +131,118 @@ async def test_climate_migrates_native_modes_from_legacy_virtual_attributes():
     assert climate.swing_mode == "off"
 
 
+def test_climate_migration_replaces_empty_native_mode_placeholders():
+    migrated = migrate_legacy_climate_attributes(
+        {
+            CONF_INITIAL_VALUE: "cool",
+            "hvac_modes": ["off", "cool"],
+            "fan_modes": [],
+            "fan_mode": "",
+            "preset_modes": [],
+            "swing_modes": [],
+            CONF_ATTRIBUTES: {
+                "fan_modes": ["auto", "turbo"],
+                "fan_mode": "auto",
+                "preset_modes": ["none", "sleep"],
+                "preset_mode": "none",
+                "swing_modes": ["off", "vertical"],
+                "swing_mode": "vertical",
+            },
+        }
+    )
+
+    assert migrated["fan_modes"] == ["auto", "turbo"]
+    assert migrated["fan_mode"] == "auto"
+    assert migrated["preset_modes"] == ["none", "sleep"]
+    assert migrated["preset_mode"] == "none"
+    assert migrated["swing_modes"] == ["off", "vertical"]
+    assert migrated["swing_mode"] == "vertical"
+    assert CONF_ATTRIBUTES not in migrated
+
+
+def test_humidifier_source_options_and_legacy_attributes_are_promoted():
+    options, consumed = extract_humidifier_options(
+        {
+            "action": "drying",
+            "available_modes": ["auto", "sleep"],
+            "current_humidity": 65,
+            "device_class": "dehumidifier",
+            "humidity": 50,
+            "max_humidity": 80,
+            "min_humidity": 30,
+            "mode": "auto",
+            "target_humidity_step": 1,
+            "supported_features": 1,
+            "vendor": "kept",
+        }
+    )
+
+    assert options == {
+        "action": "drying",
+        "class": "dehumidifier",
+        "current_humidity": 65,
+        "max_humidity": 80,
+        "min_humidity": 30,
+        "mode": "auto",
+        "modes": ["auto", "sleep"],
+        "target_humidity": 50,
+        "target_humidity_step": 1,
+    }
+    assert "vendor" not in consumed
+
+    migrated = migrate_legacy_humidifier_attributes(
+        {
+            "modes": [],
+            "mode": "",
+            CONF_ATTRIBUTES: {
+                "available_modes": ["auto", "sleep"],
+                "mode": "auto",
+                "humidity": 50,
+                "vendor": "kept",
+            },
+        }
+    )
+    assert migrated["modes"] == ["auto", "sleep"]
+    assert migrated["mode"] == "auto"
+    assert migrated["target_humidity"] == 50
+    assert migrated[CONF_ATTRIBUTES] == {"vendor": "kept"}
+
+
+async def test_humidifier_and_dehumidifier_power_actions_remain_consistent():
+    humidifier = VirtualHumidifier(
+        _config(
+            HUMIDIFIER_SCHEMA,
+            "humidifier",
+            "off",
+            **{"class": "humidifier", "action": "humidifying"},
+        ),
+        False,
+    )
+    dehumidifier = VirtualHumidifier(
+        _config(
+            HUMIDIFIER_SCHEMA,
+            "humidifier",
+            "off",
+            **{"class": "dehumidifier", "action": "drying"},
+        ),
+        False,
+    )
+    for entity in (humidifier, dehumidifier):
+        entity._create_state(entity._config)
+        entity.async_write_ha_state = Mock()
+        assert entity.action == "off"
+
+    await humidifier.async_turn_on()
+    await dehumidifier.async_turn_on()
+    assert humidifier.action == "humidifying"
+    assert dehumidifier.action == "drying"
+
+    await humidifier.async_turn_off()
+    await dehumidifier.async_turn_off()
+    assert humidifier.action == "off"
+    assert dehumidifier.action == "off"
+
+
 def test_climate_exposes_target_humidity_only_when_configured():
     without_humidity = VirtualClimate(
         _config(CLIMATE_SCHEMA, "climate", "off"),
@@ -129,7 +253,9 @@ def test_climate_exposes_target_humidity_only_when_configured():
         False,
     )
 
-    assert ClimateEntityFeature.TARGET_HUMIDITY not in without_humidity.supported_features
+    assert (
+        ClimateEntityFeature.TARGET_HUMIDITY not in without_humidity.supported_features
+    )
     assert ClimateEntityFeature.TARGET_HUMIDITY in with_humidity.supported_features
 
 
@@ -151,6 +277,176 @@ def test_fan_advertises_preset_mode_only_when_modes_are_configured():
 
     assert FanEntityFeature.PRESET_MODE not in without_modes.supported_features
     assert FanEntityFeature.PRESET_MODE in with_modes.supported_features
+
+    preset_only = VirtualFan(
+        _config(FAN_SCHEMA, "fan", "on", modes=["eco", "boost"]),
+        False,
+    )
+    assert FanEntityFeature.SET_SPEED not in preset_only.supported_features
+    assert FanEntityFeature.PRESET_MODE in preset_only.supported_features
+
+
+@pytest.mark.parametrize(
+    ("hvac_modes", "expected_features"),
+    [
+        (["off"], ClimateEntityFeature.TURN_OFF),
+        (["cool"], ClimateEntityFeature.TURN_ON),
+        (
+            ["off", "cool"],
+            ClimateEntityFeature.TURN_ON | ClimateEntityFeature.TURN_OFF,
+        ),
+    ],
+)
+def test_climate_power_features_follow_configured_hvac_modes(
+    hvac_modes, expected_features
+):
+    climate = VirtualClimate(
+        _config(
+            CLIMATE_SCHEMA,
+            "climate",
+            hvac_modes[0],
+            hvac_modes=hvac_modes,
+        ),
+        False,
+    )
+
+    assert climate.supported_features & (
+        ClimateEntityFeature.TURN_ON | ClimateEntityFeature.TURN_OFF
+    ) == expected_features
+
+
+async def test_climate_power_commands_never_create_unsupported_modes():
+    off_only = VirtualClimate(
+        _config(CLIMATE_SCHEMA, "climate", "off", hvac_modes=["off"]),
+        False,
+    )
+    cool_only = VirtualClimate(
+        _config(CLIMATE_SCHEMA, "climate", "cool", hvac_modes=["cool"]),
+        False,
+    )
+    for entity in (off_only, cool_only):
+        entity._create_state(entity._config)
+        entity.async_write_ha_state = Mock()
+
+    with pytest.raises(NotImplementedError):
+        await off_only.async_turn_on()
+    with pytest.raises(NotImplementedError):
+        await cool_only.async_turn_off()
+    assert off_only.hvac_mode == "off"
+    assert cool_only.hvac_mode == "cool"
+
+
+def test_fan_initial_and_restored_power_state_are_not_lost_without_speed_support():
+    fan = VirtualFan(_config(FAN_SCHEMA, "fan", "on"), False)
+    fan._create_state(fan._config)
+    fan._update_attributes()
+
+    assert fan.state == "on"
+    assert "percentage" not in fan.extra_state_attributes
+
+    fan._restore_state(
+        SimpleNamespace(state="on", attributes={}),
+        fan._config,
+    )
+    fan._update_attributes()
+
+    assert fan.state == "on"
+    assert "percentage" not in fan.extra_state_attributes
+
+
+async def test_fan_initial_options_and_mode_transitions_are_consistent():
+    fan = VirtualFan(
+        _config(
+            FAN_SCHEMA,
+            "fan",
+            "on",
+            speed_count=4,
+            percentage=25,
+            modes=["eco", "boost"],
+            preset_mode="eco",
+            oscillate=True,
+            oscillating=True,
+            direction=True,
+            current_direction="reverse",
+        ),
+        False,
+    )
+    fan._create_state(fan._config)
+    fan._update_attributes()
+    fan.async_write_ha_state = Mock()
+
+    assert fan.state == "on"
+    assert fan.preset_mode == "eco"
+    assert fan.percentage is None
+    assert fan.oscillating is True
+    assert fan.current_direction == "reverse"
+
+    await fan.async_set_percentage(50)
+    assert fan.percentage == 50
+    assert fan.preset_mode is None
+
+    await fan.async_set_preset_mode("boost")
+    assert fan.percentage is None
+    assert fan.preset_mode == "boost"
+
+    await fan.async_turn_off()
+    assert fan.state == "off"
+    assert fan.percentage == 0
+    assert fan.preset_mode is None
+
+    await fan.async_turn_on()
+    assert fan.state == "on"
+    assert fan.percentage == 25
+    assert fan.preset_mode is None
+
+
+def test_fan_source_options_and_legacy_attributes_are_promoted():
+    options, consumed = extract_fan_options(
+        {
+            "percentage": 50,
+            "percentage_step": 25.0,
+            "preset_mode": "eco",
+            "preset_modes": ["eco", "boost"],
+            "oscillating": True,
+            "direction": "reverse",
+            "supported_features": int(
+                FanEntityFeature.SET_SPEED
+                | FanEntityFeature.OSCILLATE
+                | FanEntityFeature.DIRECTION
+                | FanEntityFeature.PRESET_MODE
+            ),
+            "vendor": "kept",
+        }
+    )
+
+    assert options == {
+        "speed_count": 4,
+        "oscillate": True,
+        "direction": True,
+        "modes": ["eco", "boost"],
+        "percentage": 50,
+        "preset_mode": "eco",
+        "oscillating": True,
+        "current_direction": "reverse",
+    }
+    assert "vendor" not in consumed
+
+    migrated = migrate_legacy_fan_attributes(
+        {
+            "speed_count": 0,
+            "modes": [],
+            CONF_ATTRIBUTES: {
+                "percentage_step": 25.0,
+                "preset_modes": ["eco", "boost"],
+                "preset_mode": "eco",
+                "vendor": "kept",
+            },
+        }
+    )
+    assert migrated["speed_count"] == 4
+    assert migrated["modes"] == ["eco", "boost"]
+    assert migrated["preset_mode"] == "eco"
+    assert migrated[CONF_ATTRIBUTES] == {"vendor": "kept"}
 
 
 @pytest.mark.parametrize(
@@ -174,12 +470,14 @@ def test_service_domains_use_native_home_assistant_entities(domain, base_class):
         f"custom_components.virtual_layer.{domain}",
         fromlist=["ENTITY_SCHEMA", "ENTITY_CLASS"],
     )
-    config = module.ENTITY_SCHEMA({
-        CONF_NAME: f"Native {domain}",
-        ATTR_ENTITY_ID: f"{domain}.native",
-        ATTR_UNIQUE_ID: f"{domain}.native.unique",
-        CONF_INITIAL_VALUE: "unknown",
-    })
+    config = module.ENTITY_SCHEMA(
+        {
+            CONF_NAME: f"Native {domain}",
+            ATTR_ENTITY_ID: f"{domain}.native",
+            ATTR_UNIQUE_ID: f"{domain}.native.unique",
+            CONF_INITIAL_VALUE: "unknown",
+        }
+    )
 
     entity = module.ENTITY_CLASS(config, False)
 
@@ -255,36 +553,48 @@ async def test_generic_entities_repair_malformed_saved_options_and_publish_actio
         ENTITY_SCHEMA as WATER_HEATER_SCHEMA,
     )
 
-    text = VirtualText(_config(
-        TEXT_SCHEMA,
-        "text",
-        "saved",
-        min="not-a-number",
-        max=[],
-        mode=object(),
-        pattern="[A-Z]{2}\\d{2}",
-    ), False)
-    button = VirtualButton(_config(
-        BUTTON_SCHEMA,
-        "button",
-        attributes={"press_count": "corrupt"},
-    ), False)
-    media_player = VirtualMediaPlayer(_config(
-        MEDIA_PLAYER_SCHEMA,
-        "media_player",
-        source_list="not-a-list",
-        volume_level="not-a-number",
-        is_volume_muted="not-a-bool",
-    ), False)
-    water_heater = VirtualWaterHeater(_config(
-        WATER_HEATER_SCHEMA,
-        "water_heater",
-        min_temp="not-a-number",
-        max_temp=float("nan"),
-        target_temperature="not-a-number",
-        target_temperature_step=0,
-        operation_list="not-a-list",
-    ), False)
+    text = VirtualText(
+        _config(
+            TEXT_SCHEMA,
+            "text",
+            "saved",
+            min="not-a-number",
+            max=[],
+            mode=object(),
+            pattern="[A-Z]{2}\\d{2}",
+        ),
+        False,
+    )
+    button = VirtualButton(
+        _config(
+            BUTTON_SCHEMA,
+            "button",
+            attributes={"press_count": "corrupt"},
+        ),
+        False,
+    )
+    media_player = VirtualMediaPlayer(
+        _config(
+            MEDIA_PLAYER_SCHEMA,
+            "media_player",
+            source_list="not-a-list",
+            volume_level="not-a-number",
+            is_volume_muted="not-a-bool",
+        ),
+        False,
+    )
+    water_heater = VirtualWaterHeater(
+        _config(
+            WATER_HEATER_SCHEMA,
+            "water_heater",
+            min_temp="not-a-number",
+            max_temp=float("nan"),
+            target_temperature="not-a-number",
+            target_temperature_step=0,
+            operation_list="not-a-list",
+        ),
+        False,
+    )
     for entity in (text, button, media_player, water_heater):
         entity._create_state(entity._config)
         entity.async_write_ha_state = Mock()
@@ -497,9 +807,7 @@ def test_sensor_migrates_legacy_native_metadata_and_timestamp_value():
     entity._create_state(entity._config)
 
     assert entity.device_class == "timestamp"
-    assert entity.native_value == datetime(
-        2026, 8, 4, 3, 34, 56, tzinfo=timezone.utc
-    )
+    assert entity.native_value == datetime(2026, 8, 4, 3, 34, 56, tzinfo=timezone.utc)
     assert entity.state == "2026-08-04T03:34:56+00:00"
 
 
@@ -631,6 +939,14 @@ async def test_native_restore_and_range_updates_are_defensive():
             "climate",
             "off",
             hvac_modes=["off", "heat"],
+            fan_modes=["low", "high"],
+            fan_mode="low",
+            preset_modes=["none", "eco"],
+            preset_mode="none",
+            swing_modes=["off", "vertical"],
+            swing_mode="off",
+            swing_horizontal_modes=["left", "right"],
+            swing_horizontal_mode="left",
             target_temperature=20,
             target_temperature_high=25,
             target_temperature_low=15,
@@ -652,18 +968,29 @@ async def test_native_restore_and_range_updates_are_defensive():
     assert climate.target_temperature_low == 15
     assert climate.target_temperature_high == 25
 
-    climate._restore_state(SimpleNamespace(
-        state="removed_hvac_mode",
-        attributes={
-            "hvac_action": "removed_action",
-            "current_temperature": "nan",
-            "target_temperature": "not-a-number",
-        },
-    ), climate._config)
+    climate._restore_state(
+        SimpleNamespace(
+            state="removed_hvac_mode",
+            attributes={
+                "hvac_action": "removed_action",
+                "current_temperature": "nan",
+                "target_temperature": "not-a-number",
+                "fan_mode": "removed",
+                "preset_mode": "removed",
+                "swing_mode": "removed",
+                "swing_horizontal_mode": "removed",
+            },
+        ),
+        climate._config,
+    )
     assert climate.hvac_mode == "off"
-    assert climate.hvac_action is None
+    assert climate.hvac_action == "off"
     assert climate.current_temperature is None
     assert climate.target_temperature is None
+    assert climate.fan_mode == "low"
+    assert climate.preset_mode == "none"
+    assert climate.swing_mode == "off"
+    assert climate.swing_horizontal_mode == "left"
 
     from custom_components.virtual_layer.humidifier import _as_action
     from custom_components.virtual_layer.light import _as_color_temp_kelvin
@@ -671,13 +998,16 @@ async def test_native_restore_and_range_updates_are_defensive():
     assert _as_action("removed_action") is None
     assert _as_color_temp_kelvin(0) == 4000
 
-    number = VirtualNumber(_config(
-        NUMBER_SCHEMA,
-        "number",
-        "nan",
-        min=float("nan"),
-        max=float("inf"),
-    ), False)
+    number = VirtualNumber(
+        _config(
+            NUMBER_SCHEMA,
+            "number",
+            "nan",
+            min=float("nan"),
+            max=float("inf"),
+        ),
+        False,
+    )
     number._create_state(number._config)
     assert number.native_min_value == 0
     assert number.native_max_value == 100
@@ -710,6 +1040,8 @@ def test_climate_and_humidifier_restore_home_assistant_native_target_keys():
             min_humidity=20,
             max_humidity=80,
             target_humidity=45,
+            modes=["normal"],
+            mode="normal",
         ),
         False,
     )
@@ -727,7 +1059,10 @@ def test_climate_and_humidifier_restore_home_assistant_native_target_keys():
         climate._config,
     )
     humidifier._restore_state(
-        SimpleNamespace(state="on", attributes={"humidity": 55}),
+        SimpleNamespace(
+            state="on",
+            attributes={"humidity": 55, "mode": "removed"},
+        ),
         humidifier._config,
     )
 
@@ -736,6 +1071,7 @@ def test_climate_and_humidifier_restore_home_assistant_native_target_keys():
     assert climate.target_temperature_low == 17
     assert climate.target_humidity == 48
     assert humidifier.target_humidity == 55
+    assert humidifier.mode == "normal"
 
 
 def test_native_generic_entities_restore_runtime_service_attributes():
@@ -836,6 +1172,14 @@ def test_native_generic_restore_rejects_removed_options_and_bad_values():
     )
     from custom_components.virtual_layer.remote import ENTITY_CLASS as VirtualRemote
     from custom_components.virtual_layer.remote import ENTITY_SCHEMA as REMOTE_SCHEMA
+    from custom_components.virtual_layer.select import ENTITY_CLASS as VirtualSelect
+    from custom_components.virtual_layer.select import ENTITY_SCHEMA as SELECT_SCHEMA
+    from custom_components.virtual_layer.water_heater import (
+        ENTITY_CLASS as VirtualWaterHeater,
+    )
+    from custom_components.virtual_layer.water_heater import (
+        ENTITY_SCHEMA as WATER_HEATER_SCHEMA,
+    )
 
     remote = VirtualRemote(
         _config(
@@ -859,6 +1203,24 @@ def test_native_generic_restore_rejects_removed_options_and_bad_values():
         ),
         False,
     )
+    select = VirtualSelect(
+        _config(
+            SELECT_SCHEMA,
+            "select",
+            "eco",
+            options=["eco"],
+        ),
+        False,
+    )
+    water_heater = VirtualWaterHeater(
+        _config(
+            WATER_HEATER_SCHEMA,
+            "water_heater",
+            "off",
+            operation_list=["off", "eco"],
+        ),
+        False,
+    )
 
     remote._restore_state(
         SimpleNamespace(
@@ -878,11 +1240,28 @@ def test_native_generic_restore_rejects_removed_options_and_bad_values():
         ),
         media_player._config,
     )
+    select._restore_state(
+        SimpleNamespace(state="removed", attributes={}),
+        select._config,
+    )
+    water_heater._restore_state(
+        SimpleNamespace(state="removed", attributes={}),
+        water_heater._config,
+    )
 
     assert remote.current_activity == "TV"
     assert media_player.source == "TV"
     assert media_player.volume_level == 0.2
     assert media_player.is_volume_muted is False
+    assert select.current_option == "eco"
+    assert select.options == ["eco"]
+    assert water_heater.current_operation == "off"
+    assert water_heater.operation_list == ["off", "eco"]
+
+    with pytest.raises(ValueError):
+        select.set_state("removed")
+    with pytest.raises(ValueError):
+        water_heater.set_state("removed")
 
 
 def test_climate_and_humidifier_recover_non_finite_configured_ranges():
@@ -997,7 +1376,8 @@ def test_fan_light_and_vacuum_reject_malformed_restored_attributes():
 
     assert fan.current_direction == "forward"
     assert fan.oscillating is False
-    assert fan.percentage is None
+    assert fan.percentage == 67
+    assert fan.state == "on"
     assert fan.preset_mode is None
     assert light.hs_color == (120, 50)
     assert light.brightness == 255
@@ -1007,23 +1387,29 @@ def test_fan_light_and_vacuum_reject_malformed_restored_attributes():
 
 
 def test_fan_and_light_without_optional_features_publish_initial_attributes():
-    fan = VirtualFan(_config(
-        FAN_SCHEMA,
-        "fan",
-        "off",
-        speed_count=0,
-        oscillate=False,
-        direction=False,
-    ), False)
-    light = VirtualLight(_config(
-        LIGHT_SCHEMA,
-        "light",
-        "on",
-        support_brightness=False,
-        support_color=False,
-        support_color_temp=False,
-        support_effect=False,
-    ), False)
+    fan = VirtualFan(
+        _config(
+            FAN_SCHEMA,
+            "fan",
+            "off",
+            speed_count=0,
+            oscillate=False,
+            direction=False,
+        ),
+        False,
+    )
+    light = VirtualLight(
+        _config(
+            LIGHT_SCHEMA,
+            "light",
+            "on",
+            support_brightness=False,
+            support_color=False,
+            support_color_temp=False,
+            support_effect=False,
+        ),
+        False,
+    )
 
     fan._create_state(fan._config)
     light._create_state(light._config)

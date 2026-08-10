@@ -33,6 +33,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, virtual_schema
+from .fan_options import migrate_legacy_fan_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,22 +43,54 @@ CONF_DIRECTION = "direction"
 CONF_MODES = "modes"
 CONF_OSCILLATE = "oscillate"
 CONF_PERCENTAGE = "percentage"
+CONF_PRESET_MODE = "preset_mode"
+CONF_CURRENT_DIRECTION = "current_direction"
+CONF_OSCILLATING = "oscillating"
 CONF_SPEED = "speed"
 CONF_SPEED_COUNT = "speed_count"
 
 DEFAULT_FAN_VALUE = "off"
 
-BASE_SCHEMA = virtual_schema(DEFAULT_FAN_VALUE, {
-    vol.Optional(CONF_SPEED, default=False): cv.boolean,
-    vol.Optional(CONF_SPEED_COUNT, default=0): cv.positive_int,
-    vol.Optional(CONF_OSCILLATE, default=False): cv.boolean,
-    vol.Optional(CONF_DIRECTION, default=False): cv.boolean,
-    vol.Optional(CONF_MODES, default=[]): vol.All(cv.ensure_list, [cv.string]),
-})
+BASE_SCHEMA = virtual_schema(
+    DEFAULT_FAN_VALUE,
+    {
+        vol.Optional(CONF_SPEED, default=False): cv.boolean,
+        vol.Optional(CONF_SPEED_COUNT, default=0): cv.positive_int,
+        vol.Optional(CONF_OSCILLATE, default=False): cv.boolean,
+        vol.Optional(CONF_DIRECTION, default=False): cv.boolean,
+        vol.Optional(CONF_MODES, default=list): vol.All(
+            cv.ensure_list, [cv.string]
+        ),
+        vol.Optional(CONF_PERCENTAGE): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=100)
+        ),
+        vol.Optional(CONF_PRESET_MODE): cv.string,
+        vol.Optional(CONF_CURRENT_DIRECTION): vol.In({"forward", "reverse"}),
+        vol.Optional(CONF_OSCILLATING): cv.boolean,
+    },
+)
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
 
 FAN_SCHEMA = vol.Schema(BASE_SCHEMA)
+
+
+def validate_domain_options(config) -> None:
+    """Validate fan feature and initial-state relationships."""
+    if str(config.get(CONF_INITIAL_VALUE, "off")).lower() not in {"on", "off"}:
+        raise vol.Invalid("initial_value must be on or off")
+    modes = config.get(CONF_MODES, [])
+    if any(not str(mode).strip() for mode in modes):
+        raise vol.Invalid("modes cannot contain empty values")
+    if len(set(modes)) != len(modes):
+        raise vol.Invalid("modes cannot contain duplicate values")
+    preset_mode = config.get(CONF_PRESET_MODE)
+    if preset_mode is not None and preset_mode not in modes:
+        raise vol.Invalid("preset_mode must be included in modes")
+    if config.get(CONF_CURRENT_DIRECTION) is not None and not config.get(CONF_DIRECTION):
+        raise vol.Invalid("current_direction requires direction support")
+    if config.get(CONF_OSCILLATING) and not config.get(CONF_OSCILLATE):
+        raise vol.Invalid("oscillating requires oscillation support")
 
 
 async def async_setup_platform(
@@ -79,7 +112,7 @@ async def async_setup_entry(
 
     entities = []
     for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN):
-        entity = FAN_SCHEMA(entity)
+        entity = FAN_SCHEMA(migrate_legacy_fan_attributes(entity))
         entities.append(VirtualFan(entity, False))
     async_add_entities(entities)
 
@@ -107,6 +140,10 @@ class VirtualFan(VirtualEntity, FanEntity):
         self._attr_oscillating = None
         self._attr_percentage = None
         self._attr_preset_mode = None
+        self._configured_percentage = self._safe_percentage(
+            config.get(CONF_PERCENTAGE)
+        )
+        self._configured_preset_mode = config.get(CONF_PRESET_MODE)
         self._attr_supported_features = FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
         if self._attr_speed_count > 0:
             self._attr_supported_features |= FanEntityFeature.SET_SPEED
@@ -123,11 +160,12 @@ class VirtualFan(VirtualEntity, FanEntity):
         super()._create_state(config)
 
         if self._attr_supported_features & FanEntityFeature.DIRECTION:
-            self._attr_current_direction = "forward"
+            self._attr_current_direction = config.get(
+                CONF_CURRENT_DIRECTION, "forward"
+            )
         if self._attr_supported_features & FanEntityFeature.OSCILLATE:
-            self._attr_oscillating = False
-        self._attr_percentage = None
-        self._attr_preset_mode = None
+            self._attr_oscillating = config.get(CONF_OSCILLATING, False)
+        self._apply_initial_power_state(config.get(CONF_INITIAL_VALUE))
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
@@ -135,20 +173,45 @@ class VirtualFan(VirtualEntity, FanEntity):
         if self._attr_supported_features & FanEntityFeature.DIRECTION:
             direction = state.attributes.get(ATTR_DIRECTION)
             self._attr_current_direction = (
-                direction if direction in {"forward", "reverse"} else "forward"
+                direction
+                if direction in {"forward", "reverse"}
+                else config.get(CONF_CURRENT_DIRECTION, "forward")
             )
         if self._attr_supported_features & FanEntityFeature.OSCILLATE:
             oscillating = state.attributes.get(ATTR_OSCILLATING)
             self._attr_oscillating = (
-                oscillating if isinstance(oscillating, bool) else False
+                oscillating
+                if isinstance(oscillating, bool)
+                else config.get(CONF_OSCILLATING, False)
             )
-        self._attr_percentage = self._safe_percentage(
+        restored_percentage = self._safe_percentage(
             state.attributes.get(ATTR_PERCENTAGE)
         )
         preset_mode = state.attributes.get(ATTR_PRESET_MODE)
-        self._attr_preset_mode = (
+        restored_preset_mode = (
             preset_mode if preset_mode in self._attr_preset_modes else None
         )
+        if str(state.state).lower() == "on":
+            self._attr_preset_mode = restored_preset_mode
+            self._attr_percentage = restored_percentage
+            if self._attr_preset_mode is None and not self._attr_percentage:
+                self._apply_initial_power_state("on")
+        else:
+            self._attr_percentage = 0
+            self._attr_preset_mode = None
+
+    def _apply_initial_power_state(self, value) -> None:
+        """Apply a configured or fallback power state without writing to HA."""
+        if str(value).lower() not in {"y", "yes", "t", "true", "on", "1"}:
+            self._attr_percentage = 0
+            self._attr_preset_mode = None
+            return
+        if self._configured_preset_mode in self._attr_preset_modes:
+            self._attr_preset_mode = self._configured_preset_mode
+            self._attr_percentage = None
+            return
+        self._attr_preset_mode = None
+        self._attr_percentage = self._configured_percentage or 67
 
     @staticmethod
     def _safe_percentage(value) -> int | None:
@@ -165,14 +228,27 @@ class VirtualFan(VirtualEntity, FanEntity):
 
     def _update_attributes(self):
         super()._update_attributes()
-        self._attr_extra_state_attributes.update({
-            name: value for name, value in (
-                (ATTR_DIRECTION, self._attr_current_direction),
-                (ATTR_OSCILLATING, self._attr_oscillating),
-                (ATTR_PERCENTAGE, self._attr_percentage),
-                (ATTR_PRESET_MODE, self._attr_preset_mode),
-            ) if value is not None
-        })
+        feature_attributes = (
+            (
+                ATTR_DIRECTION,
+                self._attr_current_direction,
+                FanEntityFeature.DIRECTION,
+            ),
+            (
+                ATTR_OSCILLATING,
+                self._attr_oscillating,
+                FanEntityFeature.OSCILLATE,
+            ),
+            (ATTR_PERCENTAGE, self._attr_percentage, FanEntityFeature.SET_SPEED),
+            (ATTR_PRESET_MODE, self._attr_preset_mode, FanEntityFeature.PRESET_MODE),
+        )
+        self._attr_extra_state_attributes.update(
+            {
+                name: value
+                for name, value, feature in feature_attributes
+                if value is not None and feature in self._attr_supported_features
+            }
+        )
 
     def _set_percentage(self, percentage: int) -> None:
         percentage = int(percentage)
@@ -215,7 +291,10 @@ class VirtualFan(VirtualEntity, FanEntity):
             return
 
         if percentage is None:
-            percentage = 67
+            if self._attr_preset_mode in self._attr_preset_modes:
+                self._set_preset_mode(self._attr_preset_mode)
+                return
+            percentage = self._attr_percentage or self._configured_percentage or 67
         self._set_percentage(percentage)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -235,6 +314,8 @@ class VirtualFan(VirtualEntity, FanEntity):
     async def async_oscillate(self, oscillating: bool) -> None:
         """Set oscillation."""
         _LOGGER.debug(f"setting oscillate of {self.name} to {oscillating}")
+        if not isinstance(oscillating, bool):
+            raise ValueError("Oscillating must be a boolean")
         self._attr_oscillating = oscillating
         self._update_attributes()
         self.async_write_ha_state()

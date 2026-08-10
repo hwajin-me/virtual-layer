@@ -2,6 +2,7 @@
 This component provides support for a virtual climate entity.
 
 """
+
 from __future__ import annotations
 
 import logging
@@ -116,31 +117,59 @@ def _finite_step(value, default: float | None = None) -> float | None:
     return result if result > 0 else default
 
 
-BASE_SCHEMA = virtual_schema(DEFAULT_CLIMATE_VALUE, {
-    vol.Optional(CONF_CURRENT_HUMIDITY): vol.Coerce(float),
-    vol.Optional(CONF_CURRENT_TEMPERATURE): vol.Coerce(float),
-    vol.Optional(CONF_FAN_MODE): cv.string,
-    vol.Optional(CONF_FAN_MODES, default=list): vol.All(cv.ensure_list, [cv.string]),
-    vol.Optional(CONF_HVAC_ACTION): cv.string,
-    vol.Optional(CONF_HVAC_MODES, default=lambda: DEFAULT_HVAC_MODES): vol.All(cv.ensure_list, [_as_hvac_mode]),
-    vol.Optional(CONF_MAX_HUMIDITY, default=99): vol.Coerce(float),
-    vol.Optional(CONF_MAX_TEMP, default=35): vol.Coerce(float),
-    vol.Optional(CONF_MIN_HUMIDITY, default=30): vol.Coerce(float),
-    vol.Optional(CONF_MIN_TEMP, default=7): vol.Coerce(float),
-    vol.Optional(CONF_PRESET_MODE): cv.string,
-    vol.Optional(CONF_PRESET_MODES, default=list): vol.All(cv.ensure_list, [cv.string]),
-    vol.Optional(CONF_SWING_MODE): cv.string,
-    vol.Optional(CONF_SWING_MODES, default=list): vol.All(cv.ensure_list, [cv.string]),
-    vol.Optional(CONF_SWING_HORIZONTAL_MODE): cv.string,
-    vol.Optional(CONF_SWING_HORIZONTAL_MODES, default=list): vol.All(cv.ensure_list, [cv.string]),
-    vol.Optional(CONF_TARGET_HUMIDITY): vol.Coerce(float),
-    vol.Optional(CONF_TARGET_HUMIDITY_STEP): vol.Coerce(float),
-    vol.Optional(CONF_TARGET_TEMPERATURE): vol.Coerce(float),
-    vol.Optional(CONF_TARGET_TEMPERATURE_HIGH): vol.Coerce(float),
-    vol.Optional(CONF_TARGET_TEMPERATURE_LOW): vol.Coerce(float),
-    vol.Optional(CONF_TARGET_TEMPERATURE_STEP, default=PRECISION_TENTHS): vol.Coerce(float),
-    vol.Optional(CONF_TEMPERATURE_UNIT, default=UnitOfTemperature.CELSIUS): cv.string,
-})
+def _valid_mode_choice(restored, configured, available_modes):
+    """Choose a current mode without resurrecting removed stored options."""
+    if not available_modes:
+        return None
+    if restored in available_modes:
+        return restored
+    if configured in available_modes:
+        return configured
+    return available_modes[0]
+
+
+BASE_SCHEMA = virtual_schema(
+    DEFAULT_CLIMATE_VALUE,
+    {
+        vol.Optional(CONF_CURRENT_HUMIDITY): vol.Coerce(float),
+        vol.Optional(CONF_CURRENT_TEMPERATURE): vol.Coerce(float),
+        vol.Optional(CONF_FAN_MODE): cv.string,
+        vol.Optional(CONF_FAN_MODES, default=list): vol.All(
+            cv.ensure_list, [cv.string]
+        ),
+        vol.Optional(CONF_HVAC_ACTION): cv.string,
+        vol.Optional(CONF_HVAC_MODES, default=lambda: DEFAULT_HVAC_MODES): vol.All(
+            cv.ensure_list, [_as_hvac_mode]
+        ),
+        vol.Optional(CONF_MAX_HUMIDITY, default=99): vol.Coerce(float),
+        vol.Optional(CONF_MAX_TEMP, default=35): vol.Coerce(float),
+        vol.Optional(CONF_MIN_HUMIDITY, default=30): vol.Coerce(float),
+        vol.Optional(CONF_MIN_TEMP, default=7): vol.Coerce(float),
+        vol.Optional(CONF_PRESET_MODE): cv.string,
+        vol.Optional(CONF_PRESET_MODES, default=list): vol.All(
+            cv.ensure_list, [cv.string]
+        ),
+        vol.Optional(CONF_SWING_MODE): cv.string,
+        vol.Optional(CONF_SWING_MODES, default=list): vol.All(
+            cv.ensure_list, [cv.string]
+        ),
+        vol.Optional(CONF_SWING_HORIZONTAL_MODE): cv.string,
+        vol.Optional(CONF_SWING_HORIZONTAL_MODES, default=list): vol.All(
+            cv.ensure_list, [cv.string]
+        ),
+        vol.Optional(CONF_TARGET_HUMIDITY): vol.Coerce(float),
+        vol.Optional(CONF_TARGET_HUMIDITY_STEP): vol.Coerce(float),
+        vol.Optional(CONF_TARGET_TEMPERATURE): vol.Coerce(float),
+        vol.Optional(CONF_TARGET_TEMPERATURE_HIGH): vol.Coerce(float),
+        vol.Optional(CONF_TARGET_TEMPERATURE_LOW): vol.Coerce(float),
+        vol.Optional(
+            CONF_TARGET_TEMPERATURE_STEP, default=PRECISION_TENTHS
+        ): vol.Coerce(float),
+        vol.Optional(
+            CONF_TEMPERATURE_UNIT, default=UnitOfTemperature.CELSIUS
+        ): cv.string,
+    },
+)
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
 CLIMATE_SCHEMA = vol.Schema(BASE_SCHEMA)
@@ -178,28 +207,76 @@ def validate_domain_options(config) -> None:
         if current_mode is not None and current_mode not in config.get(modes_field, []):
             raise vol.Invalid(f"{current_field} must be included in {modes_field}")
 
+    action = config.get(CONF_HVAC_ACTION)
+    if action is not None and _as_hvac_action(action) is None:
+        raise vol.Invalid("hvac_action is invalid")
+    if config.get(CONF_TEMPERATURE_UNIT) not in {
+        UnitOfTemperature.CELSIUS,
+        UnitOfTemperature.FAHRENHEIT,
+        UnitOfTemperature.KELVIN,
+    }:
+        raise vol.Invalid("temperature_unit is invalid")
+
+    min_temp = _finite_float(config.get(CONF_MIN_TEMP), float("nan"))
+    max_temp = _finite_float(config.get(CONF_MAX_TEMP), float("nan"))
+    min_humidity = _finite_float(config.get(CONF_MIN_HUMIDITY), float("nan"))
+    max_humidity = _finite_float(config.get(CONF_MAX_HUMIDITY), float("nan"))
+    if not all(
+        math.isfinite(value)
+        for value in (min_temp, max_temp, min_humidity, max_humidity)
+    ):
+        raise vol.Invalid("climate ranges must be finite")
+    if min_temp > max_temp or min_humidity > max_humidity:
+        raise vol.Invalid("climate minimum cannot exceed maximum")
+
+    for field_name in (
+        CONF_CURRENT_TEMPERATURE,
+        CONF_TARGET_TEMPERATURE,
+        CONF_TARGET_TEMPERATURE_HIGH,
+        CONF_TARGET_TEMPERATURE_LOW,
+    ):
+        if field_name in config and not min_temp <= float(config[field_name]) <= max_temp:
+            raise vol.Invalid(f"{field_name} must be within the temperature range")
+    for field_name in (CONF_CURRENT_HUMIDITY, CONF_TARGET_HUMIDITY):
+        if field_name in config and not min_humidity <= float(config[field_name]) <= max_humidity:
+            raise vol.Invalid(f"{field_name} must be within the humidity range")
+    low = config.get(CONF_TARGET_TEMPERATURE_LOW)
+    high = config.get(CONF_TARGET_TEMPERATURE_HIGH)
+    if low is not None and high is not None and float(low) > float(high):
+        raise vol.Invalid("target temperature low cannot exceed high")
+    for field_name in (CONF_TARGET_TEMPERATURE_STEP, CONF_TARGET_HUMIDITY_STEP):
+        if field_name in config and _finite_step(config[field_name]) is None:
+            raise vol.Invalid(f"{field_name} must be positive")
+
 
 async def async_setup_platform(
-        hass: HomeAssistant,
-        config: ConfigType,
-        async_add_entities: AddEntitiesCallback,
-        _discovery_info: DiscoveryInfoType | None = None,
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    _discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
     """Ignore platform setup; Virtual Layer entities are config-entry only."""
     _LOGGER.debug("ignoring platform setup")
 
 
 async def async_setup_entry(
-        hass: HomeAssistant,
-        entry: ConfigEntry,
-        async_add_entities: Callable[[list], None],
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: Callable[[list], None],
 ) -> None:
     _LOGGER.debug("setting up the entries...")
     entities = []
-    for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN):
-        entities.append(VirtualClimate(CLIMATE_SCHEMA(
-            migrate_legacy_climate_attributes(entity),
-        ), False))
+    for entity in get_entity_configs(
+        hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
+    ):
+        entities.append(
+            VirtualClimate(
+                CLIMATE_SCHEMA(
+                    migrate_legacy_climate_attributes(entity),
+                ),
+                False,
+            )
+        )
     async_add_entities(entities)
 
 
@@ -233,10 +310,11 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         )
         self._attr_temperature_unit = config.get(CONF_TEMPERATURE_UNIT)
 
-        self._attr_supported_features = (
-            ClimateEntityFeature.TURN_ON
-            | ClimateEntityFeature.TURN_OFF
-        )
+        self._attr_supported_features = ClimateEntityFeature(0)
+        if any(mode != HVACMode.OFF for mode in self._attr_hvac_modes):
+            self._attr_supported_features |= ClimateEntityFeature.TURN_ON
+        if HVACMode.OFF in self._attr_hvac_modes:
+            self._attr_supported_features |= ClimateEntityFeature.TURN_OFF
         if (
             config.get(CONF_TARGET_HUMIDITY) is not None
             or config.get(CONF_TARGET_HUMIDITY_STEP) is not None
@@ -246,7 +324,9 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             config.get(CONF_TARGET_TEMPERATURE_HIGH) is not None
             or config.get(CONF_TARGET_TEMPERATURE_LOW) is not None
         ):
-            self._attr_supported_features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+            self._attr_supported_features |= (
+                ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+            )
         else:
             self._attr_supported_features |= ClimateEntityFeature.TARGET_TEMPERATURE
         self._enable_turn_on_off_backwards_compatibility = False
@@ -273,6 +353,8 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             else self._default_hvac_mode()
         )
         self._attr_hvac_action = _as_hvac_action(config.get(CONF_HVAC_ACTION))
+        if self._attr_hvac_mode == HVACMode.OFF:
+            self._attr_hvac_action = HVACAction.OFF
         self._attr_current_temperature = self._bounded_temperature(
             config.get(CONF_CURRENT_TEMPERATURE),
         )
@@ -291,10 +373,20 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         self._attr_target_humidity = self._bounded_humidity(
             config.get(CONF_TARGET_HUMIDITY),
         )
-        self._attr_fan_mode = config.get(CONF_FAN_MODE)
-        self._attr_preset_mode = config.get(CONF_PRESET_MODE)
-        self._attr_swing_mode = config.get(CONF_SWING_MODE)
-        self._attr_swing_horizontal_mode = config.get(CONF_SWING_HORIZONTAL_MODE)
+        self._attr_fan_mode = _valid_mode_choice(
+            None, config.get(CONF_FAN_MODE), self._attr_fan_modes
+        )
+        self._attr_preset_mode = _valid_mode_choice(
+            None, config.get(CONF_PRESET_MODE), self._attr_preset_modes
+        )
+        self._attr_swing_mode = _valid_mode_choice(
+            None, config.get(CONF_SWING_MODE), self._attr_swing_modes
+        )
+        self._attr_swing_horizontal_mode = _valid_mode_choice(
+            None,
+            config.get(CONF_SWING_HORIZONTAL_MODE),
+            self._attr_swing_horizontal_modes,
+        )
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
@@ -304,7 +396,11 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             if restored_mode in self._attr_hvac_modes
             else self._default_hvac_mode()
         )
-        self._attr_hvac_action = _as_hvac_action(state.attributes.get(CONF_HVAC_ACTION, config.get(CONF_HVAC_ACTION)))
+        self._attr_hvac_action = _as_hvac_action(
+            state.attributes.get(CONF_HVAC_ACTION, config.get(CONF_HVAC_ACTION))
+        )
+        if self._attr_hvac_mode == HVACMode.OFF:
+            self._attr_hvac_action = HVACAction.OFF
         self._attr_current_temperature = self._bounded_temperature(
             state.attributes.get(
                 CONF_CURRENT_TEMPERATURE,
@@ -353,10 +449,26 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
                 ),
             ),
         )
-        self._attr_fan_mode = state.attributes.get(CONF_FAN_MODE, config.get(CONF_FAN_MODE))
-        self._attr_preset_mode = state.attributes.get(CONF_PRESET_MODE, config.get(CONF_PRESET_MODE))
-        self._attr_swing_mode = state.attributes.get(CONF_SWING_MODE, config.get(CONF_SWING_MODE))
-        self._attr_swing_horizontal_mode = state.attributes.get(CONF_SWING_HORIZONTAL_MODE, config.get(CONF_SWING_HORIZONTAL_MODE))
+        self._attr_fan_mode = _valid_mode_choice(
+            state.attributes.get(CONF_FAN_MODE),
+            config.get(CONF_FAN_MODE),
+            self._attr_fan_modes,
+        )
+        self._attr_preset_mode = _valid_mode_choice(
+            state.attributes.get(CONF_PRESET_MODE),
+            config.get(CONF_PRESET_MODE),
+            self._attr_preset_modes,
+        )
+        self._attr_swing_mode = _valid_mode_choice(
+            state.attributes.get(CONF_SWING_MODE),
+            config.get(CONF_SWING_MODE),
+            self._attr_swing_modes,
+        )
+        self._attr_swing_horizontal_mode = _valid_mode_choice(
+            state.attributes.get(CONF_SWING_HORIZONTAL_MODE),
+            config.get(CONF_SWING_HORIZONTAL_MODE),
+            self._attr_swing_horizontal_modes,
+        )
 
     @property
     def state_attributes(self):
@@ -369,6 +481,10 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         if hvac_mode not in self._attr_hvac_modes:
             raise ValueError(f"Unsupported HVAC mode: {hvac_mode}")
         self._attr_hvac_mode = hvac_mode
+        if hvac_mode == HVACMode.OFF:
+            self._attr_hvac_action = HVACAction.OFF
+        elif self._attr_hvac_action in {None, HVACAction.OFF}:
+            self._attr_hvac_action = HVACAction.IDLE
         self.async_write_ha_state()
 
     def _default_hvac_mode(self) -> HVACMode:
@@ -417,11 +533,22 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         return value
 
     async def async_turn_on(self) -> None:
-        self._attr_hvac_mode = next((mode for mode in self._attr_hvac_modes if mode != HVACMode.OFF), HVACMode.HEAT)
+        next_mode = next(
+            (mode for mode in self._attr_hvac_modes if mode != HVACMode.OFF),
+            None,
+        )
+        if next_mode is None:
+            raise NotImplementedError("Climate entity has no non-off HVAC mode")
+        self._attr_hvac_mode = next_mode
+        if self._attr_hvac_action in {None, HVACAction.OFF}:
+            self._attr_hvac_action = HVACAction.IDLE
         self.async_write_ha_state()
 
     async def async_turn_off(self) -> None:
+        if HVACMode.OFF not in self._attr_hvac_modes:
+            raise NotImplementedError("Climate entity does not support the off HVAC mode")
         self._attr_hvac_mode = HVACMode.OFF
+        self._attr_hvac_action = HVACAction.OFF
         self.async_write_ha_state()
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
@@ -429,9 +556,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         next_temperature_high = self._attr_target_temperature_high
         next_temperature_low = self._attr_target_temperature_low
         if ATTR_TEMPERATURE in kwargs:
-            next_temperature = self._validate_temperature(
-                kwargs[ATTR_TEMPERATURE]
-            )
+            next_temperature = self._validate_temperature(kwargs[ATTR_TEMPERATURE])
         if ATTR_TARGET_TEMPERATURE_HIGH in kwargs:
             next_temperature_high = self._validate_temperature(
                 kwargs[ATTR_TARGET_TEMPERATURE_HIGH]
@@ -445,7 +570,9 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             and next_temperature_high is not None
             and next_temperature_low > next_temperature_high
         ):
-            raise ValueError("Low target temperature cannot exceed high target temperature")
+            raise ValueError(
+                "Low target temperature cannot exceed high target temperature"
+            )
         self._attr_target_temperature = next_temperature
         self._attr_target_temperature_high = next_temperature_high
         self._attr_target_temperature_low = next_temperature_low
@@ -493,3 +620,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         if mode not in self._attr_hvac_modes:
             raise ValueError(f"Unsupported HVAC mode: {mode}")
         self._attr_hvac_mode = mode
+        if mode == HVACMode.OFF:
+            self._attr_hvac_action = HVACAction.OFF
+        elif self._attr_hvac_action in {None, HVACAction.OFF}:
+            self._attr_hvac_action = HVACAction.IDLE

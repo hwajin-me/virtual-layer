@@ -34,9 +34,11 @@ docker compose -f tests/docker/docker-compose.yml logs -f homeassistant
 
 Run an isolated official Home Assistant stable container that creates every
 Virtual Layer domain on one device and exercises native services, common
-attribute and availability controls, and persistent entity reloads. The current
-matrix creates 66 entities across all 46 supported domains, including safety,
-appliance, electrical, utility, and HVAC variants:
+attribute and availability controls, persistent and non-persistent reloads,
+invalid service input, removed option recovery, partial entity removal, and
+full config-entry cleanup. The current matrix creates 73 entities across all 46
+supported domains, including safety, appliance, electrical, utility, and HVAC
+variants:
 
 ```sh
 tests/docker/run_all_domains.sh
@@ -44,10 +46,11 @@ tests/docker/run_all_domains.sh
 
 The script fails when an entity is missing, a service does not produce the
 expected state or attributes, persistence changes values during reload, a
-registry entry is detached from the shared device, Virtual Layer logs an error,
-or Home Assistant reports a Virtual Layer deprecation warning. Each run starts
-with fresh generated Home Assistant storage, does not require onboarding, and
-does not reuse the interactive container configuration.
+removed option is restored, invalid input mutates state, registry cleanup is
+incomplete, a registry entry is detached from the shared device, or Home
+Assistant reports a related warning, error, or deprecation. Each run starts with
+fresh generated Home Assistant storage, does not require onboarding, and does
+not reuse the interactive container configuration.
 
 ## Stop
 

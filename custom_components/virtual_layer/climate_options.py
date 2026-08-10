@@ -55,6 +55,25 @@ CLIMATE_MODE_FORM_FIELDS = (
     *CLIMATE_CURRENT_MODE_FIELDS,
 )
 
+CLIMATE_SCALAR_FORM_FIELDS = (
+    "current_humidity",
+    "current_temperature",
+    "hvac_action",
+    "max_humidity",
+    "max_temp",
+    "min_humidity",
+    "min_temp",
+    "target_humidity",
+    "target_humidity_step",
+    "target_temperature",
+    "target_temperature_high",
+    "target_temperature_low",
+    "target_temperature_step",
+    "temperature_unit",
+)
+
+CLIMATE_FORM_FIELDS = (*CLIMATE_MODE_FORM_FIELDS, *CLIMATE_SCALAR_FORM_FIELDS)
+
 
 def extract_climate_options(
     attributes: Mapping,
@@ -81,12 +100,18 @@ def migrate_legacy_climate_attributes(config: Mapping) -> dict[str, Any]:
 
     options, consumed = extract_climate_options(attributes)
     for key, value in options.items():
-        migrated.setdefault(key, value)
+        current = migrated.get(key)
+        if key in CLIMATE_MODE_LIST_FIELDS:
+            if not current and value:
+                migrated[key] = value
+        elif key in CLIMATE_CURRENT_MODE_FIELDS:
+            if current in (None, "") and value not in (None, ""):
+                migrated[key] = value
+        elif key not in migrated or current is None:
+            migrated[key] = value
 
     remaining_attributes = {
-        key: value
-        for key, value in attributes.items()
-        if key not in consumed
+        key: value for key, value in attributes.items() if key not in consumed
     }
     if remaining_attributes:
         migrated[CONF_ATTRIBUTES] = remaining_attributes

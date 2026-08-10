@@ -1361,7 +1361,6 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
     )
 
     defaults = result["data_schema"]({})
-    domain_options = json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON])
     assert defaults[CONF_PLATFORM] == "climate"
     assert defaults["hvac_modes"] == ["off", "cool", "dry", "fan_only"]
     assert defaults["fan_mode"] == "auto"
@@ -1375,8 +1374,12 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
         "ai_comfort",
     ]
     assert defaults["swing_modes"] == []
-    assert domain_options["target_temperature"] == 23.0
-    assert domain_options["target_temperature_step"] == 1.0
+    assert defaults["target_temperature"] == 23.0
+    assert defaults["target_temperature_step"] == 1.0
+    assert defaults["current_temperature"] == 24.0
+    assert defaults["min_temp"] == 18.0
+    assert defaults["max_temp"] == 30.0
+    assert defaults[CONF_DOMAIN_OPTIONS_JSON] == ""
     assert defaults["attributes_json"] == ""
 
     result = await hass.config_entries.options.async_configure(
@@ -1400,6 +1403,72 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
     ]
     assert entity["swing_modes"] == []
     assert entity["target_temperature"] == 23.0
+    assert "supported_features" not in entity.get(CONF_ATTRIBUTES, {})
+
+
+async def test_options_flow_prefills_and_creates_native_dehumidifier(hass):
+    hass.states.async_set(
+        "humidifier.basement",
+        "on",
+        {
+            "friendly_name": "Basement Dehumidifier",
+            "action": "drying",
+            "available_modes": ["auto", "sleep"],
+            "current_humidity": 65,
+            "device_class": "dehumidifier",
+            "humidity": 50,
+            "max_humidity": 80,
+            "min_humidity": 30,
+            "mode": "auto",
+            "target_humidity_step": 1,
+            "supported_features": 1,
+        },
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["humidifier.basement"]},
+    )
+
+    defaults = result["data_schema"]({})
+    assert defaults[CONF_PLATFORM] == "humidifier"
+    assert defaults["class"] == "dehumidifier"
+    assert defaults["action"] == "drying"
+    assert defaults["current_humidity"] == 65
+    assert defaults["min_humidity"] == 30
+    assert defaults["max_humidity"] == 80
+    assert defaults["target_humidity"] == 50
+    assert defaults["target_humidity_step"] == 1
+    assert defaults["modes"] == ["auto", "sleep"]
+    assert defaults["mode"] == "auto"
+    assert defaults[CONF_DOMAIN_OPTIONS_JSON] == ""
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_DEVICE_NAME: "Basement",
+            ATTR_ENTITY_ID: "humidifier.virtual_basement",
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entity = result["data"][ATTR_DEVICES]["Basement"][0]
+    assert entity["class"] == "dehumidifier"
+    assert entity["action"] == "drying"
+    assert entity["target_humidity"] == 50
+    assert entity["modes"] == ["auto", "sleep"]
+    assert entity["mode"] == "auto"
     assert "supported_features" not in entity.get(CONF_ATTRIBUTES, {})
 
 

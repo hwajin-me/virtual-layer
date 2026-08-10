@@ -313,12 +313,16 @@ is the UI-only equivalent of domain YAML options: it is validated against the
 native virtual implementation for rich domains such as climate, cover, light,
 humidifier, camera, and lock.
 
-Climate entities expose dedicated add/edit controls for supported HVAC, fan,
-preset, vertical swing, and horizontal swing modes, plus each currently
-selected mode. Copying an existing climate entity prefills these controls.
-Custom values can be added directly when the source integration does not
-publish a mode list. Advanced temperature and humidity options remain
-available in **Domain options JSON**.
+Climate/HVAC entities expose dedicated add/edit controls for HVAC, fan, preset,
+vertical swing, and horizontal swing modes; current HVAC action; current and
+target temperatures; temperature ranges and steps; current and target humidity;
+and the temperature unit. Fan entities expose speed count, initial percentage,
+preset modes, oscillation, and direction controls. Humidifier entities expose
+humidifier/dehumidifier type, current action, humidity limits and target, modes,
+and adjustment step. Copying an existing entity prefills these native controls,
+including older Virtual Layer configurations that stored them as attributes.
+Custom mode and preset values can be added when the source integration does not
+publish a list.
 
 For the remaining state-backed domains, use the same field for arbitrary
 JSON-compatible domain data. These settings are preserved on edits and appear
