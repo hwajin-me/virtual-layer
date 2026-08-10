@@ -107,7 +107,7 @@ def test_tracker_restore_rejects_invalid_gps_coordinates(hass, latitude, longitu
         tracker._config,
     )
 
-    assert tracker.location_name == "not_home"
+    assert tracker.state == "not_home"
     assert tracker.latitude is None
     assert tracker.longitude is None
     assert tracker.location_accuracy == 0
@@ -129,7 +129,7 @@ def test_tracker_restore_normalizes_valid_gps_coordinates_and_accuracy(hass):
         tracker._config,
     )
 
-    assert tracker.location_name is None
+    assert tracker._location is None
     assert tracker.latitude == 37.5
     assert tracker.longitude == 127.0
     assert tracker.location_accuracy == 0
@@ -316,7 +316,7 @@ def test_location_helper_clears_stale_metadata_when_no_gps_is_available(hass):
         hass.states.async_set(entity_id, "home")
     tracker._update_location_from_sources()
 
-    assert tracker.location_name == "home"
+    assert tracker.state == "home"
     assert tracker.extra_state_attributes[ATTR_LOCATION_MEDIAN_LATITUDE] is None
     assert tracker.extra_state_attributes[ATTR_LOCATION_MEDIAN_LONGITUDE] is None
     assert tracker.extra_state_attributes[ATTR_LOCATION_PRIORITY_SOURCE] is None

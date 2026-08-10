@@ -76,7 +76,7 @@ class VirtualSwitch(VirtualEntity, SwitchEntity):
 
         self._attr_device_class = config.get(CONF_CLASS)
 
-        _LOGGER.info(f"VirtualSwitch: {self.name} created")
+        _LOGGER.debug(f"VirtualSwitch: {self.name} created")
 
     def _create_state(self, config):
         super()._create_state(config)

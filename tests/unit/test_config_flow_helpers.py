@@ -13,6 +13,7 @@ from homeassistant.const import (
     CONF_NAME,
     CONF_PLATFORM,
 )
+from homeassistant.helpers import selector
 from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
 
@@ -53,6 +54,7 @@ from custom_components.virtual_layer.config_flow import (
     _entity_schema,
     _find_entity_by_selection_key,
     _managed_device_choices,
+    _needs_domain_specific_form,
     _options_schema,
     _reference_edit_defaults,
     _reference_entity_defaults,
@@ -75,6 +77,7 @@ from custom_components.virtual_layer.const import (
     CONF_CONFIGURATION_URL,
     CONF_EVENT_HOOKS,
     CONF_HW_VERSION,
+    CONF_ICON_TEMPLATE,
     CONF_INITIAL_AVAILABILITY,
     CONF_INITIAL_VALUE,
     CONF_LOCATION_HELPER,
@@ -115,6 +118,8 @@ def _entity_input(overrides=None):
         CONF_DEVICE_SUGGESTED_AREA: "",
         CONF_DEVICE_VIA_DEVICE_ID: "",
         CONF_ENTITY_NAME: "Washer Phase",
+        CONF_ICON: "",
+        CONF_ICON_TEMPLATE: "",
         ATTR_ENTITY_ID: "",
         CONF_PLATFORM: "sensor",
         CONF_INITIAL_VALUE: "idle",
@@ -152,6 +157,35 @@ def test_entity_form_preserves_an_existing_entity_id():
     })({})
 
     assert defaults[ATTR_ENTITY_ID] == "sensor.custom_washer_phase"
+
+
+def test_entity_form_uses_icon_and_template_selectors():
+    schema = _entity_schema({CONF_PLATFORM: "sensor"})
+    validators = {
+        marker.schema: validator
+        for marker, validator in schema.schema.items()
+    }
+
+    assert isinstance(validators[CONF_ICON], selector.IconSelector)
+    assert isinstance(validators[CONF_ICON_TEMPLATE], selector.TemplateSelector)
+
+
+def test_climate_domain_selection_reopens_form_with_mode_fields():
+    first_submission = _entity_input({CONF_PLATFORM: "climate"})
+
+    assert _needs_domain_specific_form(first_submission)
+
+    climate_defaults = _entity_schema(first_submission)({})
+    assert climate_defaults["hvac_modes"] == [
+        "off",
+        "heat",
+        "cool",
+        "heat_cool",
+        "auto",
+        "dry",
+        "fan_only",
+    ]
+    assert not _needs_domain_specific_form(climate_defaults)
 
 
 def test_build_entity_config_supports_composite_templates_and_attributes():
@@ -397,6 +431,167 @@ def test_build_entity_config_preserves_domain_options_and_normalizes_climate_def
     assert entity[CONF_INITIAL_VALUE] == "off"
     assert entity["hvac_modes"] == ["off", "heat"]
     assert entity["target_temperature"] == 21
+
+
+def test_climate_mode_fields_override_or_clear_advanced_json_values():
+    _, overridden = _build_entity_config(_entity_input({
+        CONF_PLATFORM: "climate",
+        CONF_INITIAL_VALUE: "cool",
+        CONF_DOMAIN_OPTIONS_JSON: json.dumps({
+            "hvac_modes": ["off", "cool"],
+            "fan_modes": ["old"],
+            "fan_mode": "old",
+        }),
+        "fan_modes": ["auto", "turbo"],
+        "fan_mode": "auto",
+    }))
+    assert overridden["fan_modes"] == ["auto", "turbo"]
+    assert overridden["fan_mode"] == "auto"
+
+    _, cleared = _build_entity_config(_entity_input({
+        CONF_PLATFORM: "climate",
+        CONF_INITIAL_VALUE: "cool",
+        CONF_DOMAIN_OPTIONS_JSON: json.dumps({
+            "hvac_modes": ["off", "cool"],
+            "fan_modes": ["old"],
+            "fan_mode": "old",
+        }),
+        "fan_modes": [],
+        "fan_mode": "",
+    }))
+    assert cleared["fan_modes"] == []
+    assert "fan_mode" not in cleared
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {
+            CONF_INITIAL_VALUE: "cool",
+            "hvac_modes": [],
+        },
+        {
+            CONF_INITIAL_VALUE: "cool",
+            "hvac_modes": ["off", "cool"],
+            "fan_modes": ["auto"],
+            "fan_mode": "turbo",
+        },
+        {
+            CONF_INITIAL_VALUE: "cool",
+            "hvac_modes": ["off", "cool", "cool"],
+        },
+        {
+            CONF_INITIAL_VALUE: "cool",
+            "hvac_modes": ["off", "cool"],
+            "preset_modes": ["none", ""],
+        },
+    ],
+)
+def test_build_entity_config_rejects_invalid_climate_mode_relationships(overrides):
+    with pytest.raises(InvalidDomainOptions):
+        _build_entity_config(_entity_input({
+            CONF_PLATFORM: "climate",
+            **overrides,
+        }))
+
+
+def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
+    hass.states.async_set(
+        "climate.living_room",
+        "cool",
+        {
+            ATTR_FRIENDLY_NAME: "Living Room AC",
+            "current_temperature": 24.0,
+            "fan_mode": "auto",
+            "fan_modes": ["medium", "high", "turbo", "auto"],
+            "hvac_modes": ["off", "cool", "dry", "fan_only"],
+            "max_temp": 30.0,
+            "min_temp": 18.0,
+            "preset_mode": "none",
+            "preset_modes": ["none", "sleep", "quiet", "speed", "ai_comfort"],
+            "supported_features": 441,
+            "swing_mode": None,
+            "swing_modes": [],
+            "target_temp_step": 1.0,
+            "temperature": 23.0,
+            "vendor_attribute": "preserved",
+        },
+    )
+
+    defaults = _reference_entity_defaults(hass, ["climate.living_room"])
+
+    assert defaults[CONF_PLATFORM] == "climate"
+    assert defaults[CONF_INITIAL_VALUE] == "cool"
+    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+        "current_temperature": 24.0,
+        "max_temp": 30.0,
+        "min_temp": 18.0,
+        "target_temperature": 23.0,
+        "target_temperature_step": 1.0,
+    }
+    assert defaults["hvac_modes"] == ["off", "cool", "dry", "fan_only"]
+    assert defaults["fan_mode"] == "auto"
+    assert defaults["fan_modes"] == ["medium", "high", "turbo", "auto"]
+    assert defaults["preset_mode"] == "none"
+    assert defaults["preset_modes"] == [
+        "none",
+        "sleep",
+        "quiet",
+        "speed",
+        "ai_comfort",
+    ]
+    assert defaults["swing_modes"] == []
+    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {
+        "vendor_attribute": "preserved",
+    }
+
+    _, entity = _build_entity_config(_entity_input(defaults))
+    assert entity["fan_modes"] == ["medium", "high", "turbo", "auto"]
+    assert entity["preset_modes"] == [
+        "none",
+        "sleep",
+        "quiet",
+        "speed",
+        "ai_comfort",
+    ]
+    assert entity["target_temperature"] == 23.0
+    assert entity["target_temperature_step"] == 1.0
+    assert "supported_features" not in entity[CONF_ATTRIBUTES]
+
+
+def test_climate_entity_form_uses_editable_mode_selectors():
+    schema = _entity_schema({
+        CONF_PLATFORM: "climate",
+        "hvac_modes": ["off", "cool"],
+        "fan_modes": ["auto", "turbo"],
+        "fan_mode": "auto",
+        "preset_modes": ["none", "sleep"],
+        "preset_mode": "none",
+        "swing_modes": ["off", "vertical"],
+        "swing_mode": "off",
+        "swing_horizontal_modes": ["off", "horizontal"],
+        "swing_horizontal_mode": "off",
+    })
+    validators = {
+        marker.schema: validator
+        for marker, validator in schema.schema.items()
+    }
+
+    for field_name in (
+        "hvac_modes",
+        "fan_modes",
+        "fan_mode",
+        "preset_modes",
+        "preset_mode",
+        "swing_modes",
+        "swing_mode",
+        "swing_horizontal_modes",
+        "swing_horizontal_mode",
+    ):
+        assert isinstance(validators[field_name], selector.SelectSelector)
+    assert validators["fan_modes"].config["multiple"] is True
+    assert validators["fan_modes"].config["custom_value"] is True
+    assert validators["fan_mode"].config["options"] == ["auto", "turbo"]
 
 
 def test_build_entity_config_validates_location_helper_options():
@@ -923,13 +1118,19 @@ def test_build_camera_alias_adds_source_subscription_and_state_template():
     assert entity[CONF_VALUE_TEMPLATE] == "{{ states('camera.front_door') }}"
 
 
-def test_build_entity_config_accepts_common_icon_for_native_domains():
+def test_build_entity_config_accepts_common_icon_and_template_for_native_domains():
     _, entity = _build_entity_config(_entity_input({
         CONF_PLATFORM: "binary_sensor",
         CONF_ICON: "mdi:door-open",
+        CONF_ICON_TEMPLATE: (
+            "{{ 'mdi:door-open' if this.state == 'on' else 'mdi:door-closed' }}"
+        ),
     }))
 
     assert entity[CONF_ICON] == "mdi:door-open"
+    assert entity[CONF_ICON_TEMPLATE] == (
+        "{{ 'mdi:door-open' if this.state == 'on' else 'mdi:door-closed' }}"
+    )
 
 
 def test_build_camera_alias_rejects_non_camera_source():
@@ -1095,6 +1296,59 @@ def test_unrelated_custom_field_does_not_block_generated_template_refresh():
     assert refreshed[CONF_VALUE_TEMPLATE] == "{{ new }}"
     assert refreshed[CONF_INITIAL_VALUE] == "manually-set"
     assert refreshed[CONF_ATTRIBUTES_JSON] == '{"battery": 75}'
+
+
+def test_auto_helper_refreshes_generated_climate_modes_but_preserves_custom_modes():
+    generated = {
+        CONF_PLATFORM: "climate",
+        CONF_INITIAL_VALUE: "cool",
+        CONF_SOURCE_ENTITIES_TEXT: "climate.old",
+        CONF_TEMPLATE_SOURCES_JSON: '{"old": "climate.old"}',
+        CONF_VALUE_TEMPLATE: "{{ old }}",
+        "hvac_modes": ["off", "cool"],
+        "fan_modes": ["auto", "turbo"],
+        "fan_mode": "auto",
+        "preset_modes": ["none", "sleep"],
+        "preset_mode": "none",
+        "swing_modes": [],
+    }
+    reference = {
+        CONF_PLATFORM: "climate",
+        CONF_INITIAL_VALUE: "heat",
+        CONF_SOURCE_ENTITIES_TEXT: "climate.new",
+        CONF_TEMPLATE_SOURCES_JSON: '{"new": "climate.new"}',
+        CONF_VALUE_TEMPLATE: "{{ new }}",
+        "hvac_modes": ["off", "heat"],
+        "fan_modes": ["low", "high"],
+        "fan_mode": "low",
+        "preset_modes": ["none", "eco"],
+        "preset_mode": "eco",
+    }
+
+    refreshed = _reference_edit_defaults(
+        generated,
+        reference,
+        _auto_helper_profile(generated),
+    )
+    assert refreshed["hvac_modes"] == ["off", "heat"]
+    assert refreshed["fan_modes"] == ["low", "high"]
+    assert refreshed["fan_mode"] == "low"
+    assert refreshed["preset_mode"] == "eco"
+    assert refreshed["swing_modes"] == []
+
+    customized = {
+        **generated,
+        "fan_modes": ["auto", "quiet"],
+        "fan_mode": "quiet",
+    }
+    refreshed_custom = _reference_edit_defaults(
+        customized,
+        reference,
+        _auto_helper_profile(generated),
+    )
+    assert refreshed_custom["fan_modes"] == ["auto", "quiet"]
+    assert refreshed_custom["fan_mode"] == "quiet"
+    assert refreshed_custom["preset_modes"] == ["none", "eco"]
 
 
 def test_auto_helper_profile_normalizes_stored_template_source_references():
@@ -1817,6 +2071,8 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
         {
             CONF_PLATFORM: "sensor",
             CONF_NAME: "Washer Phase",
+            CONF_ICON: "mdi:washing-machine",
+            CONF_ICON_TEMPLATE: "{{ 'mdi:washing-machine-alert' if power == 'on' else 'mdi:washing-machine' }}",
             ATTR_ENTITY_ID: "sensor.washer_phase",
             CONF_INITIAL_VALUE: "idle",
             CONF_INITIAL_AVAILABILITY: False,
@@ -1865,6 +2121,10 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
     assert defaults[CONF_DEVICE_SUGGESTED_AREA] == "Laundry Room"
     assert defaults[CONF_DEVICE_VIA_DEVICE_ID] == "parent-device-id"
     assert defaults[CONF_ENTITY_NAME] == "Washer Phase"
+    assert defaults[CONF_ICON] == "mdi:washing-machine"
+    assert defaults[CONF_ICON_TEMPLATE] == (
+        "{{ 'mdi:washing-machine-alert' if power == 'on' else 'mdi:washing-machine' }}"
+    )
     assert defaults[ATTR_ENTITY_ID] == "sensor.washer_phase"
     assert defaults[CONF_INITIAL_AVAILABILITY] is False
     assert defaults[CONF_PERSISTENT] is False

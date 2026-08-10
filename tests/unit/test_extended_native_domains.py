@@ -5,11 +5,13 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from homeassistant.components.climate import ClimateEntityFeature
 from homeassistant.components.date import DateEntity
 from homeassistant.components.datetime import DateTimeEntity
+from homeassistant.components.fan import FanEntityFeature
 from homeassistant.components.lawn_mower import LawnMowerActivity, LawnMowerEntity
 from homeassistant.components.media_player import MediaPlayerEntity, MediaPlayerState
-from homeassistant.components.remote import RemoteEntity
+from homeassistant.components.remote import RemoteEntity, RemoteEntityFeature
 from homeassistant.components.select import SelectEntity
 from homeassistant.components.sensor import (
     DEVICE_CLASS_UNITS,
@@ -32,8 +34,12 @@ from custom_components.virtual_layer.climate import (
     CLIMATE_SCHEMA,
     VirtualClimate,
 )
+from custom_components.virtual_layer.climate_options import (
+    migrate_legacy_climate_attributes,
+)
 from custom_components.virtual_layer.const import (
     ATTR_UNIQUE_ID,
+    CONF_ATTRIBUTES,
     CONF_INITIAL_VALUE,
     CONF_NAME,
 )
@@ -67,6 +73,84 @@ def _config(schema, domain: str, initial_value: str = "unknown", **options):
         CONF_INITIAL_VALUE: initial_value,
         **options,
     })
+
+
+async def test_climate_migrates_native_modes_from_legacy_virtual_attributes():
+    migrated = migrate_legacy_climate_attributes({
+        CONF_NAME: "Legacy Climate",
+        ATTR_ENTITY_ID: "climate.legacy",
+        ATTR_UNIQUE_ID: "climate.legacy.unique",
+        CONF_INITIAL_VALUE: "cool",
+        CONF_ATTRIBUTES: {
+            "fan_mode": "auto",
+            "fan_modes": ["medium", "high", "turbo", "auto"],
+            "hvac_modes": ["off", "cool", "dry", "fan_only"],
+            "preset_mode": "none",
+            "preset_modes": ["none", "sleep", "quiet"],
+            "supported_features": 441,
+            "swing_mode": "vertical",
+            "swing_modes": ["off", "vertical"],
+            "temperature": 23,
+            "vendor_attribute": "kept",
+        },
+    })
+    climate = VirtualClimate(CLIMATE_SCHEMA(migrated), False)
+    climate._create_state(climate._config)
+    climate.async_write_ha_state = Mock()
+
+    assert climate.fan_modes == ["medium", "high", "turbo", "auto"]
+    assert climate.fan_mode == "auto"
+    assert climate.preset_modes == ["none", "sleep", "quiet"]
+    assert climate.preset_mode == "none"
+    assert climate.swing_modes == ["off", "vertical"]
+    assert climate.swing_mode == "vertical"
+    assert climate.target_temperature == 23
+    assert ClimateEntityFeature.FAN_MODE in climate.supported_features
+    assert ClimateEntityFeature.PRESET_MODE in climate.supported_features
+    assert ClimateEntityFeature.SWING_MODE in climate.supported_features
+    assert ClimateEntityFeature.TARGET_HUMIDITY not in climate.supported_features
+    assert migrated[CONF_ATTRIBUTES] == {"vendor_attribute": "kept"}
+
+    await climate.async_set_fan_mode("turbo")
+    await climate.async_set_preset_mode("sleep")
+    await climate.async_set_swing_mode("off")
+    assert climate.fan_mode == "turbo"
+    assert climate.preset_mode == "sleep"
+    assert climate.swing_mode == "off"
+
+
+def test_climate_exposes_target_humidity_only_when_configured():
+    without_humidity = VirtualClimate(
+        _config(CLIMATE_SCHEMA, "climate", "off"),
+        False,
+    )
+    with_humidity = VirtualClimate(
+        _config(CLIMATE_SCHEMA, "climate", "off", target_humidity=50),
+        False,
+    )
+
+    assert ClimateEntityFeature.TARGET_HUMIDITY not in without_humidity.supported_features
+    assert ClimateEntityFeature.TARGET_HUMIDITY in with_humidity.supported_features
+
+
+def test_fan_advertises_preset_mode_only_when_modes_are_configured():
+    without_modes = VirtualFan(
+        _config(FAN_SCHEMA, "fan", "off", speed_count=3),
+        False,
+    )
+    with_modes = VirtualFan(
+        _config(
+            FAN_SCHEMA,
+            "fan",
+            "off",
+            speed_count=3,
+            modes=["eco", "boost"],
+        ),
+        False,
+    )
+
+    assert FanEntityFeature.PRESET_MODE not in without_modes.supported_features
+    assert FanEntityFeature.PRESET_MODE in with_modes.supported_features
 
 
 @pytest.mark.parametrize(
@@ -282,13 +366,24 @@ async def test_remote_media_water_heater_and_update_native_commands():
         ENTITY_SCHEMA as WATER_HEATER_SCHEMA,
     )
 
-    remote = VirtualRemote(_config(REMOTE_SCHEMA, "remote", "off"), False)
+    remote = VirtualRemote(
+        _config(
+            REMOTE_SCHEMA,
+            "remote",
+            "off",
+            activity_list=["TV", "Music"],
+            current_activity="TV",
+        ),
+        False,
+    )
     media_player = VirtualMediaPlayer(
         _config(
             MEDIA_PLAYER_SCHEMA,
             "media_player",
             "idle",
             source_list=["TV", "Radio"],
+            source="TV",
+            volume_level=0.5,
         ),
         False,
     )
@@ -321,7 +416,7 @@ async def test_remote_media_water_heater_and_update_native_commands():
         entity._update_attributes()
         entity.async_write_ha_state = Mock()
 
-    await remote.async_turn_on()
+    await remote.async_turn_on(activity="Music")
     await remote.async_send_command(["POWER", "INPUT"])
     await media_player.async_media_play()
     await media_player.async_set_volume_level(0.7)
@@ -331,6 +426,8 @@ async def test_remote_media_water_heater_and_update_native_commands():
     await update.async_install(None, backup=True)
 
     assert remote.is_on is True
+    assert remote.current_activity == "Music"
+    assert RemoteEntityFeature.ACTIVITY in remote.supported_features
     assert remote.extra_state_attributes["last_command"] == ["POWER", "INPUT"]
     assert media_player.state is MediaPlayerState.PLAYING
     assert media_player.volume_level == 0.7
@@ -339,6 +436,12 @@ async def test_remote_media_water_heater_and_update_native_commands():
     assert water_heater.current_operation == "off"
     assert update.installed_version == "1.1.0"
     assert update.extra_state_attributes["last_install_backup"] is True
+    assert "current_activity" not in remote.extra_state_attributes
+    assert "source" not in media_player.extra_state_attributes
+    assert "volume_level" not in media_player.extra_state_attributes
+    assert "target_temperature" not in water_heater.extra_state_attributes
+    assert "installed_version" not in update.extra_state_attributes
+    assert "latest_version" not in update.extra_state_attributes
 
     with pytest.raises(ValueError):
         await media_player.async_set_volume_level(1.1)
@@ -581,6 +684,207 @@ async def test_native_restore_and_range_updates_are_defensive():
     assert number.native_value == 0
 
 
+def test_climate_and_humidifier_restore_home_assistant_native_target_keys():
+    climate = VirtualClimate(
+        _config(
+            CLIMATE_SCHEMA,
+            "climate",
+            "off",
+            hvac_modes=["off", "heat"],
+            min_temp=10,
+            max_temp=30,
+            min_humidity=20,
+            max_humidity=80,
+            target_temperature=20,
+            target_temperature_high=25,
+            target_temperature_low=15,
+            target_humidity=45,
+        ),
+        False,
+    )
+    humidifier = VirtualHumidifier(
+        _config(
+            HUMIDIFIER_SCHEMA,
+            "humidifier",
+            "on",
+            min_humidity=20,
+            max_humidity=80,
+            target_humidity=45,
+        ),
+        False,
+    )
+
+    climate._restore_state(
+        SimpleNamespace(
+            state="heat",
+            attributes={
+                "temperature": 24,
+                "target_temp_high": 27,
+                "target_temp_low": 17,
+                "humidity": 48,
+            },
+        ),
+        climate._config,
+    )
+    humidifier._restore_state(
+        SimpleNamespace(state="on", attributes={"humidity": 55}),
+        humidifier._config,
+    )
+
+    assert climate.target_temperature == 24
+    assert climate.target_temperature_high == 27
+    assert climate.target_temperature_low == 17
+    assert climate.target_humidity == 48
+    assert humidifier.target_humidity == 55
+
+
+def test_native_generic_entities_restore_runtime_service_attributes():
+    from custom_components.virtual_layer.media_player import (
+        ENTITY_CLASS as VirtualMediaPlayer,
+    )
+    from custom_components.virtual_layer.media_player import (
+        ENTITY_SCHEMA as MEDIA_PLAYER_SCHEMA,
+    )
+    from custom_components.virtual_layer.remote import ENTITY_CLASS as VirtualRemote
+    from custom_components.virtual_layer.remote import ENTITY_SCHEMA as REMOTE_SCHEMA
+    from custom_components.virtual_layer.water_heater import (
+        ENTITY_CLASS as VirtualWaterHeater,
+    )
+    from custom_components.virtual_layer.water_heater import (
+        ENTITY_SCHEMA as WATER_HEATER_SCHEMA,
+    )
+
+    remote = VirtualRemote(
+        _config(
+            REMOTE_SCHEMA,
+            "remote",
+            "off",
+            activity_list=["TV", "Music"],
+            current_activity="TV",
+        ),
+        False,
+    )
+    media_player = VirtualMediaPlayer(
+        _config(
+            MEDIA_PLAYER_SCHEMA,
+            "media_player",
+            "idle",
+            source_list=["TV", "Radio"],
+            source="TV",
+            volume_level=0.2,
+            is_volume_muted=False,
+        ),
+        False,
+    )
+    water_heater = VirtualWaterHeater(
+        _config(
+            WATER_HEATER_SCHEMA,
+            "water_heater",
+            "off",
+            operation_list=["off", "heat"],
+            min_temp=35,
+            max_temp=70,
+            current_temperature=40,
+            target_temperature=45,
+        ),
+        False,
+    )
+
+    remote._restore_state(
+        SimpleNamespace(
+            state="on",
+            attributes={"current_activity": "Music"},
+        ),
+        remote._config,
+    )
+    media_player._restore_state(
+        SimpleNamespace(
+            state="playing",
+            attributes={
+                "source": "Radio",
+                "volume_level": 0.8,
+                "is_volume_muted": True,
+            },
+        ),
+        media_player._config,
+    )
+    water_heater._restore_state(
+        SimpleNamespace(
+            state="heat",
+            attributes={
+                "current_temperature": 48,
+                "temperature": 55,
+            },
+        ),
+        water_heater._config,
+    )
+
+    assert remote.current_activity == "Music"
+    assert media_player.source == "Radio"
+    assert media_player.volume_level == 0.8
+    assert media_player.is_volume_muted is True
+    assert water_heater.current_temperature == 48
+    assert water_heater.target_temperature == 55
+
+
+def test_native_generic_restore_rejects_removed_options_and_bad_values():
+    from custom_components.virtual_layer.media_player import (
+        ENTITY_CLASS as VirtualMediaPlayer,
+    )
+    from custom_components.virtual_layer.media_player import (
+        ENTITY_SCHEMA as MEDIA_PLAYER_SCHEMA,
+    )
+    from custom_components.virtual_layer.remote import ENTITY_CLASS as VirtualRemote
+    from custom_components.virtual_layer.remote import ENTITY_SCHEMA as REMOTE_SCHEMA
+
+    remote = VirtualRemote(
+        _config(
+            REMOTE_SCHEMA,
+            "remote",
+            "off",
+            activity_list=["TV"],
+            current_activity="TV",
+        ),
+        False,
+    )
+    media_player = VirtualMediaPlayer(
+        _config(
+            MEDIA_PLAYER_SCHEMA,
+            "media_player",
+            "idle",
+            source_list=["TV"],
+            source="TV",
+            volume_level=0.2,
+            is_volume_muted=False,
+        ),
+        False,
+    )
+
+    remote._restore_state(
+        SimpleNamespace(
+            state="on",
+            attributes={"current_activity": "Removed"},
+        ),
+        remote._config,
+    )
+    media_player._restore_state(
+        SimpleNamespace(
+            state="playing",
+            attributes={
+                "source": "Removed",
+                "volume_level": "invalid",
+                "is_volume_muted": "invalid",
+            },
+        ),
+        media_player._config,
+    )
+
+    assert remote.current_activity == "TV"
+    assert media_player.source == "TV"
+    assert media_player.volume_level == 0.2
+    assert media_player.is_volume_muted is False
+
+
 def test_climate_and_humidifier_recover_non_finite_configured_ranges():
     climate = VirtualClimate(
         _config(
@@ -698,7 +1002,7 @@ def test_fan_light_and_vacuum_reject_malformed_restored_attributes():
     assert light.hs_color == (120, 50)
     assert light.brightness == 255
     assert light.effect == "none"
-    assert vacuum.battery_level == 50
+    assert vacuum._battery_level == 50
     assert vacuum.fan_speed == "normal"
 
 

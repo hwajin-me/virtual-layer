@@ -365,7 +365,7 @@ def test_virtual_tracker_applies_jinja_rules_and_person_metadata(hass):
 
     tracker._update_polygon_from_sources()
 
-    assert tracker.location_name == "Office"
+    assert tracker.state == "Office"
     assert tracker.latitude == pytest.approx(37.5005)
     assert tracker.extra_state_attributes[ATTR_POLYGON_ZONE] == "Office"
     assert tracker.extra_state_attributes[ATTR_POLYGON_SELECTION_REASON] == "majority"
@@ -405,7 +405,7 @@ def test_person_is_used_as_position_when_no_trackers_are_configured(hass):
 
     tracker._update_polygon_from_sources()
 
-    assert tracker.location_name == "Office"
+    assert tracker.state == "Office"
     assert tracker.extra_state_attributes[ATTR_POLYGON_SELECTED_SOURCE] == "person.solo"
 
 
@@ -434,7 +434,7 @@ def test_unavailable_tracker_coordinates_are_not_used(hass):
 
     tracker._update_polygon_from_sources()
 
-    assert tracker.location_name == "not_home"
+    assert tracker.state == "not_home"
     assert tracker.latitude is None
 
 

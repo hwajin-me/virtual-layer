@@ -32,6 +32,12 @@ from .cfg import (
     _rename_meta_data,
     make_entity_key,
 )
+from .climate_options import (
+    CLIMATE_CURRENT_MODE_FIELDS,
+    CLIMATE_MODE_FORM_FIELDS,
+    CLIMATE_MODE_LIST_FIELDS,
+    extract_climate_options,
+)
 from .const import *
 from .polygon import parse_geojson_zones
 
@@ -86,6 +92,7 @@ _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_ATTRIBUTE_SOURCES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
     CONF_DOMAIN_OPTIONS_JSON,
+    *CLIMATE_MODE_FORM_FIELDS,
 )
 
 _AUTO_HELPER_JSON_FIELDS = frozenset({
@@ -118,7 +125,7 @@ DEFAULT_NUMBER_MAX = 100
 DEFAULT_INITIAL_VALUES = {
     "climate": "off",
 }
-CLIMATE_INITIAL_VALUES = {
+CLIMATE_INITIAL_VALUES = (
     "off",
     "heat",
     "cool",
@@ -126,7 +133,7 @@ CLIMATE_INITIAL_VALUES = {
     "auto",
     "dry",
     "fan_only",
-}
+)
 
 _DOMAIN_OPTION_RESERVED_KEYS = {
     ATTR_ENTITY_ID,
@@ -145,6 +152,7 @@ _DOMAIN_OPTION_RESERVED_KEYS = {
     CONF_AVAILABILITY_TEMPLATE,
     CONF_ATTRIBUTES,
     CONF_ICON,
+    CONF_ICON_TEMPLATE,
     CONF_AUTO_HELPER,
     CONF_ATTRIBUTE_SOURCES,
     CONF_ATTRIBUTE_TEMPLATES,
@@ -165,6 +173,7 @@ MULTILINE_TEXT_SELECTOR = selector.TextSelector(
     selector.TextSelectorConfig(multiline=True),
 )
 TEMPLATE_SELECTOR = selector.TemplateSelector()
+ICON_SELECTOR = selector.IconSelector(selector.IconSelectorConfig())
 ENTITY_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(
         multiple=True,
@@ -334,7 +343,11 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             default=defaults.get(CONF_DEVICE_VIA_DEVICE_ID, ""),
         ): selector.DeviceSelector(),
         vol.Required(CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")): str,
-        vol.Optional(CONF_ICON, default=defaults.get(CONF_ICON, "")): str,
+        vol.Optional(CONF_ICON, default=defaults.get(CONF_ICON, "")): ICON_SELECTOR,
+        vol.Optional(
+            CONF_ICON_TEMPLATE,
+            default=defaults.get(CONF_ICON_TEMPLATE, ""),
+        ): TEMPLATE_SELECTOR,
         vol.Optional(ATTR_ENTITY_ID, default=default_entity_id): str,
         vol.Required(CONF_PLATFORM, default=defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)): vol.In(VIRTUAL_ENTITY_DOMAINS),
         vol.Required(CONF_INITIAL_VALUE, default=defaults.get(CONF_INITIAL_VALUE, DEFAULT_ENTITY_VALUE)): str,
@@ -390,15 +403,55 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         schema[person_marker] = selector.EntitySelector(
             selector.EntitySelectorConfig(domain="person"),
         )
+    elif platform == "climate":
+        for field_name in CLIMATE_MODE_LIST_FIELDS:
+            if field_name in defaults:
+                marker = vol.Optional(field_name, default=defaults[field_name])
+            elif field_name == "hvac_modes":
+                marker = vol.Optional(
+                    field_name,
+                    default=list(CLIMATE_INITIAL_VALUES),
+                )
+            else:
+                marker = vol.Optional(field_name)
+            options = (
+                list(CLIMATE_INITIAL_VALUES)
+                if field_name == "hvac_modes"
+                else list(defaults.get(field_name, []))
+            )
+            schema[marker] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=options,
+                    multiple=True,
+                    custom_value=True,
+                ),
+            )
+        for field_name, modes_field in CLIMATE_CURRENT_MODE_FIELDS.items():
+            marker = (
+                vol.Optional(field_name, default=defaults[field_name])
+                if defaults.get(field_name) not in (None, "")
+                else vol.Optional(field_name)
+            )
+            schema[marker] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(defaults.get(modes_field, [])),
+                    custom_value=True,
+                ),
+            )
     return vol.Schema(schema)
 
 
 def _needs_domain_specific_form(user_input) -> bool:
     """Return true when a newly selected domain needs its dedicated fields."""
-    return (
-        user_input.get(CONF_PLATFORM) == "device_tracker"
-        and CONF_POLYGON_STRATEGY_INPUT not in user_input
-    )
+    platform = user_input.get(CONF_PLATFORM)
+    if platform == "device_tracker":
+        return CONF_POLYGON_STRATEGY_INPUT not in user_input
+    if platform == "climate":
+        return not any(
+            field_name in user_input
+            for field_name in CLIMATE_MODE_FORM_FIELDS
+        )
+    return False
 
 
 def _align_form_entity_id_domain(user_input: dict[str, Any]) -> dict[str, Any]:
@@ -902,6 +955,10 @@ def _build_entity_config(
     if icon:
         entity[CONF_ICON] = icon
 
+    icon_template = user_input.get(CONF_ICON_TEMPLATE, "").strip()
+    if icon_template:
+        entity[CONF_ICON_TEMPLATE] = icon_template
+
     entity_id = user_input.get(ATTR_ENTITY_ID, "").strip()
     if entity_id:
         try:
@@ -972,6 +1029,19 @@ def _build_entity_config(
     domain_options = _parse_domain_options(
         user_input.get(CONF_DOMAIN_OPTIONS_JSON, "").strip(),
     )
+    if platform == "climate":
+        for field_name in CLIMATE_MODE_LIST_FIELDS:
+            if field_name in user_input:
+                if not isinstance(user_input[field_name], list):
+                    raise InvalidDomainOptions
+                domain_options.pop(field_name, None)
+                domain_options[field_name] = list(user_input[field_name])
+        for field_name in CLIMATE_CURRENT_MODE_FIELDS:
+            if field_name in user_input:
+                domain_options.pop(field_name, None)
+                value = str(user_input.get(field_name, "") or "").strip()
+                if value:
+                    domain_options[field_name] = value
     entity.update(domain_options)
 
     polygon_geojson_text = user_input.get(CONF_POLYGON_GEOJSON_JSON, "").strip()
@@ -2003,9 +2073,6 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         CONF_INITIAL_VALUE: initial_value,
         CONF_SOURCE_ENTITIES_TEXT: "\n".join(entity_ids),
     }
-    if attributes:
-        defaults[CONF_ATTRIBUTES_JSON] = _json_default(attributes)
-
     source_device_classes = {
         str(state.attributes.get("device_class", "")).lower()
         for state in states
@@ -2023,6 +2090,30 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         if len(source_units) == 1 and "" not in source_units:
             domain_options[CONF_UNIT_OF_MEASUREMENT] = next(iter(source_units))
         defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
+    elif platform == "climate" and len(states) == 1:
+        domain_options, consumed_attributes = extract_climate_options(attributes)
+        defaults.update({
+            key: value
+            for key, value in domain_options.items()
+            if key in CLIMATE_MODE_FORM_FIELDS
+        })
+        advanced_domain_options = {
+            key: value
+            for key, value in domain_options.items()
+            if key not in CLIMATE_MODE_FORM_FIELDS
+        }
+        if advanced_domain_options:
+            defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(
+                advanced_domain_options,
+            )
+        attributes = {
+            key: value
+            for key, value in attributes.items()
+            if key not in consumed_attributes
+        }
+
+    if attributes:
+        defaults[CONF_ATTRIBUTES_JSON] = _json_default(attributes)
 
     variable_names: list[str] = []
     template_sources: dict[str, str] = {}
@@ -2139,10 +2230,22 @@ def _reference_edit_defaults(
                 merged[field] = reference_defaults.get(field, "")
             continue
         if reference_defaults and auto_profile is not None and (
-            _canonical_auto_helper_value(field, current_defaults.get(field, ""))
-            == auto_profile.get(field, "")
+            _canonical_auto_helper_value(
+                field,
+                current_defaults.get(
+                    field,
+                    [] if field in CLIMATE_MODE_LIST_FIELDS else "",
+                ),
+            )
+            == auto_profile.get(
+                field,
+                [] if field in CLIMATE_MODE_LIST_FIELDS else "",
+            )
         ):
-            merged[field] = reference_defaults.get(field, "")
+            merged[field] = reference_defaults.get(
+                field,
+                [] if field in CLIMATE_MODE_LIST_FIELDS else "",
+            )
 
     old_entity_id = _text_default(current_defaults.get(ATTR_ENTITY_ID)).strip()
     new_platform = merged.get(CONF_PLATFORM)
@@ -2181,7 +2284,13 @@ def _canonical_auto_helper_value(field: str, value: Any) -> Any:
 def _auto_helper_profile(defaults: dict[str, Any]) -> dict[str, Any]:
     """Create a stable record of the generated helper fields."""
     return {
-        field: _canonical_auto_helper_value(field, defaults.get(field, ""))
+        field: _canonical_auto_helper_value(
+            field,
+            defaults.get(
+                field,
+                [] if field in CLIMATE_MODE_LIST_FIELDS else "",
+            ),
+        )
         for field in _AUTO_HELPER_PROFILE_FIELDS
     }
 
@@ -2299,9 +2408,6 @@ def _existing_auto_helper_profile(hass, entity, defaults: dict[str, Any]) -> dic
     else:
         primary_profile = None
 
-    if primary_profile and _auto_helper_templates_match(defaults, primary_profile):
-        return primary_profile
-
     # Recover entries left half-updated by older edit flows: source_entities
     # and auto_helper may already describe the new selection while the actual
     # templates still contain an untouched helper for the previous sources.
@@ -2372,6 +2478,7 @@ def _entity_form_defaults(
         CONF_DEVICE_VIA_DEVICE_ID: _text_default(device.get(CONF_VIA_DEVICE_ID)),
         CONF_ENTITY_NAME: _text_default(entity.get(CONF_NAME), "Virtual Entity"),
         CONF_ICON: _text_default(entity.get(CONF_ICON)),
+        CONF_ICON_TEMPLATE: _text_default(entity.get(CONF_ICON_TEMPLATE)),
         ATTR_ENTITY_ID: _text_default(entity.get(ATTR_ENTITY_ID)),
         CONF_PLATFORM: platform,
         CONF_INITIAL_VALUE: _text_default(
@@ -2435,6 +2542,17 @@ def _entity_form_defaults(
         for key, value in entity.items()
         if key not in _DOMAIN_OPTION_RESERVED_KEYS
     }
+    if platform == "climate":
+        defaults.update({
+            key: value
+            for key, value in domain_options.items()
+            if key in CLIMATE_MODE_FORM_FIELDS
+        })
+        domain_options = {
+            key: value
+            for key, value in domain_options.items()
+            if key not in CLIMATE_MODE_FORM_FIELDS
+        }
     defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
     return defaults
 

@@ -114,8 +114,10 @@ class VirtualFan(VirtualEntity, FanEntity):
             self._attr_supported_features |= FanEntityFeature.OSCILLATE
         if config.get(CONF_DIRECTION, False):
             self._attr_supported_features |= FanEntityFeature.DIRECTION
+        if self._attr_preset_modes:
+            self._attr_supported_features |= FanEntityFeature.PRESET_MODE
 
-        _LOGGER.info(f"VirtualFan: {self.name} created")
+        _LOGGER.debug(f"VirtualFan: {self.name} created")
 
     def _create_state(self, config):
         super()._create_state(config)

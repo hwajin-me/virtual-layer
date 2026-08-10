@@ -45,6 +45,7 @@ def virtual_schema(default_initial_value: str, extra_attrs):
         vol.Optional(CONF_INITIAL_AVAILABILITY, default=DEFAULT_AVAILABILITY): cv.boolean,
         vol.Optional(CONF_ATTRIBUTES, default=dict): dict,
         vol.Optional(CONF_ICON): cv.string,
+        vol.Optional(CONF_ICON_TEMPLATE): cv.template,
         vol.Optional(CONF_AUTO_HELPER): object,
         vol.Optional(CONF_ATTRIBUTE_SOURCES, default=dict): dict,
         vol.Optional(CONF_ATTRIBUTE_TEMPLATES, default=dict): dict,
@@ -82,7 +83,9 @@ class VirtualEntity(RestoreEntity):
         """Initialize an Virtual Sensor."""
         _LOGGER.debug(f"creating-virtual-{domain}={config}")
         self._config = config
-        self._attr_icon = config.get(CONF_ICON)
+        self._configured_icon = config.get(CONF_ICON)
+        self._attr_icon = self._configured_icon
+        self._icon_template = config.get(CONF_ICON_TEMPLATE)
         self._persistent = config.get(CONF_PERSISTENT)
         self._virtual_attributes = {
             name: value
@@ -159,14 +162,14 @@ class VirtualEntity(RestoreEntity):
                         device_info[info_key] = config[config_key]
                 self._attr_device_info = DeviceInfo(**device_info)
 
-        _LOGGER.info(f'VirtualEntity {self._attr_name} created')
+        _LOGGER.debug(f'VirtualEntity {self._attr_name} created')
 
     def _create_state(self, config):
-        _LOGGER.info(f'VirtualEntity {self.unique_id}: creating initial state')
+        _LOGGER.debug(f'VirtualEntity {self.unique_id}: creating initial state')
         self._attr_available = config.get(CONF_INITIAL_AVAILABILITY)
 
     def _restore_state(self, state, config):
-        _LOGGER.info(f'VirtualEntity {self.unique_id}: restoring state')
+        _LOGGER.debug(f'VirtualEntity {self.unique_id}: restoring state')
         _LOGGER.debug(f'VirtualEntity:: state={pprint.pformat(state.state)}')
         _LOGGER.debug(f'VirtualEntity:: attr={pprint.pformat(state.attributes)}')
         self._attr_available = state.attributes.get(
@@ -278,6 +281,7 @@ class VirtualEntity(RestoreEntity):
             for template in (
                 self._value_template,
                 self._availability_template,
+                self._icon_template,
                 *self._attribute_templates.values(),
             )
             if template
@@ -522,6 +526,18 @@ class VirtualEntity(RestoreEntity):
     def _apply_templates(self):
         changed = False
 
+        if self._icon_template:
+            try:
+                rendered_icon = str(
+                    self._render_template(self._icon_template),
+                ).strip()
+                next_icon = rendered_icon or self._configured_icon
+                if self._attr_icon != next_icon:
+                    self._attr_icon = next_icon
+                    changed = True
+            except (TemplateError, TypeError, ValueError) as e:
+                _LOGGER.warning(f"Unable to render icon template for {self.entity_id}: {e}")
+
         if self._availability_template:
             try:
                 self._attr_available = self._template_to_bool(self._render_template(self._availability_template))
@@ -667,7 +683,7 @@ class VirtualOpenableEntity(VirtualEntity):
         self._target_position = None
         self._positions_per_tick = None
 
-        _LOGGER.info(f"VirtualOpenable: {self.name} created")
+        _LOGGER.debug(f"VirtualOpenable: {self.name} created")
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -754,10 +770,6 @@ class VirtualOpenableEntity(VirtualEntity):
             self.async_schedule_update_ha_state()
             return
 
-        if self._open_close_tick > self._open_close_duration:
-            _LOGGER.warning(f"Tick duration {self._open_close_tick} > total duration {self._open_close_duration}, capping to {self._open_close_duration}")
-            self._open_close_tick = self._open_close_duration
-
         if self._open_close_duration == 0:
             # Transition through opening/closing state for automations
             self._set_direction_flags(self._target_position)
@@ -771,6 +783,10 @@ class VirtualOpenableEntity(VirtualEntity):
 
             self.async_schedule_update_ha_state(force_refresh=True)
             return
+
+        if self._open_close_tick > self._open_close_duration:
+            _LOGGER.warning(f"Tick duration {self._open_close_tick} > total duration {self._open_close_duration}, capping to {self._open_close_duration}")
+            self._open_close_tick = self._open_close_duration
 
         distance = abs(self._target_position - self._current_position)
         movement_duration = (distance / 100.0) * self._open_close_duration

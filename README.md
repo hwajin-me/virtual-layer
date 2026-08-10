@@ -313,6 +313,13 @@ is the UI-only equivalent of domain YAML options: it is validated against the
 native virtual implementation for rich domains such as climate, cover, light,
 humidifier, camera, and lock.
 
+Climate entities expose dedicated add/edit controls for supported HVAC, fan,
+preset, vertical swing, and horizontal swing modes, plus each currently
+selected mode. Copying an existing climate entity prefills these controls.
+Custom values can be added directly when the source integration does not
+publish a mode list. Advanced temperature and humidity options remain
+available in **Domain options JSON**.
+
 For the remaining state-backed domains, use the same field for arbitrary
 JSON-compatible domain data. These settings are preserved on edits and appear
 as state attributes. This makes YAML-only style metadata
@@ -413,6 +420,18 @@ Run a real Home Assistant container with Docker Compose:
 docker compose -f tests/docker/docker-compose.yml pull
 docker compose -f tests/docker/docker-compose.yml up -d
 docker compose -f tests/docker/docker-compose.yml logs -f homeassistant
+```
+
+Run the isolated automated smoke test against the official stable Home
+Assistant container. It creates every supported entity domain on one virtual
+device, calls native and common control services, verifies the resulting state
+and attributes, and reloads persistent entities. The matrix also covers motion,
+presence, leak, smoke, gas, electrical and utility sensors, washer/dryer data,
+dehumidifiers, climate ranges, covers, and valves. It fails on missing entities,
+registry/device mismatches, integration errors, or deprecation warnings:
+
+```sh
+tests/docker/run_all_domains.sh
 ```
 
 Open `http://localhost:8123`, finish Home Assistant onboarding if needed, then

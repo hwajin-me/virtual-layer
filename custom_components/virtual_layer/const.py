@@ -43,6 +43,7 @@ CONF_ATTRIBUTE_TEMPLATES = "attribute_templates"
 CONF_AVAILABILITY_TEMPLATE = "availability_template"
 CONF_DIAGNOSTIC_SOURCE_ENTITY = "diagnostic_source_entity"
 CONF_EVENT_HOOKS = "event_hooks"
+CONF_ICON_TEMPLATE = "icon_template"
 CONF_INITIAL_VALUE = "initial_value"
 CONF_LOCATION_HELPER = "location_helper"
 CONF_POLYGONAL_ZONE = "polygonal_zone"
@@ -91,6 +92,7 @@ GENERIC_ENTITY_OPTION_EXCLUDED_KEYS = frozenset({
     CONF_EVENT_HOOKS,
     CONF_HW_VERSION,
     CONF_ICON,
+    CONF_ICON_TEMPLATE,
     CONF_INITIAL_AVAILABILITY,
     CONF_INITIAL_VALUE,
     CONF_MANUFACTURER,
@@ -178,10 +180,15 @@ VIRTUAL_ENTITY_DOMAINS = [
 ]
 
 STATE_ONLY_ENTITY_DOMAINS = [
+    "ai_task",
+    "assist_satellite",
+    "conversation",
     "geolocation",
+    "image_processing",
     "infrared",
     "radio_frequency",
     "tag",
+    "tts",
 ]
 
 

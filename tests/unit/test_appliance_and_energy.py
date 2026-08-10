@@ -4,9 +4,14 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from homeassistant.components.humidifier import HumidifierDeviceClass
-from homeassistant.components.number import NumberDeviceClass, NumberEntity
+from homeassistant.components.number import (
+    ATTR_STEP,
+    NumberDeviceClass,
+    NumberEntity,
+    NumberMode,
+)
 from homeassistant.components.sensor import SensorDeviceClass
-from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME
+from homeassistant.const import ATTR_ENTITY_ID, CONF_MODE, CONF_NAME
 from homeassistant.core import State
 
 from custom_components.virtual_layer.const import (
@@ -70,6 +75,8 @@ def test_sensor_electrical_device_classes_get_default_units(device_class, expect
         (NumberDeviceClass.WATER, "L"),
         (NumberDeviceClass.VOLUME_FLOW_RATE, "m³/h"),
         (NumberDeviceClass.MOISTURE, "%"),
+        (NumberDeviceClass.TEMPERATURE, "°C"),
+        (NumberDeviceClass.FREQUENCY, "Hz"),
     ],
 )
 def test_number_electrical_device_classes_get_default_units(device_class, expected_unit):
@@ -106,6 +113,27 @@ async def test_number_uses_native_state_and_clamps_template_and_service_values()
     assert entity.native_value == 15
     entity.set_state(99)
     assert entity.native_value == 20
+
+
+def test_number_supports_step_and_input_mode():
+    config = NUMBER_SCHEMA({
+        CONF_NAME: "Dimmer Limit",
+        ATTR_ENTITY_ID: "number.dimmer_limit",
+        ATTR_UNIQUE_ID: "dimmer_limit",
+        CONF_INITIAL_VALUE: 12.5,
+        CONF_MIN: 0,
+        CONF_MAX: 100,
+        ATTR_STEP: 0.5,
+        CONF_MODE: "slider",
+    })
+
+    entity = VirtualNumber(config, False)
+    entity._create_state(config)
+    entity._update_attributes()
+
+    assert entity.native_step == 0.5
+    assert entity.mode is NumberMode.SLIDER
+    assert entity.extra_state_attributes[ATTR_STEP] == 0.5
 
 
 def test_sensor_accepts_washer_and_dryer_options_as_attributes():
@@ -173,6 +201,7 @@ async def test_valve_can_model_a_pump_with_open_close_commands():
     assert entity.current_valve_position == 0
     await entity.async_open_valve()
     assert entity.current_valve_position == 100
+    assert entity._open_close_tick == 1
     await entity.async_close_valve()
     assert entity.current_valve_position == 0
 

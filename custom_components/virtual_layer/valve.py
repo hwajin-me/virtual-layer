@@ -80,7 +80,7 @@ class VirtualValve(VirtualOpenableEntity, ValveEntity):
         )
         self._attr_reports_position = True
 
-        _LOGGER.info(f"VirtualValve: {self.name} created")
+        _LOGGER.debug(f"VirtualValve: {self.name} created")
 
     @property
     def current_valve_position(self) -> int | None:

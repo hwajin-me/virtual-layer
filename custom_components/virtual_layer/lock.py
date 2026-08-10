@@ -95,7 +95,7 @@ class VirtualLock(VirtualEntity, LockEntity):
         if self._support_open:
             self._attr_supported_features |= LockEntityFeature.OPEN
         
-        _LOGGER.info(f'VirtualLock: {self.name} created')
+        _LOGGER.debug(f'VirtualLock: {self.name} created')
 
     def _create_state(self, config):
         super()._create_state(config)

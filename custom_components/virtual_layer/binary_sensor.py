@@ -102,7 +102,7 @@ class VirtualBinarySensor(VirtualEntity, BinarySensorEntity):
 
         self._attr_device_class = config.get(CONF_CLASS)
 
-        _LOGGER.info(f"VirtualBinarySensor: {self.name} created")
+        _LOGGER.debug(f"VirtualBinarySensor: {self.name} created")
 
     def _create_state(self, config):
         super()._create_state(config)

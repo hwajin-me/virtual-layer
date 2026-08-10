@@ -122,7 +122,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
         if self._image_url:
             self._attr_image_url = self._image_url
 
-        _LOGGER.info("VirtualImage: %s created", self.name)
+        _LOGGER.debug("VirtualImage: %s created", self.name)
 
     @property
     def image_last_updated(self) -> datetime | None:

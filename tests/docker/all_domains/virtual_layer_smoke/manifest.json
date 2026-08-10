@@ -1,0 +1,8 @@
+{
+  "domain": "virtual_layer_smoke",
+  "name": "Virtual Layer all-domain smoke test",
+  "codeowners": ["@hwajin-me"],
+  "documentation": "https://github.com/hwajin-me/virtual-layer",
+  "iot_class": "local_push",
+  "version": "1.0.0"
+}

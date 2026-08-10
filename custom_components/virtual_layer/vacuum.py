@@ -167,7 +167,7 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
         super().__init__(config, PLATFORM_DOMAIN, old_style)
 
         self._attr_activity = _as_activity(config.get(CONF_ACTIVITY))
-        self._attr_battery_level = _as_battery_level(config.get(CONF_BATTERY_LEVEL))
+        self._battery_level = _as_battery_level(config.get(CONF_BATTERY_LEVEL))
         self._attr_fan_speed = config.get(CONF_FAN_SPEED)
         self._attr_fan_speed_list = config.get(CONF_FAN_SPEED_LIST, [])
         self._attr_supported_features = config.get(
@@ -175,11 +175,12 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
         )
         if self._attr_fan_speed_list:
             self._attr_supported_features |= VacuumEntityFeature.FAN_SPEED
-        if self._attr_battery_level is not None:
-            self._attr_supported_features |= VacuumEntityFeature.BATTERY
+        # HA removes the legacy vacuum battery feature in 2026.8. A linked
+        # battery sensor is generated from this configuration instead.
+        self._attr_supported_features &= ~VacuumEntityFeature.BATTERY
 
         self._last_command: dict[str, Any] | None = None
-        _LOGGER.info("VirtualVacuum: %s created", self.name)
+        _LOGGER.debug("VirtualVacuum: %s created", self.name)
 
     @property
     def activity(self) -> VacuumActivity | None:
@@ -199,10 +200,6 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
     def fan_speed_list(self) -> list[str]:
         return self._attr_fan_speed_list
 
-    @property
-    def battery_level(self) -> int | None:
-        return self._attr_battery_level
-
     def _create_state(self, config):
         super()._create_state(config)
         self._attr_activity = _as_activity(
@@ -214,7 +211,7 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
         self._attr_activity = _as_activity(state.state) or _as_activity(
             config.get(CONF_ACTIVITY, config.get(CONF_INITIAL_VALUE))
         )
-        self._attr_battery_level = _as_battery_level(
+        self._battery_level = _as_battery_level(
             state.attributes.get(ATTR_BATTERY_LEVEL),
             _as_battery_level(config.get(CONF_BATTERY_LEVEL)),
         )
@@ -231,7 +228,7 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
     def _update_attributes(self):
         super()._update_attributes()
         self._attr_extra_state_attributes.update({
-            ATTR_BATTERY_LEVEL: self._attr_battery_level,
+            ATTR_BATTERY_LEVEL: self._battery_level,
             ATTR_FAN_SPEED: self._attr_fan_speed,
             ATTR_FAN_SPEED_LIST: self._attr_fan_speed_list,
         })

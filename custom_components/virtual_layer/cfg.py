@@ -20,6 +20,7 @@ from homeassistant.const import (
     CONF_ICON,
     CONF_PLATFORM,
     CONF_UNIT_OF_MEASUREMENT,
+    PERCENTAGE,
     Platform,
 )
 from homeassistant.helpers import config_validation as cv
@@ -556,7 +557,11 @@ def _normalize_common_entity_config(entity, device_name, index):
                 valid_source_entities.append(source_entity_id)
         entity[CONF_SOURCE_ENTITIES] = valid_source_entities
 
-    for key in (CONF_VALUE_TEMPLATE, CONF_AVAILABILITY_TEMPLATE):
+    for key in (
+        CONF_VALUE_TEMPLATE,
+        CONF_AVAILABILITY_TEMPLATE,
+        CONF_ICON_TEMPLATE,
+    ):
         if key in entity and not isinstance(entity[key], str):
             _LOGGER.warning(
                 "Ignoring invalid %s for device %s at index %s",
@@ -728,13 +733,13 @@ def _platform_entity_schema(platform):
     return getattr(module, f"{platform.upper()}_SCHEMA", None) or module.ENTITY_SCHEMA
 
 
-def _is_valid_platform_entity_config(schema, entity) -> bool:
-    """Check a stored entity without allowing one bad item to block setup."""
+def _platform_entity_validation_error(schema, entity):
+    """Return a stored entity validation error without blocking setup."""
     try:
         schema(entity)
-    except (TypeError, ValueError, vol.Invalid):
-        return False
-    return True
+    except (TypeError, ValueError, vol.Invalid) as err:
+        return err
+    return None
 
 
 def _pop_entity_meta(meta_data, entity_key, name, platform):
@@ -873,6 +878,46 @@ class BlendedCfg:
         )
 
         sensor_entities = self._entities.setdefault("sensor", [])
+        if platform == "vacuum" and entity.get("battery_level") is not None:
+            battery_unique_id = (
+                f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}battery"
+            )
+            battery_entity_id = self._reserve_entity_id(
+                "sensor",
+                f"sensor.{object_id}_battery",
+                battery_unique_id,
+            )
+            sensor_entities.append({
+                CONF_NAME: f"{entity[CONF_NAME]} - Battery",
+                ATTR_ENTITY_ID: battery_entity_id,
+                ATTR_UNIQUE_ID: battery_unique_id,
+                ATTR_DEVICE_ID: device_id,
+                CONF_INITIAL_VALUE: entity["battery_level"],
+                CONF_INITIAL_AVAILABILITY: True,
+                CONF_PERSISTENT: False,
+                CONF_CLASS: "battery",
+                CONF_UNIT_OF_MEASUREMENT: PERCENTAGE,
+                CONF_ATTRIBUTES: {
+                    "virtual_entity_id": entity_id,
+                    "sensor_type": "battery",
+                },
+                CONF_ICON: "mdi:battery",
+                **_entity_device_info({
+                    key: entity[key]
+                    for key in (
+                        ATTR_DEVICE_ID,
+                        CONF_MANUFACTURER,
+                        CONF_MODEL,
+                        CONF_SW_VERSION,
+                        CONF_HW_VERSION,
+                        CONF_SERIAL_NUMBER,
+                        CONF_CONFIGURATION_URL,
+                        CONF_SUGGESTED_AREA,
+                        CONF_VIA_DEVICE_ID,
+                    )
+                    if key in entity
+                }),
+            })
         if platform == "device_tracker" and isinstance(
             entity.get(CONF_POLYGONAL_ZONE),
             Mapping,
@@ -1154,13 +1199,19 @@ class BlendedCfg:
                     )
                 except (AttributeError, ImportError, TypeError, ValueError):
                     schema = None
-                if schema is None or not _is_valid_platform_entity_config(schema, entity):
+                validation_error = (
+                    None
+                    if schema is None
+                    else _platform_entity_validation_error(schema, entity)
+                )
+                if schema is None or validation_error is not None:
                     _LOGGER.warning(
                         "Skipping invalid %s entity for device %s at index %s; "
-                        "the stored UI item remains available for repair or removal",
+                        "the stored UI item remains available for repair or removal: %s",
                         platform,
                         device_name,
                         index,
+                        validation_error or "platform schema is unavailable",
                     )
                     # Keep identity metadata so repairing the item through the
                     # UI does not produce a duplicate entity or device.

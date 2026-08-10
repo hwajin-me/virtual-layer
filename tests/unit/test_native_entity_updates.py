@@ -1,5 +1,6 @@
 """Ensure native Home Assistant commands publish virtual entity changes."""
 
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -84,6 +85,38 @@ async def test_native_commands_write_the_new_state(entity, command):
     entity.async_write_ha_state.assert_called_once()
 
 
+def test_virtual_camera_restores_explicit_power_instead_of_idle_state():
+    entity = VirtualCamera(
+        _config(CAMERA_SCHEMA, "camera.persistent", "on"),
+        False,
+    )
+
+    entity._restore_state(
+        SimpleNamespace(state="idle", attributes={"is_on": False}),
+        entity._config,
+    )
+    entity._update_attributes()
+
+    assert entity.is_on is False
+    assert entity.state_attributes["is_on"] is False
+
+
+@pytest.mark.parametrize("saved_value", [None, "invalid"])
+def test_virtual_camera_uses_configured_power_for_legacy_or_bad_restore(saved_value):
+    entity = VirtualCamera(
+        _config(CAMERA_SCHEMA, "camera.persistent", "off"),
+        False,
+    )
+    attributes = {} if saved_value is None else {"is_on": saved_value}
+
+    entity._restore_state(
+        SimpleNamespace(state="idle", attributes=attributes),
+        entity._config,
+    )
+
+    assert entity.is_on is False
+
+
 async def test_virtual_vacuum_exposes_state_and_native_commands():
     entity = VirtualVacuum(
         VACUUM_SCHEMA({
@@ -103,7 +136,9 @@ async def test_virtual_vacuum_exposes_state_and_native_commands():
     assert entity.state == VacuumActivity.DOCKED
     assert VacuumEntityFeature.START in entity.supported_features
     assert VacuumEntityFeature.FAN_SPEED in entity.supported_features
-    assert entity.battery_level == 82
+    assert VacuumEntityFeature.BATTERY not in entity.supported_features
+    entity._update_attributes()
+    assert entity.extra_state_attributes["battery_level"] == 82
 
     await entity.async_start()
     assert entity.state == VacuumActivity.CLEANING

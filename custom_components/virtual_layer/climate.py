@@ -18,7 +18,7 @@ from homeassistant.components.climate import (
     ClimateEntity,
     ClimateEntityFeature,
 )
-from homeassistant.components.climate.const import HVACAction, HVACMode
+from homeassistant.components.climate.const import ATTR_HUMIDITY, HVACAction, HVACMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, PRECISION_TENTHS, UnitOfTemperature
 from homeassistant.core import HomeAssistant
@@ -27,6 +27,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
+from .climate_options import migrate_legacy_climate_attributes
 from .const import *
 from .entity import VirtualEntity, virtual_schema
 
@@ -90,6 +91,12 @@ def _safe_hvac_mode(value) -> HVACMode | None:
 def _as_hvac_action(value) -> HVACAction | None:
     if value is None:
         return None
+    if isinstance(value, HVACAction):
+        return value
+    try:
+        return HVACAction(str(value).lower())
+    except (TypeError, ValueError):
+        return None
 
 
 def _finite_float(value, default: float) -> float:
@@ -107,12 +114,6 @@ def _finite_step(value, default: float | None = None) -> float | None:
         return default
     result = _finite_float(value, default if default is not None else 0)
     return result if result > 0 else default
-    if isinstance(value, HVACAction):
-        return value
-    try:
-        return HVACAction(str(value).lower())
-    except (TypeError, ValueError):
-        return None
 
 
 BASE_SCHEMA = virtual_schema(DEFAULT_CLIMATE_VALUE, {
@@ -145,6 +146,39 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
 CLIMATE_SCHEMA = vol.Schema(BASE_SCHEMA)
 
 
+def validate_domain_options(config) -> None:
+    """Validate mode relationships submitted through the config flow."""
+    for field_name in (
+        CONF_HVAC_MODES,
+        CONF_FAN_MODES,
+        CONF_PRESET_MODES,
+        CONF_SWING_MODES,
+        CONF_SWING_HORIZONTAL_MODES,
+    ):
+        modes = config.get(field_name, [])
+        if any(not str(mode).strip() for mode in modes):
+            raise vol.Invalid(f"{field_name} cannot contain empty modes")
+        if len(set(modes)) != len(modes):
+            raise vol.Invalid(f"{field_name} cannot contain duplicate modes")
+
+    hvac_modes = config.get(CONF_HVAC_MODES, [])
+    if not hvac_modes:
+        raise vol.Invalid("At least one HVAC mode is required")
+    initial_mode = _safe_hvac_mode(config.get(CONF_INITIAL_VALUE))
+    if initial_mode not in hvac_modes:
+        raise vol.Invalid("Initial value must be included in HVAC modes")
+
+    for current_field, modes_field in (
+        (CONF_FAN_MODE, CONF_FAN_MODES),
+        (CONF_PRESET_MODE, CONF_PRESET_MODES),
+        (CONF_SWING_MODE, CONF_SWING_MODES),
+        (CONF_SWING_HORIZONTAL_MODE, CONF_SWING_HORIZONTAL_MODES),
+    ):
+        current_mode = config.get(current_field)
+        if current_mode is not None and current_mode not in config.get(modes_field, []):
+            raise vol.Invalid(f"{current_field} must be included in {modes_field}")
+
+
 async def async_setup_platform(
         hass: HomeAssistant,
         config: ConfigType,
@@ -163,7 +197,9 @@ async def async_setup_entry(
     _LOGGER.debug("setting up the entries...")
     entities = []
     for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN):
-        entities.append(VirtualClimate(CLIMATE_SCHEMA(entity), False))
+        entities.append(VirtualClimate(CLIMATE_SCHEMA(
+            migrate_legacy_climate_attributes(entity),
+        ), False))
     async_add_entities(entities)
 
 
@@ -198,10 +234,14 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         self._attr_temperature_unit = config.get(CONF_TEMPERATURE_UNIT)
 
         self._attr_supported_features = (
-            ClimateEntityFeature.TARGET_HUMIDITY
-            | ClimateEntityFeature.TURN_ON
+            ClimateEntityFeature.TURN_ON
             | ClimateEntityFeature.TURN_OFF
         )
+        if (
+            config.get(CONF_TARGET_HUMIDITY) is not None
+            or config.get(CONF_TARGET_HUMIDITY_STEP) is not None
+        ):
+            self._attr_supported_features |= ClimateEntityFeature.TARGET_HUMIDITY
         if (
             config.get(CONF_TARGET_TEMPERATURE_HIGH) is not None
             or config.get(CONF_TARGET_TEMPERATURE_LOW) is not None
@@ -273,20 +313,29 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         )
         self._attr_target_temperature = self._bounded_temperature(
             state.attributes.get(
-                CONF_TARGET_TEMPERATURE,
-                config.get(CONF_TARGET_TEMPERATURE),
+                ATTR_TEMPERATURE,
+                state.attributes.get(
+                    CONF_TARGET_TEMPERATURE,
+                    config.get(CONF_TARGET_TEMPERATURE),
+                ),
             ),
         )
         self._attr_target_temperature_high = self._bounded_temperature(
             state.attributes.get(
-                CONF_TARGET_TEMPERATURE_HIGH,
-                config.get(CONF_TARGET_TEMPERATURE_HIGH),
+                ATTR_TARGET_TEMPERATURE_HIGH,
+                state.attributes.get(
+                    CONF_TARGET_TEMPERATURE_HIGH,
+                    config.get(CONF_TARGET_TEMPERATURE_HIGH),
+                ),
             ),
         )
         self._attr_target_temperature_low = self._bounded_temperature(
             state.attributes.get(
-                CONF_TARGET_TEMPERATURE_LOW,
-                config.get(CONF_TARGET_TEMPERATURE_LOW),
+                ATTR_TARGET_TEMPERATURE_LOW,
+                state.attributes.get(
+                    CONF_TARGET_TEMPERATURE_LOW,
+                    config.get(CONF_TARGET_TEMPERATURE_LOW),
+                ),
             ),
         )
         self._attr_current_humidity = self._bounded_humidity(
@@ -297,8 +346,11 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         )
         self._attr_target_humidity = self._bounded_humidity(
             state.attributes.get(
-                CONF_TARGET_HUMIDITY,
-                config.get(CONF_TARGET_HUMIDITY),
+                ATTR_HUMIDITY,
+                state.attributes.get(
+                    CONF_TARGET_HUMIDITY,
+                    config.get(CONF_TARGET_HUMIDITY),
+                ),
             ),
         )
         self._attr_fan_mode = state.attributes.get(CONF_FAN_MODE, config.get(CONF_FAN_MODE))

@@ -27,7 +27,7 @@ from homeassistant.components.media_player import (
     MediaPlayerEntityFeature,
     MediaPlayerState,
 )
-from homeassistant.components.remote import RemoteEntity
+from homeassistant.components.remote import RemoteEntity, RemoteEntityFeature
 from homeassistant.components.select import SelectEntity
 from homeassistant.components.siren import SirenEntity, SirenEntityFeature
 from homeassistant.components.text import TextEntity, TextMode
@@ -74,7 +74,7 @@ class GenericVirtualEntity(VirtualEntity, Entity):
         self._attr_icon = config.get(CONF_ICON)
         self._attr_state_class = config.get(CONF_STATE_CLASS)
         self._domain_options = generic_entity_options(config)
-        _LOGGER.info(f"GenericVirtualEntity: {self.name} ({domain}) created")
+        _LOGGER.debug(f"GenericVirtualEntity: {self.name} ({domain}) created")
 
     @property
     def state(self):
@@ -148,13 +148,18 @@ class _NativeGenericMixin:
     """Common config and attributes for native building-block entities."""
 
     PLATFORM_DOMAIN: str
+    NATIVE_OPTION_KEYS = frozenset()
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, self.PLATFORM_DOMAIN, old_style)
         self._attr_device_class = config.get(CONF_CLASS)
         self._attr_icon = config.get(CONF_ICON)
         self._attr_state_class = config.get(CONF_STATE_CLASS)
-        self._domain_options = generic_entity_options(config)
+        self._domain_options = {
+            key: value
+            for key, value in generic_entity_options(config).items()
+            if key not in self.NATIVE_OPTION_KEYS
+        }
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -165,6 +170,7 @@ class VirtualSelect(_NativeGenericMixin, VirtualEntity, SelectEntity):
     """Virtual select with Home Assistant's native option services."""
 
     PLATFORM_DOMAIN = "select"
+    NATIVE_OPTION_KEYS = frozenset({"options"})
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
@@ -202,6 +208,7 @@ class VirtualText(_NativeGenericMixin, VirtualEntity, TextEntity):
     """Virtual text with native length and pattern capabilities."""
 
     PLATFORM_DOMAIN = "text"
+    NATIVE_OPTION_KEYS = frozenset({"max", "min", "mode", "pattern"})
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
@@ -338,6 +345,11 @@ class VirtualSiren(_NativeGenericMixin, VirtualEntity, SirenEntity):
     """Virtual siren with tone, volume, and duration capabilities."""
 
     PLATFORM_DOMAIN = "siren"
+    NATIVE_OPTION_KEYS = frozenset({
+        "available_tones",
+        "support_duration",
+        "support_volume",
+    })
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
@@ -439,11 +451,20 @@ class VirtualRemote(_NativeGenericMixin, VirtualEntity, RemoteEntity):
     """Virtual remote supporting power and command dispatch."""
 
     PLATFORM_DOMAIN = "remote"
+    NATIVE_OPTION_KEYS = frozenset({"activity_list", "current_activity"})
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
         self._attr_activity_list = _string_list(config.get("activity_list"))
         self._attr_current_activity = config.get("current_activity")
+        if (
+            _has_value(self._attr_current_activity)
+            and self._attr_current_activity not in self._attr_activity_list
+        ):
+            self._attr_activity_list.append(str(self._attr_current_activity))
+        self._attr_supported_features = RemoteEntityFeature(0)
+        if self._attr_activity_list:
+            self._attr_supported_features |= RemoteEntityFeature.ACTIVITY
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -452,6 +473,12 @@ class VirtualRemote(_NativeGenericMixin, VirtualEntity, RemoteEntity):
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
         self.set_state(state.state)
+        restored_activity = state.attributes.get("current_activity")
+        if (
+            _has_value(restored_activity)
+            and restored_activity in self._attr_activity_list
+        ):
+            self._attr_current_activity = restored_activity
 
     def set_state(self, value) -> None:
         self._attr_is_on = str(value).lower() in {"1", "on", "true", "yes"}
@@ -481,6 +508,12 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
     """Virtual media player with common playback and volume services."""
 
     PLATFORM_DOMAIN = "media_player"
+    NATIVE_OPTION_KEYS = frozenset({
+        "is_volume_muted",
+        "source",
+        "source_list",
+        "volume_level",
+    })
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
@@ -501,8 +534,8 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             self._attr_supported_features |= MediaPlayerEntityFeature.SELECT_SOURCE
 
     @staticmethod
-    def _bounded_volume(volume) -> float:
-        return max(0.0, min(1.0, _safe_float(volume, 0.5)))
+    def _bounded_volume(volume, default: float = 0.5) -> float:
+        return max(0.0, min(1.0, _safe_float(volume, default)))
 
     @staticmethod
     def _parse_media_state(value) -> MediaPlayerState | None:
@@ -523,9 +556,16 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         super()._restore_state(state, config)
         self._attr_state = self._parse_media_state(state.state)
         self._attr_volume_level = self._bounded_volume(
-            state.attributes.get("volume_level", self._attr_volume_level)
+            state.attributes.get("volume_level", self._attr_volume_level),
+            self._attr_volume_level,
         )
-        self._attr_source = state.attributes.get("source", self._attr_source)
+        restored_source = state.attributes.get("source")
+        if restored_source in self._attr_source_list:
+            self._attr_source = restored_source
+        self._attr_is_volume_muted = _safe_bool(
+            state.attributes.get("is_volume_muted", self._attr_is_volume_muted),
+            self._attr_is_volume_muted,
+        )
 
     def set_state(self, value) -> None:
         state = self._parse_media_state(value)
@@ -574,6 +614,15 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
     """Virtual water heater with target temperature and operation modes."""
 
     PLATFORM_DOMAIN = "water_heater"
+    NATIVE_OPTION_KEYS = frozenset({
+        "current_temperature",
+        "max_temp",
+        "min_temp",
+        "operation_list",
+        "target_temperature",
+        "target_temperature_step",
+        "temperature_unit",
+    })
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
@@ -627,6 +676,18 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
         self.set_state(state.state)
+        self._attr_current_temperature = self._bounded_temperature(
+            state.attributes.get(
+                "current_temperature",
+                self._attr_current_temperature,
+            )
+        )
+        self._attr_target_temperature = self._bounded_temperature(
+            state.attributes.get(
+                "temperature",
+                self._attr_target_temperature,
+            )
+        )
 
     def set_state(self, value) -> None:
         operation = str(value).lower()
@@ -666,6 +727,15 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
     """Virtual software update entity."""
 
     PLATFORM_DOMAIN = "update"
+    NATIVE_OPTION_KEYS = frozenset({
+        "installed_version",
+        "latest_version",
+        "release_notes",
+        "release_summary",
+        "release_url",
+        "support_backup",
+        "versions",
+    })
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -9,7 +10,12 @@ from unittest.mock import AsyncMock, patch
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
 import pytest
-from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME, CONF_PLATFORM
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_NAME,
+    CONF_PLATFORM,
+    STATE_UNAVAILABLE,
+)
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.virtual_layer import async_setup_entry
@@ -35,18 +41,82 @@ pytestmark = pytest.mark.integration
 
 
 def _raw_ui_entity(domain: str) -> dict:
+    initial_values = {
+        "binary_sensor": "off",
+        "camera": "on",
+        "climate": "off",
+        "cover": "closed",
+        "date": "2026-08-08",
+        "datetime": "2026-08-08T12:34:56+09:00",
+        "device_tracker": "not_home",
+        "fan": "off",
+        "humidifier": "off",
+        "lawn_mower": "docked",
+        "light": "off",
+        "lock": "locked",
+        "media_player": "idle",
+        "number": "0",
+        "remote": "off",
+        "select": "eco",
+        "siren": "off",
+        "switch": "off",
+        "text": "hello",
+        "time": "12:34:56",
+        "update": "1.0.0",
+        "vacuum": "docked",
+        "valve": "closed",
+        "water_heater": "off",
+    }
     entity = {
         CONF_PLATFORM: domain,
         CONF_NAME: f"{domain} Entity",
-        CONF_INITIAL_VALUE: "unknown",
+        CONF_INITIAL_VALUE: initial_values.get(domain, "unknown"),
         CONF_INITIAL_AVAILABILITY: True,
         CONF_PERSISTENT: False,
     }
     if domain == "number":
         entity.update({
-            CONF_INITIAL_VALUE: "0",
             CONF_MIN: 0,
             CONF_MAX: 100,
+        })
+    elif domain == "climate":
+        entity.update({
+            "hvac_modes": ["off", "heat", "cool"],
+            "fan_modes": ["auto", "turbo"],
+            "fan_mode": "auto",
+            "preset_modes": ["none", "eco"],
+            "preset_mode": "none",
+            "swing_modes": ["off", "vertical"],
+            "swing_mode": "off",
+        })
+    elif domain == "humidifier":
+        entity.update({
+            "min_humidity": 30,
+            "max_humidity": 70,
+            "target_humidity": 50,
+            "modes": ["normal", "eco"],
+            "mode": "normal",
+        })
+    elif domain == "select":
+        entity["options"] = ["eco", "boost"]
+    elif domain == "text":
+        entity.update({"min": 1, "max": 32})
+    elif domain == "update":
+        entity.update({
+            "installed_version": "1.0.0",
+            "latest_version": "1.1.0",
+            "versions": ["1.0.0", "1.1.0"],
+        })
+    elif domain == "vacuum":
+        entity.update({
+            "battery_level": 80,
+            "fan_speed": "normal",
+            "fan_speed_list": ["normal", "turbo"],
+        })
+    elif domain == "water_heater":
+        entity.update({
+            "operation_list": ["off", "eco", "heat"],
+            "target_temperature": 50,
         })
     return entity
 
@@ -150,6 +220,92 @@ async def test_config_entry_setup_loads_string_only_entity_domains(hass, tmp_pat
 
     for domain in string_only_domains:
         assert hass.states.get(f"{domain}.{domain}_entity") is None
+
+
+async def test_real_config_entry_loads_every_supported_domain(
+    hass,
+    tmp_path,
+    monkeypatch,
+):
+    """Load every advertised domain through Home Assistant's entity platforms."""
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        title="all domains - virtual_layer",
+        data={ATTR_GROUP_NAME: "all_domains"},
+        options={
+            ATTR_DEVICES: {
+                "All Domains Device": [
+                    _raw_ui_entity(domain)
+                    for domain in VIRTUAL_ENTITY_DOMAINS
+                ],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+    await hass.async_block_till_done()
+
+    missing_domains = [
+        domain
+        for domain in VIRTUAL_ENTITY_DOMAINS
+        if hass.states.get(f"{domain}.{domain}_entity") is None
+    ]
+    assert not missing_domains, f"Domains missing runtime states: {missing_domains}"
+
+    entity_registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
+    registered_device_ids = set()
+    for domain in VIRTUAL_ENTITY_DOMAINS:
+        entity_id = f"{domain}.{domain}_entity"
+        entity_entry = entity_registry.async_get(entity_id)
+        assert entity_entry is not None
+        assert entity_entry.platform == COMPONENT_DOMAIN
+        assert entity_entry.device_id is not None
+        registered_device_ids.add(entity_entry.device_id)
+        assert device_registry.async_get(entity_entry.device_id) is not None
+    assert len(registered_device_ids) == 1
+    battery_state = hass.states.get("sensor.vacuum_entity_battery")
+    assert battery_state is not None
+    assert battery_state.state == "80"
+    assert battery_state.attributes["device_class"] == "battery"
+    assert battery_state.attributes["unit_of_measurement"] == "%"
+    assert (
+        entity_registry.async_get("sensor.vacuum_entity_battery").device_id
+        in registered_device_ids
+    )
+
+    updated_options = copy.deepcopy(dict(entry.options))
+    vacuum_config = next(
+        entity
+        for entity in updated_options[ATTR_DEVICES]["All Domains Device"]
+        if entity[CONF_PLATFORM] == "vacuum"
+    )
+    vacuum_config.pop("battery_level")
+    hass.config_entries.async_update_entry(entry, options=updated_options)
+    assert await hass.config_entries.async_reload(entry.entry_id) is True
+    await hass.async_block_till_done()
+
+    assert hass.states.get("vacuum.vacuum_entity") is not None
+    assert entity_registry.async_get("sensor.vacuum_entity_battery") is None
+    assert len({
+        entity_registry.async_get(f"{domain}.{domain}_entity").device_id
+        for domain in VIRTUAL_ENTITY_DOMAINS
+    }) == 1
+
+    assert await hass.config_entries.async_unload(entry.entry_id) is True
+    await hass.async_block_till_done()
+    for domain in VIRTUAL_ENTITY_DOMAINS:
+        state = hass.states.get(f"{domain}.{domain}_entity")
+        if domain in STATE_ONLY_ENTITY_DOMAINS:
+            assert state is None
+        else:
+            assert state is None or state.state == STATE_UNAVAILABLE
 
 
 @pytest.mark.parametrize("domain", VIRTUAL_ENTITY_DOMAINS)

@@ -35,7 +35,7 @@ from .cfg import (
 )
 from .const import *
 
-__version__ = '1.0.8'
+__version__ = '1.0.9'
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -795,6 +795,21 @@ def _async_apply_state_only_templates(hass, entity) -> None:
             changed = attributes.get(ATTR_AVAILABLE) != available or changed
             attributes[ATTR_AVAILABLE] = available
 
+        if entity.get(CONF_ICON_TEMPLATE):
+            rendered_icon = str(
+                _render_state_only_template(
+                    hass,
+                    entity,
+                    entity[CONF_ICON_TEMPLATE],
+                ),
+            ).strip()
+            next_icon = rendered_icon or entity.get(CONF_ICON)
+            changed = attributes.get(CONF_ICON) != next_icon or changed
+            if next_icon:
+                attributes[CONF_ICON] = next_icon
+            else:
+                attributes.pop(CONF_ICON, None)
+
         attribute_templates = entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
         if isinstance(attribute_templates, Mapping):
             for name, template in attribute_templates.items():
@@ -1042,6 +1057,7 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
         for template in (
             entity.get(CONF_VALUE_TEMPLATE),
             entity.get(CONF_AVAILABILITY_TEMPLATE),
+            entity.get(CONF_ICON_TEMPLATE),
             *attribute_templates.values(),
         )
         if template
@@ -1213,7 +1229,7 @@ async def async_virtual_set_availability_service(hass, call):
 
     for entity_id in call.data['entity_id']:
         domain = entity_id.split(".")[0]
-        _LOGGER.info(f"{entity_id} set_avilable(value={value})")
+        _LOGGER.debug("%s set_available(value=%s)", entity_id, value)
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, attributes={ATTR_AVAILABLE: value})
             continue
@@ -1234,25 +1250,25 @@ def _async_register_virtual_services(hass) -> None:
     async def async_virtual_service_set_available(call) -> None:
         """Call virtual availability service handler."""
         await _async_verify_target_entity_control(hass, call)
-        _LOGGER.info(f"{call.service} service called")
+        _LOGGER.debug("%s service called", call.service)
         await async_virtual_set_availability_service(hass, call)
 
     async def async_virtual_service_set_state(call) -> None:
         """Call virtual state service handler."""
         await _async_verify_target_entity_control(hass, call)
-        _LOGGER.info(f"{call.service} service called")
+        _LOGGER.debug("%s service called", call.service)
         await async_virtual_set_state_service(hass, call)
 
     async def async_virtual_service_set_attributes(call) -> None:
         """Call virtual attribute service handler."""
         await _async_verify_target_entity_control(hass, call)
-        _LOGGER.info(f"{call.service} service called")
+        _LOGGER.debug("%s service called", call.service)
         await async_virtual_set_attributes_service(hass, call)
 
     async def async_virtual_service_clear_attributes(call) -> None:
         """Call virtual attribute clearing service handler."""
         await _async_verify_target_entity_control(hass, call)
-        _LOGGER.info(f"{call.service} service called")
+        _LOGGER.debug("%s service called", call.service)
         await async_virtual_clear_attributes_service(hass, call)
 
     _LOGGER.debug("installing virtual layer handlers")
@@ -1287,7 +1303,7 @@ async def async_virtual_set_state_service(hass, call):
     value = call.data[ATTR_VALUE]
     for entity_id in call.data[ATTR_ENTITY_ID]:
         domain = entity_id.split(".")[0]
-        _LOGGER.info(f"{entity_id} set_state(value={value})")
+        _LOGGER.debug("%s set_state(value=%s)", entity_id, value)
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, value=value)
             continue
@@ -1304,7 +1320,7 @@ async def async_virtual_set_attributes_service(hass, call):
     }
     for entity_id in call.data[ATTR_ENTITY_ID]:
         domain = entity_id.split(".")[0]
-        _LOGGER.info(f"{entity_id} set_attributes(attributes={attributes})")
+        _LOGGER.debug("%s set_attributes(attributes=%s)", entity_id, attributes)
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, attributes=attributes)
             continue
@@ -1316,7 +1332,7 @@ async def async_virtual_clear_attributes_service(hass, call):
     attributes = call.data[ATTR_ATTRIBUTES]
     for entity_id in call.data[ATTR_ENTITY_ID]:
         domain = entity_id.split(".")[0]
-        _LOGGER.info(f"{entity_id} clear_attributes(attributes={attributes})")
+        _LOGGER.debug("%s clear_attributes(attributes=%s)", entity_id, attributes)
         if _is_state_only_entity_id(entity_id):
             _async_clear_state_only_attributes(hass, entity_id, attributes)
             continue

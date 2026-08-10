@@ -74,7 +74,7 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
             CoverEntityFeature.SET_POSITION
         )
 
-        _LOGGER.info(f"VirtualCover: {self.name} created")
+        _LOGGER.debug(f"VirtualCover: {self.name} created")
 
     @property
     def current_cover_position(self) -> int | None:

@@ -848,15 +848,17 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         }, 0)
 
     @property
-    def location_name(self) -> str | None:
-        """Return a location name for the current location of the device."""
-        return self._location
+    def state(self) -> str | None:
+        """Return a named location or let HA resolve GPS coordinates to a zone."""
+        if self._location is not None:
+            return self._location
+        return super().state
 
     @property
-    def source_type(self) -> SourceType | str:
+    def source_type(self) -> SourceType:
         if self._coords:
-            return "gps"
-        return "virtual"
+            return SourceType.GPS
+        return SourceType.ROUTER
 
     @property
     def latitude(self) -> float | None:

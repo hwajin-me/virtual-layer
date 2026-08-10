@@ -216,7 +216,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         # Keep this alias for old callers while SensorEntity uses the native unit.
         self._attr_unit_of_measurement = self._attr_native_unit_of_measurement
 
-        _LOGGER.info(f"VirtualSensor: {self.name} created")
+        _LOGGER.debug(f"VirtualSensor: {self.name} created")
 
     def _create_state(self, config):
         super()._create_state(config)

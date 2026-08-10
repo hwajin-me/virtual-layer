@@ -11,13 +11,14 @@ from collections.abc import Callable
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.components.humidifier import (
-    DOMAIN as PLATFORM_DOMAIN,
-)
-from homeassistant.components.humidifier import (
+    ATTR_HUMIDITY,
     HumidifierAction,
     HumidifierDeviceClass,
     HumidifierEntity,
     HumidifierEntityFeature,
+)
+from homeassistant.components.humidifier import (
+    DOMAIN as PLATFORM_DOMAIN,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_DEVICE_CLASS, STATE_ON
@@ -139,7 +140,7 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             else None
         )
 
-        _LOGGER.info(f"VirtualHumidifier: {self.name} created")
+        _LOGGER.debug(f"VirtualHumidifier: {self.name} created")
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -170,8 +171,11 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         )
         self._attr_target_humidity = self._bounded_humidity(
             state.attributes.get(
-                CONF_TARGET_HUMIDITY,
-                config.get(CONF_TARGET_HUMIDITY),
+                ATTR_HUMIDITY,
+                state.attributes.get(
+                    CONF_TARGET_HUMIDITY,
+                    config.get(CONF_TARGET_HUMIDITY),
+                ),
             )
         )
         restored_mode = state.attributes.get(CONF_MODE, config.get(CONF_MODE))

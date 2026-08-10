@@ -12,8 +12,11 @@ import voluptuous as vol
 from homeassistant.components.number import (
     ATTR_MAX,
     ATTR_MIN,
+    ATTR_STEP,
+    DEFAULT_STEP,
     NumberDeviceClass,
     NumberEntity,
+    NumberMode,
 )
 from homeassistant.components.number import (
     DOMAIN as PLATFORM_DOMAIN,
@@ -24,6 +27,7 @@ from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     CONCENTRATION_PARTS_PER_MILLION,
+    CONF_MODE,
     CONF_UNIT_OF_MEASUREMENT,
     LIGHT_LUX,
     PERCENTAGE,
@@ -36,6 +40,7 @@ from homeassistant.const import (
     UnitOfPower,
     UnitOfPressure,
     UnitOfReactivePower,
+    UnitOfTemperature,
     UnitOfVolume,
     UnitOfVolumeFlowRate,
 )
@@ -54,16 +59,46 @@ DEPENDENCIES = [COMPONENT_DOMAIN]
 
 DEFAULT_NUMBER_VALUE = "0"
 
+
+def _as_number_mode(value) -> NumberMode:
+    """Return a valid number input mode while tolerating old stored data."""
+    try:
+        return NumberMode(value)
+    except (TypeError, ValueError):
+        return NumberMode.AUTO
+
+
+def validate_domain_options(config) -> None:
+    """Validate number bounds and controls entered through the UI."""
+    minimum = VirtualNumber._finite_bound(config.get(CONF_MIN), 0.0)
+    maximum = VirtualNumber._finite_bound(config.get(CONF_MAX), 100.0)
+    if minimum > maximum:
+        raise vol.Invalid("min must not be greater than max")
+
+    step = VirtualNumber._finite_bound(config.get(ATTR_STEP), DEFAULT_STEP)
+    if step <= 0:
+        raise vol.Invalid("step must be a positive finite number")
+
+    if CONF_MODE in config:
+        try:
+            NumberMode(config[CONF_MODE])
+        except (TypeError, ValueError) as err:
+            raise vol.Invalid("mode must be auto, box, or slider") from err
+
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(virtual_schema(DEFAULT_NUMBER_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
     vol.Required(CONF_MIN): vol.Coerce(float),
     vol.Required(CONF_MAX): vol.Coerce(float),
+    vol.Optional(ATTR_STEP, default=DEFAULT_STEP): vol.Coerce(float),
+    vol.Optional(CONF_MODE, default=NumberMode.AUTO): _as_number_mode,
     vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
 }))
 NUMBER_SCHEMA = vol.Schema(virtual_schema(DEFAULT_NUMBER_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
     vol.Required(CONF_MIN): vol.Coerce(float),
     vol.Required(CONF_MAX): vol.Coerce(float),
+    vol.Optional(ATTR_STEP, default=DEFAULT_STEP): vol.Coerce(float),
+    vol.Optional(CONF_MODE, default=NumberMode.AUTO): _as_number_mode,
     vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
 }))
 
@@ -83,12 +118,12 @@ UNITS_OF_MEASUREMENT = {
     NumberDeviceClass.PM25: CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,  # µg/m³ of PM2.5
     NumberDeviceClass.SIGNAL_STRENGTH: SIGNAL_STRENGTH_DECIBELS,  # signal strength (dB/dBm)
     NumberDeviceClass.SULPHUR_DIOXIDE: CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,  # µg/m³ of sulphur dioxide
-    NumberDeviceClass.TEMPERATURE: "C",  # temperature (C/F)
+    NumberDeviceClass.TEMPERATURE: UnitOfTemperature.CELSIUS,
     NumberDeviceClass.PRESSURE: UnitOfPressure.HPA,  # pressure (hPa/mbar)
     NumberDeviceClass.POWER: UnitOfPower.KILO_WATT,  # power (W/kW)
     NumberDeviceClass.CURRENT: UnitOfElectricCurrent.AMPERE,  # current (A)
     NumberDeviceClass.ENERGY: UnitOfEnergy.KILO_WATT_HOUR,  # energy (Wh/kWh/MWh)
-    NumberDeviceClass.FREQUENCY: UnitOfFrequency.GIGAHERTZ,  # energy (Hz/kHz/MHz/GHz)
+    NumberDeviceClass.FREQUENCY: UnitOfFrequency.HERTZ,
     NumberDeviceClass.POWER_FACTOR: PERCENTAGE,  # power factor (no unit, min: -1.0, max: 1.0)
     NumberDeviceClass.REACTIVE_POWER: UnitOfReactivePower.VOLT_AMPERE_REACTIVE,  # reactive power (var)
     NumberDeviceClass.VOLATILE_ORGANIC_COMPOUNDS: CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,  # µg/m³ of vocs
@@ -148,13 +183,20 @@ class VirtualNumber(VirtualEntity, NumberEntity):
                 self._attr_native_max_value,
                 self._attr_native_min_value,
             )
+        self._attr_native_step = self._finite_bound(
+            config.get(ATTR_STEP),
+            DEFAULT_STEP,
+        )
+        if self._attr_native_step <= 0:
+            self._attr_native_step = DEFAULT_STEP
+        self._attr_mode = _as_number_mode(config.get(CONF_MODE))
 
         # Set unit of measurement
         self._attr_unit_of_measurement = config.get(CONF_UNIT_OF_MEASUREMENT)
         if not self._attr_unit_of_measurement and self._attr_device_class in UNITS_OF_MEASUREMENT:
             self._attr_unit_of_measurement = UNITS_OF_MEASUREMENT[self._attr_device_class]
 
-        _LOGGER.info(f"VirtualSensor: {self.name} created")
+        _LOGGER.debug(f"VirtualNumber: {self.name} created")
 
     def convert_to_native_value(self, value: float) -> float:
         return value
@@ -201,7 +243,8 @@ class VirtualNumber(VirtualEntity, NumberEntity):
                 (ATTR_DEVICE_CLASS, self._attr_device_class),
                 (ATTR_UNIT_OF_MEASUREMENT, self._attr_unit_of_measurement),
                 (ATTR_MIN, self.native_min_value),
-                (ATTR_MAX, self.native_max_value)
+                (ATTR_MAX, self.native_max_value),
+                (ATTR_STEP, self.native_step),
             ) if value is not None
         })
 

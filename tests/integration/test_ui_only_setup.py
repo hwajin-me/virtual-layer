@@ -66,6 +66,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_DEVICE_MANUFACTURER,
     CONF_DEVICE_MODEL,
     CONF_DEVICE_NAME,
+    CONF_DOMAIN_OPTIONS_JSON,
     CONF_ENTITY_KEY,
     CONF_ENTITY_KEYS,
     CONF_ENTITY_NAME,
@@ -104,6 +105,7 @@ from custom_components.virtual_layer.const import (
     CONF_CLASS,
     CONF_CONFIGURATION_URL,
     CONF_EVENT_HOOKS,
+    CONF_ICON_TEMPLATE,
     CONF_INITIAL_AVAILABILITY,
     CONF_INITIAL_VALUE,
     CONF_LOCATION_HELPER,
@@ -1319,6 +1321,165 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
             CONF_ATTRIBUTES: {"brightness": 128},
         },
     ]
+
+
+async def test_options_flow_prefills_climate_native_mode_options(hass):
+    hass.states.async_set(
+        "climate.bedroom",
+        "cool",
+        {
+            "friendly_name": "Bedroom AC",
+            "current_temperature": 24.0,
+            "fan_mode": "auto",
+            "fan_modes": ["medium", "high", "turbo", "auto"],
+            "hvac_modes": ["off", "cool", "dry", "fan_only"],
+            "max_temp": 30.0,
+            "min_temp": 18.0,
+            "preset_mode": "none",
+            "preset_modes": ["none", "sleep", "quiet", "speed", "ai_comfort"],
+            "supported_features": 441,
+            "swing_mode": None,
+            "swing_modes": [],
+            "target_temp_step": 1.0,
+            "temperature": 23.0,
+        },
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["climate.bedroom"]},
+    )
+
+    defaults = result["data_schema"]({})
+    domain_options = json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON])
+    assert defaults[CONF_PLATFORM] == "climate"
+    assert defaults["hvac_modes"] == ["off", "cool", "dry", "fan_only"]
+    assert defaults["fan_mode"] == "auto"
+    assert defaults["fan_modes"] == ["medium", "high", "turbo", "auto"]
+    assert defaults["preset_mode"] == "none"
+    assert defaults["preset_modes"] == [
+        "none",
+        "sleep",
+        "quiet",
+        "speed",
+        "ai_comfort",
+    ]
+    assert defaults["swing_modes"] == []
+    assert domain_options["target_temperature"] == 23.0
+    assert domain_options["target_temperature_step"] == 1.0
+    assert defaults["attributes_json"] == ""
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_DEVICE_NAME: "Bedroom",
+            ATTR_ENTITY_ID: "climate.virtual_bedroom",
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entity = result["data"][ATTR_DEVICES]["Bedroom"][0]
+    assert entity["fan_modes"] == ["medium", "high", "turbo", "auto"]
+    assert entity["preset_modes"] == [
+        "none",
+        "sleep",
+        "quiet",
+        "speed",
+        "ai_comfort",
+    ]
+    assert entity["swing_modes"] == []
+    assert entity["target_temperature"] == 23.0
+    assert "supported_features" not in entity.get(CONF_ATTRIBUTES, {})
+
+
+async def test_options_flow_can_edit_all_climate_modes(hass):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Bedroom": [{
+                    CONF_PLATFORM: "climate",
+                    CONF_NAME: "Bedroom AC",
+                    ATTR_ENTITY_ID: "climate.virtual_bedroom",
+                    CONF_INITIAL_VALUE: "cool",
+                    CONF_INITIAL_AVAILABILITY: True,
+                    CONF_PERSISTENT: True,
+                    "hvac_modes": ["off", "cool", "dry"],
+                    "fan_modes": ["auto", "turbo"],
+                    "fan_mode": "auto",
+                    "preset_modes": ["none", "sleep"],
+                    "preset_mode": "none",
+                    "swing_modes": ["off", "vertical"],
+                    "swing_mode": "off",
+                    "swing_horizontal_modes": ["left", "right"],
+                    "swing_horizontal_mode": "left",
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Bedroom", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {},
+    )
+
+    assert result["step_id"] == "edit_entity"
+    defaults = result["data_schema"]({})
+    assert defaults["fan_modes"] == ["auto", "turbo"]
+    assert defaults["preset_mode"] == "none"
+    assert defaults["swing_modes"] == ["off", "vertical"]
+    assert defaults["swing_horizontal_mode"] == "left"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_INITIAL_VALUE: "heat",
+            "hvac_modes": ["off", "heat", "cool"],
+            "fan_modes": ["auto", "quiet"],
+            "fan_mode": "quiet",
+            "preset_modes": ["none", "eco"],
+            "preset_mode": "eco",
+            "swing_modes": ["auto", "vertical"],
+            "swing_mode": "auto",
+            "swing_horizontal_modes": ["left", "right"],
+            "swing_horizontal_mode": "right",
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entity = result["data"][ATTR_DEVICES]["Bedroom"][0]
+    assert entity[CONF_INITIAL_VALUE] == "heat"
+    assert entity["hvac_modes"] == ["off", "heat", "cool"]
+    assert entity["fan_modes"] == ["auto", "quiet"]
+    assert entity["fan_mode"] == "quiet"
+    assert entity["preset_modes"] == ["none", "eco"]
+    assert entity["preset_mode"] == "eco"
+    assert entity["swing_modes"] == ["auto", "vertical"]
+    assert entity["swing_mode"] == "auto"
+    assert entity["swing_horizontal_modes"] == ["left", "right"]
+    assert entity["swing_horizontal_mode"] == "right"
 
 
 async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_entities(hass):
@@ -2711,6 +2872,44 @@ async def test_direct_jinja_template_reacts_without_explicit_source_list(hass):
     await entity.async_will_remove_from_hass()
 
 
+async def test_icon_template_reacts_to_template_source_changes(hass):
+    hass.states.async_set("binary_sensor.front_door", "off")
+    config = {
+        CONF_NAME: "Template Icon Sensor",
+        ATTR_ENTITY_ID: "sensor.template_icon_sensor",
+        ATTR_UNIQUE_ID: "template-icon-sensor",
+        ATTR_DEVICE_ID: "template-icon-device",
+        CONF_INITIAL_VALUE: "ready",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: False,
+        CONF_ICON: "mdi:door",
+        CONF_ICON_TEMPLATE: (
+            "{{ 'mdi:door-open' if door == 'on' else 'mdi:door-closed' }}"
+        ),
+        CONF_TEMPLATE_SOURCES: {
+            "door": {
+                ATTR_ENTITY_ID: "binary_sensor.front_door",
+                CONF_ATTRIBUTE: "state",
+            },
+        },
+    }
+    entity = VirtualSensor(config, False)
+    entity.hass = hass
+    entity.async_schedule_update_ha_state = Mock()
+    entity._create_state(config)
+    entity._setup_templates()
+    entity._apply_templates()
+
+    assert entity.icon == "mdi:door-closed"
+
+    hass.states.async_set("binary_sensor.front_door", "on")
+    await hass.async_block_till_done()
+
+    assert entity.icon == "mdi:door-open"
+    assert entity.async_schedule_update_ha_state.called
+    await entity.async_will_remove_from_hass()
+
+
 async def test_custom_state_hook_updates_virtual_entity_from_configured_event(hass):
     config = {
         CONF_NAME: "Hook Sensor",
@@ -2877,6 +3076,10 @@ async def test_state_only_entity_updates_composite_templates(hass, tmp_path, mon
                 },
             },
             CONF_VALUE_TEMPLATE: "{{ source }}",
+            CONF_ICON: "mdi:tag-outline",
+            CONF_ICON_TEMPLATE: (
+                "{{ 'mdi:tag' if source == 'first' else 'mdi:tag-off' }}"
+            ),
             CONF_ATTRIBUTE_TEMPLATES: {
                 "copied": "{{ source }}",
                 "direct_setting": "{{ 'overridden' }}",
@@ -2895,6 +3098,7 @@ async def test_state_only_entity_updates_composite_templates(hass, tmp_path, mon
         assert await async_setup_entry(hass, entry) is True
     await hass.async_block_till_done()
     assert hass.states.get("tag.composite_tag").state == "first"
+    assert hass.states.get("tag.composite_tag").attributes[CONF_ICON] == "mdi:tag"
     assert hass.states.get("tag.composite_tag").attributes["copied"] == "first"
     assert hass.states.get("tag.composite_tag").attributes["direct_setting"] == {
         "mode": "nfc",
@@ -2904,6 +3108,7 @@ async def test_state_only_entity_updates_composite_templates(hass, tmp_path, mon
     hass.states.async_set("sensor.tag_source", "second")
     await hass.async_block_till_done()
     assert hass.states.get("tag.composite_tag").state == "second"
+    assert hass.states.get("tag.composite_tag").attributes[CONF_ICON] == "mdi:tag-off"
 
     assert await async_unload_entry(hass, entry) is True
     hass.states.async_set("sensor.tag_source", "after_unload")

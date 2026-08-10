@@ -30,6 +30,25 @@ works cleanly with Docker Desktop.
 docker compose -f tests/docker/docker-compose.yml logs -f homeassistant
 ```
 
+## Automated All-Domain Test
+
+Run an isolated official Home Assistant stable container that creates every
+Virtual Layer domain on one device and exercises native services, common
+attribute and availability controls, and persistent entity reloads. The current
+matrix creates 66 entities across all 46 supported domains, including safety,
+appliance, electrical, utility, and HVAC variants:
+
+```sh
+tests/docker/run_all_domains.sh
+```
+
+The script fails when an entity is missing, a service does not produce the
+expected state or attributes, persistence changes values during reload, a
+registry entry is detached from the shared device, Virtual Layer logs an error,
+or Home Assistant reports a Virtual Layer deprecation warning. Each run starts
+with fresh generated Home Assistant storage, does not require onboarding, and
+does not reuse the interactive container configuration.
+
 ## Stop
 
 ```sh

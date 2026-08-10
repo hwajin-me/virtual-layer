@@ -37,6 +37,7 @@ DEPENDENCIES = [COMPONENT_DOMAIN]
 
 CONF_BRAND = "brand"
 CONF_IMAGE_PATH = "image_path"
+CONF_IS_ON = "is_on"
 CONF_IS_RECORDING = "is_recording"
 CONF_IS_STREAMING = "is_streaming"
 CONF_MODEL = "model"
@@ -109,7 +110,7 @@ class VirtualCamera(VirtualEntity, Camera):
         self._source_entity = config.get(CONF_SOURCE_ENTITY)
         self._stream_source = config.get(CONF_STREAM_SOURCE)
 
-        _LOGGER.info(f"VirtualCamera: {self.name} created")
+        _LOGGER.debug(f"VirtualCamera: {self.name} created")
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -120,7 +121,13 @@ class VirtualCamera(VirtualEntity, Camera):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        self._attr_is_on = state.state.lower() != "off"
+        configured_is_on = config.get(CONF_INITIAL_VALUE).lower() == STATE_ON
+        try:
+            self._attr_is_on = cv.boolean(
+                state.attributes.get(CONF_IS_ON, configured_is_on)
+            )
+        except vol.Invalid:
+            self._attr_is_on = configured_is_on
         self._attr_is_recording = state.attributes.get(CONF_IS_RECORDING, config.get(CONF_IS_RECORDING))
         self._attr_is_streaming = state.attributes.get(CONF_IS_STREAMING, config.get(CONF_IS_STREAMING))
         self._attr_motion_detection_enabled = state.attributes.get(CONF_MOTION_DETECTION, config.get(CONF_MOTION_DETECTION))
@@ -129,6 +136,7 @@ class VirtualCamera(VirtualEntity, Camera):
     def state_attributes(self):
         data = dict(super().state_attributes or {})
         data.update(self._attr_extra_state_attributes or {})
+        data[CONF_IS_ON] = self._attr_is_on
         return data
 
     async def async_camera_image(

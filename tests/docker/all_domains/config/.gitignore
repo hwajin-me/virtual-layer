@@ -1,0 +1,8 @@
+.storage/
+.HA_VERSION
+.ha_run.lock
+*.db
+*.db-*
+*.log
+*.log.*
+all-domains-result.json

@@ -28,6 +28,7 @@ from custom_components.virtual_layer.const import (
     CONF_ATTRIBUTES,
     CONF_AVAILABILITY_TEMPLATE,
     CONF_EVENT_HOOKS,
+    CONF_ICON_TEMPLATE,
     CONF_INITIAL_AVAILABILITY,
     CONF_INITIAL_VALUE,
     CONF_MAX,
@@ -377,6 +378,7 @@ async def test_blended_cfg_normalizes_malformed_common_entity_fields(
                     CONF_PULL_INTERVAL: -30,
                     CONF_VALUE_TEMPLATE: {"bad": "template"},
                     CONF_AVAILABILITY_TEMPLATE: ["bad"],
+                    CONF_ICON_TEMPLATE: ["bad"],
                     CONF_EVENT_HOOKS: {
                         "valid event": {
                             "trigger": "event",
@@ -422,6 +424,7 @@ async def test_blended_cfg_normalizes_malformed_common_entity_fields(
     assert entity[CONF_PULL_INTERVAL] == 0
     assert CONF_VALUE_TEMPLATE not in entity
     assert CONF_AVAILABILITY_TEMPLATE not in entity
+    assert CONF_ICON_TEMPLATE not in entity
     assert entity[CONF_EVENT_HOOKS] == [
         {
             "trigger": "event",

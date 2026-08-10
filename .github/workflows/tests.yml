@@ -38,3 +38,14 @@ jobs:
         env:
           PYTHONPATH: "."
         run: "pytest tests/unit tests/integration -q"
+
+  docker-integration:
+    name: "Home Assistant stable all-domain smoke"
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 15
+    steps:
+      - name: "Checkout the repository"
+        uses: "actions/checkout@v6.0.2"
+
+      - name: "Run all supported domains in Home Assistant Container"
+        run: "tests/docker/run_all_domains.sh"
