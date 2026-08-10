@@ -35,7 +35,7 @@ from .cfg import (
 )
 from .const import *
 
-__version__ = '1.0.9'
+__version__ = '1.0.10'
 
 _LOGGER = logging.getLogger(__name__)
 
