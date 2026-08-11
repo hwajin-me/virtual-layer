@@ -24,7 +24,9 @@ from homeassistant.const import (
     CONF_UNIT_OF_MEASUREMENT,
 )
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers import selector
+from homeassistant.helpers.template import Template, TemplateError
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
@@ -66,6 +68,10 @@ CONF_ATTRIBUTE_SOURCES_JSON = "attribute_sources_json"
 CONF_ATTRIBUTES_JSON = "attributes_json"
 CONF_ATTRIBUTE_TEMPLATES_JSON = "attribute_templates_json"
 CONF_NATIVE_TEMPLATES_JSON = "native_templates_json"
+CONF_NATIVE_VALUE_TEMPLATES = "native_value_templates"
+CONF_DEVICE_DETAILS = "device_details"
+CONF_ADVANCED_SETTINGS = "advanced_settings"
+CONF_DOMAIN_SETTINGS = "domain_settings"
 CONF_COMMAND_ACTIONS_JSON = "command_actions_json"
 CONF_DEVICE_NAME = "device_name"
 CONF_DEVICE_ID = "device_id"
@@ -99,6 +105,304 @@ CAMERA_SOURCE_ENTITY_OPTION = "source_entity"
 NEW_DEVICE_TARGET = "__new_device__"
 HELPER_UPDATE_AUTO = "automatic"
 HELPER_UPDATE_FORCE = "force_helper"
+
+CLIMATE_NATIVE_TEMPLATE_PROPERTIES = (
+    "hvac_modes",
+    "hvac_mode",
+    "hvac_action",
+    "fan_modes",
+    "fan_mode",
+    "preset_modes",
+    "preset_mode",
+    "swing_modes",
+    "swing_mode",
+    "swing_horizontal_modes",
+    "swing_horizontal_mode",
+    "current_temperature",
+    "target_temperature",
+    "target_temperature_high",
+    "target_temperature_low",
+    "min_temp",
+    "max_temp",
+    "target_temperature_step",
+    "temperature_unit",
+    "current_humidity",
+    "target_humidity",
+    "min_humidity",
+    "max_humidity",
+    "target_humidity_step",
+)
+FAN_NATIVE_TEMPLATE_PROPERTIES = (
+    "is_on",
+    "speed_count",
+    "percentage",
+    "preset_modes",
+    "preset_mode",
+    "oscillating",
+    "current_direction",
+)
+HUMIDIFIER_NATIVE_TEMPLATE_PROPERTIES = (
+    "is_on",
+    "device_class",
+    "action",
+    "available_modes",
+    "mode",
+    "current_humidity",
+    "target_humidity",
+    "min_humidity",
+    "max_humidity",
+    "target_humidity_step",
+)
+DOMAIN_NATIVE_TEMPLATE_PROPERTIES = {
+    "ai_task": ("supported_features",),
+    "air_quality": (
+        "particulate_matter_2_5",
+        "particulate_matter_10",
+        "particulate_matter_0_1",
+        "air_quality_index",
+        "ozone",
+        "carbon_monoxide",
+        "carbon_dioxide",
+        "sulphur_dioxide",
+        "nitrogen_oxide",
+        "nitrogen_monoxide",
+        "nitrogen_dioxide",
+        "unit_of_measurement",
+    ),
+    "alarm_control_panel": (
+        "changed_by",
+        "code_arm_required",
+        "code_format",
+        "supported_features",
+    ),
+    "assist_satellite": (
+        "pipeline_entity_id",
+        "vad_sensitivity_entity_id",
+        "tts_options",
+        "supported_features",
+    ),
+    "binary_sensor": ("device_class",),
+    "button": ("device_class",),
+    "calendar": ("event",),
+    "camera": (
+        "source_entity",
+        "image_path",
+        "stream_source",
+        "entity_picture",
+        "frame_interval",
+        "is_on",
+        "is_recording",
+        "is_streaming",
+        "motion_detection_enabled",
+    ),
+    "climate": CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
+    "conversation": (
+        "supported_languages",
+        "supports_streaming",
+        "supported_features",
+    ),
+    "cover": (
+        "current_cover_position",
+        "current_cover_tilt_position",
+        "is_opening",
+        "is_closing",
+        "is_closed",
+        "device_class",
+        "reports_position",
+        "supported_features",
+    ),
+    "date": ("native_value",),
+    "datetime": ("native_value",),
+    "device_tracker": (
+        "location",
+        "gps",
+        "latitude",
+        "longitude",
+        "location_accuracy",
+    ),
+    "event": ("device_class", "event_types", "event_type", "event_attributes"),
+    "fan": FAN_NATIVE_TEMPLATE_PROPERTIES,
+    "geolocation": ("latitude", "longitude", "source", "unit_of_measurement"),
+    "humidifier": HUMIDIFIER_NATIVE_TEMPLATE_PROPERTIES,
+    "image": (
+        "source_entity",
+        "image_path",
+        "image_url",
+        "entity_picture",
+        "image_last_updated",
+        "content_type",
+        "svg",
+    ),
+    "image_processing": ("camera_entity", "confidence", "device_class"),
+    "lawn_mower": ("activity", "supported_features"),
+    "light": (
+        "is_on",
+        "supported_color_modes",
+        "color_mode",
+        "brightness",
+        "hs_color",
+        "xy_color",
+        "rgb_color",
+        "rgbw_color",
+        "rgbww_color",
+        "color_temp_kelvin",
+        "min_color_temp_kelvin",
+        "max_color_temp_kelvin",
+        "effect_list",
+        "effect",
+    ),
+    "lock": (
+        "support_open",
+        "is_locked",
+        "is_open",
+        "is_locking",
+        "is_unlocking",
+        "is_jammed",
+        "is_opening",
+        "changed_by",
+        "code_format",
+    ),
+    "media_player": (
+        "media_state",
+        "device_class",
+        "source_list",
+        "source",
+        "sound_mode_list",
+        "sound_mode",
+        "volume_level",
+        "volume_step",
+        "is_volume_muted",
+        "media_content_id",
+        "media_content_type",
+        "media_duration",
+        "media_position",
+        "media_position_updated_at",
+        "media_title",
+        "media_artist",
+        "media_album_artist",
+        "media_album_name",
+        "media_series_title",
+        "media_season",
+        "media_episode",
+        "media_channel",
+        "media_playlist",
+        "media_track",
+        "media_image_url",
+        "media_image_remotely_accessible",
+        "app_id",
+        "app_name",
+        "group_members",
+        "shuffle",
+        "repeat",
+    ),
+    "notify": ("device_class", "supported_features"),
+    "number": (
+        "native_min_value",
+        "native_max_value",
+        "native_step",
+        "native_value",
+        "mode",
+        "device_class",
+        "native_unit_of_measurement",
+    ),
+    "remote": ("is_on", "activity_list", "current_activity"),
+    "select": ("options", "current_option"),
+    "sensor": (
+        "device_class",
+        "state_class",
+        "options",
+        "native_unit_of_measurement",
+        "suggested_display_precision",
+        "suggested_unit_of_measurement",
+        "last_reset",
+    ),
+    "siren": ("is_on", "available_tones", "support_volume", "support_duration"),
+    "stt": (
+        "supported_languages",
+        "supported_formats",
+        "supported_codecs",
+        "supported_bit_rates",
+        "supported_sample_rates",
+        "supported_channels",
+    ),
+    "switch": ("is_on", "device_class"),
+    "text": ("native_min", "native_max", "mode", "pattern", "native_value"),
+    "time": ("native_value",),
+    "todo": ("todo_items", "supported_features"),
+    "tts": (
+        "supported_languages",
+        "default_language",
+        "supported_options",
+        "default_options",
+    ),
+    "update": (
+        "installed_version",
+        "latest_version",
+        "title",
+        "auto_update",
+        "in_progress",
+        "update_percentage",
+        "display_precision",
+        "device_class",
+        "versions",
+        "support_backup",
+        "release_notes",
+        "release_summary",
+        "release_url",
+    ),
+    "vacuum": (
+        "activity",
+        "battery_level",
+        "fan_speed_list",
+        "fan_speed",
+        "supported_features",
+    ),
+    "valve": (
+        "current_valve_position",
+        "is_opening",
+        "is_closing",
+        "is_closed",
+        "device_class",
+        "reports_position",
+        "supported_features",
+    ),
+    "water_heater": (
+        "operation_list",
+        "current_operation",
+        "min_temp",
+        "max_temp",
+        "current_temperature",
+        "target_temperature",
+        "target_temperature_high",
+        "target_temperature_low",
+        "target_temperature_step",
+        "temperature_unit",
+        "is_away_mode_on",
+        "precision",
+    ),
+    "weather": (
+        "condition",
+        "native_temperature",
+        "native_temperature_unit",
+        "native_apparent_temperature",
+        "native_dew_point",
+        "humidity",
+        "native_pressure",
+        "native_pressure_unit",
+        "native_visibility",
+        "native_visibility_unit",
+        "native_wind_speed",
+        "native_wind_gust_speed",
+        "native_wind_speed_unit",
+        "wind_bearing",
+        "cloud_coverage",
+        "ozone",
+        "uv_index",
+        "native_precipitation_unit",
+        "precision",
+        "supported_features",
+    ),
+}
 
 _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_PLATFORM,
@@ -377,18 +681,56 @@ def _setup_schema(
     return vol.Schema(schema)
 
 
+def _flatten_entity_form_sections(user_input: Mapping | None) -> dict[str, Any]:
+    """Return sectioned entity form data in the persisted flat shape."""
+    flattened = dict(user_input or {})
+    section_values = {}
+    for section_name in (
+        CONF_DEVICE_DETAILS,
+        CONF_DOMAIN_SETTINGS,
+        CONF_ADVANCED_SETTINGS,
+    ):
+        values = flattened.pop(section_name, None)
+        if isinstance(values, Mapping):
+            section_values.update(values)
+    # Flat values win for compatibility with flows opened before an integration
+    # reload changed these controls into sections.
+    section_values.update(flattened)
+    return section_values
+
+
 def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
-    defaults = defaults or {}
+    defaults = _flatten_entity_form_sections(defaults)
     platform = defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
+    managed_native_properties = set(
+        DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
+    )
+    if managed_native_properties and CONF_NATIVE_VALUE_TEMPLATES not in defaults:
+        try:
+            stored_templates = _parse_native_templates(
+                str(defaults.get(CONF_NATIVE_TEMPLATES_JSON, "") or "").strip()
+            )
+        except InvalidJson:
+            stored_templates = {}
+        defaults[CONF_NATIVE_VALUE_TEMPLATES] = {
+            property_name: template_value
+            for property_name, template_value in stored_templates.items()
+            if property_name in managed_native_properties
+        }
+        if stored_templates:
+            defaults[CONF_NATIVE_TEMPLATES_JSON] = _json_default(
+                {
+                    property_name: template_value
+                    for property_name, template_value in stored_templates.items()
+                    if property_name not in managed_native_properties
+                }
+            )
     entity_name = defaults.get(CONF_ENTITY_NAME, "Virtual Entity")
     default_entity_id = defaults.get(ATTR_ENTITY_ID) or _default_virtual_entity_id(
         platform,
         entity_name,
     )
-    schema = {
-        vol.Required(
-            CONF_DEVICE_NAME, default=defaults.get(CONF_DEVICE_NAME, "Virtual Device")
-        ): str,
+    device_details_schema = vol.Schema({
         vol.Optional(CONF_DEVICE_ID, default=defaults.get(CONF_DEVICE_ID, "")): str,
         vol.Optional(
             CONF_DEVICE_MANUFACTURER, default=defaults.get(CONF_DEVICE_MANUFACTURER, "")
@@ -418,6 +760,49 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             CONF_DEVICE_VIA_DEVICE_ID,
             default=defaults.get(CONF_DEVICE_VIA_DEVICE_ID, ""),
         ): selector.DeviceSelector(),
+    })
+    advanced_schema = {
+        vol.Optional(
+            CONF_TEMPLATE_SOURCES_JSON,
+            default=defaults.get(CONF_TEMPLATE_SOURCES_JSON, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_EVENT_HOOKS_JSON, default=defaults.get(CONF_EVENT_HOOKS_JSON, "")
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_ATTRIBUTES_JSON, default=defaults.get(CONF_ATTRIBUTES_JSON, "")
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_ATTRIBUTE_SOURCES_JSON,
+            default=defaults.get(CONF_ATTRIBUTE_SOURCES_JSON, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_ATTRIBUTE_TEMPLATES_JSON,
+            default=defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_COMMAND_ACTIONS_JSON,
+            default=defaults.get(CONF_COMMAND_ACTIONS_JSON, ""),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_DOMAIN_OPTIONS_JSON, default=defaults.get(CONF_DOMAIN_OPTIONS_JSON, "")
+        ): MULTILINE_TEXT_SELECTOR,
+    }
+    if platform not in DOMAIN_NATIVE_TEMPLATE_PROPERTIES:
+        advanced_schema[
+            vol.Optional(
+                CONF_NATIVE_TEMPLATES_JSON,
+                default=defaults.get(CONF_NATIVE_TEMPLATES_JSON, ""),
+            )
+        ] = MULTILINE_TEXT_SELECTOR
+    schema = {
+        vol.Required(
+            CONF_DEVICE_NAME, default=defaults.get(CONF_DEVICE_NAME, "Virtual Device")
+        ): str,
+        vol.Optional(CONF_DEVICE_DETAILS, default=dict): section(
+            device_details_schema,
+            {"collapsed": True},
+        ),
         vol.Required(
             CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")
         ): str,
@@ -446,10 +831,6 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             default=defaults.get(CONF_SOURCE_ENTITIES_TEXT, ""),
         ): MULTILINE_TEXT_SELECTOR,
         vol.Optional(
-            CONF_TEMPLATE_SOURCES_JSON,
-            default=defaults.get(CONF_TEMPLATE_SOURCES_JSON, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
             CONF_PULL_INTERVAL, default=defaults.get(CONF_PULL_INTERVAL, 0)
         ): vol.All(vol.Coerce(int), vol.Range(min=0)),
         vol.Optional(
@@ -459,34 +840,14 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             CONF_AVAILABILITY_TEMPLATE,
             default=defaults.get(CONF_AVAILABILITY_TEMPLATE, ""),
         ): TEMPLATE_SELECTOR,
-        vol.Optional(
-            CONF_EVENT_HOOKS_JSON, default=defaults.get(CONF_EVENT_HOOKS_JSON, "")
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_ATTRIBUTES_JSON, default=defaults.get(CONF_ATTRIBUTES_JSON, "")
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_ATTRIBUTE_SOURCES_JSON,
-            default=defaults.get(CONF_ATTRIBUTE_SOURCES_JSON, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_ATTRIBUTE_TEMPLATES_JSON,
-            default=defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_NATIVE_TEMPLATES_JSON,
-            default=defaults.get(CONF_NATIVE_TEMPLATES_JSON, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_COMMAND_ACTIONS_JSON,
-            default=defaults.get(CONF_COMMAND_ACTIONS_JSON, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_DOMAIN_OPTIONS_JSON, default=defaults.get(CONF_DOMAIN_OPTIONS_JSON, "")
-        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(CONF_ADVANCED_SETTINGS, default=dict): section(
+            vol.Schema(advanced_schema),
+            {"collapsed": True},
+        ),
     }
+    domain_schema = {}
     if platform == "device_tracker":
-        schema.update(
+        domain_schema.update(
             {
                 vol.Optional(
                     CONF_POLYGON_GEOJSON_JSON,
@@ -525,7 +886,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             if person_default
             else vol.Optional(CONF_POLYGON_PERSON)
         )
-        schema[person_marker] = selector.EntitySelector(
+        domain_schema[person_marker] = selector.EntitySelector(
             selector.EntitySelectorConfig(domain="person"),
         )
     elif platform == "climate":
@@ -544,7 +905,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 if field_name == "hvac_modes"
                 else list(defaults.get(field_name, []))
             )
-            schema[marker] = selector.SelectSelector(
+            domain_schema[marker] = selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=options,
                     multiple=True,
@@ -557,7 +918,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 if defaults.get(field_name) not in (None, "")
                 else vol.Optional(field_name)
             )
-            schema[marker] = selector.SelectSelector(
+            domain_schema[marker] = selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=list(defaults.get(modes_field, [])),
                     custom_value=True,
@@ -591,7 +952,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 if default is not None
                 else vol.Optional(field_name)
             )
-            schema[marker] = selector.NumberSelector(
+            domain_schema[marker] = selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=minimum,
                     max=maximum,
@@ -604,10 +965,10 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             if defaults.get("hvac_action") in CLIMATE_ACTION_VALUES
             else vol.Optional("hvac_action")
         )
-        schema[action_marker] = selector.SelectSelector(
+        domain_schema[action_marker] = selector.SelectSelector(
             selector.SelectSelectorConfig(options=list(CLIMATE_ACTION_VALUES)),
         )
-        schema[
+        domain_schema[
             vol.Optional(
                 "temperature_unit",
                 default=defaults.get("temperature_unit", "°C"),
@@ -616,7 +977,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             selector.SelectSelectorConfig(options=list(TEMPERATURE_UNIT_VALUES)),
         )
     elif platform == "fan":
-        schema.update(
+        domain_schema.update(
             {
                 vol.Optional(
                     "speed_count", default=defaults.get("speed_count", 0)
@@ -652,7 +1013,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             )
         else:
             percentage_marker = vol.Optional("percentage")
-        schema[percentage_marker] = selector.NumberSelector(
+        domain_schema[percentage_marker] = selector.NumberSelector(
             selector.NumberSelectorConfig(
                 min=0,
                 max=100,
@@ -665,13 +1026,13 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             if defaults.get("preset_mode") not in (None, "")
             else vol.Optional("preset_mode")
         )
-        schema[preset_marker] = selector.SelectSelector(
+        domain_schema[preset_marker] = selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=list(defaults.get(FAN_MODE_LIST_FIELD, [])),
                 custom_value=True,
             )
         )
-        schema[
+        domain_schema[
             vol.Optional(
                 "oscillating", default=defaults.get("oscillating", False)
             )
@@ -683,11 +1044,11 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             if defaults.get("current_direction") in {"forward", "reverse"}
             else vol.Optional("current_direction")
         )
-        schema[direction_marker] = selector.SelectSelector(
+        domain_schema[direction_marker] = selector.SelectSelector(
             selector.SelectSelectorConfig(options=["forward", "reverse"]),
         )
     elif platform == "humidifier":
-        schema[
+        domain_schema[
             vol.Optional(
                 "class", default=defaults.get("class", "humidifier")
             )
@@ -699,10 +1060,10 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             if defaults.get("action") in HUMIDIFIER_ACTION_VALUES
             else vol.Optional("action")
         )
-        schema[action_marker] = selector.SelectSelector(
+        domain_schema[action_marker] = selector.SelectSelector(
             selector.SelectSelectorConfig(options=list(HUMIDIFIER_ACTION_VALUES)),
         )
-        schema[
+        domain_schema[
             vol.Optional(
                 HUMIDIFIER_MODE_LIST_FIELD,
                 default=list(defaults.get(HUMIDIFIER_MODE_LIST_FIELD, [])),
@@ -722,7 +1083,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             if defaults.get(HUMIDIFIER_CURRENT_MODE_FIELD) not in (None, "")
             else vol.Optional(HUMIDIFIER_CURRENT_MODE_FIELD)
         )
-        schema[mode_marker] = selector.SelectSelector(
+        domain_schema[mode_marker] = selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=list(defaults.get(HUMIDIFIER_MODE_LIST_FIELD, [])),
                 custom_value=True,
@@ -745,7 +1106,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 if default is not None
                 else vol.Optional(field_name)
             )
-            schema[marker] = selector.NumberSelector(
+            domain_schema[marker] = selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0.1 if field_name == "target_humidity_step" else 0,
                     max=100,
@@ -753,12 +1114,41 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     mode=selector.NumberSelectorMode.BOX,
                 )
             )
-    return vol.Schema(schema)
+    if domain_schema:
+        schema[vol.Optional(CONF_DOMAIN_SETTINGS, default=dict)] = section(
+            vol.Schema(domain_schema),
+            {"collapsed": True},
+        )
+    native_template_properties = DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
+    if native_template_properties:
+        template_defaults = defaults.get(CONF_NATIVE_VALUE_TEMPLATES, {})
+        if not isinstance(template_defaults, Mapping):
+            template_defaults = {}
+        template_schema = {}
+        for property_name in native_template_properties:
+            default = template_defaults.get(property_name)
+            marker = vol.Optional(
+                property_name,
+                default=default if isinstance(default, str) else "",
+            )
+            template_schema[marker] = TEMPLATE_SELECTOR
+        schema[vol.Optional(CONF_NATIVE_VALUE_TEMPLATES, default=dict)] = section(
+            vol.Schema(template_schema),
+            {"collapsed": True},
+        )
+    return vol.Schema(schema, extra=vol.ALLOW_EXTRA)
 
 
 def _needs_domain_specific_form(user_input) -> bool:
     """Return true when a newly selected domain needs its dedicated fields."""
     platform = user_input.get(CONF_PLATFORM)
+    native_template_properties = DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform)
+    submitted_native_templates = user_input.get(CONF_NATIVE_VALUE_TEMPLATES)
+    if native_template_properties and (
+        not isinstance(submitted_native_templates, Mapping)
+        or set(submitted_native_templates) != set(native_template_properties)
+    ):
+        return True
     if platform == "device_tracker":
         return CONF_POLYGON_STRATEGY_INPUT not in user_input
     if platform == "climate":
@@ -772,6 +1162,27 @@ def _needs_domain_specific_form(user_input) -> bool:
             field_name in user_input for field_name in HUMIDIFIER_FORM_FIELDS
         )
     return False
+
+
+def _with_hidden_native_template_defaults(
+    user_input: dict[str, Any],
+    defaults: Mapping | None,
+) -> dict[str, Any]:
+    """Preserve nonstandard native templates hidden by a dedicated domain form."""
+    if (
+        user_input.get(CONF_PLATFORM) not in DOMAIN_NATIVE_TEMPLATE_PROPERTIES
+        or CONF_NATIVE_TEMPLATES_JSON in user_input
+        or not isinstance(defaults, Mapping)
+    ):
+        return user_input
+
+    hidden_templates = defaults.get(CONF_NATIVE_TEMPLATES_JSON)
+    if not hidden_templates:
+        return user_input
+    return {
+        **user_input,
+        CONF_NATIVE_TEMPLATES_JSON: hidden_templates,
+    }
 
 
 def _align_form_entity_id_domain(user_input: dict[str, Any]) -> dict[str, Any]:
@@ -1307,6 +1718,7 @@ def _build_entity_config(
     schema=None,
     validate_domain_options=None,
 ) -> tuple[str, dict[str, Any]]:
+    user_input = _flatten_entity_form_sections(user_input)
     device_name = user_input[CONF_DEVICE_NAME].strip()
     entity_name = user_input[CONF_ENTITY_NAME].strip()
     platform = user_input[CONF_PLATFORM]
@@ -1412,6 +1824,19 @@ def _build_entity_config(
     native_templates = _parse_native_templates(
         user_input.get(CONF_NATIVE_TEMPLATES_JSON, "").strip(),
     )
+    native_value_templates = user_input.get(CONF_NATIVE_VALUE_TEMPLATES, {})
+    if not isinstance(native_value_templates, Mapping):
+        raise InvalidJson(CONF_NATIVE_TEMPLATES_JSON)
+    for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()):
+        native_templates.pop(property_name, None)
+        template_value = native_value_templates.get(property_name)
+        if template_value is None:
+            continue
+        if not isinstance(template_value, str):
+            raise InvalidJson(CONF_NATIVE_TEMPLATES_JSON)
+        template_value = template_value.strip()
+        if template_value:
+            native_templates[property_name] = template_value
     if native_templates:
         entity[CONF_NATIVE_TEMPLATES] = native_templates
 
@@ -1591,8 +2016,64 @@ async def _async_build_entity_config(
         schema,
         validate_domain_options,
     )
+    _validate_entity_templates(hass, entity)
     _validate_virtual_dependency_cycle(hass, entity, replacing_entity_id)
     return device_name, entity
+
+
+def _validate_entity_templates(hass, entity: Mapping) -> None:
+    """Reject invalid Jinja syntax while the user can still edit the form."""
+
+    def _validate(value, field_name: str) -> None:
+        if not isinstance(value, str) or not value.strip():
+            return
+        try:
+            Template(value, hass).ensure_valid()
+        except TemplateError as err:
+            raise InvalidTemplate(field_name) from err
+
+    for field_name in (
+        CONF_VALUE_TEMPLATE,
+        CONF_AVAILABILITY_TEMPLATE,
+        CONF_ICON_TEMPLATE,
+    ):
+        _validate(entity.get(field_name), field_name)
+
+    for template in _mapping_or_empty(entity.get(CONF_ATTRIBUTE_TEMPLATES)).values():
+        _validate(template, CONF_ATTRIBUTE_TEMPLATES_JSON)
+
+    platform = entity.get(CONF_PLATFORM)
+    managed_properties = set(DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()))
+    for property_name, template in _mapping_or_empty(
+        entity.get(CONF_NATIVE_TEMPLATES)
+    ).items():
+        _validate(
+            template,
+            property_name
+            if property_name in managed_properties
+            else CONF_NATIVE_TEMPLATES_JSON,
+        )
+
+    for hook in entity.get(CONF_EVENT_HOOKS, []):
+        if not isinstance(hook, Mapping):
+            continue
+        for field_name in (CONF_VALUE_TEMPLATE, CONF_AVAILABILITY_TEMPLATE):
+            _validate(hook.get(field_name), CONF_EVENT_HOOKS_JSON)
+        for template in _mapping_or_empty(
+            hook.get(CONF_ATTRIBUTE_TEMPLATES)
+        ).values():
+            _validate(template, CONF_EVENT_HOOKS_JSON)
+
+    polygon = entity.get(CONF_POLYGONAL_ZONE)
+    if isinstance(polygon, Mapping):
+        rules = polygon.get(CONF_POLYGON_TRACKER_RULES, {})
+        if isinstance(rules, Mapping):
+            for rule in rules.values():
+                if isinstance(rule, Mapping):
+                    _validate(
+                        rule.get("condition_template"),
+                        CONF_POLYGON_TRACKER_RULES_JSON,
+                    )
 
 
 def _make_entity_key() -> str:
@@ -2970,6 +3451,24 @@ def _entity_form_defaults(
     platform = entity.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
     if platform not in VIRTUAL_ENTITY_DOMAINS:
         platform = DEFAULT_ENTITY_DOMAIN
+    stored_native_templates = entity.get(CONF_NATIVE_TEMPLATES)
+    if not isinstance(stored_native_templates, Mapping):
+        stored_native_templates = {}
+    managed_native_properties = set(
+        DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
+    )
+    native_value_templates = {
+        property_name: template_value
+        for property_name, template_value in stored_native_templates.items()
+        if property_name in managed_native_properties
+        and isinstance(template_value, str)
+        and template_value
+    }
+    additional_native_templates = {
+        property_name: template_value
+        for property_name, template_value in stored_native_templates.items()
+        if property_name not in managed_native_properties
+    }
     defaults = {
         CONF_DEVICE_NAME: device_name,
         CONF_DEVICE_ID: _text_default(device.get(ATTR_DEVICE_ID), device_name),
@@ -3012,7 +3511,8 @@ def _entity_form_defaults(
         CONF_ATTRIBUTE_TEMPLATES_JSON: _json_default(
             entity.get(CONF_ATTRIBUTE_TEMPLATES)
         ),
-        CONF_NATIVE_TEMPLATES_JSON: _json_default(entity.get(CONF_NATIVE_TEMPLATES)),
+        CONF_NATIVE_TEMPLATES_JSON: _json_default(additional_native_templates),
+        CONF_NATIVE_VALUE_TEMPLATES: native_value_templates,
         CONF_COMMAND_ACTIONS_JSON: _json_default(entity.get(CONF_COMMAND_ACTIONS)),
     }
     polygon = entity.get(CONF_POLYGONAL_ZONE)
@@ -3219,6 +3719,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         """Add the first UI-managed virtual entity."""
         errors = {}
         if user_input is not None:
+            user_input = _flatten_entity_form_sections(user_input)
             user_input = _align_form_entity_id_domain(user_input)
         if user_input is not None and _needs_domain_specific_form(user_input):
             return self.async_show_form(
@@ -3226,6 +3727,10 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 data_schema=_entity_schema(user_input),
             )
         if user_input is not None:
+            user_input = _with_hidden_native_template_defaults(
+                user_input,
+                self._entity_defaults,
+            )
             try:
                 device_name, entity = await _async_build_entity_config(
                     self.hass, user_input
@@ -3249,6 +3754,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 )
             except InvalidJson as err:
                 errors[err.field_name] = "invalid_json"
+            except InvalidTemplate as err:
+                errors[err.field_name] = "invalid_template"
             except InvalidEntityReference as err:
                 errors[err.field_name] = "invalid_entity_id"
             except InvalidEntityId:
@@ -3401,6 +3908,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         """Add a UI-managed virtual entity."""
         errors = {}
         if user_input is not None:
+            user_input = _flatten_entity_form_sections(user_input)
             user_input = _align_form_entity_id_domain(user_input)
         if user_input is not None and _needs_domain_specific_form(user_input):
             return self.async_show_form(
@@ -3408,6 +3916,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 data_schema=_entity_schema(user_input),
             )
         if user_input is not None:
+            user_input = _with_hidden_native_template_defaults(
+                user_input,
+                self._entity_defaults,
+            )
             try:
                 device_name, entity = await _async_build_entity_config(
                     self.hass, user_input
@@ -3427,6 +3939,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 return self.async_create_entry(data=options)
             except InvalidJson as err:
                 errors[err.field_name] = "invalid_json"
+            except InvalidTemplate as err:
+                errors[err.field_name] = "invalid_template"
             except InvalidEntityReference as err:
                 errors[err.field_name] = "invalid_entity_id"
             except InvalidEntityId:
@@ -3606,6 +4120,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             return await self.async_step_select_entity()
 
         if user_input is not None:
+            user_input = _flatten_entity_form_sections(user_input)
             user_input = _align_form_entity_id_domain(user_input)
         if user_input is not None and _needs_domain_specific_form(user_input):
             return self.async_show_form(
@@ -3613,6 +4128,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 data_schema=_entity_schema(user_input),
             )
         if user_input is not None:
+            user_input = _with_hidden_native_template_defaults(
+                user_input,
+                self._entity_defaults,
+            )
             try:
                 current_entity = _get_ui_entity(
                     self.config_entry.options,
@@ -3642,6 +4161,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 return self.async_create_entry(data=options)
             except InvalidJson as err:
                 errors[err.field_name] = "invalid_json"
+            except InvalidTemplate as err:
+                errors[err.field_name] = "invalid_template"
             except InvalidEntityReference as err:
                 errors[err.field_name] = "invalid_entity_id"
             except InvalidEntityId:
@@ -3701,6 +4222,14 @@ class MissingEntityName(exceptions.HomeAssistantError):
 
 class InvalidJson(exceptions.HomeAssistantError):
     """Error indicating an invalid JSON field."""
+
+    def __init__(self, field_name: str) -> None:
+        super().__init__(field_name)
+        self.field_name = field_name
+
+
+class InvalidTemplate(exceptions.HomeAssistantError):
+    """Error indicating invalid Jinja syntax in a form field."""
 
     def __init__(self, field_name: str) -> None:
         super().__init__(field_name)

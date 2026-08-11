@@ -389,6 +389,14 @@ class VirtualImage(VirtualEntity, ImageEntity):
             if not value.startswith("image/"):
                 raise ValueError("content_type must be an image MIME type")
             name = "content_type"
+        elif name == "image_last_updated":
+            if isinstance(value, datetime):
+                parsed = value
+            else:
+                parsed = dt_util.parse_datetime(str(value))
+            if parsed is None:
+                raise ValueError("image_last_updated must be a datetime")
+            value = parsed if parsed.tzinfo else dt_util.as_local(parsed)
         return super()._apply_native_template_value(name, value)
 
     def set_state(self, value) -> None:

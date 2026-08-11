@@ -7,6 +7,7 @@ from homeassistant.const import CONF_PLATFORM
 
 from custom_components.virtual_layer.config_flow import (
     CONF_DEVICE_NAME,
+    CONF_DOMAIN_SETTINGS,
     CONF_ENTITY_NAME,
     CONF_POLYGON_AWAY_STATE_INPUT,
     CONF_POLYGON_DISTANCE_INPUT,
@@ -137,9 +138,14 @@ def test_polygon_fields_are_only_shown_for_device_trackers():
         str(getattr(key, "schema", key))
         for key in _entity_schema({CONF_PLATFORM: "sensor"}).schema
     }
+    tracker_sections = {
+        str(getattr(key, "schema", key))
+        : value
+        for key, value in _entity_schema({CONF_PLATFORM: "device_tracker"}).schema.items()
+    }
     tracker_fields = {
         str(getattr(key, "schema", key))
-        for key in _entity_schema({CONF_PLATFORM: "device_tracker"}).schema
+        for key in tracker_sections[CONF_DOMAIN_SETTINGS].schema.schema
     }
 
     assert CONF_POLYGON_GEOJSON_JSON not in sensor_fields

@@ -10,6 +10,8 @@ from homeassistant.const import CONF_PLATFORM
 
 from custom_components.virtual_layer.config_flow import (
     CONF_DEVICE_NAME,
+    CONF_NATIVE_VALUE_TEMPLATES,
+    DOMAIN_NATIVE_TEMPLATE_PROPERTIES,
     _delete_entities_schema,
     _device_schema,
     _entity_schema,
@@ -88,13 +90,6 @@ def _selector_options(schema, translation_key: str) -> set[str]:
     raise AssertionError(f"Missing selector {translation_key}")
 
 
-def test_korean_translation_matches_english_key_topology():
-    english = _english_catalog()
-    korean = json.loads((TRANSLATIONS / "ko.json").read_text(encoding="utf-8"))
-
-    assert _leaf_paths(korean) == _leaf_paths(english)
-
-
 def test_all_translation_files_match_english_key_topology():
     english = _english_catalog()
     english_paths = _leaf_paths(english)
@@ -113,6 +108,26 @@ def test_korean_translation_covers_config_options_selectors_and_services():
     assert "backup_devices" not in korean["selector"]["options_action"]["options"]
     assert "restore_devices" not in korean["selector"]["options_action"]["options"]
     assert korean["services"]["set_attributes"]["name"] == "속성 설정"
+
+
+def test_native_template_sections_are_translated_for_add_and_edit():
+    for translation_file in (TRANSLATIONS / "en.json", TRANSLATIONS / "ko.json"):
+        catalog = json.loads(translation_file.read_text(encoding="utf-8"))
+        for platform, properties in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.items():
+            for root, step_id in (
+                ("config", "entity"),
+                ("options", "entity"),
+                ("options", "edit_entity"),
+            ):
+                translated_section = catalog[root]["step"][step_id]["sections"][
+                    CONF_NATIVE_VALUE_TEMPLATES
+                ]
+                assert translated_section["name"], platform
+                assert translated_section["description"], platform
+                assert set(properties) <= set(translated_section["data"]), platform
+                assert set(properties) <= set(
+                    translated_section["data_description"]
+                ), platform
 
 
 def test_english_translation_covers_config_flow_forms_and_errors():

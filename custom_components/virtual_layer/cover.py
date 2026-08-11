@@ -73,6 +73,22 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
             CoverEntityFeature.STOP |
             CoverEntityFeature.SET_POSITION
         )
+        self._attr_current_cover_tilt_position = None
+        if "current_cover_tilt_position" in self._native_templates or any(
+            command in self._command_actions
+            for command in (
+                "open_cover_tilt",
+                "close_cover_tilt",
+                "stop_cover_tilt",
+                "set_cover_tilt_position",
+            )
+        ):
+            self._attr_supported_features |= (
+                CoverEntityFeature.OPEN_TILT
+                | CoverEntityFeature.CLOSE_TILT
+                | CoverEntityFeature.STOP_TILT
+                | CoverEntityFeature.SET_TILT_POSITION
+            )
 
         _LOGGER.debug(f"VirtualCover: {self.name} created")
 
@@ -95,3 +111,35 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         _LOGGER.debug(f"setting {self.name} position {kwargs['position']}")
         self._set_position(kwargs['position'])
+
+    async def async_open_cover_tilt(self, **kwargs: Any) -> None:
+        self._attr_current_cover_tilt_position = 100
+        self.async_write_ha_state()
+
+    async def async_close_cover_tilt(self, **kwargs: Any) -> None:
+        self._attr_current_cover_tilt_position = 0
+        self.async_write_ha_state()
+
+    async def async_stop_cover_tilt(self, **kwargs: Any) -> None:
+        self.async_write_ha_state()
+
+    async def async_set_cover_tilt_position(self, **kwargs: Any) -> None:
+        position = int(kwargs["tilt_position"])
+        if not 0 <= position <= 100:
+            raise ValueError("tilt_position must be between 0 and 100")
+        self._attr_current_cover_tilt_position = position
+        self.async_write_ha_state()
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "current_cover_tilt_position":
+            try:
+                value = int(value)
+            except (TypeError, ValueError) as err:
+                raise ValueError(
+                    "current_cover_tilt_position must be between 0 and 100"
+                ) from err
+            if not 0 <= value <= 100:
+                raise ValueError(
+                    "current_cover_tilt_position must be between 0 and 100"
+                )
+        return super()._apply_native_template_value(name, value)

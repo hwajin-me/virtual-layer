@@ -217,7 +217,9 @@ VIRTUAL_ENTITY_COMMANDS = {
         "turn_off", "turn_on",
     }),
     "cover": frozenset({
-        "close_cover", "open_cover", "set_cover_position", "stop_cover",
+        "close_cover", "close_cover_tilt", "open_cover", "open_cover_tilt",
+        "set_cover_position", "set_cover_tilt_position", "stop_cover",
+        "stop_cover_tilt",
     }),
     "date": frozenset({"set_value"}),
     "datetime": frozenset({"set_value"}),
@@ -249,7 +251,8 @@ VIRTUAL_ENTITY_COMMANDS = {
         "close_valve", "open_valve", "set_valve_position", "stop_valve",
     }),
     "water_heater": frozenset({
-        "set_operation_mode", "set_temperature", "turn_off", "turn_on",
+        "set_operation_mode", "set_temperature", "turn_away_mode_off",
+        "turn_away_mode_on", "turn_off", "turn_on",
     }),
 }
 

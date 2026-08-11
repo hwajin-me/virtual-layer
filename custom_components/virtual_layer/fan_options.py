@@ -99,13 +99,7 @@ def migrate_legacy_fan_attributes(config: Mapping) -> dict[str, Any]:
     options, consumed = extract_fan_options(attributes)
     for key, value in options.items():
         current = migrated.get(key)
-        if key == FAN_MODE_LIST_FIELD:
-            if not current and value:
-                migrated[key] = value
-        elif key == "speed_count":
-            if not current and value:
-                migrated[key] = value
-        elif key in {"oscillate", "direction"}:
+        if key in {FAN_MODE_LIST_FIELD, "speed_count", "oscillate", "direction"}:
             if not current and value:
                 migrated[key] = value
         elif key in {"preset_mode", "current_direction"}:

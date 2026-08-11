@@ -35,7 +35,7 @@ from .cfg import (
 )
 from .const import *
 
-__version__ = '1.0.10'
+__version__ = '1.0.11'
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -130,6 +130,16 @@ VIRTUAL_PLATFORMS = VIRTUAL_ENTITY_DOMAINS
 _STATE_ONLY_TEMPLATE_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_state_only_template_listeners"
 _ENTITY_ID_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_entity_id_guard_listeners"
 _DEVICE_METADATA_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_device_metadata_guard_listeners"
+
+_STATE_ONLY_LIST_NATIVE_PROPERTIES = frozenset({
+    "supported_languages",
+    "supported_options",
+})
+_STATE_ONLY_MAPPING_NATIVE_PROPERTIES = frozenset({
+    "default_options",
+    "tts_options",
+})
+_STATE_ONLY_BOOLEAN_NATIVE_PROPERTIES = frozenset({"supports_streaming"})
 
 
 def _async_ensure_runtime_data(hass: HomeAssistant) -> None:
@@ -681,14 +691,66 @@ def _state_only_template_variables(hass, entity) -> dict:
     return variables
 
 
-def _render_state_only_template(hass, entity, template, extra_variables=None):
+def _render_state_only_template(
+    hass,
+    entity,
+    template,
+    extra_variables=None,
+    *,
+    parse_result=False,
+):
     variables = _state_only_template_variables(hass, entity)
     if extra_variables:
         variables.update(extra_variables)
     return Template(str(template), hass).async_render(
         variables=variables,
-        parse_result=False,
+        parse_result=parse_result,
     )
+
+
+def _state_only_native_template_value(name: str, value):
+    """Validate native values used by domains without an Entity platform."""
+    if name in _STATE_ONLY_LIST_NATIVE_PROPERTIES:
+        if not isinstance(value, (list, tuple, set)):
+            raise ValueError(f"{name} must render a list")
+        result = [str(item).strip() for item in value if str(item).strip()]
+        if len(result) != len(set(result)):
+            raise ValueError(f"{name} contains duplicate values")
+        return result
+    if name in _STATE_ONLY_MAPPING_NATIVE_PROPERTIES:
+        if not isinstance(value, Mapping):
+            raise ValueError(f"{name} must render an object")
+        return dict(value)
+    if name in _STATE_ONLY_BOOLEAN_NATIVE_PROPERTIES:
+        return cv.boolean(value)
+    if name == "supported_features":
+        try:
+            value = int(value)
+        except (TypeError, ValueError) as err:
+            raise ValueError(
+                "supported_features must be a non-negative integer"
+            ) from err
+        if value < 0:
+            raise ValueError("supported_features must be a non-negative integer")
+        return value
+    if name in {"latitude", "longitude"}:
+        try:
+            value = float(value)
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"{name} is outside its valid range") from err
+        limit = 90 if name == "latitude" else 180
+        if not math.isfinite(value) or not -limit <= value <= limit:
+            raise ValueError(f"{name} is outside its valid range")
+        return value
+    if name == "confidence":
+        try:
+            value = float(value)
+        except (TypeError, ValueError) as err:
+            raise ValueError("confidence must be between 0 and 100") from err
+        if not math.isfinite(value) or not 0 <= value <= 100:
+            raise ValueError("confidence must be between 0 and 100")
+        return value
+    return value
 
 
 def _state_only_hook_values_match(configured, actual) -> bool:
@@ -809,6 +871,32 @@ def _async_apply_state_only_templates(hass, entity) -> None:
                 attributes[CONF_ICON] = next_icon
             else:
                 attributes.pop(CONF_ICON, None)
+
+        native_templates = entity.get(CONF_NATIVE_TEMPLATES, {})
+        if isinstance(native_templates, Mapping):
+            for name, template in native_templates.items():
+                if not isinstance(name, str) or not name or not template:
+                    continue
+                try:
+                    rendered = _state_only_native_template_value(
+                        name,
+                        _render_state_only_template(
+                            hass,
+                            entity,
+                            template,
+                            parse_result=True,
+                        ),
+                    )
+                except (TemplateError, TypeError, ValueError, vol.Invalid) as err:
+                    _LOGGER.warning(
+                        "Unable to render native template %s for %s: %s",
+                        name,
+                        entity_id,
+                        err,
+                    )
+                    continue
+                changed = attributes.get(name) != rendered or changed
+                attributes[name] = rendered
 
         attribute_templates = entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
         if isinstance(attribute_templates, Mapping):
@@ -1059,6 +1147,11 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
             entity.get(CONF_AVAILABILITY_TEMPLATE),
             entity.get(CONF_ICON_TEMPLATE),
             *attribute_templates.values(),
+            *(
+                entity.get(CONF_NATIVE_TEMPLATES, {}).values()
+                if isinstance(entity.get(CONF_NATIVE_TEMPLATES), Mapping)
+                else ()
+            ),
         )
         if template
     ]

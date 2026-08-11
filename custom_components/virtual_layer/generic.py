@@ -56,6 +56,69 @@ CONF_STATE_CLASS = "state_class"
 
 DEFAULT_GENERIC_VALUE = "unknown"
 
+GENERIC_LIST_TEMPLATE_PROPERTIES = frozenset({
+    "event_types",
+    "group_members",
+    "supported_bit_rates",
+    "supported_channels",
+    "supported_codecs",
+    "supported_formats",
+    "supported_languages",
+    "supported_options",
+    "supported_sample_rates",
+})
+GENERIC_MAPPING_TEMPLATE_PROPERTIES = frozenset({
+    "default_options",
+    "event",
+    "event_attributes",
+    "tts_options",
+})
+GENERIC_BOOLEAN_TEMPLATE_PROPERTIES = frozenset({
+    "code_arm_required",
+    "reports_position",
+    "supports_streaming",
+})
+GENERIC_FINITE_TEMPLATE_PROPERTIES = frozenset({
+    "native_apparent_temperature",
+    "native_dew_point",
+    "native_temperature",
+})
+GENERIC_NONNEGATIVE_TEMPLATE_PROPERTIES = frozenset({
+    "air_quality_index",
+    "carbon_dioxide",
+    "carbon_monoxide",
+    "cloud_coverage",
+    "confidence",
+    "humidity",
+    "native_pressure",
+    "native_visibility",
+    "native_wind_gust_speed",
+    "native_wind_speed",
+    "nitrogen_dioxide",
+    "nitrogen_monoxide",
+    "nitrogen_oxide",
+    "ozone",
+    "particulate_matter_0_1",
+    "particulate_matter_10",
+    "particulate_matter_2_5",
+    "sulphur_dioxide",
+    "uv_index",
+})
+WEATHER_STATE_ATTRIBUTE_ALIASES = {
+    "native_apparent_temperature": "apparent_temperature",
+    "native_dew_point": "dew_point",
+    "native_precipitation_unit": "precipitation_unit",
+    "native_pressure": "pressure",
+    "native_pressure_unit": "pressure_unit",
+    "native_temperature": "temperature",
+    "native_temperature_unit": "temperature_unit",
+    "native_visibility": "visibility",
+    "native_visibility_unit": "visibility_unit",
+    "native_wind_gust_speed": "wind_gust_speed",
+    "native_wind_speed": "wind_speed",
+    "native_wind_speed_unit": "wind_speed_unit",
+}
+
 GENERIC_SCHEMA = virtual_schema(
     DEFAULT_GENERIC_VALUE,
     {
@@ -103,19 +166,203 @@ class GenericVirtualEntity(VirtualEntity, Entity):
                 if value is not None
             }
         )
-        self._attr_extra_state_attributes.update(self._domain_options)
+        domain_options = dict(self._domain_options)
+        if self._domain == "weather":
+            domain_options = {
+                WEATHER_STATE_ATTRIBUTE_ALIASES.get(name, name): value
+                for name, value in domain_options.items()
+                if name != "condition"
+            }
+        elif self._domain == "calendar":
+            domain_options.pop("initial_color", None)
+            if "event" in domain_options:
+                event = domain_options.pop("event")
+                if event is not None:
+                    domain_options.update(_calendar_event_attributes(event))
+                    self._attr_state = _calendar_event_state(event)
+                else:
+                    self._attr_state = STATE_OFF
+        elif self._domain == "event":
+            event_attributes = domain_options.pop("event_attributes", {})
+            if isinstance(event_attributes, dict):
+                domain_options.update({
+                    name: value
+                    for name, value in event_attributes.items()
+                    if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+                    and name != "event_type"
+                })
+        self._attr_extra_state_attributes.update(domain_options)
 
     def set_state(self, value) -> None:
         self._attr_state = value
 
     def _apply_native_template_value(self, name: str, value) -> bool:
-        changed = super()._apply_native_template_value(name, value)
-        if name not in {"state", "available", "icon"}:
+        if name in GENERIC_LIST_TEMPLATE_PROPERTIES:
+            value = _template_string_list(value, name)
+        elif name in GENERIC_MAPPING_TEMPLATE_PROPERTIES:
+            if name == "event" and value is None:
+                pass
+            elif not isinstance(value, dict):
+                raise ValueError(f"{name} must render an object")
+            else:
+                value = dict(value)
+        elif name == "todo_items":
+            if not isinstance(value, list) or not all(
+                isinstance(item, dict) for item in value
+            ):
+                raise ValueError("todo_items must render a list of objects")
+        elif name in GENERIC_BOOLEAN_TEMPLATE_PROPERTIES:
+            value = value if isinstance(value, bool) else self._template_to_bool(value)
+        elif name == "supported_features":
+            value = _safe_int(value, -1, -1)
+            if value < 0:
+                raise ValueError("supported_features must be a non-negative integer")
+        elif name in {"latitude", "longitude"}:
+            value = _safe_float(value, float("nan"))
+            limit = 90 if name == "latitude" else 180
+            if not math.isfinite(value) or not -limit <= value <= limit:
+                raise ValueError(f"{name} is outside its valid range")
+        elif name in GENERIC_FINITE_TEMPLATE_PROPERTIES:
+            value = _safe_float(value, float("nan"))
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be a finite number")
+        elif name in GENERIC_NONNEGATIVE_TEMPLATE_PROPERTIES:
+            value = _safe_float(value, float("nan"))
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be a non-negative number")
+            if name in {"cloud_coverage", "confidence", "humidity"} and value > 100:
+                raise ValueError(f"{name} must be between 0 and 100")
+        elif name == "wind_bearing":
+            try:
+                numeric_bearing = float(value)
+            except (TypeError, ValueError):
+                value = str(value).strip()
+                if not value:
+                    raise ValueError("wind_bearing must not be empty")
+            else:
+                if not math.isfinite(numeric_bearing) or not 0 <= numeric_bearing <= 360:
+                    raise ValueError("wind_bearing must be between 0 and 360")
+                value = numeric_bearing
+        elif self._domain == "event" and name == "event_type":
+            value = str(value).strip()
+            if not value:
+                raise ValueError("event_type must not be empty")
+            event_types = getattr(self, "_attr_event_types", [])
+            if event_types and value not in event_types:
+                raise ValueError("event_type must be present in event_types")
+        event_type_changed = (
+            self._domain == "event"
+            and name == "event_type"
+            and self._domain_options.get("event_type") != value
+        )
+        if self._domain == "weather" and name == "condition":
+            value = None if value is None else str(value).strip()
+            changed = self._attr_state != value
+            self._attr_state = value
+        else:
+            changed = super()._apply_native_template_value(name, value)
+        if (
+            self._domain == "air_quality"
+            and name == "particulate_matter_2_5"
+            and self._attr_state != value
+        ):
+            self._attr_state = value
+            changed = True
+        if name not in {
+            "available",
+            "condition",
+            "device_class",
+            "icon",
+            "state",
+            "supported_features",
+        }:
             rendered = getattr(self, f"_attr_{name}", value)
-            if self._domain_options.get(name) != rendered:
+            if (
+                name not in self._domain_options
+                or self._domain_options[name] != rendered
+            ):
                 self._domain_options[name] = rendered
                 changed = True
+        if event_type_changed:
+            self._attr_state = dt_util.utcnow().isoformat(timespec="milliseconds")
+            changed = True
         return changed
+
+    def _native_template_priority(self, name: str) -> int:
+        if name in GENERIC_LIST_TEMPLATE_PROPERTIES:
+            return 0
+        return super()._native_template_priority(name)
+
+
+def _calendar_event_value(event: dict, *names: str):
+    for name in names:
+        if name in event:
+            return event[name]
+    return None
+
+
+def _calendar_event_datetime(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time.min, tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    if parsed := dt_util.parse_datetime(value):
+        return parsed
+    if parsed_date := dt_util.parse_date(value):
+        return datetime.combine(
+            parsed_date,
+            time.min,
+            tzinfo=dt_util.DEFAULT_TIME_ZONE,
+        )
+    return None
+
+
+def _calendar_event_attributes(event: dict) -> dict:
+    start = _calendar_event_value(event, "start", "start_time")
+    end = _calendar_event_value(event, "end", "end_time")
+    start_datetime = _calendar_event_datetime(start)
+    end_datetime = _calendar_event_datetime(end)
+    all_day = bool(event.get("all_day")) or (
+        isinstance(start, date)
+        and not isinstance(start, datetime)
+        or isinstance(start, str)
+        and dt_util.parse_date(start) is not None
+        and "T" not in start
+        and " " not in start
+    )
+
+    def _display(value, parsed):
+        if parsed is not None:
+            return parsed.strftime("%Y-%m-%d %H:%M:%S")
+        return "" if value is None else str(value)
+
+    return {
+        "message": str(
+            _calendar_event_value(event, "summary", "message", "title") or ""
+        ),
+        "all_day": all_day,
+        "start_time": _display(start, start_datetime),
+        "end_time": _display(end, end_datetime),
+        "location": str(event.get("location") or ""),
+        "description": str(event.get("description") or ""),
+    }
+
+
+def _calendar_event_state(event: dict) -> str:
+    start = _calendar_event_datetime(
+        _calendar_event_value(event, "start", "start_time")
+    )
+    end = _calendar_event_datetime(_calendar_event_value(event, "end", "end_time"))
+    if start is None or end is None:
+        return STATE_OFF
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    now = dt_util.now()
+    return "on" if start <= now < end else STATE_OFF
 
 
 def _has_value(value) -> bool:
@@ -788,30 +1035,66 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         self.async_write_ha_state()
 
     def _apply_native_template_value(self, name: str, value) -> bool:
-        if name == "source_list":
+        if name in {"source_list", "sound_mode_list", "group_members"}:
             value = _template_string_list(value, name)
         elif name == "source":
             value = None if not _has_value(value) else str(value)
             if value is not None and self._attr_source_list and value not in self._attr_source_list:
                 raise ValueError(f"Invalid media source: {value}")
+        elif name == "sound_mode":
+            value = None if not _has_value(value) else str(value)
+            sound_modes = getattr(self, "_attr_sound_mode_list", None) or []
+            if value is not None and sound_modes and value not in sound_modes:
+                raise ValueError(f"Invalid media sound mode: {value}")
         elif name == "volume_level":
             parsed = _safe_float(value, float("nan"))
             if not math.isfinite(parsed) or not 0 <= parsed <= 1:
                 raise ValueError("volume_level must be between 0 and 1")
             value = parsed
-        elif name == "is_volume_muted" and not isinstance(value, bool):
-            value = self._template_to_bool(value)
+        elif name == "volume_step":
+            parsed = _safe_float(value, float("nan"))
+            if not math.isfinite(parsed) or not 0 < parsed <= 1:
+                raise ValueError("volume_step must be greater than 0 and at most 1")
+            value = parsed
+        elif name in {"media_duration", "media_position"}:
+            parsed = _safe_float(value, float("nan"))
+            if not math.isfinite(parsed) or parsed < 0:
+                raise ValueError(f"{name} must be a non-negative number")
+            value = parsed
+        elif name == "media_track":
+            value = _safe_int(value, -1, -1)
+            if value < 0:
+                raise ValueError("media_track must be a non-negative integer")
+        elif name == "media_position_updated_at":
+            if isinstance(value, datetime):
+                parsed = value
+            else:
+                parsed = dt_util.parse_datetime(str(value))
+            if parsed is None:
+                raise ValueError("media_position_updated_at must be a datetime")
+            value = parsed if parsed.tzinfo else dt_util.as_local(parsed)
+        elif name in {
+            "is_volume_muted",
+            "media_image_remotely_accessible",
+            "shuffle",
+        }:
+            value = value if isinstance(value, bool) else self._template_to_bool(value)
         elif name in {"state", "media_state"}:
             state = self._parse_media_state(value)
             if state is None and _has_value(value):
                 raise ValueError(f"Invalid media player state: {value}")
             name = "state"
             value = state
+        elif value is not None:
+            value = str(value)
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:
-        if self._attr_source not in self._attr_source_list:
+        if self._attr_source_list and self._attr_source not in self._attr_source_list:
             self._attr_source = None
+        sound_modes = getattr(self, "_attr_sound_mode_list", None) or []
+        if sound_modes and getattr(self, "_attr_sound_mode", None) not in sound_modes:
+            self._attr_sound_mode = None
         features = (
             MediaPlayerEntityFeature.TURN_ON
             | MediaPlayerEntityFeature.TURN_OFF
@@ -837,8 +1120,12 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             "min_temp",
             "operation_list",
             "target_temperature",
+            "target_temperature_high",
+            "target_temperature_low",
             "target_temperature_step",
             "temperature_unit",
+            "is_away_mode_on",
+            "precision",
         }
     )
 
@@ -864,17 +1151,42 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
         self._attr_target_temperature = self._bounded_temperature(
             config.get("target_temperature")
         )
+        self._attr_target_temperature_high = self._bounded_temperature(
+            config.get("target_temperature_high")
+        )
+        self._attr_target_temperature_low = self._bounded_temperature(
+            config.get("target_temperature_low")
+        )
+        self._attr_is_away_mode_on = (
+            _safe_bool(config.get("is_away_mode_on"))
+            if config.get("is_away_mode_on") is not None
+            else None
+        )
+        precision = config.get("precision")
+        self._attr_precision = (
+            _safe_float(precision, 1.0) if precision is not None else None
+        )
         self._attr_operation_list = _string_list(
             config.get("operation_list"),
             (STATE_OFF, "heat"),
         )
         if STATE_OFF not in self._attr_operation_list:
             self._attr_operation_list.insert(0, STATE_OFF)
+        self._refresh_supported_features()
+
+    def _refresh_supported_features(self) -> None:
         self._attr_supported_features = (
             WaterHeaterEntityFeature.TARGET_TEMPERATURE
             | WaterHeaterEntityFeature.OPERATION_MODE
             | WaterHeaterEntityFeature.ON_OFF
         )
+        if (
+            self._attr_is_away_mode_on is not None
+            or "is_away_mode_on" in self._native_templates
+            or "turn_away_mode_on" in self._command_actions
+            or "turn_away_mode_off" in self._command_actions
+        ):
+            self._attr_supported_features |= WaterHeaterEntityFeature.AWAY_MODE
 
     def _bounded_temperature(self, value):
         if value is None:
@@ -951,6 +1263,14 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
         self._attr_current_operation = STATE_OFF
         self.async_write_ha_state()
 
+    async def async_turn_away_mode_on(self) -> None:
+        self._attr_is_away_mode_on = True
+        self.async_write_ha_state()
+
+    async def async_turn_away_mode_off(self) -> None:
+        self._attr_is_away_mode_on = False
+        self.async_write_ha_state()
+
     def _apply_native_template_value(self, name: str, value) -> bool:
         aliases = {
             "temperature": "target_temperature",
@@ -970,7 +1290,12 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             value = _safe_float(value, float("nan"))
             if not math.isfinite(value):
                 raise ValueError(f"{name} must be a finite number")
-        elif name in {"current_temperature", "target_temperature"}:
+        elif name in {
+            "current_temperature",
+            "target_temperature",
+            "target_temperature_high",
+            "target_temperature_low",
+        }:
             value = self._bounded_temperature(value)
         elif name == "target_temperature_step":
             value = _safe_float(value, float("nan"))
@@ -980,6 +1305,12 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             value = str(value).strip()
             if not value:
                 raise ValueError("temperature_unit must not be empty")
+        elif name == "is_away_mode_on" and not isinstance(value, bool):
+            value = self._template_to_bool(value)
+        elif name == "precision":
+            value = _safe_float(value, float("nan"))
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError("precision must be a positive number")
         elif name == "state":
             name = "current_operation"
             value = str(value).lower()
@@ -999,13 +1330,28 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
         self._attr_target_temperature = self._bounded_temperature(
             self._attr_target_temperature
         )
+        self._attr_target_temperature_high = self._bounded_temperature(
+            self._attr_target_temperature_high
+        )
+        self._attr_target_temperature_low = self._bounded_temperature(
+            self._attr_target_temperature_low
+        )
+        if (
+            self._attr_target_temperature_high is not None
+            and self._attr_target_temperature_low is not None
+            and self._attr_target_temperature_low
+            > self._attr_target_temperature_high
+        ):
+            (
+                self._attr_target_temperature_low,
+                self._attr_target_temperature_high,
+            ) = (
+                self._attr_target_temperature_high,
+                self._attr_target_temperature_low,
+            )
         if self._attr_current_operation not in self._attr_operation_list:
             self._attr_current_operation = STATE_OFF
-        self._attr_supported_features = (
-            WaterHeaterEntityFeature.TARGET_TEMPERATURE
-            | WaterHeaterEntityFeature.OPERATION_MODE
-            | WaterHeaterEntityFeature.ON_OFF
-        )
+        self._refresh_supported_features()
 
 
 class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
@@ -1014,12 +1360,17 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
     PLATFORM_DOMAIN = "update"
     NATIVE_OPTION_KEYS = frozenset(
         {
+            "auto_update",
+            "display_precision",
+            "in_progress",
             "installed_version",
             "latest_version",
             "release_notes",
             "release_summary",
             "release_url",
             "support_backup",
+            "title",
+            "update_percentage",
             "versions",
         }
     )
@@ -1033,6 +1384,18 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
         )
         self._attr_release_summary = config.get("release_summary")
         self._attr_release_url = config.get("release_url")
+        self._attr_title = config.get("title")
+        self._attr_auto_update = _safe_bool(config.get("auto_update", False))
+        self._attr_in_progress = _safe_bool(config.get("in_progress", False))
+        self._attr_display_precision = _safe_int(
+            config.get("display_precision", 0), 0
+        )
+        update_percentage = config.get("update_percentage")
+        self._attr_update_percentage = (
+            self._bounded_update_percentage(update_percentage)
+            if update_percentage is not None
+            else None
+        )
         self._release_notes = config.get("release_notes")
         self._versions = _string_list(config.get("versions"))
         self._support_backup = _safe_bool(config.get("support_backup", True), True)
@@ -1046,6 +1409,19 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
             self._attr_supported_features |= UpdateEntityFeature.BACKUP
         if self._release_notes is not None:
             self._attr_supported_features |= UpdateEntityFeature.RELEASE_NOTES
+        if (
+            self._attr_update_percentage is not None
+            or "update_percentage" in self._native_templates
+            or "in_progress" in self._native_templates
+        ):
+            self._attr_supported_features |= UpdateEntityFeature.PROGRESS
+
+    @staticmethod
+    def _bounded_update_percentage(value) -> float:
+        parsed = _safe_float(value, float("nan"))
+        if not math.isfinite(parsed) or not 0 <= parsed <= 100:
+            raise ValueError("update_percentage must be between 0 and 100")
+        return parsed
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -1090,7 +1466,22 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
             changed = self._release_notes != value
             self._release_notes = value
             return changed
-        if name in {"installed_version", "latest_version", "release_summary", "release_url"}:
+        if name in {"auto_update", "in_progress"} and not isinstance(value, bool):
+            value = self._template_to_bool(value)
+        elif name == "update_percentage":
+            value = self._bounded_update_percentage(value)
+        elif name == "display_precision":
+            value = _safe_int(value, -1, -1)
+            if value < 0:
+                raise ValueError("display_precision must be a non-negative integer")
+        elif name in {
+            "device_class",
+            "installed_version",
+            "latest_version",
+            "release_summary",
+            "release_url",
+            "title",
+        }:
             value = None if value is None else str(value)
         if name == "state":
             name = "latest_version"

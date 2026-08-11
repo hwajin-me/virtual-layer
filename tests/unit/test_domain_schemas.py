@@ -53,35 +53,43 @@ GENERIC_DIRECT_OPTION_DOMAINS = (
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize("domain", VIRTUAL_ENTITY_DOMAINS)
-def test_every_domain_schema_accepts_composite_template_sources(domain):
-    module = import_module(f"custom_components.virtual_layer.{domain}")
-    schema = getattr(module, f"{domain.upper()}_SCHEMA", None) or module.ENTITY_SCHEMA
-    config = {
-        CONF_NAME: "Schema validation entity",
-        CONF_TEMPLATE_SOURCES: {
-            "source": {
-                ATTR_ENTITY_ID: "sensor.source",
-                CONF_ATTRIBUTE: "state",
+def test_every_domain_schema_accepts_composite_template_sources():
+    for domain in VIRTUAL_ENTITY_DOMAINS:
+        module = import_module(f"custom_components.virtual_layer.{domain}")
+        schema = (
+            getattr(module, f"{domain.upper()}_SCHEMA", None)
+            or module.ENTITY_SCHEMA
+        )
+        config = {
+            CONF_NAME: "Schema validation entity",
+            CONF_TEMPLATE_SOURCES: {
+                "source": {
+                    ATTR_ENTITY_ID: "sensor.source",
+                    CONF_ATTRIBUTE: "state",
+                },
             },
-        },
-    }
-    if domain == "climate":
-        config[CONF_INITIAL_VALUE] = "off"
-    if domain == "number":
-        config.update({"min": 0, "max": 100})
+        }
+        if domain == "climate":
+            config[CONF_INITIAL_VALUE] = "off"
+        if domain == "number":
+            config.update({"min": 0, "max": 100})
 
-    validated = schema(config)
+        validated = schema(config)
 
-    assert validated[CONF_TEMPLATE_SOURCES]["source"][ATTR_ENTITY_ID] == "sensor.source"
+        assert (
+            validated[CONF_TEMPLATE_SOURCES]["source"][ATTR_ENTITY_ID]
+            == "sensor.source"
+        ), domain
 
 
-@pytest.mark.parametrize("domain", GENERIC_DIRECT_OPTION_DOMAINS)
-def test_generic_domain_schemas_accept_direct_ui_options(domain):
-    module = import_module(f"custom_components.virtual_layer.{domain}")
-    validated = module.ENTITY_SCHEMA({
-        CONF_NAME: "Direct configuration entity",
-        "yaml_only_option": {"enabled": True, "values": [1, 2]},
-    })
+def test_generic_domain_schemas_accept_direct_ui_options():
+    direct_option = {"enabled": True, "values": [1, 2]}
 
-    assert validated["yaml_only_option"] == {"enabled": True, "values": [1, 2]}
+    for domain in GENERIC_DIRECT_OPTION_DOMAINS:
+        module = import_module(f"custom_components.virtual_layer.{domain}")
+        validated = module.ENTITY_SCHEMA({
+            CONF_NAME: "Direct configuration entity",
+            "yaml_only_option": direct_option,
+        })
+
+        assert validated["yaml_only_option"] == direct_option, domain

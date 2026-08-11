@@ -292,9 +292,13 @@ class VirtualFan(VirtualEntity, FanEntity):
         elif name == "oscillating" and not isinstance(value, bool):
             value = self._template_to_bool(value)
         elif name in {"state", "is_on"}:
-            old_percentage = self._attr_percentage
-            self.set_state(value)
-            return old_percentage != self._attr_percentage
+            old_is_on = self.is_on
+            requested_is_on = self._template_to_bool(value)
+            if not requested_is_on:
+                self._apply_initial_power_state("off")
+            elif not self.is_on:
+                self._apply_initial_power_state("on")
+            return old_is_on != self.is_on
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:

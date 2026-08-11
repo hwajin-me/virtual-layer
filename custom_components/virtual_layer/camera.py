@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Callable
 
 import aiofiles
@@ -250,6 +251,13 @@ class VirtualCamera(VirtualEntity, Camera):
             old_state = self._attr_is_on
             self.set_state(value)
             return old_state != self._attr_is_on
+        elif name == "frame_interval":
+            try:
+                value = float(value)
+            except (TypeError, ValueError) as err:
+                raise ValueError("frame_interval must be a positive number") from err
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError("frame_interval must be a positive number")
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:

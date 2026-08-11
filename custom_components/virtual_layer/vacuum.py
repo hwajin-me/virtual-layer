@@ -326,6 +326,9 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:
-        if self._attr_fan_speed not in self._attr_fan_speed_list:
+        if (
+            self._attr_fan_speed_list
+            and self._attr_fan_speed not in self._attr_fan_speed_list
+        ):
             self._attr_fan_speed = None
         self._refresh_supported_features()

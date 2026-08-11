@@ -5,7 +5,7 @@ This component provides support for a virtual sensor.
 
 import logging
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -318,6 +318,27 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                 raise ValueError("options contains duplicate values")
         elif name == "native_unit_of_measurement":
             value = None if value is None or value == "" else str(value)
+        elif name == "suggested_display_precision":
+            try:
+                value = int(value)
+            except (TypeError, ValueError) as err:
+                raise ValueError(
+                    "suggested_display_precision must be a non-negative integer"
+                ) from err
+            if value < 0:
+                raise ValueError(
+                    "suggested_display_precision must be a non-negative integer"
+                )
+        elif name == "suggested_unit_of_measurement":
+            value = None if value is None or value == "" else str(value)
+        elif name == "last_reset":
+            if isinstance(value, datetime):
+                parsed = value
+            else:
+                parsed = dt_util.parse_datetime(str(value))
+            if parsed is None:
+                raise ValueError("last_reset must be a datetime")
+            value = parsed if parsed.tzinfo else dt_util.as_local(parsed)
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:

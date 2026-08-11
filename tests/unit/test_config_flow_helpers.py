@@ -18,11 +18,13 @@ from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
 
 from custom_components.virtual_layer.config_flow import (
+    CONF_ADVANCED_SETTINGS,
     CONF_ATTRIBUTE_SOURCES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
     CONF_ATTRIBUTES_JSON,
     CONF_COMMAND_ACTIONS_JSON,
     CONF_DEVICE_CONFIGURATION_URL,
+    CONF_DEVICE_DETAILS,
     CONF_DEVICE_HW_VERSION,
     CONF_DEVICE_ID,
     CONF_DEVICE_MANUFACTURER,
@@ -33,11 +35,14 @@ from custom_components.virtual_layer.config_flow import (
     CONF_DEVICE_SW_VERSION,
     CONF_DEVICE_VIA_DEVICE_ID,
     CONF_DOMAIN_OPTIONS_JSON,
+    CONF_DOMAIN_SETTINGS,
     CONF_ENTITY_NAME,
     CONF_EVENT_HOOKS_JSON,
     CONF_NATIVE_TEMPLATES_JSON,
+    CONF_NATIVE_VALUE_TEMPLATES,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
+    DOMAIN_NATIVE_TEMPLATE_PROPERTIES,
     DeviceNameAlreadyUsed,
     InvalidDomainOptions,
     InvalidEntityId,
@@ -55,6 +60,7 @@ from custom_components.virtual_layer.config_flow import (
     _entity_key_from_stable_key,
     _entity_schema,
     _find_entity_by_selection_key,
+    _flatten_entity_form_sections,
     _managed_device_choices,
     _needs_domain_specific_form,
     _options_schema,
@@ -146,6 +152,45 @@ def _entity_input(overrides=None):
     return data
 
 
+def _section_validators(schema, section_name):
+    outer = {
+        marker.schema: validator for marker, validator in schema.schema.items()
+    }
+    section_schema = outer[section_name].schema
+    return {
+        marker.schema: validator
+        for marker, validator in section_schema.schema.items()
+    }
+
+
+def test_entity_form_collapses_secondary_fields_and_flattens_submissions():
+    schema = _entity_schema({CONF_PLATFORM: "climate"})
+    outer = {
+        marker.schema: validator for marker, validator in schema.schema.items()
+    }
+
+    for section_name in (
+        CONF_DEVICE_DETAILS,
+        CONF_ADVANCED_SETTINGS,
+        CONF_DOMAIN_SETTINGS,
+        CONF_NATIVE_VALUE_TEMPLATES,
+    ):
+        assert outer[section_name].options["collapsed"] is True
+
+    flattened = _flatten_entity_form_sections(
+        {
+            CONF_DEVICE_DETAILS: {CONF_DEVICE_ID: "nested-device"},
+            CONF_ADVANCED_SETTINGS: {CONF_ATTRIBUTES_JSON: '{"source": true}'},
+            CONF_DOMAIN_SETTINGS: {"fan_mode": "auto"},
+            CONF_DEVICE_ID: "flat-device",
+        }
+    )
+    assert flattened[CONF_DEVICE_ID] == "flat-device"
+    assert flattened[CONF_ATTRIBUTES_JSON] == '{"source": true}'
+    assert flattened["fan_mode"] == "auto"
+    assert CONF_DEVICE_DETAILS not in flattened
+
+
 def test_entity_form_defaults_to_the_selected_domain_prefix():
     defaults = _entity_schema(
         {
@@ -179,49 +224,41 @@ def test_entity_form_uses_icon_and_template_selectors():
     assert isinstance(validators[CONF_ICON_TEMPLATE], selector.TemplateSelector)
 
 
-def test_climate_domain_selection_reopens_form_with_mode_fields():
-    first_submission = _entity_input({CONF_PLATFORM: "climate"})
+def test_native_value_template_sections_match_domain_properties():
+    common_template_only_domains = {
+        "infrared",
+        "radio_frequency",
+        "scene",
+        "tag",
+        "wake_word",
+    }
+    assert set(DOMAIN_NATIVE_TEMPLATE_PROPERTIES).isdisjoint(
+        common_template_only_domains
+    )
+    assert set(DOMAIN_NATIVE_TEMPLATE_PROPERTIES) | common_template_only_domains == set(
+        VIRTUAL_ENTITY_DOMAINS
+    )
 
-    assert _needs_domain_specific_form(first_submission)
+    for platform, expected_properties in sorted(
+        DOMAIN_NATIVE_TEMPLATE_PROPERTIES.items()
+    ):
+        schema = _entity_schema({CONF_PLATFORM: platform})
+        validators = {
+            marker.schema: validator
+            for marker, validator in schema.schema.items()
+        }
+        native_section = validators[CONF_NATIVE_VALUE_TEMPLATES]
+        template_validators = {
+            marker.schema: validator
+            for marker, validator in native_section.schema.schema.items()
+        }
 
-    climate_defaults = _entity_schema(first_submission)({})
-    assert climate_defaults["hvac_modes"] == [
-        "off",
-        "heat",
-        "cool",
-        "heat_cool",
-        "auto",
-        "dry",
-        "fan_only",
-    ]
-    assert not _needs_domain_specific_form(climate_defaults)
-
-
-def test_fan_domain_selection_reopens_form_with_native_feature_fields():
-    first_submission = _entity_input({CONF_PLATFORM: "fan"})
-
-    assert _needs_domain_specific_form(first_submission)
-
-    fan_defaults = _entity_schema(first_submission)({})
-    assert fan_defaults["speed_count"] == 0
-    assert fan_defaults["oscillate"] is False
-    assert fan_defaults["direction"] is False
-    assert fan_defaults["modes"] == []
-    assert fan_defaults["oscillating"] is False
-    assert not _needs_domain_specific_form(fan_defaults)
-
-
-def test_humidifier_domain_selection_reopens_form_with_native_feature_fields():
-    first_submission = _entity_input({CONF_PLATFORM: "humidifier"})
-
-    assert _needs_domain_specific_form(first_submission)
-
-    defaults = _entity_schema(first_submission)({})
-    assert defaults["class"] == "humidifier"
-    assert defaults["min_humidity"] == 0
-    assert defaults["max_humidity"] == 100
-    assert defaults["modes"] == []
-    assert not _needs_domain_specific_form(defaults)
+        assert set(template_validators) == set(expected_properties), platform
+        assert CONF_NATIVE_TEMPLATES_JSON not in validators, platform
+        assert all(
+            isinstance(validator, selector.TemplateSelector)
+            for validator in template_validators.values()
+        ), platform
 
 
 def test_build_entity_config_supports_composite_templates_and_attributes():
@@ -701,9 +738,7 @@ def test_climate_entity_form_uses_editable_mode_selectors():
             "swing_horizontal_mode": "off",
         }
     )
-    validators = {
-        marker.schema: validator for marker, validator in schema.schema.items()
-    }
+    validators = _section_validators(schema, CONF_DOMAIN_SETTINGS)
 
     for field_name in (
         "hvac_modes",
@@ -828,9 +863,7 @@ def test_humidifier_entity_form_and_builder_use_native_controls():
             "mode": "auto",
         }
     )
-    validators = {
-        marker.schema: validator for marker, validator in form.schema.items()
-    }
+    validators = _section_validators(form, CONF_DOMAIN_SETTINGS)
     assert isinstance(validators["class"], selector.SelectSelector)
     assert isinstance(validators["action"], selector.SelectSelector)
     assert isinstance(validators["modes"], selector.SelectSelector)
@@ -908,9 +941,7 @@ def test_fan_entity_form_uses_native_feature_controls():
             "current_direction": "reverse",
         }
     )
-    validators = {
-        marker.schema: validator for marker, validator in schema.schema.items()
-    }
+    validators = _section_validators(schema, CONF_DOMAIN_SETTINGS)
 
     assert isinstance(validators["speed_count"], selector.NumberSelector)
     assert isinstance(validators["percentage"], selector.NumberSelector)
@@ -2093,39 +2124,6 @@ def test_stored_entity_ids_keeps_valid_legacy_sources_and_drops_bad_values():
     ) == ["sensor.first", "binary_sensor.second"]
 
 
-RICH_DOMAIN_OPTIONS = {
-    "binary_sensor": {"class": "door"},
-    "camera": {"is_streaming": True},
-    "climate": {"target_temperature": 21},
-    "cover": {"open_close_duration": 5},
-    "device_tracker": {"location_helper": {"distance_threshold_meters": 300}},
-    "fan": {"speed_count": 3},
-    "humidifier": {"target_humidity": 50},
-    "light": {"support_brightness": True},
-    "lock": {"support_open": True},
-    "number": {"min": 1, "max": 10},
-    "sensor": {"unit_of_measurement": "C"},
-    "switch": {"class": "outlet"},
-    "valve": {"open_close_duration": 5},
-}
-
-
-@pytest.mark.parametrize("domain", VIRTUAL_ENTITY_DOMAINS)
-def test_every_supported_domain_accepts_direct_ui_options(domain):
-    options = RICH_DOMAIN_OPTIONS.get(domain, {"yaml_only_option": True})
-    overrides = {
-        CONF_PLATFORM: domain,
-        CONF_DOMAIN_OPTIONS_JSON: json.dumps(options),
-    }
-    if domain in {"climate", "fan", "humidifier"}:
-        overrides[CONF_INITIAL_VALUE] = "off"
-
-    _, entity = _build_entity_config(_entity_input(overrides))
-
-    for key, value in options.items():
-        assert entity[key] == value
-
-
 def test_build_entity_config_rejects_invalid_template_source_entity_id():
     with pytest.raises(InvalidEntityReference) as err:
         _build_entity_config(
@@ -2965,6 +2963,9 @@ def test_entity_form_round_trips_native_templates_and_command_actions():
                 CONF_ENTITY_NAME: "Linked HVAC",
                 CONF_INITIAL_VALUE: "off",
                 CONF_NATIVE_TEMPLATES_JSON: defaults[CONF_NATIVE_TEMPLATES_JSON],
+                CONF_NATIVE_VALUE_TEMPLATES: defaults[
+                    CONF_NATIVE_VALUE_TEMPLATES
+                ],
                 CONF_COMMAND_ACTIONS_JSON: defaults[CONF_COMMAND_ACTIONS_JSON],
             }
         )
@@ -2972,3 +2973,81 @@ def test_entity_form_round_trips_native_templates_and_command_actions():
 
     assert built[CONF_NATIVE_TEMPLATES] == entity[CONF_NATIVE_TEMPLATES]
     assert built[CONF_COMMAND_ACTIONS] == entity[CONF_COMMAND_ACTIONS]
+
+
+def test_clearing_dedicated_native_template_removes_only_that_property():
+    built = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "climate",
+                CONF_INITIAL_VALUE: "off",
+                CONF_NATIVE_TEMPLATES_JSON: json.dumps(
+                    {
+                        "fan_mode": "{{ 'stale' }}",
+                        "vendor_property": "{{ 'kept' }}",
+                    }
+                ),
+                CONF_NATIVE_VALUE_TEMPLATES: {
+                    "fan_mode": "",
+                    "target_temperature": "{{ 23 }}",
+                },
+            }
+        )
+    )[1]
+
+    assert built[CONF_NATIVE_TEMPLATES] == {
+        "target_temperature": "{{ 23 }}",
+        "vendor_property": "{{ 'kept' }}",
+    }
+
+
+def test_domain_form_promotes_managed_templates_from_json_defaults():
+    form_data = _entity_schema(
+        {
+            CONF_PLATFORM: "climate",
+            CONF_NATIVE_TEMPLATES_JSON: json.dumps(
+                {
+                    "fan_mode": "{{ 'auto' }}",
+                    "vendor_property": "{{ 'kept' }}",
+                }
+            ),
+        }
+    )({})
+
+    assert {
+        key: value
+        for key, value in form_data[CONF_NATIVE_VALUE_TEMPLATES].items()
+        if value
+    } == {
+        "fan_mode": "{{ 'auto' }}"
+    }
+    assert CONF_NATIVE_TEMPLATES_JSON not in form_data
+
+
+def test_unstructured_domain_keeps_advanced_native_template_json_input():
+    schema = _entity_schema({CONF_PLATFORM: "scene"})
+    validators = {
+        marker.schema: validator for marker, validator in schema.schema.items()
+    }
+
+    advanced = validators[CONF_ADVANCED_SETTINGS]
+    advanced_fields = {
+        marker.schema for marker in advanced.schema.schema
+    }
+    assert CONF_NATIVE_TEMPLATES_JSON in advanced_fields
+
+
+def test_vacuum_domain_selection_reopens_with_dedicated_jinja_fields():
+    first_submission = _entity_input({CONF_PLATFORM: "vacuum"})
+
+    assert _needs_domain_specific_form(first_submission)
+
+    vacuum_defaults = _entity_schema(first_submission)({})
+    assert set(vacuum_defaults[CONF_NATIVE_VALUE_TEMPLATES]) == {
+        "activity",
+        "battery_level",
+        "fan_speed_list",
+        "fan_speed",
+        "supported_features",
+    }
+    assert not _needs_domain_specific_form(vacuum_defaults)

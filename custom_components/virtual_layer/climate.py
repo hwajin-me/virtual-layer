@@ -549,9 +549,29 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             "_attr_target_temperature_high",
             "_attr_target_temperature_low",
         ):
-            setattr(self, attribute, self._bounded_temperature(getattr(self, attribute, None)))
+            setattr(
+                self,
+                attribute,
+                self._bounded_temperature(getattr(self, attribute, None)),
+            )
         for attribute in ("_attr_current_humidity", "_attr_target_humidity"):
-            setattr(self, attribute, self._bounded_humidity(getattr(self, attribute, None)))
+            setattr(
+                self,
+                attribute,
+                self._bounded_humidity(getattr(self, attribute, None)),
+            )
+        if (
+            self._attr_target_temperature_low is not None
+            and self._attr_target_temperature_high is not None
+            and self._attr_target_temperature_low > self._attr_target_temperature_high
+        ):
+            (
+                self._attr_target_temperature_low,
+                self._attr_target_temperature_high,
+            ) = (
+                self._attr_target_temperature_high,
+                self._attr_target_temperature_low,
+            )
         if self._attr_hvac_mode not in self._attr_hvac_modes:
             self._attr_hvac_mode = self._default_hvac_mode()
         for current_name, modes_name in (

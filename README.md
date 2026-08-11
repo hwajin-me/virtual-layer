@@ -377,6 +377,35 @@ including older Virtual Layer configurations that stored them as attributes.
 Custom mode and preset values can be added when the source integration does not
 publish a list.
 
+Climate, fan, and humidifier forms also provide a collapsed **Native value
+Jinja templates** section. Every native value supported by those virtual
+entities has its own Home Assistant Template editor. This includes mode and
+mode-list fields, fan/preset/swing and horizontal-swing values, current and
+target temperature ranges, current and target humidity ranges, fan percentage,
+oscillation, direction, humidifier action, and on/off state where applicable.
+A non-empty template takes precedence over the corresponding static control;
+leaving it empty keeps the static value as the fallback. Existing managed
+entries from Native property templates JSON are moved into these dedicated
+editors when an entity is edited. The raw Native property templates JSON input
+is not shown for these domains; unknown vendor-specific keys from older entries
+are preserved transparently when the entity is saved.
+
+The same dedicated Jinja section covers the standard native properties of 41
+Home Assistant entity domains. In addition to the domains above, this includes
+air quality, alarms, Assist satellites, calendars, conversations, events,
+geolocation, image processing, media metadata, notifications, STT/TTS, to-do
+lists, updates, and weather. Lights include HS, XY, RGB, RGBW, and RGBWW colors;
+media players include playback metadata, sound modes, grouping, and progress;
+and covers include tilt position and tilt actions. For example, a vacuum can
+template its activity, battery level, fan speed list, current fan speed, and
+supported feature set without editing JSON.
+
+The five domains without additional synchronous native properties (`infrared`,
+`radio_frequency`, `scene`, `tag`, and `wake_word`) continue to use the common
+value, availability, icon, and attribute templates. Their advanced JSON input
+remains available for integration-specific extensions that have no standard
+Home Assistant property contract.
+
 For the remaining state-backed domains, use the same field for arbitrary
 JSON-compatible domain data. These settings are preserved on edits and appear
 as state attributes. This makes YAML-only style metadata

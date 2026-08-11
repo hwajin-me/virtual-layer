@@ -17,6 +17,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.virtual_layer.config_flow import (
     ACTION_ADD_ENTITY,
     CONF_ACTION,
+    CONF_DOMAIN_SETTINGS,
     CONF_POLYGON_GEOJSON_JSON,
     CONF_POLYGON_STRATEGY_INPUT,
     CONF_REFERENCE_ENTITY_ID,
@@ -92,6 +93,7 @@ async def test_selecting_device_tracker_reopens_form_with_polygon_fields(hass):
 
     assert result["type"] == FlowResultType.FORM
     polygon_defaults = result["data_schema"]({})
+    polygon_defaults = polygon_defaults[CONF_DOMAIN_SETTINGS]
     assert CONF_POLYGON_GEOJSON_JSON in polygon_defaults
     assert polygon_defaults[CONF_POLYGON_STRATEGY_INPUT] == "majority"
 

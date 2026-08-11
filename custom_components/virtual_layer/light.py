@@ -127,6 +127,21 @@ def _as_hs_color(value, fallback=None) -> tuple[float, float] | None:
     return hue, saturation
 
 
+def _as_color_tuple(value, length: int, maximum: float, fallback=None):
+    """Return a finite Home Assistant color tuple with the requested shape."""
+    if not isinstance(value, (list, tuple)) or len(value) != length:
+        return fallback
+    try:
+        color = tuple(float(item) for item in value)
+    except (TypeError, ValueError):
+        return fallback
+    if any(not math.isfinite(item) or not 0 <= item <= maximum for item in color):
+        return fallback
+    if maximum == 255:
+        return tuple(int(item) for item in color)
+    return color
+
+
 def validate_domain_options(config) -> None:
     """Reject malformed light colors and effects entered through the UI."""
     if config.get(CONF_SUPPORT_COLOR) and _as_hs_color(
@@ -182,6 +197,10 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._attr_max_color_temp_kelvin = 40000
         self._attr_brightness = None
         self._attr_hs_color = None
+        self._attr_xy_color = None
+        self._attr_rgb_color = None
+        self._attr_rgbw_color = None
+        self._attr_rgbww_color = None
         self._attr_color_temp_kelvin = None
         self._attr_effect = None
         self._attr_effect_list = None
@@ -210,6 +229,22 @@ class VirtualLight(VirtualEntity, LightEntity):
     @property
     def hs_color(self) -> tuple[float, float] | None:
         return self._attr_hs_color if self._attr_is_on else None
+
+    @property
+    def xy_color(self) -> tuple[float, float] | None:
+        return self._attr_xy_color if self._attr_is_on else None
+
+    @property
+    def rgb_color(self) -> tuple[int, int, int] | None:
+        return self._attr_rgb_color if self._attr_is_on else None
+
+    @property
+    def rgbw_color(self) -> tuple[int, int, int, int] | None:
+        return self._attr_rgbw_color if self._attr_is_on else None
+
+    @property
+    def rgbww_color(self) -> tuple[int, int, int, int, int] | None:
+        return self._attr_rgbww_color if self._attr_is_on else None
 
     @property
     def color_temp_kelvin(self) -> int | None:
@@ -402,6 +437,15 @@ class VirtualLight(VirtualEntity, LightEntity):
             value = _as_hs_color(value)
             if value is None:
                 raise ValueError("hs_color must be a valid hue/saturation pair")
+        elif name == "xy_color":
+            value = _as_color_tuple(value, 2, 1)
+            if value is None:
+                raise ValueError("xy_color must be a pair between 0 and 1")
+        elif name in {"rgb_color", "rgbw_color", "rgbww_color"}:
+            lengths = {"rgb_color": 3, "rgbw_color": 4, "rgbww_color": 5}
+            value = _as_color_tuple(value, lengths[name], 255)
+            if value is None:
+                raise ValueError(f"{name} must contain valid 0..255 channels")
         elif name == "color_temp_kelvin":
             value = _as_color_temp_kelvin(value)
         elif name in {"min_color_temp_kelvin", "max_color_temp_kelvin"}:
@@ -440,6 +484,10 @@ class VirtualLight(VirtualEntity, LightEntity):
                     for mode in (
                         ColorMode.COLOR_TEMP,
                         ColorMode.HS,
+                        ColorMode.XY,
+                        ColorMode.RGB,
+                        ColorMode.RGBW,
+                        ColorMode.RGBWW,
                         ColorMode.BRIGHTNESS,
                         ColorMode.ONOFF,
                     )

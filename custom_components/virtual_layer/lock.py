@@ -232,6 +232,7 @@ class VirtualLock(VirtualEntity, LockEntity):
             "is_locking",
             "is_unlocking",
             "is_jammed",
+            "is_opening",
         } and not isinstance(value, bool):
             value = self._template_to_bool(value)
         return super()._apply_native_template_value(name, value)
@@ -243,6 +244,7 @@ class VirtualLock(VirtualEntity, LockEntity):
                 for name in (
                     "is_jammed",
                     "is_open",
+                    "is_opening",
                     "is_locking",
                     "is_unlocking",
                     "is_locked",
@@ -254,6 +256,7 @@ class VirtualLock(VirtualEntity, LockEntity):
         for name in (
             "is_jammed",
             "is_open",
+            "is_opening",
             "is_locking",
             "is_unlocking",
             "is_locked",
