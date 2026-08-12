@@ -4,6 +4,7 @@ This component provides support for virtual components.
 """
 
 import asyncio
+import inspect
 import logging
 import math
 from collections.abc import Mapping
@@ -16,7 +17,7 @@ import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
 from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, CONF_ICON
+from homeassistant.const import ATTR_ENTITY_ID, CONF_ICON, CONF_PLATFORM
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, Unauthorized, UnknownUser
 from homeassistant.helpers.entity import async_generate_entity_id
@@ -27,6 +28,8 @@ from homeassistant.helpers.event import (
     async_track_template_result,
     async_track_time_interval,
 )
+from homeassistant.helpers.json import json_bytes
+from homeassistant.helpers.restore_state import async_get as async_get_restore_state
 from homeassistant.helpers.template import Template, TemplateError
 
 from .cfg import (
@@ -38,6 +41,7 @@ from .const import *
 __version__ = '1.0.11'
 
 _LOGGER = logging.getLogger(__name__)
+_MISSING = object()
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(COMPONENT_DOMAIN)
 
@@ -65,11 +69,28 @@ def _finite_service_payload(value):
     return value
 
 
+def _service_attributes(value):
+    """Require valid attribute names and Home Assistant-serializable values."""
+    if any(not isinstance(key, str) or not key for key in value):
+        raise vol.Invalid("Attribute names must be non-empty strings")
+    _finite_service_payload(value)
+    try:
+        json_bytes(value)
+    except (OverflowError, TypeError, ValueError) as err:
+        raise vol.Invalid("Attributes must be serializable by Home Assistant") from err
+    return value
+
+
 def _service_state_value(value):
     """Validate a scalar service state without coercing numbers to strings."""
     if not isinstance(value, (str, int, float, bool)):
         raise vol.Invalid("State value must be a string, number, or boolean")
-    return _finite_service_payload(value)
+    _finite_service_payload(value)
+    try:
+        json_bytes(value)
+    except (OverflowError, TypeError, ValueError) as err:
+        raise vol.Invalid("State value must be serializable by Home Assistant") from err
+    return value
 
 
 SERVICE_SET_STATE_SCHEMA = vol.Schema({
@@ -78,7 +99,7 @@ SERVICE_SET_STATE_SCHEMA = vol.Schema({
 })
 SERVICE_SET_ATTRIBUTES_SCHEMA = vol.Schema({
     vol.Required(ATTR_ENTITY_ID): cv.comp_entity_ids,
-    vol.Required(ATTR_ATTRIBUTES): vol.All(dict, _finite_service_payload),
+    vol.Required(ATTR_ATTRIBUTES): vol.All(dict, _service_attributes),
 })
 SERVICE_CLEAR_ATTRIBUTES_SCHEMA = vol.Schema({
     vol.Required(ATTR_ENTITY_ID): cv.comp_entity_ids,
@@ -128,6 +149,7 @@ async def _async_verify_admin(hass: HomeAssistant, call) -> None:
 
 VIRTUAL_PLATFORMS = VIRTUAL_ENTITY_DOMAINS
 _STATE_ONLY_TEMPLATE_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_state_only_template_listeners"
+_STATE_ONLY_RESTORE_PROXIES_DATA = f"{COMPONENT_DOMAIN}_state_only_restore_proxies"
 _ENTITY_ID_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_entity_id_guard_listeners"
 _DEVICE_METADATA_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_device_metadata_guard_listeners"
 
@@ -140,6 +162,17 @@ _STATE_ONLY_MAPPING_NATIVE_PROPERTIES = frozenset({
     "tts_options",
 })
 _STATE_ONLY_BOOLEAN_NATIVE_PROPERTIES = frozenset({"supports_streaming"})
+
+
+class _StateOnlyRestoreProxy:
+    """Expose a state-only entity to Home Assistant's restore-state helper."""
+
+    def __init__(self, entity_id: str) -> None:
+        self.entity_id = entity_id
+
+    @property
+    def extra_restore_state_data(self):
+        return None
 
 
 def _async_ensure_runtime_data(hass: HomeAssistant) -> None:
@@ -165,6 +198,29 @@ def _runtime_group_name_for_entry(hass: HomeAssistant, entry: ConfigEntry):
         ):
             return group_name
     return configured_group_name
+
+
+def _runtime_group_for_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> tuple[object, Mapping | None]:
+    """Return this entry's runtime group without borrowing another entry's data."""
+    group_name = _runtime_group_name_for_entry(hass, entry)
+    group_data = hass.data.get(COMPONENT_DOMAIN, {}).get(group_name)
+    if (
+        isinstance(group_data, Mapping)
+        and group_data.get(ATTR_CONFIG_ENTRY_ID) in (None, entry.entry_id)
+    ):
+        return group_name, group_data
+    return group_name, None
+
+
+@callback
+def _async_remove_runtime_group_for_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove runtime data only when it belongs to this config entry."""
+    group_name, group_data = _runtime_group_for_entry(hass, entry)
+    if group_data is not None:
+        hass.data.get(COMPONENT_DOMAIN, {}).pop(group_name, None)
 
 
 def _entry_platforms_from_entities(entities):
@@ -197,9 +253,21 @@ async def async_setup(hass, config):
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    _LOGGER.debug(f'async setup {entry.data}')
+    _LOGGER.debug("async setup %s", entry.data)
 
     _async_ensure_runtime_data(hass)
+    configured_group_name = entry.data[ATTR_GROUP_NAME]
+    configured_group = hass.data[COMPONENT_DOMAIN].get(configured_group_name)
+    if (
+        isinstance(configured_group, Mapping)
+        and configured_group.get(ATTR_CONFIG_ENTRY_ID) not in (None, entry.entry_id)
+    ):
+        _LOGGER.error(
+            "Cannot set up Device group %s because it is owned by config entry %s",
+            configured_group_name,
+            configured_group.get(ATTR_CONFIG_ENTRY_ID),
+        )
+        return False
     previous_group_name = _runtime_group_name_for_entry(hass, entry)
 
     # Get the config.
@@ -210,7 +278,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # create the devices.
     _LOGGER.debug("creating the devices")
     for device in vcfg.devices:
-        _LOGGER.debug(f"creating-device={device}")
+        _LOGGER.debug("creating-device=%s", device)
         await _async_get_or_create_virtual_device_in_registry(hass, entry, device)
     _async_remove_orphaned_diagnostic_registry_entries(hass, entry, vcfg.entities)
     _async_sync_active_entity_registry_entries(hass, entry, vcfg.entities)
@@ -220,9 +288,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device[ATTR_DEVICE_ID]
         for device in vcfg.devices
     }
+    active_entity_unique_ids = {
+        entity[ATTR_UNIQUE_ID]
+        for platform_entities in vcfg.entities.values()
+        if isinstance(platform_entities, list)
+        for entity in platform_entities
+        if isinstance(entity, Mapping)
+        and isinstance(entity.get(ATTR_UNIQUE_ID), str)
+    }
     for switch, device in vcfg.orphaned_entities.items():
         _LOGGER.debug(f"deleting {switch}/{device}")
-        await _async_delete_virtual_entity_from_registry(hass, entry, device, active_device_ids)
+        await _async_delete_virtual_entity_from_registry(
+            hass,
+            entry,
+            device,
+            active_device_ids,
+            active_entity_unique_ids,
+        )
 
     # Update the component data.
     hass.data[COMPONENT_DOMAIN].update({
@@ -234,7 +316,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     })
     if previous_group_name != entry.data[ATTR_GROUP_NAME]:
         hass.data[COMPONENT_DOMAIN].pop(previous_group_name, None)
-    _LOGGER.debug(f"update hass data {hass.data[COMPONENT_DOMAIN]}")
+    _LOGGER.debug("update hass data %s", hass.data[COMPONENT_DOMAIN])
     _async_setup_state_only_entities(hass, entry, vcfg.entities)
 
     # Create the entities.
@@ -250,7 +332,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _async_remove_entity_id_guard(hass, entry.entry_id)
             _async_remove_device_metadata_guard(hass, entry.entry_id)
             _async_unload_state_only_entities(hass, entry, vcfg.entities)
-            hass.data[COMPONENT_DOMAIN].pop(entry.data[ATTR_GROUP_NAME], None)
+            _async_remove_runtime_group_for_entry(hass, entry)
 
     _async_setup_entity_id_guard(hass, entry, vcfg.entities)
     _async_setup_device_metadata_guard(hass, entry, vcfg.devices)
@@ -266,8 +348,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.debug(f"unloading virtual group {entry.data[ATTR_GROUP_NAME]}")
     # _LOGGER.debug(f"before hass={hass.data[COMPONENT_DOMAIN]}")
-    runtime_group_name = _runtime_group_name_for_entry(hass, entry)
-    group_data = hass.data.get(COMPONENT_DOMAIN, {}).get(runtime_group_name, {})
+    _runtime_group_name, group_data = _runtime_group_for_entry(hass, entry)
+    group_data = group_data or {}
     platforms = _entry_platforms_from_entities(group_data.get(ATTR_ENTITIES, {}))
     unload_ok = True
     if platforms:
@@ -277,7 +359,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _async_remove_entity_id_guard(hass, entry.entry_id)
         _async_remove_device_metadata_guard(hass, entry.entry_id)
         _async_unload_state_only_entities(hass, entry, group_data.get(ATTR_ENTITIES, {}))
-        hass.data[COMPONENT_DOMAIN].pop(runtime_group_name, None)
+        _async_remove_runtime_group_for_entry(hass, entry)
         # _LOGGER.debug(f"ocfg={ocfg}")
     # _LOGGER.debug(f"after hass={hass.data[COMPONENT_DOMAIN]}")
 
@@ -289,8 +371,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     group_name = entry.data.get(ATTR_GROUP_NAME)
     _LOGGER.debug("removing virtual group %s", group_name)
 
-    runtime_group_name = _runtime_group_name_for_entry(hass, entry)
-    group_data = hass.data.get(COMPONENT_DOMAIN, {}).get(runtime_group_name, {})
+    _runtime_group_name, group_data = _runtime_group_for_entry(hass, entry)
+    group_data = group_data or {}
     _async_remove_entity_id_guard(hass, entry.entry_id)
     _async_remove_device_metadata_guard(hass, entry.entry_id)
     _async_unload_state_only_entities(hass, entry, group_data.get(ATTR_ENTITIES, {}))
@@ -298,7 +380,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
     if group_name:
         await _delete_meta_data(hass, group_name)
-        hass.data.get(COMPONENT_DOMAIN, {}).pop(runtime_group_name, None)
+        _async_remove_runtime_group_for_entry(hass, entry)
 
 
 @callback
@@ -614,9 +696,11 @@ def get_entity_from_domain(hass, domain, entity_id):
 
 
 def _state_only_attributes(entity):
+    managed_attributes = _state_only_managed_attribute_names(entity)
     attributes = {
         ATTR_PERSISTENT: entity.get(CONF_PERSISTENT),
         ATTR_AVAILABLE: entity.get(CONF_INITIAL_AVAILABILITY, DEFAULT_AVAILABILITY),
+        ATTR_VIRTUAL_ATTRIBUTES: sorted(managed_attributes),
     }
     configured_attributes = entity.get(CONF_ATTRIBUTES, {})
     if isinstance(configured_attributes, Mapping):
@@ -629,11 +713,32 @@ def _state_only_attributes(entity):
     return attributes
 
 
+def _state_only_managed_attribute_names(entity) -> set[str]:
+    """Return state attributes owned by the current state-only configuration."""
+    managed = set(generic_entity_options(entity))
+    for field_name in (
+        CONF_ATTRIBUTES,
+        CONF_ATTRIBUTE_SOURCES,
+        CONF_ATTRIBUTE_TEMPLATES,
+        CONF_NATIVE_TEMPLATES,
+    ):
+        values = entity.get(field_name, {})
+        if isinstance(values, Mapping):
+            managed.update(
+                name
+                for name in values
+                if isinstance(name, str)
+                and name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+            )
+    return managed
+
+
 @callback
 def _async_setup_state_only_entities(hass, entry, entities) -> None:
     if not isinstance(entities, Mapping):
         return
     _async_remove_state_only_template_listeners(hass, entry.entry_id)
+    _async_remove_state_only_restore_proxies(hass, entry.entry_id)
     for domain in STATE_ONLY_ENTITY_DOMAINS:
         for entity in entities.get(domain, []):
             if not isinstance(entity, Mapping):
@@ -641,23 +746,96 @@ def _async_setup_state_only_entities(hass, entry, entities) -> None:
             entity_id = _async_register_state_only_entity(hass, entry, entity)
             if entity_id is None:
                 continue
+            state_value, attributes = _state_only_initial_state(hass, entity)
             hass.states.async_set(
                 entity_id,
-                entity.get(CONF_INITIAL_VALUE, "unknown"),
-                _state_only_attributes(entity),
+                state_value,
+                attributes,
             )
+            _async_register_state_only_restore_proxy(hass, entry.entry_id, entity)
             _async_setup_state_only_templates(hass, entry, entity)
 
 
 @callback
 def _async_unload_state_only_entities(hass, entry, entities) -> None:
     _async_remove_state_only_template_listeners(hass, entry.entry_id)
+    _async_remove_state_only_restore_proxies(hass, entry.entry_id)
     if not isinstance(entities, Mapping):
         return
     for domain in STATE_ONLY_ENTITY_DOMAINS:
         for entity in entities.get(domain, []):
             if isinstance(entity, Mapping) and entity.get(ATTR_ENTITY_ID):
                 hass.states.async_remove(entity[ATTR_ENTITY_ID])
+
+
+def _state_only_initial_state(hass, entity) -> tuple[object, dict]:
+    """Return configured or restored state for a state-only virtual entity."""
+    entity_id = entity.get(ATTR_ENTITY_ID)
+    value = entity.get(CONF_INITIAL_VALUE, "unknown")
+    attributes = _state_only_attributes(entity)
+    restore_data = async_get_restore_state(hass)
+
+    if not entity.get(CONF_PERSISTENT, DEFAULT_PERSISTENT):
+        if entity_id:
+            restore_data.last_states.pop(entity_id, None)
+        return value, attributes
+
+    stored = restore_data.last_states.get(entity_id) if entity_id else None
+    if stored is None:
+        return value, attributes
+
+    value = stored.state.state
+    restored_attributes = dict(stored.state.attributes)
+    previous_managed = restored_attributes.pop(ATTR_VIRTUAL_ATTRIBUTES, [])
+    current_managed = _state_only_managed_attribute_names(entity)
+    if isinstance(previous_managed, (list, tuple, set)):
+        for name in previous_managed:
+            if isinstance(name, str) and name not in current_managed:
+                restored_attributes.pop(name, None)
+    attributes.update(restored_attributes)
+    attributes[ATTR_PERSISTENT] = True
+    attributes[ATTR_VIRTUAL_ATTRIBUTES] = sorted(current_managed)
+    attributes.setdefault(
+        ATTR_AVAILABLE,
+        entity.get(CONF_INITIAL_AVAILABILITY, DEFAULT_AVAILABILITY),
+    )
+    attributes.update(generic_entity_options(entity))
+    return value, attributes
+
+
+@callback
+def _async_register_state_only_restore_proxy(hass, entry_id, entity) -> None:
+    """Register a state-only entity so HA saves it during shutdown."""
+    entity_id = entity.get(ATTR_ENTITY_ID)
+    if (
+        not entity_id
+        or not entity.get(CONF_PERSISTENT, DEFAULT_PERSISTENT)
+    ):
+        return
+    proxy = _StateOnlyRestoreProxy(entity_id)
+    proxies = hass.data.setdefault(
+        _STATE_ONLY_RESTORE_PROXIES_DATA,
+        {},
+    ).setdefault(entry_id, {})
+    proxies[entity_id] = proxy
+    async_get_restore_state(hass).async_restore_entity_added(proxy)
+
+
+@callback
+def _async_remove_state_only_restore_proxies(hass, entry_id) -> None:
+    """Snapshot and unregister state-only restore proxies before removal."""
+    entry_proxies = hass.data.get(_STATE_ONLY_RESTORE_PROXIES_DATA)
+    proxies = entry_proxies.pop(entry_id, {}) if entry_proxies else {}
+    restore_data = async_get_restore_state(hass)
+    for entity_id, proxy in proxies.items():
+        if restore_data.entities.get(entity_id) is proxy:
+            remove = restore_data.async_restore_entity_removed
+            if "state" in inspect.signature(remove).parameters:
+                remove(entity_id, hass.states.get(entity_id), None)
+            else:
+                remove(entity_id, None)
+    if entry_proxies == {}:
+        hass.data.pop(_STATE_ONLY_RESTORE_PROXIES_DATA, None)
 
 
 @callback
@@ -726,7 +904,7 @@ def _state_only_native_template_value(name: str, value):
     if name == "supported_features":
         try:
             value = int(value)
-        except (TypeError, ValueError) as err:
+        except (TypeError, ValueError, OverflowError) as err:
             raise ValueError(
                 "supported_features must be a non-negative integer"
             ) from err
@@ -736,7 +914,7 @@ def _state_only_native_template_value(name: str, value):
     if name in {"latitude", "longitude"}:
         try:
             value = float(value)
-        except (TypeError, ValueError) as err:
+        except (TypeError, ValueError, OverflowError) as err:
             raise ValueError(f"{name} is outside its valid range") from err
         limit = 90 if name == "latitude" else 180
         if not math.isfinite(value) or not -limit <= value <= limit:
@@ -745,7 +923,7 @@ def _state_only_native_template_value(name: str, value):
     if name == "confidence":
         try:
             value = float(value)
-        except (TypeError, ValueError) as err:
+        except (TypeError, ValueError, OverflowError) as err:
             raise ValueError("confidence must be between 0 and 100") from err
         if not math.isfinite(value) or not 0 <= value <= 100:
             raise ValueError("confidence must be between 0 and 100")
@@ -841,23 +1019,37 @@ def _async_apply_state_only_templates(hass, entity) -> None:
     attributes = dict(state.attributes)
     domain_options = generic_entity_options(entity)
     changed = False
-    try:
-        for name, configured_value in domain_options.items():
-            changed = attributes.get(name) != configured_value or changed
-            attributes[name] = configured_value
+    for name, configured_value in domain_options.items():
+        changed = attributes.get(name, _MISSING) != configured_value or changed
+        attributes[name] = configured_value
 
-        if entity.get(CONF_VALUE_TEMPLATE):
+    if entity.get(CONF_VALUE_TEMPLATE):
+        try:
             value = _render_state_only_template(hass, entity, entity[CONF_VALUE_TEMPLATE])
             changed = value != state.state or changed
+        except (OverflowError, TemplateError, TypeError, ValueError) as err:
+            _LOGGER.warning(
+                "Unable to render value template for state-only entity %s: %s",
+                entity_id,
+                err,
+            )
 
-        if entity.get(CONF_AVAILABILITY_TEMPLATE):
+    if entity.get(CONF_AVAILABILITY_TEMPLATE):
+        try:
             available = str(
                 _render_state_only_template(hass, entity, entity[CONF_AVAILABILITY_TEMPLATE])
-            ).lower() in {"y", "yes", "t", "true", "on", "1"}
+            ).strip().lower() in {"y", "yes", "t", "true", "on", "1"}
             changed = attributes.get(ATTR_AVAILABLE) != available or changed
             attributes[ATTR_AVAILABLE] = available
+        except (OverflowError, TemplateError, TypeError, ValueError) as err:
+            _LOGGER.warning(
+                "Unable to render availability template for state-only entity %s: %s",
+                entity_id,
+                err,
+            )
 
-        if entity.get(CONF_ICON_TEMPLATE):
+    if entity.get(CONF_ICON_TEMPLATE):
+        try:
             rendered_icon = str(
                 _render_state_only_template(
                     hass,
@@ -871,61 +1063,84 @@ def _async_apply_state_only_templates(hass, entity) -> None:
                 attributes[CONF_ICON] = next_icon
             else:
                 attributes.pop(CONF_ICON, None)
+        except (OverflowError, TemplateError, TypeError, ValueError) as err:
+            _LOGGER.warning(
+                "Unable to render icon template for state-only entity %s: %s",
+                entity_id,
+                err,
+            )
 
-        native_templates = entity.get(CONF_NATIVE_TEMPLATES, {})
-        if isinstance(native_templates, Mapping):
-            for name, template in native_templates.items():
-                if not isinstance(name, str) or not name or not template:
-                    continue
-                try:
-                    rendered = _state_only_native_template_value(
-                        name,
-                        _render_state_only_template(
-                            hass,
-                            entity,
-                            template,
-                            parse_result=True,
-                        ),
-                    )
-                except (TemplateError, TypeError, ValueError, vol.Invalid) as err:
-                    _LOGGER.warning(
-                        "Unable to render native template %s for %s: %s",
-                        name,
-                        entity_id,
-                        err,
-                    )
-                    continue
-                changed = attributes.get(name) != rendered or changed
-                attributes[name] = rendered
-
-        attribute_templates = entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
-        if isinstance(attribute_templates, Mapping):
-            for name, template in attribute_templates.items():
-                if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
-                    continue
-                rendered = _render_state_only_template(hass, entity, template)
-                changed = attributes.get(name) != rendered or changed
-                attributes[name] = rendered
-
-        attribute_sources = entity.get(CONF_ATTRIBUTE_SOURCES, {})
-        if isinstance(attribute_sources, Mapping):
-            for name, source in attribute_sources.items():
-                if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
-                    continue
-                if not isinstance(source, Mapping):
-                    continue
-                source_entity_id = source.get(ATTR_ENTITY_ID)
-                source_state = hass.states.get(source_entity_id) if source_entity_id else None
-                attribute = source.get(CONF_ATTRIBUTE)
-                source_value = None if source_state is None else (
-                    source_state.state if attribute == "state"
-                    else source_state.attributes.get(attribute)
+    native_templates = entity.get(CONF_NATIVE_TEMPLATES, {})
+    if isinstance(native_templates, Mapping):
+        for name, template in native_templates.items():
+            if not isinstance(name, str) or not name or not template:
+                continue
+            try:
+                rendered = _state_only_native_template_value(
+                    name,
+                    _render_state_only_template(
+                        hass,
+                        entity,
+                        template,
+                        parse_result=True,
+                    ),
                 )
-                changed = attributes.get(name) != source_value or changed
-                attributes[name] = source_value
-    except (TemplateError, KeyError, TypeError, ValueError) as err:
-        _LOGGER.warning("Unable to update state-only virtual entity %s: %s", entity_id, err)
-        return
+            except (
+                OverflowError,
+                TemplateError,
+                TypeError,
+                ValueError,
+                vol.Invalid,
+            ) as err:
+                _LOGGER.warning(
+                    "Unable to render native template %s for %s: %s",
+                    name,
+                    entity_id,
+                    err,
+                )
+                continue
+            changed = attributes.get(name, _MISSING) != rendered or changed
+            attributes[name] = rendered
+
+    attribute_templates = entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
+    if isinstance(attribute_templates, Mapping):
+        for name, template in attribute_templates.items():
+            if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+                continue
+            try:
+                rendered = _render_state_only_template(
+                    hass,
+                    entity,
+                    template,
+                    parse_result=True,
+                )
+            except (OverflowError, TemplateError, TypeError, ValueError) as err:
+                _LOGGER.warning(
+                    "Unable to render attribute template %s for state-only entity %s: %s",
+                    name,
+                    entity_id,
+                    err,
+                )
+                continue
+            changed = attributes.get(name, _MISSING) != rendered or changed
+            attributes[name] = rendered
+
+    attribute_sources = entity.get(CONF_ATTRIBUTE_SOURCES, {})
+    if isinstance(attribute_sources, Mapping):
+        for name, source in attribute_sources.items():
+            if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+                continue
+            if not isinstance(source, Mapping):
+                continue
+            source_entity_id = source.get(ATTR_ENTITY_ID)
+            source_state = hass.states.get(source_entity_id) if source_entity_id else None
+            attribute = source.get(CONF_ATTRIBUTE)
+            source_value = None if source_state is None else (
+                source_state.state if attribute == "state"
+                else source_state.attributes.get(attribute)
+            )
+            changed = attributes.get(name, _MISSING) != source_value or changed
+            attributes[name] = source_value
 
     if changed:
         hass.states.async_set(entity_id, value, attributes)
@@ -945,18 +1160,26 @@ def _async_apply_state_only_event_hook(hass, entity, hook, event) -> None:
     variables = _state_only_hook_template_variables(hook, event)
     changed = False
 
-    try:
-        if hook.get(CONF_AVAILABILITY_TEMPLATE):
+    if hook.get(CONF_AVAILABILITY_TEMPLATE):
+        try:
             available = str(_render_state_only_template(
                 hass,
                 entity,
                 hook[CONF_AVAILABILITY_TEMPLATE],
                 variables,
-            )).lower() in {"y", "yes", "t", "true", "on", "1"}
+            )).strip().lower() in {"y", "yes", "t", "true", "on", "1"}
             changed = attributes.get(ATTR_AVAILABLE) != available or changed
             attributes[ATTR_AVAILABLE] = available
+        except (OverflowError, TemplateError, TypeError, ValueError) as err:
+            _LOGGER.warning(
+                "Unable to render event hook availability template for "
+                "state-only entity %s: %s",
+                entity_id,
+                err,
+            )
 
-        if hook.get(CONF_VALUE_TEMPLATE):
+    if hook.get(CONF_VALUE_TEMPLATE):
+        try:
             value = _render_state_only_template(
                 hass,
                 entity,
@@ -964,35 +1187,45 @@ def _async_apply_state_only_event_hook(hass, entity, hook, event) -> None:
                 variables,
             )
             changed = value != state.state or changed
+        except (OverflowError, TemplateError, TypeError, ValueError) as err:
+            _LOGGER.warning(
+                "Unable to render event hook value template for state-only entity %s: %s",
+                entity_id,
+                err,
+            )
 
-        configured_attributes = hook.get(CONF_ATTRIBUTES, {})
-        if isinstance(configured_attributes, Mapping):
-            for name, configured_value in configured_attributes.items():
-                if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
-                    continue
-                changed = attributes.get(name) != configured_value or changed
-                attributes[name] = configured_value
+    configured_attributes = hook.get(CONF_ATTRIBUTES, {})
+    if isinstance(configured_attributes, Mapping):
+        for name, configured_value in configured_attributes.items():
+            if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+                continue
+            changed = attributes.get(name, _MISSING) != configured_value or changed
+            attributes[name] = configured_value
 
-        attribute_templates = hook.get(CONF_ATTRIBUTE_TEMPLATES, {})
-        if isinstance(attribute_templates, Mapping):
-            for name, template in attribute_templates.items():
-                if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
-                    continue
+    attribute_templates = hook.get(CONF_ATTRIBUTE_TEMPLATES, {})
+    if isinstance(attribute_templates, Mapping):
+        for name, template in attribute_templates.items():
+            if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+                continue
+            try:
                 rendered = _render_state_only_template(
                     hass,
                     entity,
                     template,
                     variables,
+                    parse_result=True,
                 )
-                changed = attributes.get(name) != rendered or changed
-                attributes[name] = rendered
-    except (TemplateError, TypeError, ValueError) as err:
-        _LOGGER.warning(
-            "Unable to apply event hook for state-only virtual entity %s: %s",
-            entity_id,
-            err,
-        )
-        return
+            except (OverflowError, TemplateError, TypeError, ValueError) as err:
+                _LOGGER.warning(
+                    "Unable to render event hook attribute template %s for "
+                    "state-only entity %s: %s",
+                    name,
+                    entity_id,
+                    err,
+                )
+                continue
+            changed = attributes.get(name, _MISSING) != rendered or changed
+            attributes[name] = rendered
 
     should_refresh = hook.get(
         "refresh",
@@ -1038,7 +1271,7 @@ def _async_setup_state_only_event_hooks(hass, entity, listeners) -> None:
     def _schedule(index, hook, event):
         try:
             delay = float(hook.get("debounce", 0) or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             delay = 0
         if not math.isfinite(delay):
             delay = 0
@@ -1155,11 +1388,16 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
         )
         if template
     ]
-    for template in templates:
-        tracked_template = Template(str(template), hass)
+    if templates:
         listeners.append(async_track_template_result(
             hass,
-            [TrackTemplate(tracked_template, _state_only_template_variables(hass, entity))],
+            [
+                TrackTemplate(
+                    Template(str(template), hass),
+                    _state_only_template_variables(hass, entity),
+                )
+                for template in templates
+            ],
             lambda _event, _updates: _async_apply_state_only_templates(hass, entity),
         ).async_remove)
 
@@ -1180,9 +1418,17 @@ def _is_state_only_entity_id(entity_id):
 
 def _assert_managed_virtual_entity(hass, entity_id) -> None:
     """Reject service calls targeting entities outside this integration."""
+    if _get_state_only_entity_config(hass, entity_id) is not None:
+        return
     entity_entry = er.async_get(hass).async_get(entity_id)
     if entity_entry is None or entity_entry.platform != COMPONENT_DOMAIN:
         raise HomeAssistantError(f"{entity_id} is not managed by virtual_layer")
+
+
+def _assert_managed_virtual_entities(hass, entity_ids) -> None:
+    """Validate every service target before applying any state change."""
+    for entity_id in entity_ids:
+        _assert_managed_virtual_entity(hass, entity_id)
 
 
 def _get_state_only_entity_config(hass, entity_id):
@@ -1256,9 +1502,16 @@ def _async_register_state_only_entity(hass, entry, entity) -> str | None:
         suggested_object_id=_state_only_suggested_object_id(entity_id),
         config_entry=entry,
         device_id=device_id,
+        original_name=entity.get(CONF_NAME),
         original_icon=entity.get(CONF_ICON),
     )
     entity[ATTR_ENTITY_ID] = entity_entry.entity_id
+    if entity_entry.disabled:
+        _LOGGER.debug(
+            "Skipping disabled state-only virtual entity %s",
+            entity_entry.entity_id,
+        )
+        return None
     return entity_entry.entity_id
 
 
@@ -1320,13 +1573,14 @@ async def async_virtual_set_availability_service(hass, call):
     if type(value) is not bool:
         value = str_to_bool(value)
 
-    for entity_id in call.data['entity_id']:
+    entity_ids = call.data['entity_id']
+    _assert_managed_virtual_entities(hass, entity_ids)
+    for entity_id in entity_ids:
         domain = entity_id.split(".")[0]
         _LOGGER.debug("%s set_available(value=%s)", entity_id, value)
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, attributes={ATTR_AVAILABLE: value})
             continue
-        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, domain, entity_id).set_available(value)
 
 
@@ -1394,13 +1648,14 @@ def _async_register_virtual_services(hass) -> None:
 
 async def async_virtual_set_state_service(hass, call):
     value = call.data[ATTR_VALUE]
-    for entity_id in call.data[ATTR_ENTITY_ID]:
+    entity_ids = call.data[ATTR_ENTITY_ID]
+    _assert_managed_virtual_entities(hass, entity_ids)
+    for entity_id in entity_ids:
         domain = entity_id.split(".")[0]
         _LOGGER.debug("%s set_state(value=%s)", entity_id, value)
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, value=value)
             continue
-        _assert_managed_virtual_entity(hass, entity_id)
         entity = get_entity_from_domain(hass, domain, entity_id)
         await _async_apply_virtual_state(entity, value)
 
@@ -1411,25 +1666,27 @@ async def async_virtual_set_attributes_service(hass, call):
         for name, value in call.data[ATTR_ATTRIBUTES].items()
         if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
     }
-    for entity_id in call.data[ATTR_ENTITY_ID]:
+    entity_ids = call.data[ATTR_ENTITY_ID]
+    _assert_managed_virtual_entities(hass, entity_ids)
+    for entity_id in entity_ids:
         domain = entity_id.split(".")[0]
         _LOGGER.debug("%s set_attributes(attributes=%s)", entity_id, attributes)
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, attributes=attributes)
             continue
-        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, domain, entity_id).set_attributes(attributes)
 
 
 async def async_virtual_clear_attributes_service(hass, call):
     attributes = call.data[ATTR_ATTRIBUTES]
-    for entity_id in call.data[ATTR_ENTITY_ID]:
+    entity_ids = call.data[ATTR_ENTITY_ID]
+    _assert_managed_virtual_entities(hass, entity_ids)
+    for entity_id in entity_ids:
         domain = entity_id.split(".")[0]
         _LOGGER.debug("%s clear_attributes(attributes=%s)", entity_id, attributes)
         if _is_state_only_entity_id(entity_id):
             _async_clear_state_only_attributes(hass, entity_id, attributes)
             continue
-        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, domain, entity_id).clear_attributes(attributes)
 
 
@@ -1580,7 +1837,7 @@ async def _async_delete_virtual_device_from_registry(
     device_in_registry = registery.async_get_device(
         identifiers={(COMPONENT_DOMAIN, device_id)},
     )
-    if device_in_registry:
+    if device_in_registry and entry.entry_id in device_in_registry.config_entries:
         _LOGGER.debug(f"found something to delete! {device_in_registry.id}")
         if len(device_in_registry.config_entries) <= 1:
             registery.async_remove_device(device_in_registry.id)
@@ -1594,12 +1851,31 @@ async def _async_delete_virtual_device_from_registry(
 
 
 async def _async_delete_virtual_entity_from_registry(
-        hass: HomeAssistant, entry: ConfigEntry, entity, active_device_ids
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        entity,
+        active_device_ids,
+        active_entity_unique_ids=None,
 ) -> None:
-    entity_id = entity.get(ATTR_ENTITY_ID)
-    if entity_id:
+    """Remove stale registry data without trusting damaged metadata ownership."""
+    unique_id = entity.get(ATTR_UNIQUE_ID)
+    platform = entity.get(CONF_PLATFORM)
+    active_entity_unique_ids = active_entity_unique_ids or set()
+    if (
+        isinstance(unique_id, str)
+        and unique_id
+        and unique_id not in active_entity_unique_ids
+        and isinstance(platform, str)
+        and platform
+    ):
         registry = er.async_get(hass)
-        if registry.async_get(entity_id):
+        entity_id = registry.async_get_entity_id(
+            platform,
+            COMPONENT_DOMAIN,
+            unique_id,
+        )
+        entity_entry = registry.async_get(entity_id) if entity_id else None
+        if entity_entry is not None and entity_entry.config_entry_id == entry.entry_id:
             _LOGGER.debug("removing orphaned entity %s", entity_id)
             registry.async_remove(entity_id)
 

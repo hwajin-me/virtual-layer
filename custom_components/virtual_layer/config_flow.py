@@ -26,6 +26,7 @@ from homeassistant.const import (
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import selector
+from homeassistant.helpers.json import json_bytes
 from homeassistant.helpers.template import Template, TemplateError
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
@@ -104,6 +105,7 @@ CONF_POLYGON_AWAY_STATE_INPUT = "polygon_away_state"
 CAMERA_SOURCE_ENTITY_OPTION = "source_entity"
 NEW_DEVICE_TARGET = "__new_device__"
 HELPER_UPDATE_AUTO = "automatic"
+HELPER_UPDATE_KEEP = "keep_current"
 HELPER_UPDATE_FORCE = "force_helper"
 
 CLIMATE_NATIVE_TEMPLATE_PROPERTIES = (
@@ -404,17 +406,60 @@ DOMAIN_NATIVE_TEMPLATE_PROPERTIES = {
     ),
 }
 
+NATIVE_TEMPLATE_ATTRIBUTE_ALIASES = {
+    "current_cover_position": "current_position",
+    "current_cover_tilt_position": "current_tilt_position",
+    "current_direction": "direction",
+    "current_valve_position": "current_position",
+    "native_max": "max",
+    "native_max_value": "max",
+    "native_min": "min",
+    "native_min_value": "min",
+    "native_step": "step",
+    "native_unit_of_measurement": "unit_of_measurement",
+    "target_humidity": "humidity",
+    "target_temperature": "temperature",
+    "target_temperature_high": "target_temp_high",
+    "target_temperature_low": "target_temp_low",
+    "target_temperature_step": "target_temp_step",
+    "temperature_unit": "unit_of_measurement",
+}
+NATIVE_TEMPLATE_STATE_PROPERTIES = frozenset({
+    "activity",
+    "condition",
+    "current_operation",
+    "current_option",
+    "event_type",
+    "hvac_mode",
+    "location",
+    "media_state",
+    "native_value",
+})
+NATIVE_TEMPLATE_BOOLEAN_STATE_VALUES = {
+    "is_closed": {"closed"},
+    "is_closing": {"closing"},
+    "is_jammed": {"jammed"},
+    "is_locked": {"locked"},
+    "is_locking": {"locking"},
+    "is_open": {"open"},
+    "is_opening": {"opening"},
+    "is_unlocking": {"unlocking"},
+}
+
 _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_PLATFORM,
     CONF_INITIAL_VALUE,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
     CONF_VALUE_TEMPLATE,
+    CONF_AVAILABILITY_TEMPLATE,
+    CONF_ICON_TEMPLATE,
     CONF_EVENT_HOOKS_JSON,
     CONF_ATTRIBUTES_JSON,
     CONF_ATTRIBUTE_SOURCES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
     CONF_NATIVE_TEMPLATES_JSON,
+    CONF_NATIVE_VALUE_TEMPLATES,
     CONF_COMMAND_ACTIONS_JSON,
     CONF_DOMAIN_OPTIONS_JSON,
     *CLIMATE_FORM_FIELDS,
@@ -439,8 +484,18 @@ _AUTO_HELPER_TEMPLATE_FIELDS = frozenset(
     {
         CONF_TEMPLATE_SOURCES_JSON,
         CONF_VALUE_TEMPLATE,
-        CONF_ATTRIBUTE_TEMPLATES_JSON,
         CONF_NATIVE_TEMPLATES_JSON,
+    }
+)
+
+_ATTRIBUTE_HELPER_METADATA_NAMES = frozenset(
+    {
+        ATTR_FRIENDLY_NAME,
+        CONF_ICON,
+        CONF_UNIT_OF_MEASUREMENT,
+        "attribution",
+        "device_class",
+        "supported_features",
     }
 )
 
@@ -575,7 +630,11 @@ def _helper_update_schema() -> vol.Schema:
                 default=HELPER_UPDATE_AUTO,
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
-                    options=[HELPER_UPDATE_AUTO, HELPER_UPDATE_FORCE],
+                    options=[
+                        HELPER_UPDATE_AUTO,
+                        HELPER_UPDATE_KEEP,
+                        HELPER_UPDATE_FORCE,
+                    ],
                     translation_key="helper_update_mode",
                     mode=selector.SelectSelectorMode.LIST,
                 )
@@ -679,6 +738,16 @@ def _setup_schema(
     if include_entity_toggle:
         schema[vol.Optional(CONF_ADD_FIRST_ENTITY, default=False)] = cv.boolean
     return vol.Schema(schema)
+
+
+def _normalized_group_name(value) -> str:
+    """Return a non-empty Device group name without accidental whitespace."""
+    if not isinstance(value, str):
+        raise MissingGroupName
+    name = value.strip()
+    if not name:
+        raise MissingGroupName
+    return name
 
 
 def _flatten_entity_form_sections(user_input: Mapping | None) -> dict[str, Any]:
@@ -1277,19 +1346,29 @@ def _parse_json_object(value: str, field_name: str) -> dict[str, Any]:
         raise InvalidJson(field_name) from err
     if not isinstance(parsed, dict):
         raise InvalidJson(field_name)
-    return parsed
+    return _validate_ha_json_value(parsed, field_name)
 
 
 def _parse_json_value(value: str, field_name: str):
     if not value:
         return None
     try:
-        return json.loads(
+        parsed = json.loads(
             value,
             parse_constant=_reject_json_constant,
         )
     except (json.JSONDecodeError, TypeError, ValueError) as err:
         raise InvalidJson(field_name) from err
+    return _validate_ha_json_value(parsed, field_name)
+
+
+def _validate_ha_json_value(value, field_name: str):
+    """Reject JSON values that Home Assistant cannot persist."""
+    try:
+        json_bytes(value)
+    except (OverflowError, TypeError, ValueError) as err:
+        raise InvalidJson(field_name) from err
+    return value
 
 
 def _parse_source_entities(value: str) -> list[str]:
@@ -1318,7 +1397,10 @@ def _parse_attribute_sources(value: str) -> dict[str, dict[str, str]]:
         ):
             raise InvalidJson(CONF_ATTRIBUTE_SOURCES_JSON)
 
-        attribute_sources[target_attribute.strip()] = _parse_source_reference(
+        normalized_name = target_attribute.strip()
+        if normalized_name in attribute_sources:
+            raise InvalidJson(CONF_ATTRIBUTE_SOURCES_JSON)
+        attribute_sources[normalized_name] = _parse_source_reference(
             source,
             CONF_ATTRIBUTE_SOURCES_JSON,
         )
@@ -1335,7 +1417,10 @@ def _parse_template_sources(value: str) -> dict[str, dict[str, str]]:
             or variable_name.strip().casefold() in JINJA_RESERVED_VARIABLE_NAMES
         ):
             raise InvalidJson(CONF_TEMPLATE_SOURCES_JSON)
-        template_sources[variable_name.strip()] = _parse_source_reference(
+        normalized_name = variable_name.strip()
+        if normalized_name in template_sources:
+            raise InvalidJson(CONF_TEMPLATE_SOURCES_JSON)
+        template_sources[normalized_name] = _parse_source_reference(
             source,
             CONF_TEMPLATE_SOURCES_JSON,
             default_attribute="state",
@@ -1353,14 +1438,43 @@ def _parse_domain_options(value: str) -> dict[str, Any]:
 def _parse_native_templates(value: str) -> dict[str, str]:
     """Parse templates which feed native Home Assistant properties."""
     parsed = _parse_json_object(value, CONF_NATIVE_TEMPLATES_JSON)
-    if any(
-        not VirtualEntity._valid_native_template_name(name)
-        or not isinstance(template, str)
-        or not template.strip()
-        for name, template in parsed.items()
-    ):
-        raise InvalidJson(CONF_NATIVE_TEMPLATES_JSON)
-    return {name.strip(): template for name, template in parsed.items()}
+    templates = {}
+    for name, template in parsed.items():
+        if (
+            not VirtualEntity._valid_native_template_name(name)
+            or not isinstance(template, str)
+            or not template.strip()
+        ):
+            raise InvalidJson(CONF_NATIVE_TEMPLATES_JSON)
+        normalized_name = name.strip()
+        if normalized_name in templates:
+            raise InvalidJson(CONF_NATIVE_TEMPLATES_JSON)
+        templates[normalized_name] = template
+    return templates
+
+
+def _normalize_attribute_mapping(
+    value: Mapping,
+    field_name: str,
+    *,
+    templates: bool = False,
+) -> dict[str, Any]:
+    """Normalize attribute names without silently merging distinct inputs."""
+    normalized = {}
+    for name, item in value.items():
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+            or templates
+            and (not isinstance(item, str) or not item.strip())
+        ):
+            raise InvalidJson(field_name)
+        normalized_name = name.strip()
+        if normalized_name in normalized:
+            raise InvalidJson(field_name)
+        normalized[normalized_name] = item
+    return normalized
 
 
 def _parse_command_actions(value: str, platform: str | None = None) -> dict[str, Any]:
@@ -1460,18 +1574,18 @@ def _parse_event_hooks(value: str) -> list[dict[str, Any]]:
         for field_name in (CONF_ATTRIBUTES, CONF_ATTRIBUTE_TEMPLATES):
             if field_name in next_hook:
                 field_value = next_hook[field_name]
-                if not isinstance(field_value, dict) or any(
-                    not isinstance(name, str)
-                    or not name.strip()
-                    or name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
-                    for name in field_value
-                ):
+                if not isinstance(field_value, dict):
                     raise InvalidJson(CONF_EVENT_HOOKS_JSON)
+                next_hook[field_name] = _normalize_attribute_mapping(
+                    field_value,
+                    CONF_EVENT_HOOKS_JSON,
+                    templates=field_name == CONF_ATTRIBUTE_TEMPLATES,
+                )
 
         if "debounce" in next_hook:
             try:
                 debounce = float(next_hook["debounce"])
-            except (TypeError, ValueError) as err:
+            except (TypeError, ValueError, OverflowError) as err:
                 raise InvalidJson(CONF_EVENT_HOOKS_JSON) from err
             if not math.isfinite(debounce):
                 raise InvalidJson(CONF_EVENT_HOOKS_JSON)
@@ -1518,7 +1632,14 @@ def _validate_platform_entity(
             raise ValueError("Domain options must contain only finite numbers")
         if validate_domain_options:
             validate_domain_options(validated_entity)
-    except (AttributeError, ImportError, TypeError, ValueError, vol.Invalid) as err:
+    except (
+        AttributeError,
+        ImportError,
+        OverflowError,
+        TypeError,
+        ValueError,
+        vol.Invalid,
+    ) as err:
         raise InvalidDomainOptions from err
 
 
@@ -1791,13 +1912,7 @@ def _build_entity_config(
     attributes = _parse_json_object(
         user_input.get(CONF_ATTRIBUTES_JSON, "").strip(), CONF_ATTRIBUTES_JSON
     )
-    if any(
-        not isinstance(name, str)
-        or not name.strip()
-        or name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
-        for name in attributes
-    ):
-        raise InvalidJson(CONF_ATTRIBUTES_JSON)
+    attributes = _normalize_attribute_mapping(attributes, CONF_ATTRIBUTES_JSON)
     if attributes:
         entity[CONF_ATTRIBUTES] = attributes
 
@@ -1811,13 +1926,11 @@ def _build_entity_config(
         user_input.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "").strip(),
         CONF_ATTRIBUTE_TEMPLATES_JSON,
     )
-    if any(
-        not isinstance(name, str)
-        or not name.strip()
-        or name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
-        for name in attribute_templates
-    ):
-        raise InvalidJson(CONF_ATTRIBUTE_TEMPLATES_JSON)
+    attribute_templates = _normalize_attribute_mapping(
+        attribute_templates,
+        CONF_ATTRIBUTE_TEMPLATES_JSON,
+        templates=True,
+    )
     if attribute_templates:
         entity[CONF_ATTRIBUTE_TEMPLATES] = attribute_templates
 
@@ -1997,6 +2110,13 @@ def _build_entity_config(
     return device_name, entity
 
 
+def _domain_options_error_field(user_input: Mapping) -> str:
+    """Return a visible error location for the selected domain's inputs."""
+    if user_input.get(CONF_PLATFORM) in {"climate", "fan", "humidifier"}:
+        return "base"
+    return CONF_DOMAIN_OPTIONS_JSON
+
+
 async def _async_build_entity_config(
     hass,
     user_input: dict[str, Any],
@@ -2121,22 +2241,50 @@ def _make_device_name(device_name: str) -> str:
     return device_name.removeprefix("+")
 
 
-def _plain_options(value):
-    """Convert Home Assistant read-only option mappings to mutable containers."""
+def _plain_options(value, _seen=None, _depth=0):
+    """Convert read-only options without following damaged recursive values."""
+    if _depth > 100:
+        return None
+    if _seen is None:
+        _seen = set()
     if isinstance(value, Mapping):
-        return {key: _plain_options(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_plain_options(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_plain_options(item) for item in value)
-    return copy.deepcopy(value)
+        identity = id(value)
+        if identity in _seen:
+            return None
+        _seen.add(identity)
+        try:
+            return {
+                key: _plain_options(item, _seen, _depth + 1)
+                for key, item in value.items()
+            }
+        finally:
+            _seen.remove(identity)
+    if isinstance(value, (list, tuple)):
+        identity = id(value)
+        if identity in _seen:
+            return None
+        _seen.add(identity)
+        try:
+            items = [_plain_options(item, _seen, _depth + 1) for item in value]
+            return tuple(items) if isinstance(value, tuple) else items
+        finally:
+            _seen.remove(identity)
+    try:
+        return copy.deepcopy(value)
+    except Exception:  # noqa: BLE001 - damaged legacy values must remain removable
+        return value
 
 
 def _text_default(value: Any, default: str = "") -> str:
     """Return a form-safe text value for legacy or partially corrupt options."""
     if value is None:
         return default
-    return value if isinstance(value, str) else str(value)
+    if isinstance(value, str):
+        return value
+    try:
+        return str(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def _multiline_list_default(value: Any) -> str:
@@ -2179,7 +2327,7 @@ def _boolean_default(value: Any, default: bool) -> bool:
 def _nonnegative_int_default(value: Any) -> int:
     try:
         value = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
     return max(0, value)
 
@@ -2187,7 +2335,7 @@ def _nonnegative_int_default(value: Any) -> int:
 def _positive_float_default(value: Any, default: float) -> float:
     try:
         value = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return value if math.isfinite(value) and value >= 1 else default
 
@@ -2660,21 +2808,54 @@ def _delete_ui_entities(
 def _json_default(value) -> str:
     if not value:
         return ""
-    return json.dumps(_plain_options(value), sort_keys=True)
+    return json.dumps(_json_safe(_plain_options(value)), sort_keys=True)
 
 
-def _json_safe(value):
+def _json_safe(value, _seen=None, _depth=0):
+    """Return a value that can be displayed and saved as Home Assistant JSON."""
+    if _depth > 100:
+        return None
     try:
-        json.dumps(value)
+        json.dumps(value, allow_nan=False)
+        json_bytes(value)
         return value
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        if _seen is None:
+            _seen = set()
         if isinstance(value, Mapping):
-            return {str(key): _json_safe(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [_json_safe(item) for item in value]
-        if isinstance(value, tuple):
-            return [_json_safe(item) for item in value]
-        return str(value)
+            identity = id(value)
+            if identity in _seen:
+                return None
+            _seen.add(identity)
+            try:
+                result = {}
+                for key, item in value.items():
+                    try:
+                        safe_key = str(key)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    result[safe_key] = _json_safe(item, _seen, _depth + 1)
+                return result
+            finally:
+                _seen.remove(identity)
+        if isinstance(value, (list, tuple, set, frozenset)):
+            identity = id(value)
+            if identity in _seen:
+                return None
+            _seen.add(identity)
+            try:
+                return [
+                    _json_safe(item, _seen, _depth + 1)
+                    for item in value
+                ]
+            finally:
+                _seen.remove(identity)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return None
+        try:
+            return str(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
 
 
 def _fallback_entity_name(entity_id: str) -> str:
@@ -2697,6 +2878,18 @@ def _normalize_reference_entity_ids(value) -> list[str]:
         except vol.Invalid as err:
             raise InvalidEntityReference(CONF_REFERENCE_ENTITY_ID) from err
     return list(dict.fromkeys(entity_ids))
+
+
+def _validate_mergeable_source_entities(
+    entity_ids: list[str],
+    field_name: str,
+) -> None:
+    """Reject binary media sources where a multi-source helper is undefined."""
+    if len(entity_ids) > 1 and any(
+        entity_id.split(".", 1)[0] in NON_MERGEABLE_SOURCE_DOMAINS
+        for entity_id in entity_ids
+    ):
+        raise InvalidEntityReference(field_name)
 
 
 def _source_variable_name(entity_id: str, existing: set[str]) -> str:
@@ -2805,7 +2998,7 @@ def _source_state_is_number(entity_id: str, state) -> bool:
         return True
     try:
         float(state.state)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False
     return True
 
@@ -2813,7 +3006,7 @@ def _source_state_is_number(entity_id: str, state) -> bool:
 def _source_state_as_float(state) -> float:
     try:
         return float(state.state)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0.0
 
 
@@ -2922,6 +3115,156 @@ def _combined_entity_name(states: list) -> str:
     return _shorten_generated_text(combined_name, MAX_GENERATED_ENTITY_NAME_LENGTH)
 
 
+def _native_source_template(entity_id: str, state, property_name: str) -> str:
+    """Build a native-property helper from a source state when possible."""
+    attributes = state.attributes
+    attribute_name = property_name
+    if attribute_name not in attributes:
+        attribute_name = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(property_name, "")
+    if attribute_name and attribute_name in attributes:
+        return f"{{{{ state_attr({entity_id!r}, {attribute_name!r}) }}}}"
+
+    if property_name in {"source_entity", "camera_entity"}:
+        return f"{{{{ {entity_id!r} }}}}"
+    if property_name in NATIVE_TEMPLATE_STATE_PROPERTIES:
+        return f"{{{{ states({entity_id!r}) }}}}"
+    if property_name == "is_on":
+        return (
+            f"{{{{ states({entity_id!r}) not in "
+            "['off', 'unknown', 'unavailable'] }}"
+        )
+    if state_values := NATIVE_TEMPLATE_BOOLEAN_STATE_VALUES.get(property_name):
+        return (
+            f"{{{{ states({entity_id!r}) in "
+            f"{sorted(state_values)!r} }}}}"
+        )
+    return ""
+
+
+def _native_reference_templates(
+    platform: str,
+    entity_ids: list[str],
+    states: list,
+) -> dict[str, str]:
+    """Generate editable native Jinja helpers for a single source entity."""
+    if len(entity_ids) != 1 or len(states) != 1:
+        return {}
+    return {
+        property_name: template
+        for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
+        if (
+            template := _native_source_template(
+                entity_ids[0],
+                states[0],
+                property_name,
+            )
+        )
+    }
+
+
+def _native_source_attribute_names(platform: str, state) -> set[str]:
+    """Return source attributes already represented by native templates."""
+    attributes = state.attributes
+    names = set()
+    for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()):
+        if property_name in attributes:
+            names.add(property_name)
+        alias = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(property_name)
+        if alias in attributes:
+            names.add(alias)
+    return names
+
+
+def _merged_attribute_template(
+    entity_ids: list[str],
+    attribute_name: str,
+    values: list[Any],
+) -> str:
+    """Build a type-aware Jinja helper for one common source attribute."""
+    expressions = [
+        f"state_attr({entity_id!r}, {attribute_name!r})"
+        for entity_id in entity_ids
+    ]
+    if all(isinstance(value, bool) for value in values):
+        return "{{ " + " and ".join(f"({item} | bool)" for item in expressions) + " }}"
+    if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
+        return (
+            "{% set values = ["
+            + ", ".join(expressions)
+            + "] | select('number') | map('float') | list %}"
+            "{{ (values | average) if values else none }}"
+        )
+    if all(isinstance(value, Mapping) for value in values):
+        merged = f"({expressions[0]} | default({{}}, true))"
+        for expression in expressions[1:]:
+            merged = (
+                "dict(("
+                + merged
+                + ".items() | list) + (("
+                + expression
+                + " | default({}, true)).items() | list))"
+            )
+        return f"{{{{ {merged} }}}}"
+    if all(isinstance(value, (list, tuple, set)) for value in values):
+        lists = [f"({item} | default([], true) | list)" for item in expressions]
+        return (
+            "{% set ns = namespace(values=[]) %}{% for value in "
+            + " + ".join(lists)
+            + " %}{% if value not in ns.values %}"
+            "{% set ns.values = ns.values + [value] %}"
+            "{% endif %}{% endfor %}{{ ns.values }}"
+        )
+    if all(isinstance(value, str) for value in values):
+        return "{{ " + " ~ ".join(
+            f"({item} | default('', true))" for item in expressions
+        ) + " }}"
+    return (
+        "{% set values = ["
+        + ", ".join(expressions)
+        + "] | reject('eq', none) | list %}"
+        "{{ values[0] if values else none }}"
+    )
+
+
+def _attribute_reference_templates(
+    platform: str,
+    entity_ids: list[str],
+    states: list,
+) -> dict[str, str]:
+    """Generate dynamic helpers for source attributes not handled natively."""
+    if not states:
+        return {}
+
+    attribute_names = {
+        name
+        for name in states[0].attributes
+        if isinstance(name, str) and name.strip()
+    }
+    for state in states[1:]:
+        attribute_names.intersection_update(state.attributes)
+    attribute_names.difference_update(_ATTRIBUTE_HELPER_METADATA_NAMES)
+    attribute_names.difference_update(RESERVED_VIRTUAL_ATTRIBUTE_NAMES)
+    for state in states:
+        attribute_names.difference_update(
+            _native_source_attribute_names(platform, state),
+        )
+
+    templates = {}
+    for attribute_name in sorted(attribute_names):
+        values = [state.attributes[attribute_name] for state in states]
+        if len(states) == 1:
+            templates[attribute_name] = (
+                f"{{{{ state_attr({entity_ids[0]!r}, {attribute_name!r}) }}}}"
+            )
+        else:
+            templates[attribute_name] = _merged_attribute_template(
+                entity_ids,
+                attribute_name,
+                values,
+            )
+    return templates
+
+
 def _shorten_generated_text(value: str, max_length: int) -> str:
     """Shorten generated UI defaults without touching user-submitted values."""
     value = " ".join(str(value).split())
@@ -2935,11 +3278,7 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     if not entity_ids:
         return {}
 
-    if len(entity_ids) > 1 and any(
-        entity_id.split(".", 1)[0] in NON_MERGEABLE_SOURCE_DOMAINS
-        for entity_id in entity_ids
-    ):
-        raise InvalidEntityReference(CONF_REFERENCE_ENTITY_ID)
+    _validate_mergeable_source_entities(entity_ids, CONF_REFERENCE_ENTITY_ID)
 
     states = _reference_states(hass, entity_ids)
     source_domains = [entity_id.split(".", 1)[0] for entity_id in entity_ids]
@@ -2962,10 +3301,10 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     safety_boolean_sources = (
         _safety_boolean_sources(entity_ids, states) if all_boolean else False
     )
-    if all_location:
-        platform = "device_tracker"
-    elif len(entity_ids) == 1 and source_domains[0] in VIRTUAL_ENTITY_DOMAINS:
+    if len(entity_ids) == 1 and source_domains[0] in VIRTUAL_ENTITY_DOMAINS:
         platform = source_domains[0]
+    elif all_location:
+        platform = "device_tracker"
     elif all_boolean:
         platform = "binary_sensor"
     elif all_datetime:
@@ -3017,6 +3356,8 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             name: _json_safe(value)
             for name, value in dict(first_state.attributes).items()
             if name != ATTR_FRIENDLY_NAME
+            and name != CONF_ICON
+            and name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
         }
     defaults = {
         CONF_DEVICE_NAME: _combined_device_name(hass, entity_ids),
@@ -3024,7 +3365,19 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         CONF_PLATFORM: platform,
         CONF_INITIAL_VALUE: initial_value,
         CONF_SOURCE_ENTITIES_TEXT: "\n".join(entity_ids),
+        CONF_AVAILABILITY_TEMPLATE: (
+            "{{ "
+            + " and ".join(
+                f"states({entity_id!r}) not in ['unknown', 'unavailable']"
+                for entity_id in entity_ids
+            )
+            + " }}"
+        ),
     }
+    if len(entity_ids) == 1 and first_state.attributes.get(CONF_ICON):
+        defaults[CONF_ICON_TEMPLATE] = (
+            f"{{{{ state_attr({entity_ids[0]!r}, {CONF_ICON!r}) }}}}"
+        )
     source_device_classes = {
         str(state.attributes.get("device_class", "")).lower() for state in states
     }
@@ -3098,6 +3451,7 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
                 CAMERA_SOURCE_ENTITY_OPTION: entity_ids[0],
             }
         )
+    attribute_templates: dict[str, str] = {}
     if platform == "binary_sensor" and presence_or_motion_class:
         defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(
             {
@@ -3110,7 +3464,7 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         )
     elif platform == "binary_sensor" and safety_boolean_sources:
         defaults[CONF_VALUE_TEMPLATE] = _safety_boolean_helper_template(variable_names)
-    elif all_location:
+    elif all_location and platform == "device_tracker":
         # Device tracker coordinates need stateful priority retention after an
         # outlying device reaches its destination. The platform helper performs
         # that calculation and keeps this policy visible/editable in the UI.
@@ -3155,12 +3509,25 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         )
     else:
         defaults[CONF_VALUE_TEMPLATE] = "{{ " + " ~ ".join(variable_names) + " }}"
-        defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] = _json_default(
+        attribute_templates.update(
             {
                 variable_name: f"{{{{ {variable_name} }}}}"
                 for variable_name in variable_names
             }
         )
+
+    for attribute_name, template in _attribute_reference_templates(
+        platform,
+        entity_ids,
+        states,
+    ).items():
+        attribute_templates.setdefault(attribute_name, template)
+    if attribute_templates:
+        defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] = _json_default(attribute_templates)
+
+    native_templates = _native_reference_templates(platform, entity_ids, states)
+    if native_templates:
+        defaults[CONF_NATIVE_VALUE_TEMPLATES] = native_templates
 
     return defaults
 
@@ -3201,6 +3568,22 @@ def _reference_edit_defaults(
     for field in _AUTO_HELPER_PROFILE_FIELDS:
         if field == CONF_SOURCE_ENTITIES_TEXT:
             continue
+        if field == CONF_NATIVE_VALUE_TEMPLATES:
+            merged[field] = _merge_native_helper_templates(
+                current_defaults,
+                reference_defaults,
+                auto_profile,
+                force_template_helper=force_template_helper,
+            )
+            continue
+        if field == CONF_ATTRIBUTE_TEMPLATES_JSON:
+            merged[field] = _merge_attribute_helper_templates(
+                current_defaults,
+                reference_defaults,
+                auto_profile,
+                force_template_helper=force_template_helper,
+            )
+            continue
         if field in _AUTO_HELPER_TEMPLATE_FIELDS:
             if templates_are_generated:
                 merged[field] = reference_defaults.get(field, "")
@@ -3222,10 +3605,10 @@ def _reference_edit_defaults(
                 )
             )
         ):
-            merged[field] = reference_defaults.get(
-                field,
-                [] if field in CLIMATE_MODE_LIST_FIELDS else "",
-            )
+            if field in reference_defaults:
+                merged[field] = reference_defaults[field]
+            else:
+                merged.pop(field, None)
 
     old_entity_id = _text_default(current_defaults.get(ATTR_ENTITY_ID)).strip()
     new_platform = merged.get(CONF_PLATFORM)
@@ -3234,6 +3617,115 @@ def _reference_edit_defaults(
         if separator and object_id:
             merged[ATTR_ENTITY_ID] = f"{new_platform}.{object_id}"
     return merged
+
+
+def _attribute_template_mapping(value: Any) -> dict[str, str]:
+    """Normalize attribute helper JSON without trusting legacy stored data."""
+    if isinstance(value, str):
+        if not value.strip():
+            return {}
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        str(attribute_name): template
+        for attribute_name, template in _plain_options(value).items()
+        if isinstance(attribute_name, str)
+        and attribute_name.strip()
+        and isinstance(template, str)
+        and template.strip()
+    }
+
+
+def _merge_attribute_helper_templates(
+    current_defaults: Mapping,
+    reference_defaults: Mapping,
+    auto_profile: Mapping | None,
+    *,
+    force_template_helper: bool,
+) -> str:
+    """Refresh generated attribute helpers while preserving per-key edits."""
+    current = _attribute_template_mapping(
+        current_defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON),
+    )
+    generated = _attribute_template_mapping(
+        reference_defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON),
+    )
+    baseline = _attribute_template_mapping(
+        auto_profile.get(CONF_ATTRIBUTE_TEMPLATES_JSON) if auto_profile else None,
+    )
+
+    if force_template_helper:
+        return _json_default(generated)
+
+    merged = {}
+    for attribute_name in current.keys() | generated.keys() | baseline.keys():
+        current_value = current.get(attribute_name, "")
+        if current_value == baseline.get(attribute_name, ""):
+            next_value = generated.get(attribute_name, "")
+        else:
+            next_value = current_value
+        if next_value:
+            merged[attribute_name] = next_value
+    return _json_default(merged)
+
+
+def _native_template_mapping(value: Any) -> dict[str, str]:
+    """Normalize editable native helper templates into a plain mapping."""
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        str(property_name): template
+        for property_name, template in _plain_options(value).items()
+        if isinstance(template, str)
+    }
+
+
+def _merge_native_helper_templates(
+    current_defaults: Mapping,
+    reference_defaults: Mapping,
+    auto_profile: Mapping | None,
+    *,
+    force_template_helper: bool,
+) -> dict[str, str]:
+    """Refresh generated native templates while preserving per-field edits."""
+    platform = reference_defaults.get(
+        CONF_PLATFORM,
+        current_defaults.get(CONF_PLATFORM),
+    )
+    properties = DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
+    current = _native_template_mapping(
+        current_defaults.get(CONF_NATIVE_VALUE_TEMPLATES),
+    )
+    generated = _native_template_mapping(
+        reference_defaults.get(CONF_NATIVE_VALUE_TEMPLATES),
+    )
+    baseline = _native_template_mapping(
+        auto_profile.get(CONF_NATIVE_VALUE_TEMPLATES) if auto_profile else None,
+    )
+
+    merged = {}
+    for property_name in properties:
+        current_value = current.get(property_name, "")
+        if force_template_helper or current_value == baseline.get(property_name, ""):
+            next_value = generated.get(property_name, "")
+        else:
+            next_value = current_value
+        if next_value:
+            merged[property_name] = next_value
+    return merged
+
+
+def _auto_helper_field_default(field: str) -> Any:
+    """Return the canonical empty value for an auto-helper field."""
+    if field in CLIMATE_MODE_LIST_FIELDS:
+        return []
+    if field == CONF_NATIVE_VALUE_TEMPLATES:
+        return {}
+    return ""
 
 
 def _canonical_auto_helper_value(field: str, value: Any) -> Any:
@@ -3251,6 +3743,9 @@ def _canonical_auto_helper_value(field: str, value: Any) -> Any:
         except (AttributeError, InvalidJson):
             return value
 
+    if field == CONF_NATIVE_VALUE_TEMPLATES:
+        return _native_template_mapping(value)
+
     if field in _AUTO_HELPER_JSON_FIELDS:
         try:
             parsed = _parse_json_value(value, field)
@@ -3266,10 +3761,7 @@ def _auto_helper_profile(defaults: dict[str, Any]) -> dict[str, Any]:
     return {
         field: _canonical_auto_helper_value(
             field,
-            defaults.get(
-                field,
-                [] if field in CLIMATE_MODE_LIST_FIELDS else "",
-            ),
+            defaults.get(field, _auto_helper_field_default(field)),
         )
         for field in _AUTO_HELPER_PROFILE_FIELDS
     }
@@ -3282,8 +3774,11 @@ def _auto_helper_templates_match(
     """Return whether the editable templates still match a helper baseline."""
     normalized_profile = _auto_helper_profile(dict(profile))
     return all(
-        _canonical_auto_helper_value(field, defaults.get(field, ""))
-        == normalized_profile.get(field, "")
+        _canonical_auto_helper_value(
+            field,
+            defaults.get(field, _auto_helper_field_default(field)),
+        )
+        == normalized_profile.get(field, _auto_helper_field_default(field))
         for field in _AUTO_HELPER_TEMPLATE_FIELDS
     )
 
@@ -3617,23 +4112,31 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         return VirtualOptionsFlowHandler()
 
     async def validate_input(self, user_input, current_entry=None):
+        group_name = _normalized_group_name(user_input.get(ATTR_GROUP_NAME, ""))
         for entry in self.hass.config_entries.async_entries(COMPONENT_DOMAIN):
             if current_entry and entry.entry_id == current_entry.entry_id:
                 continue
-            if entry.data.get(ATTR_GROUP_NAME) == user_input[ATTR_GROUP_NAME]:
+            existing_group_name = str(entry.data.get(ATTR_GROUP_NAME, "")).strip()
+            if existing_group_name == group_name:
                 raise GroupNameAlreadyUsed
 
         if current_entry:
-            return {"title": f"{user_input[ATTR_GROUP_NAME]} - {COMPONENT_DOMAIN}"}
+            return {
+                "title": f"{group_name} - {COMPONENT_DOMAIN}",
+                ATTR_GROUP_NAME: group_name,
+            }
 
         for group in self.hass.data.get(COMPONENT_DOMAIN, {}):
             _LOGGER.debug(f"checking {group}")
-            if group == user_input[ATTR_GROUP_NAME]:
+            if str(group).strip() == group_name:
                 raise GroupNameAlreadyUsed
-        return {"title": f"{user_input[ATTR_GROUP_NAME]} - {COMPONENT_DOMAIN}"}
+        return {
+            "title": f"{group_name} - {COMPONENT_DOMAIN}",
+            ATTR_GROUP_NAME: group_name,
+        }
 
     async def async_step_user(self, user_input=None):
-        _LOGGER.debug(f"step user {user_input}")
+        _LOGGER.debug("step user %s", user_input)
 
         errors = {}
         if user_input is not None:
@@ -3641,7 +4144,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 info = await self.validate_input(user_input)
                 self._pending_title = info["title"]
                 self._pending_data = {
-                    ATTR_GROUP_NAME: user_input[ATTR_GROUP_NAME],
+                    ATTR_GROUP_NAME: info[ATTR_GROUP_NAME],
                 }
                 if user_input.get(CONF_ADD_FIRST_ENTITY):
                     return await self.async_step_entity_source()
@@ -3653,6 +4156,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 )
             except GroupNameAlreadyUsed:
                 errors["base"] = "group_name_used"
+            except MissingGroupName:
+                errors[ATTR_GROUP_NAME] = "required"
 
         defaults = user_input or {
             ATTR_GROUP_NAME: IMPORTED_GROUP_NAME,
@@ -3673,7 +4178,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             try:
                 await self.validate_input(user_input, current_entry=entry)
                 old_group_name = entry.data[ATTR_GROUP_NAME]
-                new_group_name = user_input[ATTR_GROUP_NAME]
+                new_group_name = _normalized_group_name(user_input[ATTR_GROUP_NAME])
                 await _rename_meta_data(self.hass, old_group_name, new_group_name)
                 return self.async_update_reload_and_abort(
                     entry,
@@ -3684,6 +4189,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 )
             except GroupNameAlreadyUsed:
                 errors["base"] = "group_name_used"
+            except MissingGroupName:
+                errors[ATTR_GROUP_NAME] = "required"
 
         defaults = user_input or {
             ATTR_GROUP_NAME: entry.data[ATTR_GROUP_NAME],
@@ -3761,7 +4268,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             except InvalidEntityId:
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
             except InvalidDomainOptions:
-                errors[CONF_DOMAIN_OPTIONS_JSON] = "invalid_domain_options"
+                errors[_domain_options_error_field(user_input)] = "invalid_domain_options"
             except DeviceNameAlreadyUsed:
                 errors[CONF_DEVICE_NAME] = "device_name_used"
             except MissingDeviceName:
@@ -3793,6 +4300,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._edit_current_defaults: dict[str, Any] | None = None
         self._edit_target_device_name: str | None = None
         self._edit_source_entities: list[str] | None = None
+        self._edit_helper_update_mode: str | None = None
+        self._edit_sources_changed = False
 
     async def async_step_init(self, user_input=None):
         errors = {}
@@ -3946,7 +4455,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             except InvalidEntityId:
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
             except InvalidDomainOptions:
-                errors[CONF_DOMAIN_OPTIONS_JSON] = "invalid_domain_options"
+                errors[_domain_options_error_field(user_input)] = "invalid_domain_options"
             except DeviceNameAlreadyUsed:
                 errors[CONF_DEVICE_NAME] = "device_name_used"
             except MissingDeviceName:
@@ -4054,12 +4563,15 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     CONF_TARGET_DEVICE_NAME,
                 )
                 self._edit_source_entities = selected_sources
-                if selected_sources != _stored_entity_ids(
+                self._edit_sources_changed = selected_sources != _stored_entity_ids(
                     entity.get(CONF_SOURCE_ENTITIES),
-                ):
+                )
+                if self._edit_sources_changed or selected_sources:
                     return await self.async_step_edit_entity_helper()
 
-                self._prepare_edit_entity_defaults(force_template_helper=False)
+                self._prepare_edit_entity_defaults(
+                    helper_update_mode=HELPER_UPDATE_AUTO,
+                )
                 return await self.async_step_edit_entity()
             except InvalidEntityReference:
                 errors[CONF_REFERENCE_ENTITY_ID] = "invalid_entity_id"
@@ -4074,21 +4586,34 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             errors=errors,
         )
 
-    def _prepare_edit_entity_defaults(self, *, force_template_helper: bool) -> None:
+    def _prepare_edit_entity_defaults(self, *, helper_update_mode: str) -> None:
         """Apply the selected helper policy to the pending source change."""
         if self._edit_current_defaults is None or self._edit_source_entities is None:
             return
-        self._entity_defaults = _reference_edit_defaults(
-            self._edit_current_defaults,
-            self._reference_defaults,
-            self._edit_auto_helper_profile,
-            force_template_helper=force_template_helper,
-            source_entities_text=(
-                "\n".join(self._edit_source_entities)
-                if not self._reference_defaults
-                else None
-            ),
-        )
+        self._edit_helper_update_mode = helper_update_mode
+        if helper_update_mode == HELPER_UPDATE_KEEP:
+            self._entity_defaults = _reference_edit_defaults(
+                self._edit_current_defaults,
+                {},
+                None,
+                source_entities_text="\n".join(self._edit_source_entities),
+            )
+        else:
+            self._entity_defaults = _reference_edit_defaults(
+                self._edit_current_defaults,
+                self._reference_defaults,
+                self._edit_auto_helper_profile,
+                force_template_helper=(helper_update_mode == HELPER_UPDATE_FORCE),
+                source_entities_text=(
+                    "\n".join(self._edit_source_entities)
+                    if not self._reference_defaults
+                    else None
+                ),
+            )
+            if self._edit_sources_changed:
+                self._edit_auto_helper_profile = _auto_helper_profile(
+                    self._reference_defaults,
+                )
         self._entity_defaults = _with_existing_device_defaults(
             self._entity_defaults,
             self.config_entry.options,
@@ -4102,9 +4627,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
         if user_input is not None:
             self._prepare_edit_entity_defaults(
-                force_template_helper=(
-                    user_input[CONF_HELPER_UPDATE_MODE] == HELPER_UPDATE_FORCE
-                ),
+                helper_update_mode=user_input[CONF_HELPER_UPDATE_MODE],
             )
             return await self.async_step_edit_entity()
 
@@ -4138,6 +4661,39 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     self._edit_device_name,
                     self._edit_index,
                 )
+                submitted_sources = _parse_source_entities(
+                    user_input.get(CONF_SOURCE_ENTITIES_TEXT, ""),
+                )
+                if submitted_sources != self._edit_source_entities:
+                    _validate_mergeable_source_entities(
+                        submitted_sources,
+                        CONF_SOURCE_ENTITIES_TEXT,
+                    )
+                    # Validate the complete pending edit first so dependency
+                    # cycles and malformed input remain attached to the
+                    # detailed form fields instead of the source picker.
+                    await _async_build_entity_config(
+                        self.hass,
+                        user_input,
+                        _virtual_entity_id(current_entity),
+                    )
+                    try:
+                        self._reference_defaults = _reference_entity_defaults(
+                            self.hass,
+                            submitted_sources,
+                        )
+                    except InvalidEntityReference:
+                        # Valid future or unloaded entities cannot prefill a
+                        # helper yet, but users can still keep current Jinja.
+                        self._reference_defaults = {}
+                    self._edit_current_defaults = user_input
+                    # The detailed form is now authoritative. Reapplying the
+                    # source-step Device choice would discard metadata edits.
+                    self._edit_target_device_name = None
+                    self._edit_source_entities = submitted_sources
+                    self._edit_sources_changed = True
+                    return await self.async_step_edit_entity_helper()
+
                 device_name, entity = await _async_build_entity_config(
                     self.hass,
                     user_input,
@@ -4146,8 +4702,21 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 _set_auto_helper_profile(
                     entity,
                     user_input,
-                    self._reference_defaults,
-                    self._edit_auto_helper_profile,
+                    (
+                        {}
+                        if self._edit_helper_update_mode == HELPER_UPDATE_KEEP
+                        else self._reference_defaults
+                    ),
+                    (
+                        self._edit_auto_helper_profile
+                        if self._edit_helper_update_mode == HELPER_UPDATE_KEEP
+                        else (
+                            _auto_helper_profile({})
+                            if self._edit_sources_changed
+                            and not self._reference_defaults
+                            else self._edit_auto_helper_profile
+                        )
+                    ),
                 )
                 device_config = _build_device_config(user_input, device_name)
                 options = _replace_ui_entity(
@@ -4168,7 +4737,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             except InvalidEntityId:
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
             except InvalidDomainOptions:
-                errors[CONF_DOMAIN_OPTIONS_JSON] = "invalid_domain_options"
+                errors[_domain_options_error_field(user_input)] = "invalid_domain_options"
             except DeviceNameAlreadyUsed:
                 errors[CONF_DEVICE_NAME] = "device_name_used"
             except MissingDeviceName:
@@ -4206,6 +4775,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
 class GroupNameAlreadyUsed(exceptions.HomeAssistantError):
     """Error indicating group name already used."""
+
+
+class MissingGroupName(exceptions.HomeAssistantError):
+    """Error indicating an empty Device group name."""
 
 
 class DeviceNameAlreadyUsed(exceptions.HomeAssistantError):

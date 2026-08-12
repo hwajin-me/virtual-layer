@@ -40,7 +40,7 @@ def _speed_count_from_step(value: Any) -> int | None:
     """Convert Home Assistant's percentage step to a speed count."""
     try:
         step = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if not math.isfinite(step) or step <= 0:
         return None
@@ -71,7 +71,7 @@ def extract_fan_options(attributes: Mapping) -> tuple[dict[str, Any], set[str]]:
 
     try:
         supported_features = FanEntityFeature(int(attributes.get("supported_features", 0)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         supported_features = FanEntityFeature(0)
     options["oscillate"] = (
         "oscillating" in attributes

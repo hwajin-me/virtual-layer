@@ -217,7 +217,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
             try:
                 latitude = float(state.attributes[ATTR_LATITUDE])
                 longitude = float(state.attributes[ATTR_LONGITUDE])
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError, OverflowError):
                 continue
             if (
                 not math.isfinite(latitude)

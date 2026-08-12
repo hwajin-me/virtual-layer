@@ -54,6 +54,7 @@ from custom_components.virtual_layer.config_flow import (
     _build_entity_config,
     _default_virtual_entity_id,
     _delete_ui_entities,
+    _domain_options_error_field,
     _entity_choices,
     _entity_form_defaults,
     _entity_key,
@@ -61,17 +62,20 @@ from custom_components.virtual_layer.config_flow import (
     _entity_schema,
     _find_entity_by_selection_key,
     _flatten_entity_form_sections,
+    _json_default,
     _managed_device_choices,
     _needs_domain_specific_form,
     _options_schema,
     _parse_command_actions,
     _parse_native_templates,
+    _plain_options,
     _reference_edit_defaults,
     _reference_entity_defaults,
     _replace_ui_device,
     _replace_ui_entity,
     _set_auto_helper_profile,
     _stored_entity_ids,
+    _validate_platform_entity,
 )
 from custom_components.virtual_layer.const import (
     ATTR_DEVICE_ATTRIBUTES,
@@ -115,6 +119,40 @@ from custom_components.virtual_layer.const import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    "progress",
+    [101, pytest.param(10**10000, id="huge-integer")],
+)
+def test_update_domain_options_reject_out_of_range_progress(progress):
+    from custom_components.virtual_layer.update import (
+        ENTITY_SCHEMA,
+        validate_domain_options,
+    )
+
+    with pytest.raises(InvalidDomainOptions):
+        _validate_platform_entity(
+            {
+                CONF_PLATFORM: "update",
+                CONF_NAME: "Invalid Update",
+                CONF_INITIAL_VALUE: "1.0.0",
+                "update_percentage": progress,
+            },
+            ENTITY_SCHEMA,
+            validate_domain_options,
+        )
+
+
+@pytest.mark.parametrize("platform", ["climate", "fan", "humidifier"])
+def test_native_domain_validation_errors_are_shown_at_form_level(platform):
+    assert _domain_options_error_field({CONF_PLATFORM: platform}) == "base"
+
+
+def test_advanced_domain_validation_errors_remain_attached_to_options():
+    assert _domain_options_error_field({CONF_PLATFORM: "vacuum"}) == (
+        CONF_DOMAIN_OPTIONS_JSON
+    )
 
 
 def _entity_input(overrides=None):
@@ -259,6 +297,31 @@ def test_native_value_template_sections_match_domain_properties():
             isinstance(validator, selector.TemplateSelector)
             for validator in template_validators.values()
         ), platform
+
+
+@pytest.mark.parametrize(
+    ("platform", "properties"),
+    DOMAIN_NATIVE_TEMPLATE_PROPERTIES.items(),
+)
+def test_every_native_jinja_field_gets_a_source_helper_when_attribute_exists(
+    hass,
+    platform,
+    properties,
+):
+    entity_id = f"{platform}.helper_source"
+    hass.states.async_set(
+        entity_id,
+        "active",
+        {property_name: property_name for property_name in properties},
+    )
+
+    defaults = _reference_entity_defaults(hass, [entity_id])
+
+    assert set(defaults[CONF_NATIVE_VALUE_TEMPLATES]) == set(properties)
+    for property_name in properties:
+        assert defaults[CONF_NATIVE_VALUE_TEMPLATES][property_name] == (
+            f"{{{{ state_attr({entity_id!r}, {property_name!r}) }}}}"
+        )
 
 
 def test_build_entity_config_supports_composite_templates_and_attributes():
@@ -420,6 +483,61 @@ def test_build_entity_config_rejects_non_standard_json_numbers(constant):
     assert err.value.field_name == CONF_ATTRIBUTES_JSON
 
 
+def test_build_entity_config_rejects_json_integer_outside_ha_range():
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_ATTRIBUTES_JSON: '{"too_large": 18446744073709551616}',
+                }
+            )
+        )
+
+    assert err.value.field_name == CONF_ATTRIBUTES_JSON
+
+
+def test_plain_options_isolates_recursive_and_excessively_deep_values():
+    recursive = {}
+    recursive["self"] = recursive
+    deeply_nested = "leaf"
+    for _ in range(150):
+        deeply_nested = [deeply_nested]
+
+    result = _plain_options({
+        "recursive": recursive,
+        "deep": deeply_nested,
+        "healthy": {"nested": True},
+    })
+
+    assert result["recursive"] == {"self": None}
+    assert result["healthy"] == {"nested": True}
+    value = result["deep"]
+    depth = 0
+    while isinstance(value, list):
+        value = value[0]
+        depth += 1
+    assert value is None
+    assert 0 < depth <= 101
+
+
+def test_json_default_sanitizes_values_that_cannot_be_saved_by_home_assistant():
+    result = json.loads(
+        _json_default(
+            {
+                "object": object(),
+                "set": {"one", "two"},
+                "too_large": 10**10000,
+                "not_finite": float("nan"),
+            }
+        )
+    )
+
+    assert result["object"].startswith("<object object at ")
+    assert sorted(result["set"]) == ["one", "two"]
+    assert result["too_large"] is None
+    assert result["not_finite"] == "nan"
+
+
 def test_build_entity_config_rejects_non_finite_numeric_strings():
     with pytest.raises(InvalidJson) as err:
         _build_entity_config(
@@ -529,6 +647,56 @@ def test_build_entity_config_deduplicates_sources_and_rejects_invalid_template_v
         )
 
     assert err.value.field_name == CONF_TEMPLATE_SOURCES_JSON
+
+
+def test_build_entity_config_normalizes_attribute_names_and_rejects_bad_templates():
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_ATTRIBUTES_JSON: '{" summary ": "ready"}',
+                CONF_ATTRIBUTE_TEMPLATES_JSON: (
+                    '{" detail ": "{{ states(\\"sensor.detail\\") }}"}'
+                ),
+            }
+        )
+    )
+
+    assert entity[CONF_ATTRIBUTES] == {"summary": "ready"}
+    assert entity[CONF_ATTRIBUTE_TEMPLATES] == {
+        "detail": '{{ states("sensor.detail") }}',
+    }
+
+    for field_name, payload in (
+        (CONF_ATTRIBUTE_TEMPLATES_JSON, '{"detail": 42}'),
+        (CONF_ATTRIBUTES_JSON, '{"name": 1, " name ": 2}'),
+        (CONF_TEMPLATE_SOURCES_JSON, '{"power": "sensor.a", " power ": "sensor.b"}'),
+        (
+            CONF_ATTRIBUTE_SOURCES_JSON,
+            '{"power": "sensor.a.state", " power ": "sensor.b.state"}',
+        ),
+    ):
+        with pytest.raises(InvalidJson) as err:
+            _build_entity_config(_entity_input({field_name: payload}))
+        assert err.value.field_name == field_name
+
+
+def test_build_entity_config_rejects_non_string_event_attribute_templates():
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_EVENT_HOOKS_JSON: json.dumps(
+                        [{
+                            "trigger": "event",
+                            "event_type": "virtual_layer_update",
+                            "attribute_templates": {"value": {"not": "jinja"}},
+                        }]
+                    ),
+                }
+            )
+        )
+
+    assert err.value.field_name == CONF_EVENT_HOOKS_JSON
 
     with pytest.raises(InvalidJson) as err:
         _build_entity_config(
@@ -705,6 +873,14 @@ def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
         "ai_comfort",
     ]
     assert defaults["swing_modes"] == []
+    native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert native_templates["hvac_mode"] == "{{ states('climate.living_room') }}"
+    assert native_templates["hvac_modes"] == (
+        "{{ state_attr('climate.living_room', 'hvac_modes') }}"
+    )
+    assert native_templates["target_temperature"] == (
+        "{{ state_attr('climate.living_room', 'temperature') }}"
+    )
     assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {
         "vendor_attribute": "preserved",
     }
@@ -1431,6 +1607,80 @@ def test_reference_entity_defaults_combines_string_sources_with_concat_template(
     )
 
 
+def test_reference_entity_defaults_generates_dynamic_single_source_attributes(hass):
+    hass.states.async_set(
+        "climate.office",
+        "cool",
+        {
+            "hvac_modes": ["off", "cool"],
+            "temperature": 23,
+            "vendor_status": "healthy",
+        },
+    )
+
+    defaults = _reference_entity_defaults(hass, ["climate.office"])
+    templates = json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+
+    assert templates == {
+        "vendor_status": "{{ state_attr('climate.office', 'vendor_status') }}",
+    }
+    assert "temperature" not in templates
+    assert Template(templates["vendor_status"], hass).async_render() == "healthy"
+
+
+def test_reference_entity_defaults_merges_common_attributes_by_type(hass):
+    hass.states.async_set(
+        "sensor.first_process",
+        "wash",
+        {
+            "active": True,
+            "label": "washer",
+            "load": 10,
+            "metadata": {1: "first", "shared": "first"},
+            "steps": [{"name": "wash"}],
+            "tags": ["laundry", "wet"],
+        },
+    )
+    hass.states.async_set(
+        "sensor.second_process",
+        "dry",
+        {
+            "active": False,
+            "label": "dryer",
+            "load": 20,
+            "metadata": {2: "second", "shared": "second"},
+            "steps": [{"name": "wash"}, {"name": "dry"}],
+            "tags": ["laundry", "dry"],
+        },
+    )
+
+    defaults = _reference_entity_defaults(
+        hass,
+        ["sensor.first_process", "sensor.second_process"],
+    )
+    templates = json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+
+    assert Template(templates["active"], hass).async_render() is False
+    assert Template(templates["load"], hass).async_render() == 15.0
+    assert Template(templates["label"], hass).async_render() == "washerdryer"
+    assert Template(templates["tags"], hass).async_render() == [
+        "laundry",
+        "wet",
+        "dry",
+    ]
+    assert Template(templates["metadata"], hass).async_render() == {
+        1: "first",
+        2: "second",
+        "shared": "second",
+    }
+    assert Template(templates["steps"], hass).async_render() == [
+        {"name": "wash"},
+        {"name": "dry"},
+    ]
+    assert "first_process" in templates
+    assert "second_process" in templates
+
+
 def test_reference_camera_defaults_create_image_and_stream_alias(hass):
     hass.states.async_set("camera.front_door", "on", {"friendly_name": "Front Door"})
 
@@ -1442,6 +1692,68 @@ def test_reference_camera_defaults_create_image_and_stream_alias(hass):
     assert defaults[CONF_VALUE_TEMPLATE] == "{{ front_door }}"
     assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         "source_entity": "camera.front_door",
+    }
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["source_entity"] == (
+        "{{ 'camera.front_door' }}"
+    )
+
+
+def test_reference_light_generates_boolean_and_brightness_templates(hass):
+    hass.states.async_set(
+        "light.desk",
+        "on",
+        {"brightness": 128, CONF_ICON: "mdi:desk-lamp"},
+    )
+
+    defaults = _reference_entity_defaults(hass, ["light.desk"])
+
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["is_on"] == (
+        "{{ states('light.desk') not in ['off', 'unknown', 'unavailable'] }}"
+    )
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["brightness"] == (
+        "{{ state_attr('light.desk', 'brightness') }}"
+    )
+    assert defaults[CONF_AVAILABILITY_TEMPLATE] == (
+        "{{ states('light.desk') not in ['unknown', 'unavailable'] }}"
+    )
+    assert defaults[CONF_ICON_TEMPLATE] == (
+        "{{ state_attr('light.desk', 'icon') }}"
+    )
+    _, entity = _build_entity_config(_entity_input(defaults))
+    assert entity[CONF_ICON_TEMPLATE] == "{{ state_attr('light.desk', 'icon') }}"
+    assert CONF_ICON not in entity.get(CONF_ATTRIBUTES, {})
+
+
+def test_reference_tts_generates_language_and_option_templates(hass):
+    hass.states.async_set(
+        "tts.house_voice",
+        "ready",
+        {
+            "friendly_name": "House Voice",
+            "supported_languages": ["en", "ko"],
+            "default_language": "ko",
+            "supported_options": ["voice"],
+            "default_options": {"voice": "female"},
+        },
+    )
+
+    defaults = _reference_entity_defaults(hass, ["tts.house_voice"])
+    native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+
+    assert defaults[CONF_PLATFORM] == "tts"
+    assert native_templates == {
+        "supported_languages": (
+            "{{ state_attr('tts.house_voice', 'supported_languages') }}"
+        ),
+        "default_language": (
+            "{{ state_attr('tts.house_voice', 'default_language') }}"
+        ),
+        "supported_options": (
+            "{{ state_attr('tts.house_voice', 'supported_options') }}"
+        ),
+        "default_options": (
+            "{{ state_attr('tts.house_voice', 'default_options') }}"
+        ),
     }
 
 
@@ -1902,7 +2214,7 @@ def test_auto_helper_refresh_replaces_only_generated_helper_fields():
     assert refreshed[CONF_VALUE_TEMPLATE] == "{{ new }}"
     assert refreshed[CONF_ATTRIBUTES_JSON] == '{"battery": 90}'
     assert refreshed[CONF_ATTRIBUTE_TEMPLATES_JSON] == ""
-    assert refreshed[CONF_DOMAIN_OPTIONS_JSON] == ""
+    assert CONF_DOMAIN_OPTIONS_JSON not in refreshed
 
 
 def test_custom_template_fields_are_preserved_while_generated_fields_refresh():
@@ -2015,7 +2327,7 @@ def test_auto_helper_refreshes_generated_climate_modes_but_preserves_custom_mode
     assert refreshed["fan_modes"] == ["low", "high"]
     assert refreshed["fan_mode"] == "low"
     assert refreshed["preset_mode"] == "eco"
-    assert refreshed["swing_modes"] == []
+    assert "swing_modes" not in refreshed
 
     customized = {
         **generated,
@@ -2030,6 +2342,119 @@ def test_auto_helper_refreshes_generated_climate_modes_but_preserves_custom_mode
     assert refreshed_custom["fan_modes"] == ["auto", "quiet"]
     assert refreshed_custom["fan_mode"] == "quiet"
     assert refreshed_custom["preset_modes"] == ["none", "eco"]
+
+
+def test_auto_helper_refreshes_native_jinja_per_field_and_preserves_custom_values():
+    generated = {
+        CONF_PLATFORM: "climate",
+        CONF_SOURCE_ENTITIES_TEXT: "climate.old",
+        CONF_AVAILABILITY_TEMPLATE: "{{ states('climate.old') != 'unavailable' }}",
+        CONF_ICON_TEMPLATE: "{{ state_attr('climate.old', 'icon') }}",
+        CONF_NATIVE_VALUE_TEMPLATES: {
+            "hvac_mode": "{{ states('climate.old') }}",
+            "fan_mode": "{{ state_attr('climate.old', 'fan_mode') }}",
+        },
+    }
+    current = {
+        **generated,
+        CONF_AVAILABILITY_TEMPLATE: "{{ true }}",
+        CONF_NATIVE_VALUE_TEMPLATES: {
+            **generated[CONF_NATIVE_VALUE_TEMPLATES],
+            "fan_mode": "{{ 'quiet' }}",
+        },
+    }
+    reference = {
+        CONF_PLATFORM: "climate",
+        CONF_SOURCE_ENTITIES_TEXT: "climate.new",
+        CONF_AVAILABILITY_TEMPLATE: "{{ states('climate.new') != 'unavailable' }}",
+        CONF_ICON_TEMPLATE: "{{ state_attr('climate.new', 'icon') }}",
+        CONF_NATIVE_VALUE_TEMPLATES: {
+            "hvac_mode": "{{ states('climate.new') }}",
+            "fan_mode": "{{ state_attr('climate.new', 'fan_mode') }}",
+            "preset_mode": "{{ state_attr('climate.new', 'preset_mode') }}",
+        },
+    }
+
+    refreshed = _reference_edit_defaults(
+        current,
+        reference,
+        _auto_helper_profile(generated),
+    )
+
+    assert refreshed[CONF_NATIVE_VALUE_TEMPLATES] == {
+        "hvac_mode": "{{ states('climate.new') }}",
+        "fan_mode": "{{ 'quiet' }}",
+        "preset_mode": "{{ state_attr('climate.new', 'preset_mode') }}",
+    }
+    assert refreshed[CONF_AVAILABILITY_TEMPLATE] == "{{ true }}"
+    assert refreshed[CONF_ICON_TEMPLATE] == "{{ state_attr('climate.new', 'icon') }}"
+
+    forced = _reference_edit_defaults(
+        current,
+        reference,
+        _auto_helper_profile(generated),
+        force_template_helper=True,
+    )
+    assert forced[CONF_NATIVE_VALUE_TEMPLATES] == reference[
+        CONF_NATIVE_VALUE_TEMPLATES
+    ]
+
+
+def test_auto_helper_refreshes_attribute_jinja_per_key_and_removes_stale_helpers():
+    generated = {
+        CONF_PLATFORM: "sensor",
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.old",
+        CONF_ATTRIBUTE_TEMPLATES_JSON: json.dumps(
+            {
+                "generated": "{{ state_attr('sensor.old', 'generated') }}",
+                "removed": "{{ state_attr('sensor.old', 'removed') }}",
+                "customized": "{{ state_attr('sensor.old', 'customized') }}",
+            }
+        ),
+    }
+    current = {
+        **generated,
+        CONF_ATTRIBUTE_TEMPLATES_JSON: json.dumps(
+            {
+                "generated": "{{ state_attr('sensor.old', 'generated') }}",
+                "removed": "{{ state_attr('sensor.old', 'removed') }}",
+                "customized": "{{ 42 }}",
+            }
+        ),
+    }
+    reference = {
+        CONF_PLATFORM: "sensor",
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.new",
+        CONF_ATTRIBUTE_TEMPLATES_JSON: json.dumps(
+            {
+                "generated": "{{ state_attr('sensor.new', 'generated') }}",
+                "added": "{{ state_attr('sensor.new', 'added') }}",
+                "customized": "{{ state_attr('sensor.new', 'customized') }}",
+            }
+        ),
+    }
+
+    refreshed = _reference_edit_defaults(
+        current,
+        reference,
+        _auto_helper_profile(generated),
+    )
+
+    assert json.loads(refreshed[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
+        "added": "{{ state_attr('sensor.new', 'added') }}",
+        "customized": "{{ 42 }}",
+        "generated": "{{ state_attr('sensor.new', 'generated') }}",
+    }
+
+    forced = _reference_edit_defaults(
+        current,
+        reference,
+        _auto_helper_profile(generated),
+        force_template_helper=True,
+    )
+    assert json.loads(forced[CONF_ATTRIBUTE_TEMPLATES_JSON]) == json.loads(
+        reference[CONF_ATTRIBUTE_TEMPLATES_JSON]
+    )
 
 
 def test_auto_helper_profile_normalizes_stored_template_source_references():
@@ -2913,6 +3338,7 @@ def test_native_templates_and_command_actions_parse_complex_values():
     [
         (_parse_native_templates, '{"entity_id": "{{ states(\'sensor.bad\') }}"}'),
         (_parse_native_templates, '{"fan_modes": ["auto"]}'),
+        (_parse_native_templates, '{"mode": "{{ 1 }}", " mode ": "{{ 2 }}"}'),
         (_parse_command_actions, '{"set-temperature": []}'),
         (_parse_command_actions, '{"turn_on": {"sequence": [], "optimistic": true}}'),
         (_parse_command_actions, '{"turn_on": {"sequence": [{"action": 1}]}}'),

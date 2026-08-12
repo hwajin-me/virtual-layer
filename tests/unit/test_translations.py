@@ -81,6 +81,8 @@ def _assert_form_translation_fields(catalog, section, step_id, schema):
     assert step["title"]
     assert step["description"]
     assert fields <= set(step.get("data", {})), step_id
+    section_fields = set(step.get("sections", {}))
+    assert fields - section_fields <= set(step.get("data_description", {})), step_id
 
 
 def _selector_options(schema, translation_key: str) -> set[str]:

@@ -72,7 +72,7 @@ def _finite_float(value, default: float) -> float:
     """Return a finite configured number or a compatibility default."""
     try:
         result = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return result if math.isfinite(result) else default
 
@@ -96,6 +96,11 @@ BASE_SCHEMA = virtual_schema(
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
 HUMIDIFIER_SCHEMA = vol.Schema(BASE_SCHEMA)
+
+
+def normalize_domain_options(config):
+    """Promote legacy attributes before persisted-data validation."""
+    return migrate_legacy_humidifier_attributes(config)
 
 
 def validate_domain_options(config) -> None:
@@ -246,7 +251,7 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             return None
         try:
             humidity = float(humidity)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         if not math.isfinite(humidity):
             return None
@@ -332,7 +337,10 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         self.async_write_ha_state()
 
     async def async_set_humidity(self, humidity: int) -> None:
-        humidity = float(humidity)
+        try:
+            humidity = float(humidity)
+        except (TypeError, ValueError, OverflowError) as err:
+            raise ValueError("Humidity must be numeric") from err
         if not math.isfinite(humidity):
             raise ValueError("Humidity must be finite")
         if not self._attr_min_humidity <= humidity <= self._attr_max_humidity:

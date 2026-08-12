@@ -230,8 +230,21 @@ on the source type:
   from that median is followed for 30 minutes after its latest GPS update, so a
   travelling device remains selected after it arrives near the other devices.
 
+Source attributes receive helpers too. A single source uses a dynamic
+`state_attr()` template. Attributes shared by multiple sources use `AND` for
+booleans, `average` for numbers, an order-preserving unique union for lists,
+concatenation for strings, and an ordered merge for mapping objects. Native
+domain properties and metadata such as device class or unit are kept in their
+dedicated fields instead of duplicated.
+
 The generated Home Assistant Jinja template is optional. You can keep it, edit
-it, or replace it entirely.
+it, or replace it entirely. Editing an entity with selected sources shows a
+template policy step even when the source IDs are unchanged, so updated source
+capabilities can be read again. Changing sources in the Modify form shows the
+policy step again. Automatic mode regenerates untouched helpers while
+preserving each customized field, Keep Current leaves every template unchanged,
+and Force Helper replaces generated and custom templates from the current
+sources.
 
 Example washer-style virtual sensor:
 

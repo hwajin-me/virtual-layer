@@ -16,6 +16,12 @@ ENTITY_SCHEMA = vol.Schema(GENERIC_SCHEMA, extra=vol.ALLOW_EXTRA)
 ENTITY_CLASS = VirtualUpdate
 
 
+def validate_domain_options(config) -> None:
+    """Reject invalid update progress while it is still editable in the UI."""
+    if (value := config.get("update_percentage")) is not None:
+        VirtualUpdate._bounded_update_percentage(value)
+
+
 async def async_setup_platform(hass, config, async_add_entities, _discovery_info=None):
     await async_setup_generic_platform(hass, config, async_add_entities, PLATFORM_DOMAIN)
 

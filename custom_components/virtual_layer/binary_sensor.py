@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 
 from . import (
-    _assert_managed_virtual_entity,
+    _assert_managed_virtual_entities,
     _async_verify_target_entity_control,
     get_entity_configs,
     get_entity_from_domain,
@@ -157,21 +157,24 @@ class VirtualBinarySensor(VirtualEntity, BinarySensorEntity):
 
 
 async def async_virtual_on_service(hass, call):
-    for entity_id in call.data['entity_id']:
+    entity_ids = call.data['entity_id']
+    _assert_managed_virtual_entities(hass, entity_ids)
+    for entity_id in entity_ids:
         _LOGGER.debug(f"turning on {entity_id}")
-        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, PLATFORM_DOMAIN, entity_id).turn_on()
 
 
 async def async_virtual_off_service(hass, call):
-    for entity_id in call.data['entity_id']:
+    entity_ids = call.data['entity_id']
+    _assert_managed_virtual_entities(hass, entity_ids)
+    for entity_id in entity_ids:
         _LOGGER.debug(f"turning off {entity_id}")
-        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, PLATFORM_DOMAIN, entity_id).turn_off()
 
 
 async def async_virtual_toggle_service(hass, call):
-    for entity_id in call.data['entity_id']:
+    entity_ids = call.data['entity_id']
+    _assert_managed_virtual_entities(hass, entity_ids)
+    for entity_id in entity_ids:
         _LOGGER.debug(f"toggling {entity_id}")
-        _assert_managed_virtual_entity(hass, entity_id)
         get_entity_from_domain(hass, PLATFORM_DOMAIN, entity_id).toggle()

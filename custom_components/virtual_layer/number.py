@@ -206,7 +206,7 @@ class VirtualNumber(VirtualEntity, NumberEntity):
     def _finite_bound(value, fallback: float) -> float:
         try:
             value = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return fallback
         return value if math.isfinite(value) else fallback
 
@@ -228,8 +228,11 @@ class VirtualNumber(VirtualEntity, NumberEntity):
     def _normalize_value(self, value, fallback) -> float:
         try:
             native_value = float(value)
-        except (TypeError, ValueError):
-            native_value = float(fallback)
+        except (TypeError, ValueError, OverflowError):
+            try:
+                native_value = float(fallback)
+            except (TypeError, ValueError, OverflowError):
+                native_value = self.native_min_value
         if not math.isfinite(native_value):
             native_value = self.native_min_value
         return max(
@@ -254,7 +257,7 @@ class VirtualNumber(VirtualEntity, NumberEntity):
         self.set(value)
 
     def set(self, value) -> None:
-        _LOGGER.debug(f"set {self.name} to {value}")
+        _LOGGER.debug("set %s to %s", self.name, value)
         self._attr_native_value = self._normalize_value(value, self.native_value)
         self.async_schedule_update_ha_state()
 

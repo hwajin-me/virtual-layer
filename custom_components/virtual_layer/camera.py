@@ -254,7 +254,7 @@ class VirtualCamera(VirtualEntity, Camera):
         elif name == "frame_interval":
             try:
                 value = float(value)
-            except (TypeError, ValueError) as err:
+            except (TypeError, ValueError, OverflowError) as err:
                 raise ValueError("frame_interval must be a positive number") from err
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("frame_interval must be a positive number")

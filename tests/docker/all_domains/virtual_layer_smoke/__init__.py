@@ -17,6 +17,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, STATE_UNAVAILABLE
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import config_validation as cv
 
 from custom_components.virtual_layer.const import (
     ATTR_DEVICE_ATTRIBUTES,
@@ -36,6 +37,7 @@ DOMAIN = "virtual_layer_smoke"
 GROUP_NAME = "docker_all_domains"
 DEVICE_NAME = "Docker All Domains"
 RESULT_FILE = "all-domains-result.json"
+CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
 
 class _VirtualLayerErrorHandler(logging.Handler):
@@ -2087,6 +2089,49 @@ async def _async_test_nonpersistent_reset(
     return errors
 
 
+async def _async_test_state_only_persistent_reload(
+    hass: HomeAssistant,
+    entry,
+    entity_ids: list[str],
+) -> list[str]:
+    """Ensure a persistent state-only entity survives a config-entry reload."""
+    errors: list[str] = []
+    entity_id = "tag.docker_tag"
+    await _async_call(
+        hass,
+        errors,
+        COMPONENT_DOMAIN,
+        "set_state",
+        {"entity_id": entity_id, "value": "changed_state_only"},
+    )
+    changed = hass.states.get(entity_id)
+    if changed is None or changed.state != "changed_state_only":
+        errors.append(f"{entity_id}: persistent runtime update was not applied")
+        return errors
+    if not await hass.config_entries.async_reload(entry.entry_id):
+        errors.append("state-only persistent reload failed")
+        return errors
+    missing = await _async_wait_for_states(hass, entity_ids)
+    if missing:
+        errors.append(f"state-only persistent reload missing entities: {missing}")
+        return errors
+    await asyncio.sleep(1)
+    restored = hass.states.get(entity_id)
+    if restored is None or restored.state != "changed_state_only":
+        errors.append(
+            f"{entity_id}: expected restored state after reload, got "
+            f"{None if restored is None else restored.state!r}"
+        )
+    await _async_call(
+        hass,
+        errors,
+        COMPONENT_DOMAIN,
+        "set_state",
+        {"entity_id": entity_id, "value": "docker_smoke"},
+    )
+    return errors
+
+
 async def _async_test_variant_removal(
     hass: HomeAssistant,
     entry,
@@ -2313,6 +2358,17 @@ async def _async_run(hass: HomeAssistant) -> None:
             and not invalid_service_errors
             else []
         )
+        state_only_persistent_errors = (
+            await _async_test_state_only_persistent_reload(
+                hass,
+                entry,
+                configured_entity_ids,
+            )
+            if not missing_entities
+            and not reload_missing_entities
+            and not feature_reload_missing_entities
+            else []
+        )
         nonpersistent_reset_errors = (
             await _async_test_nonpersistent_reset(
                 hass,
@@ -2405,6 +2461,7 @@ async def _async_run(hass: HomeAssistant) -> None:
                 "command_action_errors": command_action_errors,
                 "invalid_service_errors": invalid_service_errors,
                 "removed_option_restore_errors": removed_option_restore_errors,
+                "state_only_persistent_errors": state_only_persistent_errors,
                 "nonpersistent_reset_errors": nonpersistent_reset_errors,
                 "common_control_errors": common_control_errors,
                 "removal_errors": removal_errors,
@@ -2436,6 +2493,7 @@ async def _async_run(hass: HomeAssistant) -> None:
                     command_action_errors,
                     invalid_service_errors,
                     removed_option_restore_errors,
+                    state_only_persistent_errors,
                     nonpersistent_reset_errors,
                     common_control_errors,
                     removal_errors,

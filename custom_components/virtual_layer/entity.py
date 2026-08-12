@@ -7,7 +7,6 @@ This class adds persistence to an entity.
 import inspect
 import logging
 import math
-import pprint
 from datetime import timedelta
 from enum import Enum
 from functools import wraps
@@ -40,6 +39,7 @@ from homeassistant.util import slugify
 from .const import *
 
 _LOGGER = logging.getLogger(__name__)
+_MISSING = object()
 
 positive_tick = vol.All(vol.Coerce(float), vol.Range(min=0, min_included=False))
 
@@ -132,7 +132,7 @@ class VirtualEntity(RestoreEntity):
 
     def __init__(self, config, domain, old_style : bool = False):
         """Initialize an Virtual Sensor."""
-        _LOGGER.debug(f"creating-virtual-{domain}={config}")
+        _LOGGER.debug("creating-virtual-%s=%s", domain, config)
         self._config = config
         self._configured_icon = config.get(CONF_ICON)
         self._attr_icon = self._configured_icon
@@ -176,6 +176,11 @@ class VirtualEntity(RestoreEntity):
         ]
         self._hook_debounce_cancelers = {}
         self._refresh_remove_listeners = []
+        self._configured_virtual_attribute_names = {
+            *self._virtual_attributes,
+            *self._attribute_sources,
+            *self._attribute_templates,
+        }
 
         if old_style:
             # Build name, entity id and unique id. We do this because historically
@@ -221,16 +226,16 @@ class VirtualEntity(RestoreEntity):
                         device_info[info_key] = config[config_key]
                 self._attr_device_info = DeviceInfo(**device_info)
 
-        _LOGGER.debug(f'VirtualEntity {self._attr_name} created')
+        _LOGGER.debug("VirtualEntity %s created", self._attr_name)
 
     def _create_state(self, config):
-        _LOGGER.debug(f'VirtualEntity {self.unique_id}: creating initial state')
+        _LOGGER.debug("VirtualEntity %s: creating initial state", self.unique_id)
         self._attr_available = config.get(CONF_INITIAL_AVAILABILITY)
 
     def _restore_state(self, state, config):
-        _LOGGER.debug(f'VirtualEntity {self.unique_id}: restoring state')
-        _LOGGER.debug(f'VirtualEntity:: state={pprint.pformat(state.state)}')
-        _LOGGER.debug(f'VirtualEntity:: attr={pprint.pformat(state.attributes)}')
+        _LOGGER.debug("VirtualEntity %s: restoring state", self.unique_id)
+        _LOGGER.debug("VirtualEntity:: state=%s", state.state)
+        _LOGGER.debug("VirtualEntity:: attr=%s", state.attributes)
         self._attr_available = state.attributes.get(
             ATTR_AVAILABLE,
             config.get(CONF_INITIAL_AVAILABILITY, DEFAULT_AVAILABILITY),
@@ -239,11 +244,19 @@ class VirtualEntity(RestoreEntity):
             ATTR_VIRTUAL_ATTRIBUTES,
             list(self._virtual_attributes.keys()),
         )
+        previous_configured_names = state.attributes.get(
+            ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES,
+            [],
+        )
+        if not isinstance(previous_configured_names, (list, tuple, set)):
+            previous_configured_names = []
         self._virtual_attributes = {
             name: state.attributes.get(name)
             for name in attribute_names
             if name in state.attributes
             if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+            if name not in previous_configured_names
+            or name in self._configured_virtual_attribute_names
         }
 
     def _update_attributes(self):
@@ -254,6 +267,9 @@ class VirtualEntity(RestoreEntity):
         self._attr_extra_state_attributes.update(self._virtual_attributes)
         if self._virtual_attributes:
             self._attr_extra_state_attributes[ATTR_VIRTUAL_ATTRIBUTES] = list(self._virtual_attributes.keys())
+        self._attr_extra_state_attributes[ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES] = sorted(
+            self._configured_virtual_attribute_names
+        )
         if _LOGGER.isEnabledFor(logging.DEBUG):
             self._attr_extra_state_attributes.update({
                 ATTR_ENTITY_ID: self.entity_id,
@@ -349,11 +365,7 @@ class VirtualEntity(RestoreEntity):
             )
             if template
         ]
-        for template in templates:
-            tracked_template = template if isinstance(template, Template) else Template(
-                str(template), self.hass
-            )
-
+        if templates:
             @callback
             def _async_template_changed(_event, _updates):
                 self._apply_templates()
@@ -361,7 +373,17 @@ class VirtualEntity(RestoreEntity):
             self._refresh_remove_listeners.append(
                 async_track_template_result(
                     self.hass,
-                    [TrackTemplate(tracked_template, self._template_variables())],
+                    [
+                        TrackTemplate(
+                            (
+                                template
+                                if isinstance(template, Template)
+                                else Template(str(template), self.hass)
+                            ),
+                            self._template_variables(),
+                        )
+                        for template in templates
+                    ],
                     _async_template_changed,
                 ).async_remove
             )
@@ -470,7 +492,7 @@ class VirtualEntity(RestoreEntity):
     def _schedule_event_hook(self, index: int, hook, event):
         try:
             delay = float(hook.get("debounce", 0) or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             delay = 0
         if not math.isfinite(delay):
             delay = 0
@@ -729,7 +751,7 @@ class VirtualEntity(RestoreEntity):
         return variables
 
     def _template_to_bool(self, value) -> bool:
-        value = str(value).lower()
+        value = str(value).strip().lower()
         return value in ["y", "yes", "t", "true", "on", "1"]
 
     @callback
@@ -745,31 +767,37 @@ class VirtualEntity(RestoreEntity):
                 if self._attr_icon != next_icon:
                     self._attr_icon = next_icon
                     changed = True
-            except (TemplateError, TypeError, ValueError) as e:
+            except (OverflowError, TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to render icon template for {self.entity_id}: {e}")
 
         if self._availability_template:
             try:
-                self._attr_available = self._template_to_bool(self._render_template(self._availability_template))
-                changed = True
-            except (TemplateError, TypeError, ValueError) as e:
+                available = self._template_to_bool(
+                    self._render_template(self._availability_template)
+                )
+                if self._attr_available != available:
+                    self._attr_available = available
+                    changed = True
+            except (OverflowError, TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to render availability template for {self.entity_id}: {e}")
 
         if self._value_template:
             try:
                 self.set_state(self._render_template(self._value_template))
                 changed = True
-            except (TemplateError, TypeError, ValueError) as e:
+            except (OverflowError, TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to render value template for {self.entity_id}: {e}")
 
         for name, template in self._attribute_templates.items():
             try:
-                self._virtual_attributes[name] = self._render_template(
+                rendered = self._render_template(
                     template,
                     parse_result=True,
                 )
-                changed = True
-            except (TemplateError, TypeError, ValueError) as e:
+                if self._virtual_attributes.get(name, _MISSING) != rendered:
+                    self._virtual_attributes[name] = rendered
+                    changed = True
+            except (OverflowError, TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to render attribute template {name} for {self.entity_id}: {e}")
 
         native_changed = False
@@ -782,7 +810,7 @@ class VirtualEntity(RestoreEntity):
                     name,
                     self._render_template(template, parse_result=True),
                 ) or native_changed
-            except (TemplateError, TypeError, ValueError) as e:
+            except (OverflowError, TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(
                     "Unable to render native template %s for %s: %s",
                     name,
@@ -796,7 +824,13 @@ class VirtualEntity(RestoreEntity):
         if self._attribute_sources:
             try:
                 changed = self._apply_attribute_sources() or changed
-            except (TemplateError, KeyError, TypeError, ValueError) as e:
+            except (
+                KeyError,
+                OverflowError,
+                TemplateError,
+                TypeError,
+                ValueError,
+            ) as e:
                 _LOGGER.warning(f"Unable to apply attribute sources for {self.entity_id}: {e}")
 
         if changed:
@@ -819,7 +853,7 @@ class VirtualEntity(RestoreEntity):
             else:
                 value = state.attributes.get(attribute)
 
-            if self._virtual_attributes.get(name) != value:
+            if self._virtual_attributes.get(name, _MISSING) != value:
                 self._virtual_attributes[name] = value
                 changed = True
         return changed
@@ -831,18 +865,20 @@ class VirtualEntity(RestoreEntity):
 
         if hook.get(CONF_AVAILABILITY_TEMPLATE):
             try:
-                self._attr_available = self._template_to_bool(
+                available = self._template_to_bool(
                     self._render_template(hook[CONF_AVAILABILITY_TEMPLATE], variables),
                 )
-                changed = True
-            except (TemplateError, TypeError, ValueError) as e:
+                if self._attr_available != available:
+                    self._attr_available = available
+                    changed = True
+            except (OverflowError, TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to render event hook availability template for {self.entity_id}: {e}")
 
         if hook.get(CONF_VALUE_TEMPLATE):
             try:
                 self.set_state(self._render_template(hook[CONF_VALUE_TEMPLATE], variables))
                 changed = True
-            except (TemplateError, TypeError, ValueError) as e:
+            except (OverflowError, TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to render event hook value template for {self.entity_id}: {e}")
 
         attributes = hook.get(CONF_ATTRIBUTES)
@@ -853,8 +889,10 @@ class VirtualEntity(RestoreEntity):
                 if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
             }
             if next_attributes:
-                self._virtual_attributes.update(next_attributes)
-                changed = True
+                for name, value in next_attributes.items():
+                    if self._virtual_attributes.get(name, _MISSING) != value:
+                        self._virtual_attributes[name] = value
+                        changed = True
 
         attribute_templates = hook.get(CONF_ATTRIBUTE_TEMPLATES)
         if isinstance(attribute_templates, dict):
@@ -862,13 +900,15 @@ class VirtualEntity(RestoreEntity):
                 if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES:
                     continue
                 try:
-                    self._virtual_attributes[name] = self._render_template(
+                    rendered = self._render_template(
                         template,
                         variables,
                         parse_result=True,
                     )
-                    changed = True
-                except (TemplateError, TypeError, ValueError) as e:
+                    if self._virtual_attributes.get(name, _MISSING) != rendered:
+                        self._virtual_attributes[name] = rendered
+                        changed = True
+                except (OverflowError, TemplateError, TypeError, ValueError) as e:
                     _LOGGER.warning(f"Unable to render event hook attribute template {name} for {self.entity_id}: {e}")
 
         should_refresh = hook.get(
@@ -909,7 +949,7 @@ class VirtualOpenableEntity(VirtualEntity):
 
     def __init__(self, config, domain, old_style: bool):
         """Initialize the Virtual openable device."""
-        _LOGGER.debug(f"creating-virtual-openable-{domain}={config}")
+        _LOGGER.debug("creating-virtual-openable-%s=%s", domain, config)
         super().__init__(config, domain, old_style)
 
         self._attr_device_class = config.get(CONF_CLASS)
@@ -945,7 +985,7 @@ class VirtualOpenableEntity(VirtualEntity):
         )
         try:
             restored_position = float(restored_position)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             restored_position = fallback_position
         if not isfinite(restored_position):
             restored_position = fallback_position
@@ -1052,7 +1092,7 @@ class VirtualOpenableEntity(VirtualEntity):
         }:
             try:
                 position = float(value)
-            except (TypeError, ValueError) as err:
+            except (TypeError, ValueError, OverflowError) as err:
                 raise ValueError("position must be between 0 and 100") from err
             if not isfinite(position) or not 0 <= position <= 100:
                 raise ValueError("position must be between 0 and 100")

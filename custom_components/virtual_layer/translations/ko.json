@@ -22,7 +22,8 @@
           "add_first_entity": "지금 엔티티 추가"
         },
         "data_description": {
-          "group_name": "장치 메타데이터와 엔티티 ID는 이 장치 모음에 속합니다."
+          "group_name": "장치 메타데이터와 엔티티 ID는 이 장치 모음에 속합니다.",
+          "add_first_entity": "장치를 만든 뒤 바로 소스 선택과 엔티티 설정 단계로 이동합니다."
         }
       },
       "reconfigure": {
@@ -162,13 +163,19 @@
           "target_temperature_low": "온도 범위 제어에서 사용할 목표 최저 온도입니다.",
           "target_temperature_step": "목표 온도를 조절할 때 사용하는 양수 단위입니다.",
           "temperature_unit": "이 가상 Climate 엔티티에서 사용할 온도 단위입니다.",
+          "platform": "Home Assistant 엔티티 도메인입니다. 변경 후 한 번 제출하면 해당 도메인의 전용 설정과 Jinja 필드가 표시됩니다.",
+          "initial_value": "템플릿이 처음 렌더링되기 전이나 값 템플릿이 없을 때 사용하는 기본 상태입니다.",
+          "initial_availability": "가용성 템플릿이 없을 때 사용하는 초기 가용 상태입니다.",
+          "persistent": "Home Assistant 재시작 후 마지막 상태를 복원합니다. 끄면 초기값으로 돌아갑니다.",
+          "value_template": "엔티티의 주 상태를 만드는 Jinja 템플릿입니다. 소스 엔티티를 복사하면 helper가 생성되며, 이후 소스 변경 시 직접 수정한 템플릿은 보존됩니다.",
+          "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다.",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
           "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
           "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
           "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
           "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: power -> states('sensor.power')",
+          "attribute_templates_json": "값이 Jinja 템플릿인 JSON 객체입니다. 단일 소스를 복사하면 동적 속성에 state_attr helper를 생성합니다. 여러 소스의 공통 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
           "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
           "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다.",
           "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다.",
@@ -195,7 +202,7 @@
           },
           "native_value_templates": {
             "name": "네이티브 값 Jinja 템플릿",
-            "description": "선택한 엔티티 도메인이 지원하는 각 네이티브 값에 적용할 선택적 Jinja 템플릿입니다. 비워 두면 위에서 설정한 정적 값을 사용합니다.",
+            "description": "선택한 도메인의 네이티브 값에 적용할 Jinja 템플릿입니다. 소스 엔티티를 복사하면 확인 가능한 모든 속성을 자동으로 채웁니다. 이후 소스 변경 시 직접 수정한 값은 보존하고 수정하지 않은 helper 값만 다시 생성합니다. 빈 필드는 위에서 설정한 정적 값을 사용합니다.",
             "data": {
               "hvac_modes": "HVAC 모드 목록",
               "hvac_mode": "현재 HVAC 모드",
@@ -634,6 +641,9 @@
         "description": "UI에서 가상 장치와 엔티티를 추가, 수정, 삭제하거나 관리합니다.",
         "data": {
           "action": "작업"
+        },
+        "data_description": {
+          "action": "엔티티 추가, 수정, 일괄 삭제 또는 공유 장치 메타데이터 관리 작업을 선택합니다."
         }
       },
       "select_entity": {
@@ -641,6 +651,9 @@
         "description": "수정할 가상 엔티티를 선택하세요.",
         "data": {
           "entity_key": "가상 엔티티"
+        },
+        "data_description": {
+          "entity_key": "소스, helper 템플릿, 네이티브 값, Action 또는 소속 장치를 변경할 엔티티를 선택합니다."
         }
       },
       "select_device": {
@@ -648,6 +661,9 @@
         "description": "관리할 가상 장치를 선택하세요. 그룹을 쉽게 확인할 수 있도록 엔티티 수를 표시합니다.",
         "data": {
           "managed_device_name": "가상 장치"
+        },
+        "data_description": {
+          "managed_device_name": "각 엔티티를 수정하지 않고 이름이나 공유 레지스트리 메타데이터를 변경할 장치를 선택합니다."
         }
       },
       "edit_device": {
@@ -815,13 +831,19 @@
           "target_temperature_low": "온도 범위 제어에서 사용할 목표 최저 온도입니다.",
           "target_temperature_step": "목표 온도를 조절할 때 사용하는 양수 단위입니다.",
           "temperature_unit": "이 가상 Climate 엔티티에서 사용할 온도 단위입니다.",
+          "platform": "Home Assistant 엔티티 도메인입니다. 변경 후 한 번 제출하면 해당 도메인의 전용 설정과 Jinja 필드가 표시됩니다.",
+          "initial_value": "템플릿이 처음 렌더링되기 전이나 값 템플릿이 없을 때 사용하는 기본 상태입니다.",
+          "initial_availability": "가용성 템플릿이 없을 때 사용하는 초기 가용 상태입니다.",
+          "persistent": "Home Assistant 재시작 후 마지막 상태를 복원합니다. 끄면 초기값으로 돌아갑니다.",
+          "value_template": "엔티티의 주 상태를 만드는 Jinja 템플릿입니다. 소스 엔티티를 복사하면 helper가 생성되며, 이후 소스 변경 시 직접 수정한 템플릿은 보존됩니다.",
+          "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다.",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
           "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
           "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
           "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
           "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: power -> states('sensor.power')",
+          "attribute_templates_json": "값이 Jinja 템플릿인 JSON 객체입니다. 단일 소스를 복사하면 동적 속성에 state_attr helper를 생성합니다. 여러 소스의 공통 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
           "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
           "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다.",
           "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다.",
@@ -848,7 +870,7 @@
           },
           "native_value_templates": {
             "name": "네이티브 값 Jinja 템플릿",
-            "description": "선택한 엔티티 도메인이 지원하는 각 네이티브 값에 적용할 선택적 Jinja 템플릿입니다. 비워 두면 위에서 설정한 정적 값을 사용합니다.",
+            "description": "선택한 도메인의 네이티브 값에 적용할 Jinja 템플릿입니다. 소스 엔티티를 복사하면 확인 가능한 모든 속성을 자동으로 채웁니다. 이후 소스 변경 시 직접 수정한 값은 보존하고 수정하지 않은 helper 값만 다시 생성합니다. 빈 필드는 위에서 설정한 정적 값을 사용합니다.",
             "data": {
               "hvac_modes": "HVAC 모드 목록",
               "hvac_mode": "현재 HVAC 모드",
@@ -1268,12 +1290,12 @@
       },
       "edit_entity_helper": {
         "title": "생성된 템플릿 업데이트",
-        "description": "source entity 목록이 변경되었습니다. custom template을 자동으로 보존할지, 새 source 기준 helper template으로 교체할지 선택하세요.",
+        "description": "source entity 목록이 변경되었습니다. helper를 자동 갱신할지, 현재 모든 template을 그대로 유지할지, 새 source 기준 helper로 전부 교체할지 선택하세요.",
         "data": {
           "helper_update_mode": "템플릿 업데이트 방식"
         },
         "data_description": {
-          "helper_update_mode": "자동 판별은 수정한 template을 보존하고 수정하지 않은 helper template만 다시 만듭니다. 강제 적용은 custom template도 새 source 기준으로 교체합니다."
+          "helper_update_mode": "자동 판별은 직접 수정한 template을 각각 보존하고 수정하지 않은 helper만 다시 만듭니다. 현재 상태 유지는 모든 template을 변경하지 않습니다. 강제 적용은 생성된 template과 custom template을 모두 새 source 기준으로 교체합니다."
         }
       },
       "entity": {
@@ -1403,13 +1425,19 @@
           "target_temperature_low": "온도 범위 제어에서 사용할 목표 최저 온도입니다.",
           "target_temperature_step": "목표 온도를 조절할 때 사용하는 양수 단위입니다.",
           "temperature_unit": "이 가상 Climate 엔티티에서 사용할 온도 단위입니다.",
+          "platform": "Home Assistant 엔티티 도메인입니다. 변경 후 한 번 제출하면 해당 도메인의 전용 설정과 Jinja 필드가 표시됩니다.",
+          "initial_value": "템플릿이 처음 렌더링되기 전이나 값 템플릿이 없을 때 사용하는 기본 상태입니다.",
+          "initial_availability": "가용성 템플릿이 없을 때 사용하는 초기 가용 상태입니다.",
+          "persistent": "Home Assistant 재시작 후 마지막 상태를 복원합니다. 끄면 초기값으로 돌아갑니다.",
+          "value_template": "엔티티의 주 상태를 만드는 Jinja 템플릿입니다. 소스 엔티티를 복사하면 helper가 생성되며, 이후 소스 변경 시 직접 수정한 템플릿은 보존됩니다.",
+          "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다.",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
           "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
           "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
           "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
           "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-          "attribute_templates_json": "값이 템플릿인 JSON 객체입니다. 예: power -> states('sensor.power')",
+          "attribute_templates_json": "값이 Jinja 템플릿인 JSON 객체입니다. 단일 소스를 복사하면 동적 속성에 state_attr helper를 생성합니다. 여러 소스의 공통 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
           "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
           "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다.",
           "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다.",
@@ -1436,7 +1464,7 @@
           },
           "native_value_templates": {
             "name": "네이티브 값 Jinja 템플릿",
-            "description": "선택한 엔티티 도메인이 지원하는 각 네이티브 값에 적용할 선택적 Jinja 템플릿입니다. 비워 두면 위에서 설정한 정적 값을 사용합니다.",
+            "description": "선택한 도메인의 네이티브 값에 적용할 Jinja 템플릿입니다. 소스 엔티티를 복사하면 확인 가능한 모든 속성을 자동으로 채웁니다. 이후 소스 변경 시 직접 수정한 값은 보존하고 수정하지 않은 helper 값만 다시 생성합니다. 빈 필드는 위에서 설정한 정적 값을 사용합니다.",
             "data": {
               "hvac_modes": "HVAC 모드 목록",
               "hvac_mode": "현재 HVAC 모드",
@@ -1877,6 +1905,7 @@
     "helper_update_mode": {
       "options": {
         "automatic": "자동 판별 (권장)",
+        "keep_current": "현재 템플릿 유지",
         "force_helper": "템플릿 helper 다시 적용"
       }
     }

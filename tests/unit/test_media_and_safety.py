@@ -132,6 +132,28 @@ async def test_virtual_image_renders_polygon_map_svg(hass):
     entity.async_write_ha_state.assert_called_once()
 
 
+def test_virtual_polygon_map_ignores_overflowing_source_coordinates(hass):
+    hass.states.async_set(
+        "device_tracker.damaged",
+        "not_home",
+        {
+            ATTR_LATITUDE: 10**10000,
+            ATTR_LONGITUDE: 127.0,
+        },
+    )
+    entity = VirtualImage(IMAGE_SCHEMA({
+        CONF_NAME: "Damaged Polygon Map",
+        ATTR_ENTITY_ID: "image.damaged_polygon_map",
+        ATTR_UNIQUE_ID: "damaged_polygon_map",
+        CONF_INITIAL_VALUE: "unknown",
+        CONF_SOURCE_ENTITIES: ["device_tracker.damaged"],
+        CONF_POLYGONAL_ZONE: {CONF_POLYGON_GEOJSON: {}},
+    }), hass, False)
+    entity.hass = hass
+
+    assert entity._polygon_markers() == []
+
+
 async def test_virtual_polygon_map_keeps_last_complete_zones_after_partial_reload(
     hass,
     monkeypatch,

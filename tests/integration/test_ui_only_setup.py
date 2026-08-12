@@ -9,7 +9,7 @@ import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
 import pytest
 import voluptuous as vol
-from homeassistant.config_entries import SOURCE_IMPORT, SOURCE_RECONFIGURE
+from homeassistant.config_entries import SOURCE_IMPORT, SOURCE_RECONFIGURE, SOURCE_USER
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_LATITUDE,
@@ -29,7 +29,9 @@ from custom_components.virtual_layer import (
     SERVICE_SET_ATTRIBUTES_SCHEMA,
     SERVICE_SET_STATE_SCHEMA,
     _async_delete_virtual_device_from_registry,
+    _async_delete_virtual_entity_from_registry,
     _async_remove_orphaned_diagnostic_registry_entries,
+    _async_setup_state_only_templates,
     _async_verify_admin,
     _async_verify_target_entity_control,
     async_remove_entry,
@@ -83,6 +85,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_TEMPLATE_SOURCES_JSON,
     HELPER_UPDATE_AUTO,
     HELPER_UPDATE_FORCE,
+    HELPER_UPDATE_KEEP,
     _auto_helper_profile,
     _entity_key,
     _flatten_entity_form_sections,
@@ -100,6 +103,7 @@ from custom_components.virtual_layer.const import (
     ATTR_GROUP_NAME,
     ATTR_UNIQUE_ID,
     ATTR_VALUE,
+    ATTR_VIRTUAL_ATTRIBUTES,
     COMPONENT_DOMAIN,
     COMPONENT_SERVICES,
     CONF_ATTRIBUTE,
@@ -313,6 +317,40 @@ def test_common_service_schemas_reject_non_finite_values(value):
         })
 
 
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        {1: "numeric key"},
+        {"": "empty key"},
+        {"unsupported": object()},
+        {"too_large": 1 << 128},
+    ],
+)
+def test_set_attributes_schema_rejects_non_json_compatible_values(attributes):
+    with pytest.raises(vol.Invalid):
+        SERVICE_SET_ATTRIBUTES_SCHEMA({
+            ATTR_ENTITY_ID: ["sensor.virtual"],
+            ATTR_ATTRIBUTES: attributes,
+        })
+
+
+def test_set_state_schema_rejects_integer_outside_home_assistant_json_range():
+    with pytest.raises(vol.Invalid):
+        SERVICE_SET_STATE_SCHEMA({
+            ATTR_ENTITY_ID: ["sensor.virtual"],
+            ATTR_VALUE: 1 << 128,
+        })
+
+
+def test_set_attributes_schema_uses_home_assistant_serialization_extensions():
+    payload = {"nested": {2: "numeric key"}, "values": {"one", "two"}}
+    validated = SERVICE_SET_ATTRIBUTES_SCHEMA({
+        ATTR_ENTITY_ID: ["sensor.virtual"],
+        ATTR_ATTRIBUTES: payload,
+    })
+    assert validated[ATTR_ATTRIBUTES] == payload
+
+
 async def test_home_assistant_loads_korean_config_translations(hass):
     config_translations = await async_get_translations(
         hass,
@@ -330,9 +368,23 @@ async def test_home_assistant_loads_korean_config_translations(hass):
     assert config_translations[
         "component.virtual_layer.config.step.entity.title"
     ] == "가상 엔티티 추가"
+    assert config_translations[
+        "component.virtual_layer.config.step.entity.sections."
+        "native_value_templates.data.supported_languages"
+    ] == "지원 언어"
+    assert "직접 수정한 값은 보존" in config_translations[
+        "component.virtual_layer.config.step.entity.sections."
+        "native_value_templates.description"
+    ]
+    assert "Jinja 템플릿" in config_translations[
+        "component.virtual_layer.config.step.entity."
+        "data_description.value_template"
+    ]
     assert selector_translations[
         "component.virtual_layer.selector.options_action.options.add_entity"
     ] == "가상 엔티티 추가"
+
+
 async def test_config_import_is_rejected(hass):
     result = await hass.config_entries.flow.async_init(
         COMPONENT_DOMAIN,
@@ -342,6 +394,33 @@ async def test_config_import_is_rejected(hass):
 
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "import_not_supported"
+
+
+async def test_config_flow_normalizes_and_validates_device_group_names(hass):
+    result = await hass.config_entries.flow.async_init(
+        COMPONENT_DOMAIN,
+        context={"source": SOURCE_USER},
+        data={ATTR_GROUP_NAME: "  Upstairs  "},
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][ATTR_GROUP_NAME] == "Upstairs"
+
+    result = await hass.config_entries.flow.async_init(
+        COMPONENT_DOMAIN,
+        context={"source": SOURCE_USER},
+        data={ATTR_GROUP_NAME: "   "},
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {ATTR_GROUP_NAME: "required"}
+
+    result = await hass.config_entries.flow.async_init(
+        COMPONENT_DOMAIN,
+        context={"source": SOURCE_USER},
+        data={ATTR_GROUP_NAME: " Upstairs "},
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"base": "group_name_used"}
 
 
 def test_yaml_configuration_is_rejected_by_config_entry_only_schema(caplog):
@@ -358,6 +437,30 @@ async def test_setup_repairs_partially_initialized_runtime_data(hass):
 
     assert hass.services.has_service(COMPONENT_DOMAIN, "set_state")
     assert hass.data["virtual_layer-services"][COMPONENT_DOMAIN] == "installed"
+
+
+async def test_setup_does_not_overwrite_runtime_group_owned_by_another_entry(hass):
+    owner = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "duplicate"},
+    )
+    duplicate = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "duplicate"},
+    )
+    owner.add_to_hass(hass)
+    duplicate.add_to_hass(hass)
+    owner_runtime = {
+        ATTR_CONFIG_ENTRY_ID: owner.entry_id,
+        ATTR_ENTITIES: {"sensor": []},
+        ATTR_DEVICES: [],
+    }
+    hass.data[COMPONENT_DOMAIN] = {"duplicate": owner_runtime}
+
+    assert await async_setup_entry(hass, duplicate) is False
+    assert hass.data[COMPONENT_DOMAIN]["duplicate"] is owner_runtime
+    assert await async_unload_entry(hass, duplicate) is True
+    assert hass.data[COMPONENT_DOMAIN]["duplicate"] is owner_runtime
 
 
 async def test_platform_setup_from_file_configuration_is_ignored(hass):
@@ -825,6 +928,11 @@ async def test_options_flow_can_edit_existing_entity(hass):
     )
 
     assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
     assert result["step_id"] == "edit_entity"
 
     result = await hass.config_entries.options.async_configure(
@@ -849,6 +957,17 @@ async def test_options_flow_can_edit_existing_entity(hass):
             "attribute_sources_json": "",
             "attribute_templates_json": "",
         },
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        _flatten_entity_form_sections(result["data_schema"]({})),
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -930,6 +1049,7 @@ async def test_options_flow_aligns_entity_id_when_domain_is_edited(hass):
     entity = result["data"][ATTR_DEVICES]["Virtual"][0]
     assert entity[CONF_PLATFORM] == "binary_sensor"
     assert entity[ATTR_ENTITY_ID] == "binary_sensor.virtual_mode"
+    assert CONF_AUTO_HELPER not in entity
 
 
 @pytest.mark.parametrize(
@@ -1050,6 +1170,9 @@ async def test_options_flow_refreshes_generated_helper_when_sources_change(
         "",
     )
     assert entity[CONF_AUTO_HELPER] is not False
+    if not new_sources:
+        assert entity[CONF_AUTO_HELPER][CONF_VALUE_TEMPLATE] == ""
+        assert entity[CONF_AUTO_HELPER][CONF_TEMPLATE_SOURCES_JSON] == ""
 
 
 @pytest.mark.parametrize("auto_helper_marker", ["new_profile", False])
@@ -1121,6 +1244,11 @@ async def test_options_flow_recovers_stale_helper_after_partial_source_update(
     )
 
     assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
     assert result["step_id"] == "edit_entity"
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "\n".join(new_sources)
@@ -1211,6 +1339,11 @@ async def test_options_flow_recovers_sorted_legacy_boolean_or_helper(hass):
         {CONF_REFERENCE_ENTITY_ID: new_sources},
     )
 
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
     assert result["step_id"] == "edit_entity"
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_TEMPLATE_SOURCES_JSON] == new_defaults[
@@ -1234,8 +1367,77 @@ async def test_options_flow_recovers_sorted_legacy_boolean_or_helper(hass):
     } == set(new_sources)
 
 
+async def test_edit_same_sources_can_force_helpers_from_current_source_attributes(hass):
+    sources = ["sensor.washer_one", "sensor.washer_two"]
+    for entity_id, power in zip(sources, (10, 20), strict=True):
+        hass.states.async_set(entity_id, "idle", {"power": power})
+    generated = _reference_entity_defaults(hass, sources)
+
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Laundry": [{
+                    CONF_PLATFORM: "sensor",
+                    CONF_NAME: "Combined Washers",
+                    CONF_INITIAL_VALUE: generated[CONF_INITIAL_VALUE],
+                    CONF_INITIAL_AVAILABILITY: True,
+                    CONF_PERSISTENT: True,
+                    CONF_SOURCE_ENTITIES: sources,
+                    CONF_TEMPLATE_SOURCES: {
+                        variable_name: {
+                            ATTR_ENTITY_ID: source_entity_id,
+                            CONF_ATTRIBUTE: "state",
+                        }
+                        for variable_name, source_entity_id in json.loads(
+                            generated[CONF_TEMPLATE_SOURCES_JSON]
+                        ).items()
+                    },
+                    CONF_VALUE_TEMPLATE: generated[CONF_VALUE_TEMPLATE],
+                    CONF_ATTRIBUTE_TEMPLATES: json.loads(
+                        generated[CONF_ATTRIBUTE_TEMPLATES_JSON]
+                    ),
+                    CONF_AUTO_HELPER: _auto_helper_profile(generated),
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    for entity_id, power in zip(sources, (10, 20), strict=True):
+        hass.states.async_set(
+            entity_id,
+            "idle",
+            {"power": power, "energy": power * 5},
+        )
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Laundry", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: sources},
+    )
+
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_FORCE},
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    templates = json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+    assert "energy" in templates
+
+
 @pytest.mark.parametrize(("helper_mode", "preserves_custom"), [
     (HELPER_UPDATE_AUTO, True),
+    (HELPER_UPDATE_KEEP, True),
     (HELPER_UPDATE_FORCE, False),
 ])
 async def test_options_flow_handles_custom_template_when_sources_change(
@@ -1322,6 +1524,301 @@ async def test_options_flow_handles_custom_template_when_sources_change(
     assert entity[CONF_SOURCE_ENTITIES] == new_sources
     assert entity[CONF_VALUE_TEMPLATE] == expected_template
     assert ("door_5" in entity[CONF_TEMPLATE_SOURCES]) is preserves_custom
+
+
+@pytest.mark.parametrize(
+    ("helper_mode", "keeps_original"),
+    [
+        (HELPER_UPDATE_KEEP, True),
+        (HELPER_UPDATE_FORCE, False),
+    ],
+)
+async def test_edit_form_source_change_requires_helper_policy(
+    hass,
+    helper_mode,
+    keeps_original,
+):
+    old_sources = ["binary_sensor.door_5", "binary_sensor.door_6"]
+    new_sources = ["binary_sensor.door_6", "binary_sensor.door_7"]
+    for entity_id in {*old_sources, *new_sources}:
+        hass.states.async_set(entity_id, "off", {"device_class": "door"})
+
+    generated = _reference_entity_defaults(hass, old_sources)
+    template_sources = json.loads(generated[CONF_TEMPLATE_SOURCES_JSON])
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Doors": [{
+                    CONF_PLATFORM: "binary_sensor",
+                    CONF_NAME: "Combined Doors",
+                    CONF_INITIAL_VALUE: generated[CONF_INITIAL_VALUE],
+                    CONF_INITIAL_AVAILABILITY: True,
+                    CONF_PERSISTENT: True,
+                    CONF_SOURCE_ENTITIES: old_sources,
+                    CONF_TEMPLATE_SOURCES: {
+                        variable_name: {
+                            ATTR_ENTITY_ID: source_entity_id,
+                            CONF_ATTRIBUTE: "state",
+                        }
+                        for variable_name, source_entity_id
+                        in template_sources.items()
+                    },
+                    CONF_VALUE_TEMPLATE: generated[CONF_VALUE_TEMPLATE],
+                    CONF_AUTO_HELPER: _auto_helper_profile(generated),
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Doors", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {},
+    )
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults[CONF_SOURCE_ENTITIES_TEXT] = "\n".join(new_sources)
+    defaults[CONF_ENTITY_NAME] = "Renamed Combined Doors"
+    defaults[CONF_DEVICE_MODEL] = "Updated Model"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+    assert result["step_id"] == "edit_entity_helper"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: helper_mode},
+    )
+    edited = _flatten_entity_form_sections(result["data_schema"]({}))
+    expected = (
+        generated
+        if keeps_original
+        else _reference_entity_defaults(hass, new_sources)
+    )
+    assert edited[CONF_SOURCE_ENTITIES_TEXT] == "\n".join(new_sources)
+    assert edited[CONF_ENTITY_NAME] == "Renamed Combined Doors"
+    assert edited[CONF_DEVICE_MODEL] == "Updated Model"
+    assert edited[CONF_VALUE_TEMPLATE] == expected[CONF_VALUE_TEMPLATE]
+    assert edited[CONF_TEMPLATE_SOURCES_JSON] == expected[
+        CONF_TEMPLATE_SOURCES_JSON
+    ]
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        edited,
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entity = result["data"][ATTR_DEVICES]["Doors"][0]
+    assert entity[CONF_SOURCE_ENTITIES] == new_sources
+    assert entity[CONF_VALUE_TEMPLATE] == expected[CONF_VALUE_TEMPLATE]
+    assert entity[CONF_AUTO_HELPER][CONF_VALUE_TEMPLATE] == expected[
+        CONF_VALUE_TEMPLATE
+    ]
+
+
+async def test_repeated_source_changes_regenerate_from_latest_helper_baseline(hass):
+    first_sources = ["binary_sensor.door_5", "binary_sensor.door_6"]
+    second_sources = ["binary_sensor.door_6", "binary_sensor.door_7"]
+    final_sources = ["binary_sensor.door_7", "binary_sensor.door_8"]
+    for entity_id in {*first_sources, *second_sources, *final_sources}:
+        hass.states.async_set(entity_id, "off", {"device_class": "door"})
+
+    generated = _reference_entity_defaults(hass, first_sources)
+    template_sources = json.loads(generated[CONF_TEMPLATE_SOURCES_JSON])
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Doors": [{
+                    CONF_PLATFORM: "binary_sensor",
+                    CONF_NAME: "Combined Doors",
+                    CONF_INITIAL_VALUE: "off",
+                    CONF_SOURCE_ENTITIES: first_sources,
+                    CONF_TEMPLATE_SOURCES: {
+                        name: {
+                            ATTR_ENTITY_ID: entity_id,
+                            CONF_ATTRIBUTE: "state",
+                        }
+                        for name, entity_id in template_sources.items()
+                    },
+                    CONF_VALUE_TEMPLATE: generated[CONF_VALUE_TEMPLATE],
+                    CONF_AUTO_HELPER: _auto_helper_profile(generated),
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Doors", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: second_sources},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert "door_7" in defaults[CONF_VALUE_TEMPLATE]
+
+    defaults[CONF_SOURCE_ENTITIES_TEXT] = "\n".join(final_sources)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
+    final_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    expected = _reference_entity_defaults(hass, final_sources)
+    assert final_defaults[CONF_VALUE_TEMPLATE] == expected[CONF_VALUE_TEMPLATE]
+    assert final_defaults[CONF_TEMPLATE_SOURCES_JSON] == expected[
+        CONF_TEMPLATE_SOURCES_JSON
+    ]
+    assert "door_6" not in final_defaults[CONF_VALUE_TEMPLATE]
+
+
+async def test_edit_form_rejects_multiple_nonmergeable_media_sources(hass):
+    hass.states.async_set("camera.front", "idle")
+    hass.states.async_set("camera.back", "idle")
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Media": [{
+                    CONF_PLATFORM: "sensor",
+                    CONF_NAME: "Media State",
+                    CONF_INITIAL_VALUE: "idle",
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Media", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {},
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults[CONF_SOURCE_ENTITIES_TEXT] = "camera.front\ncamera.back"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+
+    assert result["step_id"] == "edit_entity"
+    assert result["errors"] == {
+        CONF_SOURCE_ENTITIES_TEXT: "invalid_entity_id",
+    }
+
+
+async def test_options_flow_refreshes_untouched_native_jinja_and_keeps_custom_field(
+    hass,
+):
+    hass.states.async_set(
+        "climate.old_unit",
+        "cool",
+        {"hvac_modes": ["off", "cool"], "fan_mode": "auto"},
+    )
+    hass.states.async_set(
+        "climate.new_unit",
+        "heat",
+        {"hvac_modes": ["off", "heat"], "fan_mode": "high"},
+    )
+    generated = _reference_entity_defaults(hass, ["climate.old_unit"])
+    generated_native = generated[CONF_NATIVE_VALUE_TEMPLATES]
+    stored_native = {**generated_native, "fan_mode": "{{ 'quiet' }}"}
+    template_sources = json.loads(generated[CONF_TEMPLATE_SOURCES_JSON])
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "HVAC": [{
+                    CONF_PLATFORM: "climate",
+                    CONF_NAME: "Combined HVAC",
+                    CONF_INITIAL_VALUE: "cool",
+                    CONF_INITIAL_AVAILABILITY: True,
+                    CONF_PERSISTENT: True,
+                    CONF_SOURCE_ENTITIES: ["climate.old_unit"],
+                    CONF_TEMPLATE_SOURCES: {
+                        variable_name: {
+                            ATTR_ENTITY_ID: source_entity_id,
+                            CONF_ATTRIBUTE: "state",
+                        }
+                        for variable_name, source_entity_id
+                        in template_sources.items()
+                    },
+                    CONF_VALUE_TEMPLATE: generated[CONF_VALUE_TEMPLATE],
+                    CONF_NATIVE_TEMPLATES: stored_native,
+                    CONF_AUTO_HELPER: _auto_helper_profile(generated),
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("HVAC", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["climate.new_unit"]},
+    )
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
+
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert native_templates["hvac_mode"] == "{{ states('climate.new_unit') }}"
+    assert native_templates["hvac_modes"] == (
+        "{{ state_attr('climate.new_unit', 'hvac_modes') }}"
+    )
+    assert native_templates["fan_mode"] == "{{ 'quiet' }}"
 
 
 async def test_options_flow_refreshes_entity_id_when_source_domain_changes(hass):
@@ -1506,11 +2003,24 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
                     ATTR_ENTITY_ID: "light.kitchen_lamp",
                     CONF_ATTRIBUTE: "state",
                 },
+                },
+                CONF_VALUE_TEMPLATE: "{{ kitchen_lamp }}",
+                CONF_AVAILABILITY_TEMPLATE: (
+                    "{{ states('light.kitchen_lamp') not in "
+                    "['unknown', 'unavailable'] }}"
+                ),
+                CONF_ATTRIBUTES: {"brightness": 128},
+                CONF_NATIVE_TEMPLATES: {
+                    "is_on": (
+                        "{{ states('light.kitchen_lamp') not in "
+                        "['off', 'unknown', 'unavailable'] }}"
+                    ),
+                    "brightness": (
+                        "{{ state_attr('light.kitchen_lamp', 'brightness') }}"
+                    ),
+                },
             },
-            CONF_VALUE_TEMPLATE: "{{ kitchen_lamp }}",
-            CONF_ATTRIBUTES: {"brightness": 128},
-        },
-    ]
+        ]
 
 
 async def test_options_flow_prefills_climate_native_mode_options(hass):
@@ -1807,9 +2317,10 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
                 ATTR_ENTITY_ID: "binary_sensor.back_door",
                 CONF_ATTRIBUTE: "state",
             },
-        },
-        CONF_VALUE_TEMPLATE: defaults[CONF_VALUE_TEMPLATE],
-    }
+            },
+            CONF_VALUE_TEMPLATE: defaults[CONF_VALUE_TEMPLATE],
+            CONF_AVAILABILITY_TEMPLATE: defaults[CONF_AVAILABILITY_TEMPLATE],
+        }
 
 
 async def test_options_flow_adds_entity_to_selected_existing_device(hass):
@@ -2510,6 +3021,76 @@ async def test_orphan_cleanup_preserves_device_shared_with_another_entry(hass):
     assert shared_entry.entry_id in remaining.config_entries
 
 
+async def test_orphan_cleanup_ignores_registry_data_owned_by_another_entry(hass):
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "ui"})
+    owner = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "owner"},
+    )
+    entry.add_to_hass(hass)
+    owner.add_to_hass(hass)
+
+    device_registry = dr.async_get(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=owner.entry_id,
+        identifiers={(COMPONENT_DOMAIN, "owned-device")},
+        name="Owned Device",
+    )
+    entity_registry = er.async_get(hass)
+    owned_entity = entity_registry.async_get_or_create(
+        "sensor",
+        COMPONENT_DOMAIN,
+        "owned-unique-id",
+        suggested_object_id="owned_sensor",
+        config_entry=owner,
+        device_id=device.id,
+    )
+
+    orphan_metadata = {
+        ATTR_UNIQUE_ID: "owned-unique-id",
+        ATTR_ENTITY_ID: owned_entity.entity_id,
+        ATTR_DEVICE_ID: "owned-device",
+        CONF_PLATFORM: "sensor",
+    }
+    await _async_delete_virtual_entity_from_registry(
+        hass,
+        entry,
+        orphan_metadata,
+        active_device_ids=set(),
+        active_entity_unique_ids=set(),
+    )
+
+    assert entity_registry.async_get(owned_entity.entity_id) is not None
+    assert device_registry.async_get(device.id) is not None
+
+
+async def test_orphan_cleanup_does_not_remove_active_duplicate_identity(hass):
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "ui"})
+    entry.add_to_hass(hass)
+    entity_registry = er.async_get(hass)
+    active = entity_registry.async_get_or_create(
+        "sensor",
+        COMPONENT_DOMAIN,
+        "active-unique-id",
+        suggested_object_id="active_sensor",
+        config_entry=entry,
+    )
+
+    await _async_delete_virtual_entity_from_registry(
+        hass,
+        entry,
+        {
+            ATTR_UNIQUE_ID: "active-unique-id",
+            ATTR_ENTITY_ID: active.entity_id,
+            CONF_PLATFORM: "sensor",
+        },
+        active_device_ids=set(),
+        active_entity_unique_ids={"active-unique-id"},
+    )
+
+    assert entity_registry.async_get(active.entity_id) is not None
+
+
 async def test_setup_entry_removes_stale_device_after_device_id_change(hass, tmp_path, monkeypatch):
     meta_file = tmp_path / "virtual_layer.meta.json"
     monkeypatch.setattr(
@@ -2798,6 +3379,18 @@ async def test_unload_entry_is_idempotent_when_group_data_is_missing(hass):
     assert hass.data[COMPONENT_DOMAIN] == {}
 
 
+async def test_unload_entry_removes_empty_legacy_runtime_group(hass):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "legacy-empty"},
+    )
+    entry.add_to_hass(hass)
+    hass.data[COMPONENT_DOMAIN] = {"legacy-empty": {}}
+
+    assert await async_unload_entry(hass, entry) is True
+    assert hass.data[COMPONENT_DOMAIN] == {}
+
+
 async def test_remove_entry_cleans_metadata_registries_and_state_even_after_failed_setup(
     hass,
     tmp_path,
@@ -2929,6 +3522,134 @@ async def test_state_only_virtual_entities_can_be_updated_with_services(hass):
     assert "source" not in state.attributes
 
 
+async def test_state_only_entities_honor_persistent_setting_across_reload(
+    hass,
+    tmp_path,
+    monkeypatch,
+):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {"Tags": [
+            {
+                "platform": "tag",
+                "name": "Persistent Tag",
+                ATTR_ENTITY_ID: "tag.persistent_tag",
+                CONF_INITIAL_VALUE: "initial",
+                CONF_PERSISTENT: True,
+            },
+            {
+                "platform": "tag",
+                "name": "Transient Tag",
+                ATTR_ENTITY_ID: "tag.transient_tag",
+                CONF_INITIAL_VALUE: "initial",
+                CONF_PERSISTENT: False,
+            },
+        ]}},
+    )
+    entry.add_to_hass(hass)
+
+    with patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        AsyncMock(return_value=True),
+    ):
+        assert await async_setup_entry(hass, entry) is True
+
+    persistent = hass.states.get("tag.persistent_tag")
+    transient = hass.states.get("tag.transient_tag")
+    hass.states.async_set(
+        persistent.entity_id,
+        "changed",
+        {**persistent.attributes, "runtime_value": {"nested": [1, 2]}},
+    )
+    hass.states.async_set(transient.entity_id, "changed", transient.attributes)
+
+    assert await async_unload_entry(hass, entry) is True
+    with patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        AsyncMock(return_value=True),
+    ):
+        assert await async_setup_entry(hass, entry) is True
+
+    persistent = hass.states.get("tag.persistent_tag")
+    transient = hass.states.get("tag.transient_tag")
+    assert persistent.state == "changed"
+    assert persistent.attributes["runtime_value"] == {"nested": [1, 2]}
+    assert transient.state == "initial"
+
+
+async def test_state_only_reload_removes_attributes_deleted_from_configuration(
+    hass,
+    tmp_path,
+    monkeypatch,
+):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entity = {
+        "platform": "tag",
+        "name": "Managed Tag",
+        ATTR_ENTITY_ID: "tag.managed_tag",
+        CONF_INITIAL_VALUE: "initial",
+        CONF_PERSISTENT: True,
+        CONF_ATTRIBUTES: {"removed_attribute": "configured"},
+        CONF_NATIVE_TEMPLATES: {"removed_native": "{{ 'rendered' }}"},
+    }
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {"Tags": [entity]}},
+    )
+    entry.add_to_hass(hass)
+
+    with patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        AsyncMock(return_value=True),
+    ):
+        assert await async_setup_entry(hass, entry) is True
+
+    state = hass.states.get("tag.managed_tag")
+    assert state.attributes["removed_attribute"] == "configured"
+    assert state.attributes["removed_native"] == "rendered"
+    hass.states.async_set(
+        state.entity_id,
+        "changed",
+        {**state.attributes, "runtime_attribute": "preserved"},
+    )
+
+    next_entity = dict(entity)
+    next_entity.pop(CONF_ATTRIBUTES)
+    next_entity.pop(CONF_NATIVE_TEMPLATES)
+    hass.config_entries.async_update_entry(
+        entry,
+        options={ATTR_DEVICES: {"Tags": [next_entity]}},
+    )
+    assert await async_unload_entry(hass, entry) is True
+    with patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        AsyncMock(return_value=True),
+    ):
+        assert await async_setup_entry(hass, entry) is True
+
+    restored = hass.states.get("tag.managed_tag")
+    assert restored.state == "changed"
+    assert "removed_attribute" not in restored.attributes
+    assert "removed_native" not in restored.attributes
+    assert restored.attributes["runtime_attribute"] == "preserved"
+    assert restored.attributes[ATTR_VIRTUAL_ATTRIBUTES] == []
+
+
 async def test_state_only_services_do_not_update_unmanaged_entities(hass):
     hass.data[COMPONENT_DOMAIN] = {
         "ui": {
@@ -2961,6 +3682,17 @@ async def test_state_only_services_do_not_update_unmanaged_entities(hass):
     state = hass.states.get("tag.external_tag")
     assert state.state == "external"
     assert state.attributes["source"] == "outside"
+
+    hass.states.async_set("tag.virtual_tag", "unchanged")
+    with pytest.raises(HomeAssistantError, match="not managed by virtual_layer"):
+        await async_virtual_set_state_service(
+            hass,
+            SimpleNamespace(data={
+                ATTR_ENTITY_ID: ["tag.virtual_tag", "tag.external_tag"],
+                ATTR_VALUE: "partially_changed",
+            }),
+        )
+    assert hass.states.get("tag.virtual_tag").state == "unchanged"
 
 
 async def test_virtual_services_reject_non_virtual_platform_entities(hass):
@@ -3341,6 +4073,9 @@ async def test_state_only_entity_updates_composite_templates(hass, tmp_path, mon
             ),
             CONF_ATTRIBUTE_TEMPLATES: {
                 "copied": "{{ source }}",
+                "structured": "{{ {'values': [source], 'count': 1} }}",
+                "broken": "{{ 1 / 0 }}",
+                "after_broken": "{{ [source, 'ok'] }}",
                 "direct_setting": "{{ 'overridden' }}",
             },
             "direct_setting": {"mode": "nfc", "priority": 1},
@@ -3359,6 +4094,15 @@ async def test_state_only_entity_updates_composite_templates(hass, tmp_path, mon
     assert hass.states.get("tag.composite_tag").state == "first"
     assert hass.states.get("tag.composite_tag").attributes[CONF_ICON] == "mdi:tag"
     assert hass.states.get("tag.composite_tag").attributes["copied"] == "first"
+    assert hass.states.get("tag.composite_tag").attributes["structured"] == {
+        "values": ["first"],
+        "count": 1,
+    }
+    assert "broken" not in hass.states.get("tag.composite_tag").attributes
+    assert hass.states.get("tag.composite_tag").attributes["after_broken"] == [
+        "first",
+        "ok",
+    ]
     assert hass.states.get("tag.composite_tag").attributes["direct_setting"] == {
         "mode": "nfc",
         "priority": 1,
@@ -3476,6 +4220,8 @@ async def test_state_only_entity_supports_state_and_event_hooks(
                     CONF_ATTRIBUTE_TEMPLATES: {
                         "event_source": "{{ trigger.event_type }}",
                         "previous_value": "{{ this.state }}",
+                        "broken": "{{ 1 / 0 }}",
+                        "structured": "{{ {'values': [trigger.data.value]} }}",
                     },
                 },
             ],
@@ -3508,6 +4254,8 @@ async def test_state_only_entity_supports_state_and_event_hooks(
     assert state.state == "received"
     assert state.attributes["event_source"] == "virtual_layer_tag_update"
     assert state.attributes["previous_value"] == "scanned"
+    assert "broken" not in state.attributes
+    assert state.attributes["structured"] == {"values": ["received"]}
 
     info = hass.states.get("sensor.hook_tag_info")
     debug = hass.states.get("sensor.hook_tag_debug1")
@@ -3637,6 +4385,58 @@ async def test_state_only_setup_does_not_overwrite_existing_state(hass, tmp_path
     assert (
         hass.data[COMPONENT_DOMAIN]["ui"][ATTR_ENTITIES]["tag"][0][ATTR_ENTITY_ID]
         == "tag.existing_tag_2"
+    )
+
+
+async def test_state_only_setup_respects_registry_disabled_entities(
+    hass,
+    tmp_path,
+    monkeypatch,
+):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        title="ui - virtual_layer",
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Tags": [{
+                    CONF_PLATFORM: "tag",
+                    CONF_NAME: "Disabled Tag",
+                    ATTR_ENTITY_ID: "tag.disabled_tag",
+                    CONF_INITIAL_VALUE: "virtual",
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    with patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        AsyncMock(return_value=True),
+    ):
+        assert await async_setup_entry(hass, entry) is True
+        assert hass.states.get("tag.disabled_tag") is not None
+        assert er.async_get(hass).async_get("tag.disabled_tag").original_name == (
+            "Disabled Tag"
+        )
+        assert await async_unload_entry(hass, entry) is True
+
+        er.async_get(hass).async_update_entity(
+            "tag.disabled_tag",
+            disabled_by=er.RegistryEntryDisabler.USER,
+        )
+        assert await async_setup_entry(hass, entry) is True
+
+    assert hass.states.get("tag.disabled_tag") is None
+    assert entry.entry_id not in hass.data.get(
+        "virtual_layer_state_only_template_listeners",
+        {},
     )
 
 
@@ -3783,6 +4583,148 @@ async def test_virtual_entity_renders_composite_templates_with_source_variables(
 
     assert entity.state == "running"
     assert entity.extra_state_attributes["summary"] == "42W / 58%"
+
+
+async def test_template_tracking_is_batched_for_regular_and_state_only_entities(hass):
+    regular_config = {
+        CONF_NAME: "Batched Sensor",
+        ATTR_ENTITY_ID: "sensor.batched_sensor",
+        ATTR_UNIQUE_ID: "batched-sensor",
+        ATTR_DEVICE_ID: "Batch",
+        CONF_INITIAL_VALUE: "idle",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: False,
+        CONF_VALUE_TEMPLATE: "{{ states('sensor.batch_source') }}",
+        CONF_AVAILABILITY_TEMPLATE: "{{ true }}",
+        CONF_ICON_TEMPLATE: "{{ 'mdi:test-tube' }}",
+        CONF_ATTRIBUTE_TEMPLATES: {
+            "power": "{{ state_attr('sensor.batch_source', 'power') }}",
+        },
+    }
+    regular = VirtualSensor(regular_config, False)
+    regular.hass = hass
+    regular.async_schedule_update_ha_state = Mock()
+    regular._create_state(regular_config)
+
+    tracked = SimpleNamespace(async_remove=Mock())
+    with patch(
+        "custom_components.virtual_layer.entity.async_track_template_result",
+        return_value=tracked,
+    ) as track_regular:
+        regular._setup_templates()
+
+    assert track_regular.call_count == 1
+    assert len(track_regular.call_args.args[1]) == 4
+
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+    )
+    state_only = {
+        CONF_PLATFORM: "tag",
+        CONF_NAME: "Batched Tag",
+        ATTR_ENTITY_ID: "tag.batched_tag",
+        ATTR_UNIQUE_ID: "batched-tag",
+        CONF_INITIAL_VALUE: "idle",
+        CONF_VALUE_TEMPLATE: "{{ states('sensor.batch_source') }}",
+        CONF_AVAILABILITY_TEMPLATE: "{{ true }}",
+        CONF_ICON_TEMPLATE: "{{ 'mdi:tag' }}",
+        CONF_ATTRIBUTE_TEMPLATES: {
+            "power": "{{ state_attr('sensor.batch_source', 'power') }}",
+        },
+    }
+    tracked_state_only = SimpleNamespace(async_remove=Mock())
+    with patch(
+        "custom_components.virtual_layer.async_track_template_result",
+        return_value=tracked_state_only,
+    ) as track_state_only:
+        _async_setup_state_only_templates(hass, entry, state_only)
+
+    assert track_state_only.call_count == 1
+    assert len(track_state_only.call_args.args[1]) == 4
+
+
+async def test_unchanged_templates_do_not_schedule_redundant_state_writes(hass):
+    config = {
+        CONF_NAME: "Stable Sensor",
+        ATTR_ENTITY_ID: "sensor.stable_sensor",
+        ATTR_UNIQUE_ID: "stable-sensor",
+        ATTR_DEVICE_ID: "Stable",
+        CONF_INITIAL_VALUE: "ready",
+        CONF_INITIAL_AVAILABILITY: False,
+        CONF_PERSISTENT: False,
+        CONF_AVAILABILITY_TEMPLATE: "{{ '  true  ' }}",
+        CONF_ATTRIBUTE_TEMPLATES: {"summary": "{{ {'value': [1, 2]} }}"},
+    }
+    entity = VirtualSensor(config, False)
+    entity.hass = hass
+    entity.async_schedule_update_ha_state = Mock()
+    entity._create_state(config)
+
+    entity._apply_templates()
+    assert entity.available is True
+    assert entity.extra_state_attributes["summary"] == {"value": [1, 2]}
+    assert entity.async_schedule_update_ha_state.call_count == 1
+
+    entity.async_schedule_update_ha_state.reset_mock()
+    entity._apply_templates()
+    entity.async_schedule_update_ha_state.assert_not_called()
+
+
+async def test_generated_attribute_helpers_follow_multiple_source_attributes(hass):
+    hass.states.async_set(
+        "sensor.first_load",
+        "ready",
+        {"active": True, "power": 10, "programs": ["eco", "quick"]},
+    )
+    hass.states.async_set(
+        "sensor.second_load",
+        "ready",
+        {"active": True, "power": 30, "programs": ["eco", "intensive"]},
+    )
+    defaults = _reference_entity_defaults(
+        hass,
+        ["sensor.first_load", "sensor.second_load"],
+    )
+    config = {
+        CONF_NAME: "Combined Load",
+        ATTR_ENTITY_ID: "sensor.combined_load",
+        ATTR_UNIQUE_ID: "combined_load",
+        ATTR_DEVICE_ID: "Laundry",
+        CONF_INITIAL_VALUE: "ready",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: False,
+        CONF_ATTRIBUTE_TEMPLATES: json.loads(
+            defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]
+        ),
+    }
+    entity = VirtualSensor(config, False)
+    entity.hass = hass
+    entity.async_schedule_update_ha_state = Mock()
+
+    entity._create_state(config)
+    entity._apply_templates()
+    assert entity.extra_state_attributes["active"] is True
+    assert entity.extra_state_attributes["power"] == 20.0
+    assert entity.extra_state_attributes["programs"] == [
+        "eco",
+        "quick",
+        "intensive",
+    ]
+
+    hass.states.async_set(
+        "sensor.second_load",
+        "running",
+        {"active": False, "power": 50, "programs": ["delicate"]},
+    )
+    entity._apply_templates()
+    assert entity.extra_state_attributes["active"] is False
+    assert entity.extra_state_attributes["power"] == 30.0
+    assert entity.extra_state_attributes["programs"] == [
+        "eco",
+        "quick",
+        "delicate",
+    ]
 
 
 async def test_generated_numeric_helper_ignores_unavailable_sources_at_runtime(hass):

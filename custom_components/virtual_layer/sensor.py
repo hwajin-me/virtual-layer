@@ -48,7 +48,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import dt as dt_util
 
 from . import (
-    _assert_managed_virtual_entity,
+    _assert_managed_virtual_entities,
     _async_verify_target_entity_control,
     get_entity_configs,
     get_entity_from_domain,
@@ -287,7 +287,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         self._attr_extra_state_attributes.update(self._domain_options)
 
     def set(self, value) -> None:
-        _LOGGER.debug(f"set {self.name} to {value}")
+        _LOGGER.debug("set %s to %s", self.name, value)
         self._attr_native_value = self._coerce_native_value(value)
         self._attr_state = self._attr_native_value
         self.async_schedule_update_ha_state()
@@ -321,7 +321,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         elif name == "suggested_display_precision":
             try:
                 value = int(value)
-            except (TypeError, ValueError) as err:
+            except (TypeError, ValueError, OverflowError) as err:
                 raise ValueError(
                     "suggested_display_precision must be a non-negative integer"
                 ) from err
@@ -377,8 +377,9 @@ class VirtualDiagnosticSensor(VirtualSensor):
 
 
 async def async_virtual_set_service(hass, call):
-    for entity_id in call.data[ATTR_ENTITY_ID]:
-        value = call.data[ATTR_VALUE]
-        _LOGGER.debug(f"setting {entity_id} to {value})")
-        _assert_managed_virtual_entity(hass, entity_id)
+    entity_ids = call.data[ATTR_ENTITY_ID]
+    _assert_managed_virtual_entities(hass, entity_ids)
+    value = call.data[ATTR_VALUE]
+    for entity_id in entity_ids:
+        _LOGGER.debug("setting %s to %s", entity_id, value)
         get_entity_from_domain(hass, PLATFORM_DOMAIN, entity_id).set(value)

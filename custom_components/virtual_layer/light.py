@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import logging
 import math
-import pprint
 from collections.abc import Callable
 from typing import Any
 
@@ -70,14 +69,20 @@ BASE_SCHEMA = virtual_schema(DEFAULT_LIGHT_VALUE, {
     vol.Optional(CONF_SUPPORT_BRIGHTNESS, default=DEFAULT_SUPPORT_BRIGHTNESS): cv.boolean,
     vol.Optional(CONF_INITIAL_BRIGHTNESS, default=DEFAULT_INITIAL_BRIGHTNESS): cv.byte,
     vol.Optional(CONF_SUPPORT_COLOR, default=DEFAULT_SUPPORT_COLOR): cv.boolean,
-    vol.Optional(CONF_INITIAL_COLOR, default=DEFAULT_INITIAL_COLOR): cv.ensure_list,
+    vol.Optional(
+        CONF_INITIAL_COLOR,
+        default=lambda: list(DEFAULT_INITIAL_COLOR),
+    ): cv.ensure_list,
     vol.Optional(CONF_SUPPORT_COLOR_TEMP, default=DEFAULT_SUPPORT_COLOR_TEMP): cv.boolean,
     vol.Optional(CONF_INITIAL_COLOR_TEMP, default=DEFAULT_INITIAL_COLOR_TEMP): cv.positive_int,
     vol.Optional(CONF_SUPPORT_WHITE_VALUE, default=DEFAULT_SUPPORT_WHITE_VALUE): cv.boolean,
     vol.Optional(CONF_INITIAL_WHITE_VALUE, default=DEFAULT_INITIAL_WHITE_VALUE): cv.byte,
     vol.Optional(CONF_SUPPORT_EFFECT, default=DEFAULT_SUPPORT_EFFECT): cv.boolean,
     vol.Optional(CONF_INITIAL_EFFECT, default=DEFAULT_INITIAL_EFFECT): cv.string,
-    vol.Optional(CONF_INITIAL_EFFECT_LIST, default=DEFAULT_INITIAL_EFFECT_LIST): cv.ensure_list
+    vol.Optional(
+        CONF_INITIAL_EFFECT_LIST,
+        default=lambda: list(DEFAULT_INITIAL_EFFECT_LIST),
+    ): cv.ensure_list,
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
@@ -89,7 +94,7 @@ def _as_color_temp_kelvin(value: float | str) -> int:
     """Normalize legacy mired values while storing modern Kelvin values."""
     try:
         color_temp = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return DEFAULT_INITIAL_COLOR_TEMP
     if not math.isfinite(color_temp) or color_temp <= 0:
         return DEFAULT_INITIAL_COLOR_TEMP
@@ -115,7 +120,7 @@ def _as_hs_color(value, fallback=None) -> tuple[float, float] | None:
         return fallback
     try:
         hue, saturation = (float(item) for item in value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return fallback
     if (
         not math.isfinite(hue)
@@ -133,7 +138,7 @@ def _as_color_tuple(value, length: int, maximum: float, fallback=None):
         return fallback
     try:
         color = tuple(float(item) for item in value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return fallback
     if any(not math.isfinite(item) or not 0 <= item <= maximum for item in color):
         return fallback
@@ -359,7 +364,7 @@ class VirtualLight(VirtualEntity, LightEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on."""
-        _LOGGER.debug(f"turning {self.name} on {pprint.pformat(kwargs)}")
+        _LOGGER.debug("turning %s on %s", self.name, kwargs)
         hs_color = kwargs.get(ATTR_HS_COLOR, None)
 
         if hs_color is not None and ColorMode.HS in self._attr_supported_color_modes:
@@ -394,7 +399,7 @@ class VirtualLight(VirtualEntity, LightEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the light off."""
-        _LOGGER.debug(f"turning {self.name} off {pprint.pformat(kwargs)}")
+        _LOGGER.debug("turning %s off %s", self.name, kwargs)
         self._attr_is_on = False
         self._update_attributes()
         self.async_write_ha_state()
@@ -451,7 +456,7 @@ class VirtualLight(VirtualEntity, LightEntity):
         elif name in {"min_color_temp_kelvin", "max_color_temp_kelvin"}:
             try:
                 value = int(value)
-            except (TypeError, ValueError) as err:
+            except (TypeError, ValueError, OverflowError) as err:
                 raise ValueError(f"{name} must be an integer") from err
             if not 1000 <= value <= 40000:
                 raise ValueError(f"{name} must be between 1000 and 40000")

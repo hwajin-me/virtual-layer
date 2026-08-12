@@ -157,7 +157,7 @@ def parse_geojson_zones(data, default_priority: int = 0) -> list[dict[str, Any]]
             raise ValueError("Every polygon zone needs a name property")
         try:
             priority = int(properties.get("priority", default_priority))
-        except (TypeError, ValueError) as err:
+        except (TypeError, ValueError, OverflowError) as err:
             raise ValueError(f"Invalid priority for polygon zone {name}") from err
 
         coordinates = geometry.get("coordinates")

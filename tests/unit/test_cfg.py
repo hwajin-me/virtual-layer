@@ -10,6 +10,7 @@ from custom_components.virtual_layer.cfg import (
     _async_load_json,
     _async_save_json,
     _delete_meta_data,
+    _device_config_for_key,
     _make_entity_id,
     _normalize_common_entity_config,
     _rename_meta_data,
@@ -82,6 +83,17 @@ async def test_json_storage_recovers_legacy_non_finite_numbers(tmp_path):
     assert not list(tmp_path.glob("*.tmp"))
 
 
+@pytest.mark.asyncio
+async def test_json_storage_ignores_integer_too_large_for_python_decoder(tmp_path):
+    storage_file = tmp_path / "damaged.json"
+    storage_file.write_text(
+        '{"too_large": ' + ("1" * 5000) + "}",
+        encoding="utf-8",
+    )
+
+    assert await _async_load_json(str(storage_file)) == {}
+
+
 def test_stored_entity_normalization_sanitizes_non_finite_values():
     normalized = _normalize_common_entity_config(
         {
@@ -91,8 +103,14 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
             CONF_MIN: float("nan"),
             CONF_MAX: float("inf"),
             CONF_ATTRIBUTES: {
-                "nested": [1, float("-inf")],
+                " nested ": [1, float("-inf")],
                 10: "invalid key",
+            },
+            CONF_ATTRIBUTE_TEMPLATES: {
+                " summary ": "{{ 1 }}",
+                "summary": "{{ 2 }}",
+                "invalid": {"not": "jinja"},
+                ATTR_ENTITY_ID: "{{ 'blocked' }}",
             },
             CONF_EVENT_HOOKS: [{
                 "trigger": "event",
@@ -108,10 +126,67 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
     assert normalized[CONF_MIN] == 0
     assert normalized[CONF_MAX] == 100
     assert normalized[CONF_ATTRIBUTES] == {"nested": [1, None]}
+    assert normalized[CONF_ATTRIBUTE_TEMPLATES] == {"summary": "{{ 1 }}"}
     assert normalized[CONF_EVENT_HOOKS] == [{
         "trigger": "event",
         "event_type": "virtual_layer_update",
     }]
+
+
+def test_stored_config_sanitizes_integers_outside_home_assistant_json_range():
+    oversized = 10**10000
+    normalized = _normalize_common_entity_config(
+        {
+            CONF_PLATFORM: "sensor",
+            CONF_NAME: "Damaged sensor",
+            CONF_INITIAL_VALUE: oversized,
+            CONF_ATTRIBUTES: {"oversized": oversized},
+        },
+        "Damaged Device",
+        0,
+    )
+
+    assert normalized[CONF_INITIAL_VALUE] == "unknown"
+    assert normalized[CONF_ATTRIBUTES] == {"oversized": None}
+
+    device = _device_config_for_key(
+        "Damaged Device",
+        {"Damaged Device": {ATTR_DEVICE_ID: oversized, CONF_NAME: oversized}},
+    )
+    assert device[ATTR_DEVICE_ID] == "Damaged Device"
+    assert device[CONF_NAME] == "Damaged Device"
+
+
+def test_stored_config_sanitizes_recursive_and_excessively_deep_values():
+    recursive = {}
+    recursive["self"] = recursive
+    deeply_nested = "leaf"
+    for _ in range(150):
+        deeply_nested = [deeply_nested]
+
+    normalized = _normalize_common_entity_config(
+        {
+            CONF_PLATFORM: "sensor",
+            CONF_NAME: "Damaged sensor",
+            CONF_ATTRIBUTES: {
+                "recursive": recursive,
+                "deep": deeply_nested,
+                "healthy": {"nested": True},
+            },
+        },
+        "Damaged Device",
+        0,
+    )
+
+    assert normalized[CONF_ATTRIBUTES]["recursive"] == {"self": None}
+    assert normalized[CONF_ATTRIBUTES]["healthy"] == {"nested": True}
+    value = normalized[CONF_ATTRIBUTES]["deep"]
+    depth = 0
+    while isinstance(value, list):
+        value = value[0]
+        depth += 1
+    assert value is None
+    assert 0 < depth <= 101
 
 
 @pytest.mark.asyncio
@@ -377,6 +452,7 @@ async def test_blended_cfg_normalizes_malformed_common_entity_fields(
                     CONF_ATTRIBUTE_TEMPLATES: 3,
                     CONF_NATIVE_TEMPLATES: {
                         "fan_modes": "{{ ['auto'] }}",
+                        " fan_modes ": "{{ ['duplicate'] }}",
                         "_private": "{{ true }}",
                         ATTR_ENTITY_ID: "{{ 'sensor.hijack' }}",
                         "bad_value": ["not", "a", "template"],
@@ -407,6 +483,8 @@ async def test_blended_cfg_normalizes_malformed_common_entity_fields(
                             "attributes_changed": ["mode", ""],
                             CONF_ATTRIBUTE_TEMPLATES: {
                                 "copied": "{{ trigger.to }}",
+                                " copied ": "{{ 'duplicate' }}",
+                                "bad": {"not": "jinja"},
                                 ATTR_ENTITY_ID: "blocked",
                             },
                         },
@@ -570,6 +648,44 @@ async def test_blended_cfg_skips_invalid_domain_entity_but_keeps_repair_metadata
 
 
 @pytest.mark.asyncio
+async def test_blended_cfg_migrates_legacy_domain_attributes_before_validation(
+    hass,
+    tmp_path,
+    monkeypatch,
+):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    cfg = BlendedCfg(
+        hass,
+        {ATTR_GROUP_NAME: "ui"},
+        {ATTR_DEVICES: {"HVAC": [{
+            CONF_PLATFORM: "climate",
+            CONF_NAME: "Legacy Climate",
+            CONF_INITIAL_VALUE: "cool",
+            "hvac_modes": ["off", "cool"],
+            "fan_modes": [],
+            "fan_mode": "",
+            CONF_ATTRIBUTES: {
+                "fan_modes": ["auto", "turbo"],
+                "fan_mode": "auto",
+                "supported_features": 441,
+                "vendor": "preserved",
+            },
+        }]}},
+    )
+
+    await cfg.async_load()
+
+    entity = cfg.entities["climate"][0]
+    assert entity["fan_modes"] == ["auto", "turbo"]
+    assert entity["fan_mode"] == "auto"
+    assert entity[CONF_ATTRIBUTES] == {"vendor": "preserved"}
+
+
+@pytest.mark.asyncio
 async def test_blended_cfg_repairs_corrupt_identity_fields(
     hass,
     tmp_path,
@@ -642,3 +758,36 @@ async def test_blended_cfg_repairs_duplicate_and_non_string_entity_keys(
     assert len({entity[ATTR_UNIQUE_ID] for entity in primary_entities}) == 3
     saved_metadata = json.loads(meta_file.read_text())[ATTR_DEVICES]["ui"]
     assert len(saved_metadata) == 3
+
+
+@pytest.mark.asyncio
+async def test_blended_cfg_applies_domain_validator_to_stored_entities(
+    hass,
+    tmp_path,
+    monkeypatch,
+):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    cfg = BlendedCfg(
+        hass,
+        {ATTR_GROUP_NAME: "ui"},
+        {
+            ATTR_DEVICES: {
+                "Updates": [{
+                    CONF_PLATFORM: "update",
+                    CONF_NAME: "Damaged Update",
+                    CONF_INITIAL_VALUE: "1.0.0",
+                    "update_percentage": 150,
+                }],
+            },
+        },
+    )
+
+    await cfg.async_load()
+
+    assert "update" not in cfg.entities
+    assert cfg.devices[0][CONF_NAME] == "Updates"
+    assert json.loads(meta_file.read_text())[ATTR_DEVICES]["ui"]

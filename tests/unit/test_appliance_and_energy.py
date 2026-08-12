@@ -357,3 +357,33 @@ def test_lock_replacing_delayed_operation_cancels_previous_timer():
 
     first_cancel.assert_called_once_with()
     assert entity._timer_handle is second_cancel
+
+
+def test_lock_jam_and_direct_transitions_clear_conflicting_activity_flags():
+    config = LOCK_SCHEMA(
+        {
+            CONF_NAME: "Jamming Lock",
+            ATTR_ENTITY_ID: "lock.jamming_lock",
+            ATTR_UNIQUE_ID: "jamming_lock",
+            CONF_INITIAL_VALUE: "locked",
+            "jamming_test": 1,
+        }
+    )
+    entity = VirtualLock(Mock(), config, False)
+    entity._create_state(config)
+    entity._locking()
+
+    with patch("custom_components.virtual_layer.lock.random.randint", return_value=0):
+        entity._lock()
+
+    assert entity.is_jammed is True
+    assert entity.is_locking is False
+    assert entity.is_unlocking is False
+    assert entity.is_opening is False
+
+    entity._test_jamming = 0
+    entity._attr_is_opening = True
+    entity.set_state("locked")
+    assert entity.is_locked is True
+    assert entity.is_jammed is False
+    assert entity.is_opening is False

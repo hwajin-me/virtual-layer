@@ -235,7 +235,7 @@ class GenericVirtualEntity(VirtualEntity, Entity):
         elif name == "wind_bearing":
             try:
                 numeric_bearing = float(value)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 value = str(value).strip()
                 if not value:
                     raise ValueError("wind_bearing must not be empty")
@@ -395,7 +395,7 @@ def _safe_float(value, default: float) -> float:
     """Read a finite numeric option without making old settings unloadable."""
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return default
     return parsed if math.isfinite(parsed) else default
 
@@ -404,7 +404,7 @@ def _safe_int(value, default: int, minimum: int = 0) -> int:
     """Read an integer option with a lower bound from persisted data."""
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return default
     return max(minimum, parsed)
 
@@ -519,7 +519,7 @@ class VirtualText(_NativeGenericMixin, VirtualEntity, TextEntity):
             )
         try:
             self._attr_mode = TextMode(config.get("mode", TextMode.TEXT))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             self._attr_mode = TextMode.TEXT
         pattern = config.get("pattern")
         try:
@@ -1193,7 +1193,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             return None
         try:
             parsed = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         if not math.isfinite(parsed):
             return None
@@ -1391,11 +1391,15 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
             config.get("display_precision", 0), 0
         )
         update_percentage = config.get("update_percentage")
-        self._attr_update_percentage = (
-            self._bounded_update_percentage(update_percentage)
-            if update_percentage is not None
-            else None
-        )
+        try:
+            self._attr_update_percentage = (
+                self._bounded_update_percentage(update_percentage)
+                if update_percentage is not None
+                else None
+            )
+        except (OverflowError, ValueError):
+            _LOGGER.warning("Ignoring invalid stored update percentage")
+            self._attr_update_percentage = None
         self._release_notes = config.get("release_notes")
         self._versions = _string_list(config.get("versions"))
         self._support_backup = _safe_bool(config.get("support_backup", True), True)

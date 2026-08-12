@@ -166,13 +166,22 @@ def _normalize_event_hooks(value, device_name, index):
             if not isinstance(field_value, Mapping):
                 hook.pop(field_name, None)
                 continue
-            hook[field_name] = {
-                name: field_value
-                for name, field_value in field_value.items()
-                if isinstance(name, str)
-                and name.strip()
-                and name.strip() not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
-            }
+            normalized_values = {}
+            for name, item in field_value.items():
+                if (
+                    not isinstance(name, str)
+                    or not name.strip()
+                    or name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+                    or field_name == CONF_ATTRIBUTE_TEMPLATES
+                    and (not isinstance(item, str) or not item.strip())
+                    or name.strip() in normalized_values
+                ):
+                    continue
+                normalized_values[name.strip()] = item
+            if normalized_values:
+                hook[field_name] = normalized_values
+            else:
+                hook.pop(field_name, None)
 
         for field_name in (CONF_VALUE_TEMPLATE, CONF_AVAILABILITY_TEMPLATE):
             if field_name in hook and not isinstance(hook[field_name], str):
@@ -184,7 +193,7 @@ def _normalize_event_hooks(value, device_name, index):
                 if not math.isfinite(debounce):
                     raise ValueError
                 hook["debounce"] = max(0, debounce)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 hook.pop("debounce")
         if "refresh" in hook:
             try:
@@ -246,7 +255,7 @@ async def _async_load_json(file_name):
     except FileNotFoundError:
         _LOGGER.debug("json file does not exist: %s", file_name)
         return {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError, RecursionError):
         _LOGGER.exception("Unable to load json file: %s", file_name)
         return {}
 
@@ -291,11 +300,11 @@ async def _save_meta_data(hass, group_name, meta_data):
         )
 
         # Update (or add) the group piece.
-        _LOGGER.debug(f"meta before {devices}")
+        _LOGGER.debug("meta before %s", devices)
         devices.update({
             group_name: meta_data
         })
-        _LOGGER.debug(f"meta after {devices}")
+        _LOGGER.debug("meta after %s", devices)
 
         # Write it back out.
         payload[ATTR_VERSION] = STORAGE_VERSION
@@ -314,9 +323,9 @@ async def _delete_meta_data(hass, group_name):
         )
 
         # Delete the group piece.
-        _LOGGER.debug(f"meta before {devices}")
+        _LOGGER.debug("meta before %s", devices)
         devices.pop(group_name, None)
-        _LOGGER.debug(f"meta after {devices}")
+        _LOGGER.debug("meta after %s", devices)
 
         # Write it back out.
         payload[ATTR_VERSION] = STORAGE_VERSION
@@ -368,6 +377,7 @@ def _make_name(name):
 def _device_config_for_key(device_name, device_attributes):
     device = copy.deepcopy(_as_dict(device_attributes, "device attributes").get(device_name, {}))
     device = _as_dict(device, f"device attributes for {device_name}")
+    device = _sanitize_stored_value(device)
     for key in (
         ATTR_DEVICE_ID,
         CONF_NAME,
@@ -467,7 +477,7 @@ def _normalize_common_entity_config(entity, device_name, index):
                 entity[key] = float(entity.get(key, default))
                 if not math.isfinite(entity[key]):
                     raise ValueError
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 _LOGGER.warning(
                     "Resetting invalid number %s for device %s at index %s",
                     key,
@@ -494,18 +504,40 @@ def _normalize_common_entity_config(entity, device_name, index):
             )
             entity[key] = {}
 
+    for key in (CONF_ATTRIBUTES, CONF_ATTRIBUTE_TEMPLATES):
+        values = entity.get(key, {})
+        if not isinstance(values, Mapping):
+            continue
+        normalized_values = {}
+        for name, item in values.items():
+            if (
+                not isinstance(name, str)
+                or not name.strip()
+                or name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+                or key == CONF_ATTRIBUTE_TEMPLATES
+                and (not isinstance(item, str) or not item.strip())
+                or name.strip() in normalized_values
+            ):
+                continue
+            normalized_values[name.strip()] = item
+        entity[key] = normalized_values
+
     native_templates = entity.get(CONF_NATIVE_TEMPLATES, {})
     if isinstance(native_templates, Mapping):
-        entity[CONF_NATIVE_TEMPLATES] = {
-            name.strip(): template
-            for name, template in native_templates.items()
-            if isinstance(name, str)
-            and name.strip().isidentifier()
-            and not name.strip().startswith("_")
-            and name.strip() not in RESERVED_NATIVE_TEMPLATE_NAMES
-            and isinstance(template, str)
-            and template.strip()
-        }
+        normalized_templates = {}
+        for name, template in native_templates.items():
+            if (
+                not isinstance(name, str)
+                or not name.strip().isidentifier()
+                or name.strip().startswith("_")
+                or name.strip() in RESERVED_NATIVE_TEMPLATE_NAMES
+                or not isinstance(template, str)
+                or not template.strip()
+                or name.strip() in normalized_templates
+            ):
+                continue
+            normalized_templates[name.strip()] = template
+        entity[CONF_NATIVE_TEMPLATES] = normalized_templates
 
     command_actions = entity.get(CONF_COMMAND_ACTIONS)
     if command_actions is not None:
@@ -623,7 +655,7 @@ def _normalize_common_entity_config(entity, device_name, index):
     if pull_interval is not None:
         try:
             pull_interval = int(pull_interval)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             pull_interval = 0
         entity[CONF_PULL_INTERVAL] = max(0, pull_interval)
 
@@ -652,17 +684,44 @@ def _platform_command_names(platform) -> set[str]:
     return set(VIRTUAL_ENTITY_COMMANDS.get(platform, ()))
 
 
-def _sanitize_stored_value(value):
+def _sanitize_stored_value(value, _seen=None, _depth=0):
     """Make damaged config-entry values JSON-safe without dropping the entity."""
+    if _depth > 100:
+        return None
+    if _seen is None:
+        _seen = set()
     if isinstance(value, Mapping):
-        return {
-            key: _sanitize_stored_value(item)
-            for key, item in value.items()
-            if isinstance(key, str)
-        }
+        identity = id(value)
+        if identity in _seen:
+            return None
+        _seen.add(identity)
+        try:
+            return {
+                key: _sanitize_stored_value(item, _seen, _depth + 1)
+                for key, item in value.items()
+                if isinstance(key, str)
+            }
+        finally:
+            _seen.remove(identity)
     if isinstance(value, (list, tuple)):
-        return [_sanitize_stored_value(item) for item in value]
+        identity = id(value)
+        if identity in _seen:
+            return None
+        _seen.add(identity)
+        try:
+            return [
+                _sanitize_stored_value(item, _seen, _depth + 1)
+                for item in value
+            ]
+        finally:
+            _seen.remove(identity)
     if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and not -(2**63) <= value <= 2**64 - 1
+    ):
         return None
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -782,19 +841,36 @@ def _entity_id_matches_platform(entity_id, platform):
     return normalized.split(".", 1)[0] == platform
 
 
-def _platform_entity_schema(platform):
-    """Load a platform schema for persisted entity validation."""
+def _platform_entity_validator(platform):
+    """Load platform normalization and validation hooks for persisted data."""
     module = import_module(f".{platform}", __package__)
-    return getattr(module, f"{platform.upper()}_SCHEMA", None) or module.ENTITY_SCHEMA
+    schema = getattr(module, f"{platform.upper()}_SCHEMA", None) or module.ENTITY_SCHEMA
+    return (
+        schema,
+        getattr(module, "normalize_domain_options", None),
+        getattr(module, "validate_domain_options", None),
+    )
 
 
-def _platform_entity_validation_error(schema, entity):
-    """Return a stored entity validation error without blocking setup."""
+def _validate_stored_platform_entity(
+    schema,
+    normalize_domain_options,
+    validate_domain_options,
+    entity,
+):
+    """Normalize and validate one stored entity without blocking setup."""
     try:
-        schema(entity)
-    except (TypeError, ValueError, vol.Invalid) as err:
-        return err
-    return None
+        normalized_entity = (
+            normalize_domain_options(entity)
+            if normalize_domain_options is not None
+            else entity
+        )
+        validated_entity = schema(normalized_entity)
+        if validate_domain_options is not None:
+            validate_domain_options(validated_entity)
+    except (OverflowError, TypeError, ValueError, vol.Invalid) as err:
+        return None, err
+    return normalized_entity, None
 
 
 def _pop_entity_meta(meta_data, entity_key, name, platform):
@@ -1114,8 +1190,8 @@ class BlendedCfg:
         changed = False
         seen_entity_keys = set()
 
-        _LOGGER.debug(f"loaded-meta-data={meta_data}")
-        _LOGGER.debug(f"loaded-devices={devices}")
+        _LOGGER.debug("loaded-meta-data=%s", meta_data)
+        _LOGGER.debug("loaded-devices=%s", devices)
 
         # Let's fix up the devices/entities
         for device_name, entities in devices.items():
@@ -1248,16 +1324,27 @@ class BlendedCfg:
                 # UI data. Only import off the event loop; Home Assistant
                 # template schema validation itself needs the loop context.
                 try:
-                    schema = await self._hass.async_add_executor_job(
-                        _platform_entity_schema,
+                    (
+                        schema,
+                        normalize_domain_options,
+                        validate_domain_options,
+                    ) = await self._hass.async_add_executor_job(
+                        _platform_entity_validator,
                         platform,
                     )
                 except (AttributeError, ImportError, TypeError, ValueError):
                     schema = None
-                validation_error = (
-                    None
+                    normalize_domain_options = None
+                    validate_domain_options = None
+                validated_entity, validation_error = (
+                    (None, None)
                     if schema is None
-                    else _platform_entity_validation_error(schema, entity)
+                    else _validate_stored_platform_entity(
+                        schema,
+                        normalize_domain_options,
+                        validate_domain_options,
+                        entity,
+                    )
                 )
                 if schema is None or validation_error is not None:
                     _LOGGER.warning(
@@ -1272,6 +1359,7 @@ class BlendedCfg:
                     # UI does not produce a duplicate entity or device.
                     self._meta_data[entity_key] = entity_meta
                     continue
+                entity = validated_entity
 
                 reserved_entity_id = self._reserve_entity_id(
                     platform,
@@ -1305,7 +1393,7 @@ class BlendedCfg:
                     entity_meta[ATTR_ENTITY_ID] = entity_id
                     changed = True
 
-                _LOGGER.debug(f"added entity {platform}/{entity}")
+                _LOGGER.debug("added entity %s/%s", platform, entity)
 
                 # Now store in the correct place. Move off temporary meta
                 # data list.
@@ -1339,10 +1427,10 @@ class BlendedCfg:
         if changed:
             await _save_meta_data(self._hass, self._group_name, self._meta_data)
 
-        _LOGGER.debug(f"meta-data={self._meta_data}")
-        _LOGGER.debug(f"devices={self._devices}")
-        _LOGGER.debug(f"entities={self._entities}")
-        _LOGGER.debug(f"orphaned-entities={self._orphaned_entities}")
+        _LOGGER.debug("meta-data=%s", self._meta_data)
+        _LOGGER.debug("devices=%s", self._devices)
+        _LOGGER.debug("entities=%s", self._entities)
+        _LOGGER.debug("orphaned-entities=%s", self._orphaned_entities)
 
     async def async_delete(self):
         _LOGGER.debug(f"deleting {self._group_name}")

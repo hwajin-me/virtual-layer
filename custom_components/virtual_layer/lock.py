@@ -116,6 +116,7 @@ class VirtualLock(VirtualEntity, LockEntity):
             self._attr_is_locked = True
             self._attr_is_locking = False
             self._attr_is_unlocking = False
+            self._attr_is_opening = False
             self._attr_is_jammed = False
         else:
             self._jam()
@@ -126,6 +127,7 @@ class VirtualLock(VirtualEntity, LockEntity):
         self._attr_is_locked = False
         self._attr_is_locking = True
         self._attr_is_unlocking = False
+        self._attr_is_opening = False
         self._attr_is_jammed = False
 
     def _unlock(self) -> None:
@@ -134,6 +136,7 @@ class VirtualLock(VirtualEntity, LockEntity):
         self._attr_is_locked = False
         self._attr_is_locking = False
         self._attr_is_unlocking = False
+        self._attr_is_opening = False
         self._attr_is_jammed = False
 
     def _open(self) -> None:
@@ -142,6 +145,7 @@ class VirtualLock(VirtualEntity, LockEntity):
         self._attr_is_locked = False
         self._attr_is_locking = False
         self._attr_is_unlocking = False
+        self._attr_is_opening = False
         self._attr_is_jammed = False
 
     def _unlocking(self) -> None:
@@ -150,12 +154,16 @@ class VirtualLock(VirtualEntity, LockEntity):
         self._attr_is_locked = False
         self._attr_is_locking = False
         self._attr_is_unlocking = True
+        self._attr_is_opening = False
         self._attr_is_jammed = False
 
     def _jam(self) -> None:
         _LOGGER.debug(f"jamming {self.name}")
         self._attr_is_open = False
         self._attr_is_locked = False
+        self._attr_is_locking = False
+        self._attr_is_unlocking = False
+        self._attr_is_opening = False
         self._attr_is_jammed = True
 
     @callback

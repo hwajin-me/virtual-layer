@@ -38,7 +38,9 @@ from custom_components.virtual_layer.climate_options import (
     migrate_legacy_climate_attributes,
 )
 from custom_components.virtual_layer.const import (
+    ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES,
     ATTR_UNIQUE_ID,
+    ATTR_VIRTUAL_ATTRIBUTES,
     CONF_ATTRIBUTES,
     CONF_INITIAL_VALUE,
     CONF_NAME,
@@ -57,7 +59,9 @@ from custom_components.virtual_layer.humidifier_options import (
     migrate_legacy_humidifier_attributes,
 )
 from custom_components.virtual_layer.light import (
+    CONF_INITIAL_COLOR,
     CONF_INITIAL_COLOR_TEMP,
+    CONF_INITIAL_EFFECT_LIST,
     CONF_SUPPORT_COLOR_TEMP,
     LIGHT_SCHEMA,
     VirtualLight,
@@ -83,6 +87,71 @@ def _config(schema, domain: str, initial_value: str = "unknown", **options):
             **options,
         }
     )
+
+
+def test_light_schema_mutable_defaults_are_isolated_per_entity():
+    first = LIGHT_SCHEMA({CONF_NAME: "First light"})
+    second = LIGHT_SCHEMA({CONF_NAME: "Second light"})
+
+    first[CONF_INITIAL_COLOR].append(200)
+    first[CONF_INITIAL_EFFECT_LIST].append("mutated")
+
+    assert second[CONF_INITIAL_COLOR] == [0, 100]
+    assert second[CONF_INITIAL_EFFECT_LIST] == ["rainbow", "none"]
+
+
+def test_native_numeric_helpers_recover_from_integer_overflow():
+    from custom_components.virtual_layer.climate import _finite_float as climate_float
+    from custom_components.virtual_layer.fan import VirtualFan
+    from custom_components.virtual_layer.humidifier import (
+        _finite_float as humidifier_float,
+    )
+    from custom_components.virtual_layer.light import (
+        _as_color_temp_kelvin,
+        _as_hs_color,
+    )
+
+    huge = 10**10000
+
+    assert climate_float(huge, 21) == 21
+    assert humidifier_float(huge, 45) == 45
+    assert VirtualFan._safe_percentage(huge) is None
+    assert _as_color_temp_kelvin(huge) == 4000
+    assert _as_hs_color([huge, 50]) is None
+
+    number = VirtualNumber(
+        _config(
+            NUMBER_SCHEMA,
+            "number",
+            "5",
+            min=0,
+            max=10,
+        ),
+        False,
+    )
+    number._create_state(number._config)
+    assert number._normalize_value(huge, huge) == 0
+
+
+@pytest.mark.parametrize(
+    "progress",
+    ["corrupt", pytest.param(10**10000, id="huge-integer")],
+)
+def test_update_constructor_recovers_invalid_stored_progress(progress):
+    from custom_components.virtual_layer.update import ENTITY_CLASS as VirtualUpdate
+    from custom_components.virtual_layer.update import ENTITY_SCHEMA as UPDATE_SCHEMA
+
+    update = VirtualUpdate(
+        _config(
+            UPDATE_SCHEMA,
+            "update",
+            "1.0.0",
+            update_percentage=progress,
+        ),
+        False,
+    )
+
+    assert update.update_percentage is None
 
 
 async def test_climate_migrates_native_modes_from_legacy_virtual_attributes():
@@ -1072,6 +1141,47 @@ def test_climate_and_humidifier_restore_home_assistant_native_target_keys():
     assert climate.target_humidity == 48
     assert humidifier.target_humidity == 55
     assert humidifier.mode == "normal"
+
+
+def test_regular_entity_restore_drops_removed_config_attributes_only():
+    config = _config(
+        SENSOR_SCHEMA,
+        "sensor",
+        "ready",
+        attributes={"still_configured": "current"},
+    )
+    sensor = VirtualSensor(config, False)
+
+    sensor._restore_state(
+        SimpleNamespace(
+            state="restored",
+            attributes={
+                "available": True,
+                ATTR_VIRTUAL_ATTRIBUTES: [
+                    "removed_configured",
+                    "still_configured",
+                    "runtime_attribute",
+                ],
+                ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES: [
+                    "removed_configured",
+                    "still_configured",
+                ],
+                "removed_configured": "stale",
+                "still_configured": "runtime-value",
+                "runtime_attribute": "preserved",
+            },
+        ),
+        config,
+    )
+
+    assert sensor._virtual_attributes == {
+        "still_configured": "runtime-value",
+        "runtime_attribute": "preserved",
+    }
+    sensor._update_attributes()
+    assert sensor.extra_state_attributes[ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES] == [
+        "still_configured"
+    ]
 
 
 def test_native_generic_entities_restore_runtime_service_attributes():

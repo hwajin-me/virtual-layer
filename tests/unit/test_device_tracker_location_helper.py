@@ -89,6 +89,7 @@ def _set_zone(hass, entity_id, name, latitude, longitude):
         (91, 127),
         (37.5, -181),
         ("invalid", 127),
+        pytest.param(10**10000, 127, id="huge-latitude"),
     ],
 )
 def test_tracker_restore_rejects_invalid_gps_coordinates(hass, latitude, longitude):

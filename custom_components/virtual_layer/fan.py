@@ -75,6 +75,11 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
 FAN_SCHEMA = vol.Schema(BASE_SCHEMA)
 
 
+def normalize_domain_options(config):
+    """Promote legacy attributes before persisted-data validation."""
+    return migrate_legacy_fan_attributes(config)
+
+
 def validate_domain_options(config) -> None:
     """Validate fan feature and initial-state relationships."""
     if str(config.get(CONF_INITIAL_VALUE, "off")).lower() not in {"on", "off"}:
@@ -238,7 +243,7 @@ class VirtualFan(VirtualEntity, FanEntity):
             return None
         try:
             parsed = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         if not math.isfinite(parsed) or not 0 <= parsed <= 100:
             return None

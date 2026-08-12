@@ -134,7 +134,7 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
         if name == "current_cover_tilt_position":
             try:
                 value = int(value)
-            except (TypeError, ValueError) as err:
+            except (TypeError, ValueError, OverflowError) as err:
                 raise ValueError(
                     "current_cover_tilt_position must be between 0 and 100"
                 ) from err
