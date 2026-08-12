@@ -38,8 +38,6 @@ from .cfg import (
 )
 from .const import *
 
-__version__ = '1.0.11'
-
 _LOGGER = logging.getLogger(__name__)
 _MISSING = object()
 
@@ -602,7 +600,7 @@ def _device_registry_updates_for_config(hass, device: Mapping, registry_entry=No
         "name": device.get(CONF_NAME),
         "manufacturer": device.get(CONF_MANUFACTURER) or COMPONENT_MANUFACTURER,
         "model": device.get(CONF_MODEL) or COMPONENT_MODEL,
-        "sw_version": device.get(CONF_SW_VERSION) or __version__,
+        "sw_version": device.get(CONF_SW_VERSION) or '0.0.1',
         "area_id": _configured_area_id(hass, device),
     }
     for config_key, registry_key in (
@@ -1772,7 +1770,7 @@ async def _async_get_or_create_virtual_device_in_registry(
         "manufacturer": device.get(CONF_MANUFACTURER) or COMPONENT_MANUFACTURER,
         "model": device.get(CONF_MODEL) or COMPONENT_MODEL,
         "name": device[CONF_NAME],
-        "sw_version": device.get(CONF_SW_VERSION) or __version__,
+        "sw_version": device.get(CONF_SW_VERSION) or "0.0.1",
     }
     for config_key, info_key in (
         (CONF_HW_VERSION, "hw_version"),
