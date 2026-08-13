@@ -99,15 +99,43 @@ class VirtualLock(VirtualEntity, LockEntity):
 
     def _create_state(self, config):
         super()._create_state(config)
-
-        self._attr_is_open = config.get(CONF_INITIAL_VALUE).lower() == LockState.OPEN
-        self._attr_is_locked = config.get(CONF_INITIAL_VALUE).lower() == LockState.LOCKED
+        initial_state = str(config.get(CONF_INITIAL_VALUE, DEFAULT_LOCK_VALUE)).lower()
+        if not self._set_lock_state_flags(initial_state):
+            self._set_lock_state_flags(DEFAULT_LOCK_VALUE)
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
+        if self._set_lock_state_flags(state.state):
+            return
+        initial_state = str(config.get(CONF_INITIAL_VALUE, DEFAULT_LOCK_VALUE)).lower()
+        if not self._set_lock_state_flags(initial_state):
+            self._set_lock_state_flags(DEFAULT_LOCK_VALUE)
 
-        self._attr_is_open = state.state == LockState.OPEN
-        self._attr_is_locked = state.state == LockState.LOCKED
+    def _set_lock_state_flags(self, state: str) -> bool:
+        """Apply a native lock state without triggering lock side effects."""
+        state = str(state).lower()
+        state_flags = {
+            LockState.JAMMED: "is_jammed",
+            LockState.OPEN: "is_open",
+            LockState.OPENING: "is_opening",
+            LockState.LOCKING: "is_locking",
+            LockState.UNLOCKING: "is_unlocking",
+            LockState.LOCKED: "is_locked",
+            LockState.UNLOCKED: None,
+        }
+        if state not in state_flags:
+            return False
+        active_flag = state_flags[state]
+        for flag in (
+            "is_jammed",
+            "is_open",
+            "is_opening",
+            "is_locking",
+            "is_unlocking",
+            "is_locked",
+        ):
+            setattr(self, f"_attr_{flag}", flag == active_flag)
+        return True
 
     def _lock(self) -> None:
         if self._test_jamming == 0 or random.randint(0, self._test_jamming) > 0:
@@ -225,8 +253,12 @@ class VirtualLock(VirtualEntity, LockEntity):
             self._open()
         elif value in ["jammed"]:
             self._jam()
-        else:
+        elif value in ["locking", "unlocking", "opening"]:
+            self._set_lock_state_flags(value)
+        elif value in ["unlocked", "unlock", "off", "false", "0"]:
             self._unlock()
+        else:
+            raise ValueError(f"Invalid lock state: {value}")
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name == CONF_SUPPORT_OPEN:

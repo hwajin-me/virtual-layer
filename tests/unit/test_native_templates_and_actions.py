@@ -1,8 +1,10 @@
 """Tests for native property templates and command actions."""
 
+import asyncio
 from datetime import timedelta
 from importlib import import_module
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from homeassistant.components.climate import ClimateEntityFeature, HVACMode
@@ -17,6 +19,7 @@ from homeassistant.components.light import ColorMode, LightEntityFeature
 from homeassistant.components.media_player import (
     MediaPlayerEntityFeature,
     MediaPlayerState,
+    RepeatMode,
 )
 from homeassistant.components.remote import RemoteEntityFeature
 from homeassistant.components.siren import SirenEntityFeature
@@ -34,6 +37,7 @@ from custom_components.virtual_layer.const import (
     CONF_INITIAL_VALUE,
     CONF_NAME,
     CONF_NATIVE_TEMPLATES,
+    CONF_PERSISTENT,
     VIRTUAL_ENTITY_COMMANDS,
 )
 from custom_components.virtual_layer.cover import COVER_SCHEMA, VirtualCover
@@ -104,6 +108,210 @@ def test_command_contracts_match_wrapped_platform_methods():
         }
 
         assert wrapped_commands == expected_commands, domain
+
+
+def test_numeric_native_templates_reject_boolean_values(hass):
+    entities_and_fields = [
+        (
+            VirtualClimate(
+                CLIMATE_SCHEMA(
+                    _base(
+                        "climate.boolean_numeric",
+                        "off",
+                        hvac_modes=["off", "heat"],
+                    )
+                ),
+                False,
+            ),
+            "min_temp",
+        ),
+        (
+            VirtualHumidifier(
+                HUMIDIFIER_SCHEMA(_base("humidifier.boolean_numeric", "off")),
+                False,
+            ),
+            "min_humidity",
+        ),
+        (
+            VirtualFan(FAN_SCHEMA(_base("fan.boolean_numeric", "off")), False),
+            "speed_count",
+        ),
+        (
+            VirtualCamera(
+                CAMERA_SCHEMA(_base("camera.boolean_numeric", "on")),
+                False,
+            ),
+            "frame_interval",
+        ),
+        (
+            VirtualCover(
+                COVER_SCHEMA(_base("cover.boolean_numeric", "open")),
+                False,
+            ),
+            "current_cover_tilt_position",
+        ),
+        (
+            VirtualDeviceTracker(
+                DEVICE_TRACKER_SCHEMA(
+                    _base("device_tracker.boolean_numeric", "not_home")
+                )
+            ),
+            "location_accuracy",
+        ),
+        (
+            VirtualLight(
+                LIGHT_SCHEMA(_base("light.boolean_numeric", "on")),
+                False,
+            ),
+            "min_color_temp_kelvin",
+        ),
+        (
+            VirtualNumber(
+                NUMBER_SCHEMA(
+                    _base("number.boolean_numeric", "1", min=0, max=10)
+                ),
+                False,
+            ),
+            "native_step",
+        ),
+        (
+            VirtualSensor(
+                SENSOR_SCHEMA(_base("sensor.boolean_numeric", "1")),
+                False,
+            ),
+            "suggested_display_precision",
+        ),
+        (
+            VirtualWaterHeater(
+                GENERIC_ENTITY_SCHEMA(
+                    _base("water_heater.boolean_numeric", "off")
+                ),
+                False,
+            ),
+            "target_temperature",
+        ),
+        (
+            GenericVirtualEntity(
+                GENERIC_ENTITY_SCHEMA(_base("weather.boolean_numeric", "sunny")),
+                "weather",
+                False,
+            ),
+            "wind_bearing",
+        ),
+    ]
+
+    for entity, field_name in entities_and_fields:
+        with pytest.raises(ValueError, match="number|numeric|integer|between"):
+            entity._apply_native_template_value(field_name, True)
+
+    with pytest.raises(ValueError, match="coordinates"):
+        VirtualDeviceTracker._validated_coordinates(True, 127)
+    with pytest.raises(ValueError, match="boolean"):
+        entities_and_fields[8][0].set_state(True)
+
+
+async def test_numeric_services_reject_boolean_values():
+    climate = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.boolean_service",
+                "off",
+                hvac_modes=["off", "heat"],
+                min_temp=0,
+                max_temp=30,
+                min_humidity=0,
+                max_humidity=100,
+            )
+        ),
+        False,
+    )
+    humidifier = VirtualHumidifier(
+        HUMIDIFIER_SCHEMA(
+            _base(
+                "humidifier.boolean_service",
+                "off",
+                min_humidity=0,
+                max_humidity=100,
+            )
+        ),
+        False,
+    )
+    cover = VirtualCover(
+        COVER_SCHEMA(_base("cover.boolean_service", "open")),
+        False,
+    )
+    media = VirtualMediaPlayer(
+        GENERIC_ENTITY_SCHEMA(_base("media_player.boolean_service", "idle")),
+        False,
+    )
+    heater = VirtualWaterHeater(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "water_heater.boolean_service",
+                "off",
+                min_temp=0,
+                max_temp=100,
+            )
+        ),
+        False,
+    )
+    for entity in (climate, humidifier, cover, media, heater):
+        entity._create_state(entity._config)
+        entity.async_write_ha_state = Mock()
+
+    with pytest.raises(ValueError):
+        await climate.async_set_temperature(temperature=True)
+    with pytest.raises(ValueError):
+        await climate.async_set_humidity(True)
+    with pytest.raises(ValueError):
+        await humidifier.async_set_humidity(True)
+    with pytest.raises(ValueError):
+        await cover.async_set_cover_tilt_position(tilt_position=True)
+    with pytest.raises(ValueError):
+        await media.async_set_volume_level(True)
+    with pytest.raises(ValueError):
+        await heater.async_set_temperature(temperature=True)
+
+
+async def test_light_turn_on_rolls_back_all_values_when_validation_fails():
+    light = VirtualLight(
+        LIGHT_SCHEMA(
+            _base(
+                "light.atomic_turn_on",
+                "off",
+                support_color=True,
+                initial_color=[20, 30],
+                support_effect=True,
+                initial_effect_list=["none", "rainbow"],
+            )
+        ),
+        False,
+    )
+    light._create_state(light._config)
+    light.async_write_ha_state = Mock()
+    initial = (
+        light.is_on,
+        light.brightness,
+        light.color_mode,
+        light.hs_color,
+        light.effect,
+    )
+
+    with pytest.raises(ValueError, match="effect"):
+        await light.async_turn_on(
+            brightness=200,
+            hs_color=(120, 80),
+            effect="invalid",
+        )
+
+    assert (
+        light.is_on,
+        light.brightness,
+        light.color_mode,
+        light.hs_color,
+        light.effect,
+    ) == initial
+    light.async_write_ha_state.assert_not_called()
 
 
 def test_climate_native_templates_render_lists_enums_and_numbers(hass):
@@ -275,6 +483,82 @@ def test_humidifier_native_templates_render_target_action_and_modes(hass):
     assert HumidifierEntityFeature.MODES in entity.supported_features
 
 
+def test_hvac_fan_and_humidifier_templates_normalize_mode_whitespace(hass):
+    climate = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.whitespace",
+                "off",
+                hvac_modes=["off", "cool"],
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "hvac_modes": "{{ [' off ', ' cool '] }}",
+                        "hvac_mode": "{{ ' COOL ' }}",
+                        "hvac_action": "{{ ' COOLING ' }}",
+                        "fan_modes": "{{ [' auto ', ' turbo '] }}",
+                        "fan_mode": "{{ ' turbo ' }}",
+                        "temperature_unit": "{{ ' °F ' }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    fan = VirtualFan(
+        FAN_SCHEMA(
+            _base(
+                "fan.whitespace",
+                "off",
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "preset_modes": "{{ [' quiet ', ' boost '] }}",
+                        "preset_mode": "{{ ' boost ' }}",
+                        "current_direction": "{{ ' REVERSE ' }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    humidifier = VirtualHumidifier(
+        HUMIDIFIER_SCHEMA(
+            _base(
+                "humidifier.whitespace",
+                "on",
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "available_modes": "{{ [' auto ', ' sleep '] }}",
+                        "mode": "{{ ' sleep ' }}",
+                        "action": "{{ ' DRYING ' }}",
+                        "device_class": "{{ ' DEHUMIDIFIER ' }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+
+    for entity in (climate, fan, humidifier):
+        entity.hass = hass
+        entity._create_state(entity._config)
+        entity.async_schedule_update_ha_state = Mock()
+        entity._apply_templates()
+
+    assert climate.hvac_modes == [HVACMode.OFF, HVACMode.COOL]
+    assert climate.hvac_mode == HVACMode.COOL
+    assert climate.hvac_action == HVACAction.COOLING
+    assert climate.fan_modes == ["auto", "turbo"]
+    assert climate.fan_mode == "turbo"
+    assert climate.temperature_unit == UnitOfTemperature.FAHRENHEIT
+    assert fan.preset_modes == ["quiet", "boost"]
+    assert fan.preset_mode == "boost"
+    assert fan.current_direction == "reverse"
+    assert humidifier.available_modes == ["auto", "sleep"]
+    assert humidifier.mode == "sleep"
+    assert humidifier.action == HumidifierAction.DRYING
+    assert humidifier.device_class == HumidifierDeviceClass.DEHUMIDIFIER
+
+
 def test_attribute_template_preserves_structured_jinja_result(hass):
     entity = VirtualSensor(
         SENSOR_SCHEMA(
@@ -371,6 +655,90 @@ async def test_command_action_defaults_to_optimistic_native_update(hass):
     entity.async_write_ha_state.assert_called_once()
 
 
+async def test_command_actions_run_for_independent_concurrent_commands(hass):
+    calls = []
+    both_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _capture(call):
+        calls.append(call.data["requested"])
+        if len(calls) == 2:
+            both_started.set()
+        await release.wait()
+
+    hass.services.async_register("virtual_test", "capture_parallel", _capture)
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            _base(
+                "fan.parallel_actions",
+                "off",
+                speed_count=3,
+                **{
+                    CONF_COMMAND_ACTIONS: {
+                        "set_percentage": {
+                            "optimistic": False,
+                            "sequence": [{
+                                "action": "virtual_test.capture_parallel",
+                                "data": {"requested": "{{ percentage }}"},
+                            }],
+                        }
+                    }
+                },
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    tasks = [
+        asyncio.create_task(entity.async_set_percentage(25)),
+        asyncio.create_task(entity.async_set_percentage(75)),
+    ]
+    await asyncio.wait_for(both_started.wait(), 1)
+    release.set()
+    await asyncio.gather(*tasks)
+
+    assert sorted(calls) == [25, 75]
+    assert entity.percentage == 0
+
+
+async def test_command_action_chain_still_prevents_recursive_reentry(hass):
+    calls = 0
+    entity = None
+
+    async def _reenter(_call):
+        nonlocal calls
+        calls += 1
+        await entity.async_set_percentage(60)
+
+    hass.services.async_register("virtual_test", "reenter", _reenter)
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            _base(
+                "fan.recursive_action",
+                "off",
+                speed_count=3,
+                **{
+                    CONF_COMMAND_ACTIONS: {
+                        "set_percentage": [{"action": "virtual_test.reenter"}],
+                    }
+                },
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    await entity.async_set_percentage(30)
+
+    assert calls == 1
+    assert entity.percentage == 30
+
+
 async def test_command_action_flattens_kwargs_for_climate_templates(hass):
     calls = []
 
@@ -414,6 +782,212 @@ def _render_native_templates(entity, hass):
     entity.async_schedule_update_ha_state = Mock()
     entity.async_write_ha_state = Mock()
     entity._apply_templates()
+
+
+@pytest.mark.asyncio
+async def test_persistent_entities_restore_against_templated_capabilities(hass):
+    select = VirtualSelect(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "select.restored_dynamic",
+                "old",
+                options=["old"],
+                **{
+                    CONF_PERSISTENT: True,
+                    CONF_NATIVE_TEMPLATES: {
+                        "options": "{{ ['eco', 'turbo'] }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    number = VirtualNumber(
+        NUMBER_SCHEMA(
+            _base(
+                "number.restored_dynamic",
+                "10",
+                min=0,
+                max=100,
+                **{
+                    CONF_PERSISTENT: True,
+                    CONF_NATIVE_TEMPLATES: {
+                        "max": "{{ 200 }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    light = VirtualLight(
+        LIGHT_SCHEMA(
+            _base(
+                "light.restored_dynamic",
+                "on",
+                support_effect=False,
+                **{
+                    CONF_PERSISTENT: True,
+                    CONF_NATIVE_TEMPLATES: {
+                        "effects": "{{ ['none', 'rainbow'] }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    remote = VirtualRemote(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "remote.restored_dynamic",
+                "off",
+                **{
+                    CONF_PERSISTENT: True,
+                    CONF_NATIVE_TEMPLATES: {
+                        "activity_list": "{{ ['TV', 'Music'] }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    media = VirtualMediaPlayer(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "media_player.restored_dynamic",
+                "idle",
+                **{
+                    CONF_PERSISTENT: True,
+                    CONF_NATIVE_TEMPLATES: {
+                        "source_list": "{{ ['TV', 'Radio'] }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    water_heater = VirtualWaterHeater(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "water_heater.restored_dynamic",
+                "off",
+                **{
+                    CONF_PERSISTENT: True,
+                    CONF_NATIVE_TEMPLATES: {
+                        "operation_list": "{{ ['off', 'eco'] }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    fan = VirtualFan(
+        FAN_SCHEMA(
+            _base(
+                "fan.restored_dynamic",
+                "off",
+                **{
+                    CONF_PERSISTENT: True,
+                    CONF_NATIVE_TEMPLATES: {
+                        "preset_modes": "{{ ['quiet', 'boost'] }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    humidifier = VirtualHumidifier(
+        HUMIDIFIER_SCHEMA(
+            _base(
+                "humidifier.restored_dynamic",
+                "off",
+                **{
+                    CONF_PERSISTENT: True,
+                    CONF_NATIVE_TEMPLATES: {
+                        "available_modes": "{{ ['normal', 'dry'] }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    climate = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.restored_dynamic",
+                "off",
+                hvac_modes=["off", "cool"],
+                **{
+                    CONF_PERSISTENT: True,
+                    CONF_NATIVE_TEMPLATES: {
+                        "fan_modes": "{{ ['auto', 'turbo'] }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    cases = (
+        (select, SimpleNamespace(state="turbo", attributes={})),
+        (number, SimpleNamespace(state="150", attributes={})),
+        (
+            light,
+            SimpleNamespace(
+                state="on",
+                attributes={"color_mode": "brightness", "effect": "rainbow"},
+            ),
+        ),
+        (
+            remote,
+            SimpleNamespace(state="on", attributes={"current_activity": "Music"}),
+        ),
+        (
+            media,
+            SimpleNamespace(state="playing", attributes={"source": "Radio"}),
+        ),
+        (water_heater, SimpleNamespace(state="eco", attributes={})),
+        (
+            fan,
+            SimpleNamespace(state="on", attributes={"preset_mode": "boost"}),
+        ),
+        (
+            humidifier,
+            SimpleNamespace(state="on", attributes={"mode": "dry"}),
+        ),
+        (
+            climate,
+            SimpleNamespace(state="cool", attributes={"fan_mode": "turbo"}),
+        ),
+    )
+
+    for entity, restored_state in cases:
+        entity.hass = hass
+        entity.async_get_last_state = AsyncMock(return_value=restored_state)
+        entity.async_schedule_update_ha_state = Mock()
+        entity.async_write_ha_state = Mock()
+        await entity.async_added_to_hass()
+
+    assert select.options == ["eco", "turbo"]
+    assert select.current_option == "turbo"
+    assert number.native_max_value == 200
+    assert number.native_value == 150
+    assert light.effect_list == ["none", "rainbow"]
+    assert light.effect == "rainbow"
+    assert LightEntityFeature.EFFECT in light.supported_features
+    assert remote.activity_list == ["TV", "Music"]
+    assert remote.current_activity == "Music"
+    assert media.source_list == ["TV", "Radio"]
+    assert media.source == "Radio"
+    assert water_heater.operation_list == ["off", "eco"]
+    assert water_heater.current_operation == "eco"
+    assert fan.preset_modes == ["quiet", "boost"]
+    assert fan.preset_mode == "boost"
+    assert humidifier.available_modes == ["normal", "dry"]
+    assert humidifier.mode == "dry"
+    assert climate.fan_modes == ["auto", "turbo"]
+    assert climate.fan_mode == "turbo"
+
+    for entity, _restored_state in cases:
+        await entity.async_will_remove_from_hass()
 
 
 def test_select_and_text_templates_validate_dynamic_contracts(hass):
@@ -485,6 +1059,7 @@ def test_media_remote_and_siren_templates_refresh_features(hass):
                         "media_image_remotely_accessible": "{{ true }}",
                         "group_members": "{{ ['media_player.dynamic'] }}",
                         "shuffle": "{{ true }}",
+                        "repeat": "{{ 'all' }}",
                         "state": "{{ 'playing' }}",
                     }
                 },
@@ -539,13 +1114,81 @@ def test_media_remote_and_siren_templates_refresh_features(hass):
     assert media.media_image_remotely_accessible is True
     assert media.group_members == ["media_player.dynamic"]
     assert media.shuffle is True
+    assert media.repeat == RepeatMode.ALL
     assert MediaPlayerEntityFeature.SELECT_SOURCE in media.supported_features
+    assert MediaPlayerEntityFeature.SELECT_SOUND_MODE in media.supported_features
+    assert MediaPlayerEntityFeature.SHUFFLE_SET in media.supported_features
+    assert MediaPlayerEntityFeature.REPEAT_SET in media.supported_features
     assert remote.current_activity == "Music"
     assert RemoteEntityFeature.ACTIVITY in remote.supported_features
     assert siren.available_tones == ["alarm", "chime"]
     assert SirenEntityFeature.TONES in siren.supported_features
     assert SirenEntityFeature.VOLUME_SET not in siren.supported_features
     assert SirenEntityFeature.DURATION not in siren.supported_features
+
+
+async def test_media_player_sound_shuffle_and_repeat_services_update_native_values(
+    hass,
+):
+    media = VirtualMediaPlayer(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "media_player.controls",
+                "idle",
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "sound_mode_list": "{{ ['movie', 'music'] }}",
+                        "sound_mode": "{{ 'movie' }}",
+                        "shuffle": "{{ false }}",
+                        "repeat": "{{ 'off' }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    _render_native_templates(media, hass)
+    media.async_write_ha_state = Mock()
+
+    await media.async_select_sound_mode("music")
+    await media.async_set_shuffle(True)
+    await media.async_set_repeat(RepeatMode.ONE)
+
+    assert media.sound_mode == "music"
+    assert media.shuffle is True
+    assert media.repeat == RepeatMode.ONE
+    assert media.async_write_ha_state.call_count == 3
+
+
+def test_media_player_restores_sound_shuffle_and_repeat_native_values(hass):
+    media = VirtualMediaPlayer(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "media_player.restore_controls",
+                "idle",
+                source_list=["TV", "Radio"],
+            )
+        ),
+        False,
+    )
+    media.hass = hass
+
+    media._restore_state(
+        SimpleNamespace(
+            state="playing",
+            attributes={
+                "available": True,
+                "sound_mode": " music ",
+                "shuffle": True,
+                "repeat": "one",
+            },
+        ),
+        media._config,
+    )
+
+    assert media.sound_mode == "music"
+    assert media.shuffle is True
+    assert media.repeat == RepeatMode.ONE
 
 
 def test_water_heater_and_update_templates_reconcile_ranges_and_features(hass):
@@ -698,6 +1341,67 @@ def test_light_number_and_vacuum_templates_use_native_types(hass):
     assert VacuumEntityFeature.FAN_SPEED in vacuum.supported_features
     vacuum._update_attributes()
     assert vacuum.extra_state_attributes["battery_level"] == 87
+
+
+@pytest.mark.parametrize(
+    ("mode", "service_key", "service_value", "expected"),
+    [
+        ("xy", "xy_color", [0.25, 0.75], (0.25, 0.75)),
+        ("rgb", "rgb_color", [10, 20, 30], (10, 20, 30)),
+        ("rgbw", "rgbw_color", [10, 20, 30, 40], (10, 20, 30, 40)),
+        (
+            "rgbww",
+            "rgbww_color",
+            [10, 20, 30, 40, 50],
+            (10, 20, 30, 40, 50),
+        ),
+    ],
+)
+async def test_light_color_modes_update_and_restore_native_colors(
+    hass,
+    mode,
+    service_key,
+    service_value,
+    expected,
+):
+    config = LIGHT_SCHEMA(
+        _base(
+            f"light.{mode}",
+            "on",
+            **{
+                CONF_NATIVE_TEMPLATES: {
+                    "supported_color_modes": "{{ [" + repr(mode) + "] }}",
+                },
+            },
+        )
+    )
+    entity = VirtualLight(config, False)
+    _render_native_templates(entity, hass)
+
+    await entity.async_turn_on(**{service_key: service_value, "brightness": 123})
+
+    assert entity.color_mode == ColorMode(mode)
+    assert getattr(entity, service_key) == expected
+    assert entity.brightness == 123
+
+    restored = VirtualLight(config, False)
+    restored.hass = hass
+    restored._apply_restore_prerequisite_templates()
+    restored._restore_state(
+        SimpleNamespace(
+            state="on",
+            attributes={
+                "color_mode": mode,
+                service_key: service_value,
+                "brightness": 123,
+            },
+        ),
+        config,
+    )
+
+    assert restored.color_mode == ColorMode(mode)
+    assert getattr(restored, service_key) == expected
+    assert restored.brightness == 123
 
 
 def test_vacuum_fan_speed_template_does_not_require_a_speed_list(hass):

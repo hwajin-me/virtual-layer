@@ -59,12 +59,12 @@ from custom_components.virtual_layer.camera import (
 from custom_components.virtual_layer.climate import CLIMATE_SCHEMA
 from custom_components.virtual_layer.config_flow import (
     ACTION_ADD_ENTITY,
+    ACTION_DELETE_DEVICE,
     ACTION_DELETE_ENTITY,
     ACTION_EDIT_ENTITY,
     ACTION_FINISH,
     ACTION_MANAGE_DEVICES,
     CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
-    DOMAIN_NATIVE_TEMPLATE_PROPERTIES,
     CONF_ACTION,
     CONF_ADVANCED_SETTINGS,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
@@ -85,6 +85,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TARGET_DEVICE_NAME,
     CONF_TEMPLATE_SOURCES_JSON,
+    DOMAIN_NATIVE_TEMPLATE_PROPERTIES,
     HELPER_UPDATE_AUTO,
     HELPER_UPDATE_FORCE,
     HELPER_UPDATE_KEEP,
@@ -251,6 +252,41 @@ async def test_options_flow_rejects_invalid_jinja_before_saving(hass):
     assert entry.options[ATTR_DEVICES] == {}
 
 
+async def test_options_flow_rejects_an_entity_id_owned_by_another_entity(hass):
+    hass.states.async_set("sensor.existing_meter", "42")
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: []},
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults.update({
+        CONF_DEVICE_NAME: "Meters",
+        CONF_ENTITY_NAME: "Virtual Meter",
+        ATTR_ENTITY_ID: "sensor.existing_meter",
+    })
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "entity"
+    assert result["errors"] == {ATTR_ENTITY_ID: "entity_id_used"}
+    assert entry.options[ATTR_DEVICES] == {}
+
+
 async def test_vacuum_edit_hides_json_and_preserves_native_templates(hass):
     device_name = "Robot Vacuum"
     managed_property = "battery_level"
@@ -356,6 +392,24 @@ def test_set_attributes_schema_uses_home_assistant_serialization_extensions():
         ATTR_ATTRIBUTES: payload,
     })
     assert validated[ATTR_ATTRIBUTES] == payload
+
+
+def test_set_attributes_schema_rejects_recursive_and_excessively_deep_values():
+    recursive = {}
+    recursive["self"] = recursive
+
+    nested = {}
+    cursor = nested
+    for _ in range(102):
+        cursor["next"] = {}
+        cursor = cursor["next"]
+
+    for attributes in (recursive, nested):
+        with pytest.raises(vol.Invalid):
+            SERVICE_SET_ATTRIBUTES_SCHEMA({
+                ATTR_ENTITY_ID: ["sensor.virtual"],
+                ATTR_ATTRIBUTES: attributes,
+            })
 
 
 async def test_home_assistant_loads_korean_config_translations(hass):
@@ -887,6 +941,75 @@ async def test_options_flow_can_delete_multiple_entities(hass):
             CONF_NAME: "Laundry",
         },
     }
+
+
+async def test_options_flow_can_delete_a_malformed_device_group(hass):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Healthy": [{CONF_PLATFORM: "sensor", CONF_NAME: "Power"}],
+                "Broken": "not-an-entity-list",
+            },
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Healthy": {ATTR_DEVICE_ID: "healthy-1"},
+                "Broken": {ATTR_DEVICE_ID: "broken-1"},
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_DELETE_DEVICE},
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "delete_device"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_MANAGED_DEVICE_NAME: "Broken"},
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][ATTR_DEVICES] == {
+        "Healthy": [{CONF_PLATFORM: "sensor", CONF_NAME: "Power"}],
+    }
+    assert result["data"][ATTR_DEVICE_ATTRIBUTES] == {
+        "Healthy": {ATTR_DEVICE_ID: "healthy-1"},
+    }
+
+
+async def test_options_flow_can_delete_the_only_malformed_entity(hass):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {"Broken": ["not-an-entity"]},
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Broken": {ATTR_DEVICE_ID: "broken-1", CONF_NAME: "Broken"},
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_DELETE_ENTITY},
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "delete_entities"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEYS: [_entity_key("Broken", 0)]},
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][ATTR_DEVICES] == {}
+    assert result["data"][ATTR_DEVICE_ATTRIBUTES] == {}
 
 
 async def test_options_flow_can_edit_existing_entity(hass):
@@ -2046,6 +2169,61 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     )
     assert native_templates["brightness"] == (
         "{{ state_attr('light.kitchen_lamp', 'brightness') }}"
+    )
+
+
+async def test_options_flow_refreshes_untouched_helpers_when_add_sources_change(hass):
+    old_sources = [
+        "binary_sensor.door_one",
+        "binary_sensor.door_two",
+    ]
+    new_sources = [
+        "binary_sensor.door_one",
+        "binary_sensor.door_three",
+    ]
+    for entity_id, state in zip(
+        [*old_sources, new_sources[-1]],
+        ["on", "off", "on"],
+        strict=True,
+    ):
+        hass.states.async_set(entity_id, state, {"device_class": "door"})
+
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: old_sources},
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert "door_two" in defaults[CONF_VALUE_TEMPLATE]
+
+    defaults[CONF_DEVICE_NAME] = "Doors"
+    defaults[CONF_SOURCE_ENTITIES_TEXT] = "\n".join(new_sources)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    saved = result["data"][ATTR_DEVICES]["Doors"][0]
+    assert saved[CONF_SOURCE_ENTITIES] == new_sources
+    assert {
+        source[ATTR_ENTITY_ID]
+        for source in saved[CONF_TEMPLATE_SOURCES].values()
+    } == set(new_sources)
+    assert "door_three" in saved[CONF_VALUE_TEMPLATE]
+    assert "door_two" not in saved[CONF_VALUE_TEMPLATE]
+    assert saved[CONF_AUTO_HELPER][CONF_SOURCE_ENTITIES_TEXT] == "\n".join(
+        new_sources
     )
 
 

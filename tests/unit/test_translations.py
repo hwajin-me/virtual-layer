@@ -200,6 +200,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
         "select_device": _select_device_schema(entity_options),
         "edit_device": _device_schema({CONF_DEVICE_NAME: "Laundry"}),
         "delete_entities": _delete_entities_schema(entity_options),
+        "delete_device": _select_device_schema(entity_options),
         "edit_entity": _entity_schema(),
         "edit_entity_helper": _helper_update_schema(),
         "edit_entity_source": _reference_entity_schema(
@@ -222,12 +223,14 @@ def test_english_translation_covers_config_flow_forms_and_errors():
         "group_name_used",
         "invalid_json",
         "invalid_entity_id",
+        "entity_id_used",
         "invalid_domain_options",
         "required",
     } <= set(english["config"]["error"])
     assert {
         "invalid_json",
         "invalid_entity_id",
+        "entity_id_used",
         "invalid_domain_options",
         "device_not_found",
         "entity_not_found",

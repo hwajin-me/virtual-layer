@@ -157,7 +157,15 @@ def _entity_config(domain: str) -> dict:
                 }],
             },
         },
-        "cover": {"open_close_duration": 0},
+        "cover": {
+            "open_close_duration": 0,
+            "command_actions": {
+                "set_cover_tilt_position": [{
+                    "action": "virtual_layer_smoke.capture",
+                    "data": {"command": "set_cover_tilt_position"},
+                }],
+            },
+        },
         "fan": {
             "speed_count": 3,
             "oscillate": True,
@@ -196,16 +204,27 @@ def _entity_config(domain: str) -> dict:
             "initial_effect_list": ["none", "rainbow"],
             "initial_effect": "none",
             "native_templates": {
-                "supported_color_modes": "{{ ['hs', 'color_temp'] }}",
+                "supported_color_modes": "{{ ['hs', 'rgb', 'color_temp'] }}",
                 "effect_list": "{{ ['none', 'rainbow'] }}",
             },
         },
         "lock": {"support_open": True},
         "media_player": {
-            "source_list": ["TV", "Radio"],
             "source": "TV",
             "native_templates": {
                 "source_list": "{{ ['TV', 'Radio'] }}",
+                "sound_mode_list": "{{ ['movie', 'music'] }}",
+            },
+            "command_actions": {
+                command: [{
+                    "action": "virtual_layer_smoke.capture",
+                    "data": {"command": command},
+                }]
+                for command in (
+                    "select_sound_mode",
+                    "set_shuffle",
+                    "set_repeat",
+                )
             },
         },
         "number": {
@@ -220,11 +239,9 @@ def _entity_config(domain: str) -> dict:
             },
         },
         "remote": {
-            "activity_list": ["TV", "Music"],
             "native_templates": {"activity_list": "{{ ['TV', 'Music'] }}"},
         },
         "select": {
-            "options": ["eco", "boost"],
             "native_templates": {"options": "{{ ['eco', 'boost'] }}"},
         },
         "siren": {
@@ -264,8 +281,8 @@ def _entity_config(domain: str) -> dict:
         },
         "valve": {"open_close_duration": 0},
         "water_heater": {
-            "operation_list": ["off", "eco", "heat"],
             "target_temperature": 50,
+            "is_away_mode_on": False,
             "native_templates": {
                 "operation_list": "{{ ['off', 'eco', 'heat'] }}",
                 "min_temp": "{{ 35 }}",
@@ -785,7 +802,11 @@ async def _async_test_services(hass: HomeAssistant) -> list[str]:
         (
             "climate",
             "set_temperature",
-            {"entity_id": "climate.docker_climate", "temperature": 24},
+            {
+                "entity_id": "climate.docker_climate",
+                "temperature": 24,
+                "hvac_mode": "heat",
+            },
         ),
         (
             "climate",
@@ -879,6 +900,24 @@ async def _async_test_services(hass: HomeAssistant) -> list[str]:
             "media_player",
             "select_source",
             {"entity_id": "media_player.docker_media_player", "source": "Radio"},
+        ),
+        (
+            "media_player",
+            "select_sound_mode",
+            {
+                "entity_id": "media_player.docker_media_player",
+                "sound_mode": "music",
+            },
+        ),
+        (
+            "media_player",
+            "shuffle_set",
+            {"entity_id": "media_player.docker_media_player", "shuffle": True},
+        ),
+        (
+            "media_player",
+            "repeat_set",
+            {"entity_id": "media_player.docker_media_player", "repeat": "one"},
         ),
         (
             "number",
@@ -1049,6 +1088,9 @@ def _state_contract_errors(hass: HomeAssistant) -> list[str]:
                 "volume_level": 0.7,
                 "is_volume_muted": True,
                 "source": "Radio",
+                "sound_mode": "music",
+                "shuffle": True,
+                "repeat": "one",
             },
         ),
         "number": ("42.0", {"step": 0.5, "mode": "slider"}),
@@ -1466,6 +1508,14 @@ async def _async_test_feature_sequences(hass: HomeAssistant) -> list[str]:
             "open",
             {"current_position": 100},
         ),
+        (
+            "cover",
+            "set_cover_tilt_position",
+            "cover.docker_cover",
+            "open",
+            {"current_tilt_position": 64},
+            {"tilt_position": 64},
+        ),
         ("fan", "turn_off", "fan.docker_fan", "off", {"percentage": 0}),
         (
             "fan",
@@ -1496,6 +1546,14 @@ async def _async_test_feature_sequences(hass: HomeAssistant) -> list[str]:
             "on",
             {"hs_color": (120.0, 50.0)},
             {"hs_color": [120, 50]},
+        ),
+        (
+            "light",
+            "turn_on",
+            "light.docker_light",
+            "on",
+            {"rgb_color": (10, 20, 30)},
+            {"rgb_color": [10, 20, 30]},
         ),
         (
             "light",
@@ -1560,6 +1618,14 @@ async def _async_test_feature_sequences(hass: HomeAssistant) -> list[str]:
         ),
         ("water_heater", "turn_off", "water_heater.docker_water_heater", "off", {}),
         ("water_heater", "turn_on", "water_heater.docker_water_heater", "eco", {}),
+        (
+            "water_heater",
+            "set_away_mode",
+            "water_heater.docker_water_heater",
+            "eco",
+            {"away_mode": "on"},
+            {"away_mode": True},
+        ),
     ]
     for case in cases:
         domain, service, entity_id, state, attributes, *service_data = case
@@ -1604,7 +1670,10 @@ def _feature_sequence_restore_errors(hass: HomeAssistant) -> list[str]:
     expected = {
         "binary_sensor.docker_binary_sensor": ("on", {}),
         "climate.docker_climate": ("heat", {"hvac_action": "idle"}),
-        "cover.docker_cover": ("open", {"current_position": 100}),
+        "cover.docker_cover": (
+            "open",
+            {"current_position": 100, "current_tilt_position": 64},
+        ),
         "fan.docker_fan": ("on", {"percentage": 33, "preset_mode": None}),
         "humidifier.docker_humidifier": ("on", {"action": "humidifying"}),
         "lawn_mower.docker_lawn_mower": ("returning", {}),
@@ -1616,9 +1685,18 @@ def _feature_sequence_restore_errors(hass: HomeAssistant) -> list[str]:
         "media_player.docker_media_player": ("on", {}),
         "remote.docker_remote": ("on", {"current_activity": "TV"}),
         "siren.docker_siren": ("off", {}),
-        "vacuum.docker_vacuum": ("returning", {"fan_speed": "turbo"}),
+        "vacuum.docker_vacuum": (
+            "returning",
+            {
+                "fan_speed": "turbo",
+                "last_command": {"command": "locate"},
+            },
+        ),
         "valve.docker_valve": ("open", {"current_position": 100}),
-        "water_heater.docker_water_heater": ("eco", {"temperature": 55.0}),
+        "water_heater.docker_water_heater": (
+            "eco",
+            {"temperature": 55.0, "away_mode": "on"},
+        ),
     }
     errors: list[str] = []
     for entity_id, (expected_state, expected_attributes) in expected.items():

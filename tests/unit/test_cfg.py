@@ -5,6 +5,7 @@ import json
 import pytest
 from homeassistant.const import ATTR_ENTITY_ID, CONF_PLATFORM
 
+from custom_components.virtual_layer import cfg as cfg_module
 from custom_components.virtual_layer.cfg import (
     BlendedCfg,
     _async_load_json,
@@ -92,6 +93,39 @@ async def test_json_storage_ignores_integer_too_large_for_python_decoder(tmp_pat
     )
 
     assert await _async_load_json(str(storage_file)) == {}
+
+
+@pytest.mark.asyncio
+async def test_json_storage_rejects_oversized_metadata_without_unbounded_read(
+    tmp_path,
+    monkeypatch,
+):
+    storage_file = tmp_path / "oversized.json"
+    storage_file.write_bytes(b'{"padding":"' + b"x" * 32 + b'"}')
+    monkeypatch.setattr(cfg_module, "MAX_METADATA_BYTES", 16)
+
+    assert await _async_load_json(str(storage_file)) == {}
+
+
+@pytest.mark.asyncio
+async def test_json_storage_does_not_write_a_file_the_loader_will_reject(
+    tmp_path,
+    monkeypatch,
+):
+    storage_file = tmp_path / "metadata.json"
+    storage_file.write_text('{"previous": true}', encoding="utf-8")
+    monkeypatch.setattr(cfg_module, "MAX_METADATA_BYTES", 32)
+
+    with pytest.raises(ValueError, match="too large"):
+        await _async_save_json(
+            str(storage_file),
+            {"padding": "x" * 64},
+        )
+
+    assert json.loads(storage_file.read_text(encoding="utf-8")) == {
+        "previous": True,
+    }
+    assert not list(tmp_path.glob("metadata.json.*.tmp"))
 
 
 def test_stored_entity_normalization_sanitizes_non_finite_values():

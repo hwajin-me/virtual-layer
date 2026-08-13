@@ -35,6 +35,7 @@ and manage them from `Settings > Devices & services > Virtual Layer`.
   hardware version, and serial number
 - Create, edit, and delete virtual entities
 - Delete multiple entities in one operation
+- Delete a complete virtual Device, including malformed legacy groups
 - Set entity name and entity ID from the UI
 - Create a virtual entity from one or more existing Home Assistant entities
 - Auto-generate useful helper templates when multiple source entities are
@@ -79,6 +80,7 @@ After setup, use `Configure` on the Virtual Layer integration entry to:
 - edit an existing virtual entity
 - delete one or more virtual entities
 - manage virtual device metadata
+- delete a virtual device and all of its entities
 - finish without changes
 
 Use `Reconfigure` to update the integration entry's main device name.
@@ -485,8 +487,6 @@ Current translation files:
 
 - English: `custom_components/virtual_layer/translations/en.json`
 - Korean: `custom_components/virtual_layer/translations/ko.json`
-- Czech: `custom_components/virtual_layer/translations/cz.json`
-- Slovak: `custom_components/virtual_layer/translations/sk.json`
 
 ## Testing
 

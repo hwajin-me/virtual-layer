@@ -8,6 +8,7 @@ import asyncio
 import logging
 import math
 from collections.abc import Callable
+from contextvars import ContextVar
 
 import aiofiles
 import homeassistant.helpers.config_validation as cv
@@ -30,9 +31,22 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, virtual_schema
+from .entity import (
+    MAX_LOCAL_MEDIA_BYTES,
+    VirtualEntity,
+    allowed_local_path,
+    virtual_schema,
+)
 
 _LOGGER = logging.getLogger(__name__)
+_CAMERA_IMAGE_ALIAS_CHAIN: ContextVar[frozenset[int]] = ContextVar(
+    "virtual_layer_camera_image_alias_chain",
+    default=frozenset(),
+)
+_CAMERA_STREAM_ALIAS_CHAIN: ContextVar[frozenset[int]] = ContextVar(
+    "virtual_layer_camera_stream_alias_chain",
+    default=frozenset(),
+)
 
 DEPENDENCIES = [COMPONENT_DOMAIN]
 
@@ -129,9 +143,17 @@ class VirtualCamera(VirtualEntity, Camera):
             )
         except vol.Invalid:
             self._attr_is_on = configured_is_on
-        self._attr_is_recording = state.attributes.get(CONF_IS_RECORDING, config.get(CONF_IS_RECORDING))
-        self._attr_is_streaming = state.attributes.get(CONF_IS_STREAMING, config.get(CONF_IS_STREAMING))
-        self._attr_motion_detection_enabled = state.attributes.get(CONF_MOTION_DETECTION, config.get(CONF_MOTION_DETECTION))
+        for attribute_name, config_name in (
+            ("_attr_is_recording", CONF_IS_RECORDING),
+            ("_attr_is_streaming", CONF_IS_STREAMING),
+            ("_attr_motion_detection_enabled", CONF_MOTION_DETECTION),
+        ):
+            fallback = config.get(config_name, False)
+            try:
+                value = cv.boolean(state.attributes.get(config_name, fallback))
+            except vol.Invalid:
+                value = fallback
+            setattr(self, attribute_name, value)
 
     @property
     def state_attributes(self):
@@ -149,6 +171,11 @@ class VirtualCamera(VirtualEntity, Camera):
             return None
         source = self._source_camera()
         if source is not None and not self._image_path:
+            marker = id(self)
+            active_aliases = _CAMERA_IMAGE_ALIAS_CHAIN.get()
+            if marker in active_aliases:
+                return None
+            token = _CAMERA_IMAGE_ALIAS_CHAIN.set(active_aliases | {marker})
             try:
                 return await source.async_camera_image(width=width, height=height)
             except (
@@ -165,18 +192,37 @@ class VirtualCamera(VirtualEntity, Camera):
                     err,
                 )
                 return None
+            finally:
+                _CAMERA_IMAGE_ALIAS_CHAIN.reset(token)
         if not self._image_path:
             return None
-        try:
-            async with aiofiles.open(self._image_path, "rb") as image_file:
-                return await image_file.read()
-        except OSError:
-            _LOGGER.warning(f"Unable to read virtual camera image {self._image_path}")
+        image_path = await self.hass.async_add_executor_job(
+            allowed_local_path,
+            self.hass,
+            self._image_path,
+        )
+        if image_path is None:
+            _LOGGER.warning("Blocked disallowed image path for %s", self.entity_id)
             return None
+        try:
+            async with aiofiles.open(image_path, "rb") as image_file:
+                image = await image_file.read(MAX_LOCAL_MEDIA_BYTES + 1)
+        except OSError:
+            _LOGGER.warning("Unable to read image for %s", self.entity_id)
+            return None
+        if len(image) > MAX_LOCAL_MEDIA_BYTES:
+            _LOGGER.warning("Local image is too large for %s", self.entity_id)
+            return None
+        return image
 
     async def stream_source(self) -> str | None:
         source = self._source_camera()
         if source is not None and not self._stream_source:
+            marker = id(self)
+            active_aliases = _CAMERA_STREAM_ALIAS_CHAIN.get()
+            if marker in active_aliases:
+                return None
+            token = _CAMERA_STREAM_ALIAS_CHAIN.set(active_aliases | {marker})
             try:
                 return await source.stream_source()
             except (
@@ -193,6 +239,8 @@ class VirtualCamera(VirtualEntity, Camera):
                     err,
                 )
                 return None
+            finally:
+                _CAMERA_STREAM_ALIAS_CHAIN.reset(token)
         return self._stream_source
 
     def _source_camera(self) -> Camera | None:
@@ -252,6 +300,8 @@ class VirtualCamera(VirtualEntity, Camera):
             self.set_state(value)
             return old_state != self._attr_is_on
         elif name == "frame_interval":
+            if isinstance(value, bool):
+                raise ValueError("frame_interval must be a positive number")
             try:
                 value = float(value)
             except (TypeError, ValueError, OverflowError) as err:

@@ -136,6 +136,43 @@ def test_tracker_restore_normalizes_valid_gps_coordinates_and_accuracy(hass):
     assert tracker.location_accuracy == 0
 
 
+@pytest.mark.parametrize(
+    ("state", "attributes", "expected_location"),
+    [
+        (
+            "not_home",
+            {
+                ATTR_LATITUDE: "37.5",
+                ATTR_LONGITUDE: "127.0",
+                "gps_accuracy": 12,
+            },
+            (None, 37.5, 127.0, 12),
+        ),
+        ("work", {}, ("work", None, None, 0)),
+    ],
+)
+def test_tracker_restores_legacy_state_without_available_attribute(
+    hass,
+    state,
+    attributes,
+    expected_location,
+):
+    tracker = _helper_tracker(hass)
+
+    tracker._restore_state(
+        SimpleNamespace(state=state, attributes=attributes),
+        tracker._config,
+    )
+
+    assert tracker.available is True
+    assert (
+        tracker._location,
+        tracker.latitude,
+        tracker.longitude,
+        tracker.location_accuracy,
+    ) == expected_location
+
+
 def test_location_helper_prefers_recent_outlier_and_holds_arrived_device(hass):
     tracker = _helper_tracker(hass)
     _set_position(hass, "device_tracker.first_phone", 37.5000, 127.0000)

@@ -18,6 +18,10 @@ from aiohttp import ClientError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 EARTH_RADIUS_METERS = 6_371_000
+MAX_GEOJSON_BYTES = 5 * 1024 * 1024
+MAX_GEOJSON_FEATURES = 1_000
+MAX_GEOJSON_POINTS = 100_000
+GEOJSON_DOWNLOAD_CHUNK_BYTES = 64 * 1024
 SUPPORTED_GEOMETRY_TYPES = {"Polygon", "MultiPolygon"}
 SVG_COLORS = (
     "#2563eb",
@@ -48,9 +52,12 @@ def _coordinate(value) -> tuple[float, float]:
     return longitude, latitude
 
 
-def _ring(value) -> list[tuple[float, float]]:
+def _ring(value, point_budget: list[int]) -> list[tuple[float, float]]:
     if not isinstance(value, list):
         raise InvalidGeoJson("GeoJSON polygon ring must be a list")
+    if len(value) > point_budget[0]:
+        raise InvalidGeoJson("GeoJSON contains too many coordinate points")
+    point_budget[0] -= len(value)
     ring = [_coordinate(item) for item in value]
     if len(ring) < 3:
         raise ValueError("GeoJSON polygon ring needs at least three points")
@@ -61,10 +68,10 @@ def _ring(value) -> list[tuple[float, float]]:
     return ring
 
 
-def _polygon(value) -> dict[str, Any]:
+def _polygon(value, point_budget: list[int]) -> dict[str, Any]:
     if not isinstance(value, list) or not value:
         raise ValueError("GeoJSON polygon must contain an exterior ring")
-    rings = [_ring(item) for item in value]
+    rings = [_ring(item, point_budget) for item in value]
     if _ring_area(rings[0]) == 0:
         raise ValueError("GeoJSON polygon exterior ring has no area")
     if any(_ring_area(hole) == 0 for hole in rings[1:]):
@@ -125,6 +132,8 @@ def _unwrap_ring(ring) -> list[tuple[float, float]]:
 def parse_geojson_zones(data, default_priority: int = 0) -> list[dict[str, Any]]:
     """Parse supported GeoJSON features into a compact runtime representation."""
     if isinstance(data, str):
+        if len(data.encode("utf-8")) > MAX_GEOJSON_BYTES:
+            raise InvalidGeoJson("GeoJSON document is too large")
         data = json.loads(data)
     if not isinstance(data, Mapping):
         raise InvalidGeoJson("GeoJSON root must be an object")
@@ -138,8 +147,11 @@ def parse_geojson_zones(data, default_priority: int = 0) -> list[dict[str, Any]]
         raise ValueError("GeoJSON root must be a Feature or FeatureCollection")
     if not isinstance(features, list):
         raise InvalidGeoJson("GeoJSON features must be a list")
+    if len(features) > MAX_GEOJSON_FEATURES:
+        raise InvalidGeoJson("GeoJSON contains too many features")
 
     zones = []
+    point_budget = [MAX_GEOJSON_POINTS]
     for feature_index, feature in enumerate(features):
         if not isinstance(feature, Mapping):
             raise InvalidGeoJson("GeoJSON feature must be an object")
@@ -162,11 +174,11 @@ def parse_geojson_zones(data, default_priority: int = 0) -> list[dict[str, Any]]
 
         coordinates = geometry.get("coordinates")
         if geometry_type == "Polygon":
-            polygons = [_polygon(coordinates)]
+            polygons = [_polygon(coordinates, point_budget)]
         else:
             if not isinstance(coordinates, list) or not coordinates:
                 raise ValueError("GeoJSON MultiPolygon must contain polygons")
-            polygons = [_polygon(item) for item in coordinates]
+            polygons = [_polygon(item, point_budget) for item in coordinates]
         area = sum(
             _ring_area(item["outer"])
             - sum(_ring_area(hole) for hole in item["holes"])
@@ -457,11 +469,28 @@ async def load_polygon_zones(
                 session = session or async_get_clientsession(hass)
                 async with session.get(file_name, timeout=20) as response:
                     response.raise_for_status()
-                    payload = await response.json(content_type=None)
+                    if (
+                        response.content_length is not None
+                        and response.content_length > MAX_GEOJSON_BYTES
+                    ):
+                        raise InvalidGeoJson("GeoJSON document is too large")
+                    chunks = []
+                    size = 0
+                    async for chunk in response.content.iter_chunked(
+                        GEOJSON_DOWNLOAD_CHUNK_BYTES
+                    ):
+                        size += len(chunk)
+                        if size > MAX_GEOJSON_BYTES:
+                            raise InvalidGeoJson("GeoJSON document is too large")
+                        chunks.append(chunk)
+                    document = b"".join(chunks)
             else:
                 path = await _local_geojson_path(hass, file_name)
-                async with aiofiles.open(path, encoding="utf-8") as geojson_file:
-                    payload = json.loads(await geojson_file.read())
+                async with aiofiles.open(path, "rb") as geojson_file:
+                    document = await geojson_file.read(MAX_GEOJSON_BYTES + 1)
+            if len(document) > MAX_GEOJSON_BYTES:
+                raise InvalidGeoJson("GeoJSON document is too large")
+            payload = json.loads(document)
             zones.extend(parse_geojson_zones(payload, file_index))
         except (
             asyncio.TimeoutError,

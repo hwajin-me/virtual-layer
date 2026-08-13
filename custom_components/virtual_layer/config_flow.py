@@ -822,6 +822,7 @@ _ATTRIBUTE_HELPER_METADATA_NAMES = frozenset(
 
 ACTION_ADD_ENTITY = "add_entity"
 ACTION_DELETE_ENTITY = "delete_entity"
+ACTION_DELETE_DEVICE = "delete_device"
 ACTION_EDIT_ENTITY = "edit_entity"
 ACTION_FINISH = "finish"
 ACTION_MANAGE_DEVICES = "manage_devices"
@@ -1068,6 +1069,7 @@ def _options_schema(options: dict[str, Any]) -> vol.Schema:
         actions.append(ACTION_DELETE_ENTITY)
     if _options_devices(options):
         actions.append(ACTION_MANAGE_DEVICES)
+        actions.append(ACTION_DELETE_DEVICE)
     actions.append(ACTION_FINISH)
     return vol.Schema(
         {
@@ -1502,7 +1504,7 @@ def _parse_json_object(value: str, field_name: str) -> dict[str, Any]:
             value,
             parse_constant=_reject_json_constant,
         )
-    except (json.JSONDecodeError, TypeError, ValueError) as err:
+    except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as err:
         raise InvalidJson(field_name) from err
     if not isinstance(parsed, dict):
         raise InvalidJson(field_name)
@@ -1517,7 +1519,7 @@ def _parse_json_value(value: str, field_name: str):
             value,
             parse_constant=_reject_json_constant,
         )
-    except (json.JSONDecodeError, TypeError, ValueError) as err:
+    except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as err:
         raise InvalidJson(field_name) from err
     return _validate_ha_json_value(parsed, field_name)
 
@@ -1526,7 +1528,7 @@ def _validate_ha_json_value(value, field_name: str):
     """Reject JSON values that Home Assistant cannot persist."""
     try:
         json_bytes(value)
-    except (OverflowError, TypeError, ValueError) as err:
+    except (OverflowError, RecursionError, TypeError, ValueError) as err:
         raise InvalidJson(field_name) from err
     return value
 
@@ -1994,6 +1996,27 @@ def _validate_virtual_dependency_cycle(
             raise InvalidEntityReference(field_name)
 
 
+def _validate_virtual_entity_id_available(
+    hass,
+    entity: Mapping,
+    replacing_entity_id: str | None = None,
+) -> None:
+    """Reject IDs that Home Assistant cannot assign to this virtual entity."""
+    entity_id = _virtual_entity_id(entity)
+    if entity_id is None or entity_id == replacing_entity_id:
+        return
+
+    for entry in hass.config_entries.async_entries(COMPONENT_DOMAIN):
+        for configured_entity in _iter_option_entities(entry.options):
+            if _virtual_entity_id(configured_entity) == entity_id:
+                raise EntityIdAlreadyUsed
+
+    if er.async_get(hass).async_get(entity_id) is not None:
+        raise EntityIdAlreadyUsed
+    if hass.states.get(entity_id) is not None:
+        raise EntityIdAlreadyUsed
+
+
 def _build_entity_config(
     user_input: dict[str, Any],
     schema=None,
@@ -2298,6 +2321,7 @@ async def _async_build_entity_config(
     )
     _validate_entity_templates(hass, entity)
     _validate_virtual_dependency_cycle(hass, entity, replacing_entity_id)
+    _validate_virtual_entity_id_available(hass, entity, replacing_entity_id)
     return device_name, entity
 
 
@@ -2817,10 +2841,19 @@ def _entity_key_from_stable_key(entity_key: str) -> str:
 
 
 def _selection_key_for_entity(
-    device_name: str, index: int, entity: dict[str, Any]
+    device_name: str,
+    index: int,
+    entity: Mapping,
+    *,
+    stable_key_is_unique: bool = True,
 ) -> str:
-    if entity.get(ATTR_ENTITY_KEY):
-        return _entity_key_from_stable_key(entity[ATTR_ENTITY_KEY])
+    entity_key = entity.get(ATTR_ENTITY_KEY)
+    if (
+        stable_key_is_unique
+        and isinstance(entity_key, str)
+        and entity_key
+    ):
+        return _entity_key_from_stable_key(entity_key)
     return _entity_key(device_name, index)
 
 
@@ -2834,6 +2867,7 @@ def _parse_entity_key(value: str) -> tuple[str, int]:
         or len(parsed) != 2
         or not isinstance(parsed[0], str)
         or not isinstance(parsed[1], int)
+        or isinstance(parsed[1], bool)
     ):
         raise InvalidEntitySelection
     return parsed[0], parsed[1]
@@ -2855,13 +2889,16 @@ def _find_entity_by_selection_key(
     ):
         wanted_key = parsed[1]
         devices = _options_devices(options)
+        matches = []
         for device_name, entities in devices.items():
             for index, entity in enumerate(_entity_list_or_empty(entities)):
                 if (
                     isinstance(entity, Mapping)
                     and entity.get(ATTR_ENTITY_KEY) == wanted_key
                 ):
-                    return device_name, index
+                    matches.append((device_name, index))
+        if len(matches) == 1:
+            return matches[0]
         raise InvalidEntitySelection
 
     return _parse_entity_key(value)
@@ -2873,6 +2910,15 @@ def _entity_choices(
     include_invalid: bool = False,
 ) -> dict[str, str]:
     devices = _options_devices(options)
+    stable_key_counts: dict[str, int] = {}
+    for entities in devices.values():
+        for entity in _entity_list_or_empty(entities):
+            if not isinstance(entity, Mapping):
+                continue
+            entity_key = entity.get(ATTR_ENTITY_KEY)
+            if isinstance(entity_key, str) and entity_key:
+                stable_key_counts[entity_key] = stable_key_counts.get(entity_key, 0) + 1
+
     choices = {}
     for device_name, entities in devices.items():
         for index, entity in enumerate(_entity_list_or_empty(entities)):
@@ -2884,7 +2930,16 @@ def _entity_choices(
                 continue
             platform = entity.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
             name = entity.get(CONF_NAME, "Virtual Entity")
-            choices[_selection_key_for_entity(device_name, index, entity)] = (
+            entity_key = entity.get(ATTR_ENTITY_KEY)
+            choices[_selection_key_for_entity(
+                device_name,
+                index,
+                entity,
+                stable_key_is_unique=(
+                    isinstance(entity_key, str)
+                    and stable_key_counts.get(entity_key) == 1
+                ),
+            )] = (
                 f"{device_name} / {name} ({platform})"
             )
     return choices
@@ -2962,6 +3017,22 @@ def _delete_ui_entities(
             device_attributes.pop(device_name, None)
             next_options[ATTR_DEVICE_ATTRIBUTES] = device_attributes
 
+    return next_options
+
+
+def _delete_ui_device(options: dict[str, Any], device_name: str) -> dict[str, Any]:
+    """Delete one Device and every entity or malformed item assigned to it."""
+    next_options = _plain_options(options or {})
+    if not isinstance(next_options.get(ATTR_DEVICES), Mapping):
+        raise InvalidEntitySelection
+    devices = next_options[ATTR_DEVICES]
+    if not isinstance(device_name, str) or device_name not in devices:
+        raise InvalidEntitySelection
+
+    devices.pop(device_name, None)
+    device_attributes = _options_device_attributes(next_options)
+    device_attributes.pop(device_name, None)
+    next_options[ATTR_DEVICE_ATTRIBUTES] = device_attributes
     return next_options
 
 
@@ -4024,6 +4095,44 @@ def _reference_edit_defaults(
     return merged
 
 
+def _refresh_add_reference_defaults(
+    hass,
+    user_input: dict[str, Any],
+    reference_defaults: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Refresh untouched generated fields after sources change on an add form."""
+    submitted_sources = _parse_source_entities(
+        user_input.get(CONF_SOURCE_ENTITIES_TEXT, ""),
+    )
+    reference_sources = _stored_entity_ids(
+        reference_defaults.get(CONF_SOURCE_ENTITIES_TEXT),
+    )
+    if submitted_sources == reference_sources:
+        return user_input, reference_defaults
+
+    _validate_mergeable_source_entities(
+        submitted_sources,
+        CONF_SOURCE_ENTITIES_TEXT,
+    )
+    try:
+        refreshed_reference_defaults = _reference_entity_defaults(
+            hass,
+            submitted_sources,
+        )
+    except InvalidEntityReference:
+        # A syntactically valid future/unloaded source can still be saved, but
+        # cannot provide state or attributes for helper generation yet.
+        refreshed_reference_defaults = {}
+
+    refreshed_input = _reference_edit_defaults(
+        user_input,
+        refreshed_reference_defaults,
+        _auto_helper_profile(reference_defaults),
+        source_entities_text="\n".join(submitted_sources),
+    )
+    return refreshed_input, refreshed_reference_defaults
+
+
 def _attribute_template_mapping(value: Any) -> dict[str, str]:
     """Normalize attribute helper JSON without trusting legacy stored data."""
     if isinstance(value, str):
@@ -4541,7 +4650,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         }
 
     async def async_step_user(self, user_input=None):
-        _LOGGER.debug("step user %s", user_input)
+        _LOGGER.debug("Starting Virtual Layer user configuration step")
 
         errors = {}
         if user_input is not None:
@@ -4631,12 +4740,26 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         if user_input is not None:
             user_input = _flatten_entity_form_sections(user_input)
             user_input = _align_form_entity_id_domain(user_input)
-        if user_input is not None and _needs_domain_specific_form(user_input):
+            try:
+                user_input, self._reference_defaults = (
+                    _refresh_add_reference_defaults(
+                        self.hass,
+                        user_input,
+                        self._reference_defaults,
+                    )
+                )
+            except InvalidEntityReference as err:
+                errors[err.field_name] = "invalid_entity_id"
+        if (
+            user_input is not None
+            and not errors
+            and _needs_domain_specific_form(user_input)
+        ):
             return self.async_show_form(
                 step_id="entity",
                 data_schema=_entity_schema(user_input),
             )
-        if user_input is not None:
+        if user_input is not None and not errors:
             user_input = _with_hidden_native_template_defaults(
                 user_input,
                 self._entity_defaults,
@@ -4670,6 +4793,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 errors[err.field_name] = "invalid_entity_id"
             except InvalidEntityId:
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
+            except EntityIdAlreadyUsed:
+                errors[ATTR_ENTITY_ID] = "entity_id_used"
             except InvalidDomainOptions:
                 errors[_domain_options_error_field(user_input)] = "invalid_domain_options"
             except DeviceNameAlreadyUsed:
@@ -4719,6 +4844,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 return await self.async_step_delete_entities()
             if user_input[CONF_ACTION] == ACTION_MANAGE_DEVICES:
                 return await self.async_step_select_device()
+            if user_input[CONF_ACTION] == ACTION_DELETE_DEVICE:
+                return await self.async_step_delete_device()
             return await self.async_step_entity_source()
 
         return self.async_show_form(
@@ -4822,12 +4949,26 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         if user_input is not None:
             user_input = _flatten_entity_form_sections(user_input)
             user_input = _align_form_entity_id_domain(user_input)
-        if user_input is not None and _needs_domain_specific_form(user_input):
+            try:
+                user_input, self._reference_defaults = (
+                    _refresh_add_reference_defaults(
+                        self.hass,
+                        user_input,
+                        self._reference_defaults,
+                    )
+                )
+            except InvalidEntityReference as err:
+                errors[err.field_name] = "invalid_entity_id"
+        if (
+            user_input is not None
+            and not errors
+            and _needs_domain_specific_form(user_input)
+        ):
             return self.async_show_form(
                 step_id="entity",
                 data_schema=_entity_schema(user_input),
             )
-        if user_input is not None:
+        if user_input is not None and not errors:
             user_input = _with_hidden_native_template_defaults(
                 user_input,
                 self._entity_defaults,
@@ -4857,6 +4998,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 errors[err.field_name] = "invalid_entity_id"
             except InvalidEntityId:
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
+            except EntityIdAlreadyUsed:
+                errors[ATTR_ENTITY_ID] = "entity_id_used"
             except InvalidDomainOptions:
                 errors[_domain_options_error_field(user_input)] = "invalid_domain_options"
             except DeviceNameAlreadyUsed:
@@ -4904,7 +5047,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
     async def async_step_delete_entities(self, user_input=None):
         """Delete one or more UI-managed virtual entities."""
         errors = {}
-        if not _entity_choices(self.config_entry.options):
+        if not _entity_choices(self.config_entry.options, include_invalid=True):
             return self.async_show_form(
                 step_id="init",
                 data_schema=_options_schema(self.config_entry.options),
@@ -4924,6 +5067,32 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="delete_entities",
             data_schema=_delete_entities_schema(self.config_entry.options),
+            errors=errors,
+        )
+
+    async def async_step_delete_device(self, user_input=None):
+        """Delete a Device, including malformed groups that cannot be edited."""
+        errors = {}
+        if not _managed_device_choices(self.config_entry.options):
+            return self.async_show_form(
+                step_id="init",
+                data_schema=_options_schema(self.config_entry.options),
+                errors={"base": "no_devices"},
+            )
+
+        if user_input is not None:
+            try:
+                options = _delete_ui_device(
+                    self.config_entry.options,
+                    user_input.get(CONF_MANAGED_DEVICE_NAME),
+                )
+                return self.async_create_entry(data=options)
+            except InvalidEntitySelection:
+                errors[CONF_MANAGED_DEVICE_NAME] = "device_not_found"
+
+        return self.async_show_form(
+            step_id="delete_device",
+            data_schema=_select_device_schema(self.config_entry.options),
             errors=errors,
         )
 
@@ -5139,6 +5308,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 errors[err.field_name] = "invalid_entity_id"
             except InvalidEntityId:
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
+            except EntityIdAlreadyUsed:
+                errors[ATTR_ENTITY_ID] = "entity_id_used"
             except InvalidDomainOptions:
                 errors[_domain_options_error_field(user_input)] = "invalid_domain_options"
             except DeviceNameAlreadyUsed:
@@ -5222,6 +5393,10 @@ class InvalidEntityReference(exceptions.HomeAssistantError):
 
 class InvalidEntityId(exceptions.HomeAssistantError):
     """Error indicating an invalid entity ID."""
+
+
+class EntityIdAlreadyUsed(exceptions.HomeAssistantError):
+    """Error indicating an entity ID is already owned by another entity."""
 
 
 class InvalidDomainOptions(exceptions.HomeAssistantError):

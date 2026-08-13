@@ -5,7 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from homeassistant.components.climate import ClimateEntityFeature
+from homeassistant.components.climate import ClimateEntityFeature, HVACMode
+from homeassistant.components.climate.const import ATTR_HVAC_MODE
 from homeassistant.components.date import DateEntity
 from homeassistant.components.datetime import DateTimeEntity
 from homeassistant.components.fan import FanEntityFeature
@@ -604,6 +605,125 @@ async def test_select_text_and_temporal_entities_apply_native_values():
     assert all(entity.async_write_ha_state.called for entity in entities)
 
 
+@pytest.mark.parametrize(
+    ("domain", "initial"),
+    [
+        ("date", "2026-08-04"),
+        ("time", "12:34:56"),
+        ("datetime", "2026-08-04T12:34:56+00:00"),
+    ],
+)
+def test_temporal_entities_reject_invalid_direct_state_without_clearing(
+    domain,
+    initial,
+):
+    module = __import__(
+        f"custom_components.virtual_layer.{domain}",
+        fromlist=["ENTITY_CLASS", "ENTITY_SCHEMA"],
+    )
+    entity = module.ENTITY_CLASS(
+        _config(module.ENTITY_SCHEMA, domain, initial),
+        False,
+    )
+    entity._create_state(entity._config)
+    previous = entity.native_value
+
+    with pytest.raises(ValueError, match=f"Invalid {domain} value"):
+        entity.set_state("not-a-temporal-value")
+
+    assert entity.native_value == previous
+
+
+@pytest.mark.parametrize(
+    ("domain", "initial", "expected"),
+    [
+        ("date", "2026-08-04", date(2026, 8, 4)),
+        ("time", "12:34:56", time(12, 34, 56)),
+        (
+            "datetime",
+            "2026-08-04T12:34:56+00:00",
+            datetime(2026, 8, 4, 12, 34, 56, tzinfo=timezone.utc),
+        ),
+    ],
+)
+def test_temporal_restore_falls_back_from_unavailable_state(
+    domain,
+    initial,
+    expected,
+):
+    module = __import__(
+        f"custom_components.virtual_layer.{domain}",
+        fromlist=["ENTITY_CLASS", "ENTITY_SCHEMA"],
+    )
+    entity = module.ENTITY_CLASS(
+        _config(module.ENTITY_SCHEMA, domain, initial),
+        False,
+    )
+
+    entity._restore_state(
+        SimpleNamespace(state="unavailable", attributes={}),
+        entity._config,
+    )
+
+    assert entity.native_value == expected
+
+
+def test_activity_entities_restore_configured_fallback_from_unknown_state():
+    from custom_components.virtual_layer.lawn_mower import (
+        ENTITY_CLASS as VirtualLawnMower,
+    )
+    from custom_components.virtual_layer.lawn_mower import ENTITY_SCHEMA as MOWER_SCHEMA
+    from custom_components.virtual_layer.media_player import (
+        ENTITY_CLASS as VirtualMediaPlayer,
+    )
+    from custom_components.virtual_layer.media_player import (
+        ENTITY_SCHEMA as MEDIA_PLAYER_SCHEMA,
+    )
+
+    mower = VirtualLawnMower(
+        _config(MOWER_SCHEMA, "lawn_mower", "docked"),
+        False,
+    )
+    media = VirtualMediaPlayer(
+        _config(MEDIA_PLAYER_SCHEMA, "media_player", "idle"),
+        False,
+    )
+
+    for entity in (mower, media):
+        entity._restore_state(
+            SimpleNamespace(state="unavailable", attributes={}),
+            entity._config,
+        )
+
+    assert mower.activity is LawnMowerActivity.DOCKED
+    assert media.state is MediaPlayerState.IDLE
+
+
+def test_text_restore_and_direct_state_respect_constraints():
+    from custom_components.virtual_layer.text import ENTITY_CLASS as VirtualText
+    from custom_components.virtual_layer.text import ENTITY_SCHEMA as TEXT_SCHEMA
+
+    text = VirtualText(
+        _config(
+            TEXT_SCHEMA,
+            "text",
+            "AB12",
+            min=4,
+            max=4,
+            pattern="[A-Z]{2}\\d{2}",
+        ),
+        False,
+    )
+    text._restore_state(
+        SimpleNamespace(state="invalid", attributes={}),
+        text._config,
+    )
+
+    assert text.native_value == "AB12"
+    with pytest.raises(ValueError, match="constraints"):
+        text.set_state("bad")
+
+
 async def test_generic_entities_repair_malformed_saved_options_and_publish_actions():
     from custom_components.virtual_layer.button import ENTITY_CLASS as VirtualButton
     from custom_components.virtual_layer.button import ENTITY_SCHEMA as BUTTON_SCHEMA
@@ -832,6 +952,46 @@ async def test_remote_media_water_heater_and_update_native_commands():
         await update.async_install("2.0.0", backup=False)
 
 
+def test_water_heater_restores_range_and_away_mode_attributes():
+    from custom_components.virtual_layer.water_heater import (
+        ENTITY_CLASS as VirtualWaterHeater,
+    )
+    from custom_components.virtual_layer.water_heater import (
+        ENTITY_SCHEMA as WATER_HEATER_SCHEMA,
+    )
+
+    entity = VirtualWaterHeater(
+        _config(
+            WATER_HEATER_SCHEMA,
+            "water_heater",
+            "heat",
+            operation_list=["off", "heat"],
+            min_temp=35,
+            max_temp=85,
+            target_temperature_high=60,
+            target_temperature_low=45,
+            is_away_mode_on=False,
+        ),
+        False,
+    )
+
+    entity._restore_state(
+        SimpleNamespace(
+            state="heat",
+            attributes={
+                "target_temp_high": 70,
+                "target_temp_low": 40,
+                "away_mode": "on",
+            },
+        ),
+        entity._config,
+    )
+
+    assert entity.target_temperature_high == 70
+    assert entity.target_temperature_low == 40
+    assert entity.is_away_mode_on is True
+
+
 def test_energy_sensor_uses_native_sensor_contract_and_state_class():
     entity = VirtualSensor(
         _config(
@@ -999,6 +1159,20 @@ async def test_native_range_and_mode_validation_prevents_invalid_states():
         await climate.async_set_fan_mode("turbo")
     with pytest.raises(ValueError):
         await climate.async_set_temperature(temperature=31)
+    with pytest.raises(ValueError):
+        await climate.async_set_temperature(
+            temperature=21,
+            **{ATTR_HVAC_MODE: "cool"},
+        )
+    assert climate.target_temperature is None
+    assert climate.hvac_mode == HVACMode.OFF
+
+    await climate.async_set_temperature(
+        temperature=21,
+        **{ATTR_HVAC_MODE: "heat"},
+    )
+    assert climate.target_temperature == 21
+    assert climate.hvac_mode == HVACMode.HEAT
 
 
 async def test_native_restore_and_range_updates_are_defensive():
@@ -1182,6 +1356,52 @@ def test_regular_entity_restore_drops_removed_config_attributes_only():
     assert sensor.extra_state_attributes[ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES] == [
         "still_configured"
     ]
+
+
+@pytest.mark.parametrize(
+    ("attribute_names", "configured_names"),
+    [
+        ("not-a-list", "not-a-list"),
+        ([{"bad": "name"}, "safe"], [{"bad": "configured"}, "safe"]),
+    ],
+)
+def test_regular_entity_restore_ignores_malformed_attribute_name_metadata(
+    attribute_names,
+    configured_names,
+):
+    config = _config(SENSOR_SCHEMA, "sensor", "ready", attributes={"safe": "now"})
+    sensor = VirtualSensor(config, False)
+
+    sensor._restore_state(
+        SimpleNamespace(
+            state="restored",
+            attributes={
+                "available": True,
+                ATTR_VIRTUAL_ATTRIBUTES: attribute_names,
+                ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES: configured_names,
+                "safe": "restored-safe",
+            },
+        ),
+        config,
+    )
+
+    assert sensor._virtual_attributes == {"safe": "restored-safe"}
+
+
+@pytest.mark.parametrize(
+    ("restored", "expected"),
+    [("false", False), ("true", True), ("invalid", True)],
+)
+def test_regular_entity_restore_normalizes_availability(restored, expected):
+    config = _config(SENSOR_SCHEMA, "sensor", "ready")
+    sensor = VirtualSensor(config, False)
+
+    sensor._restore_state(
+        SimpleNamespace(state="restored", attributes={"available": restored}),
+        config,
+    )
+
+    assert sensor.available is expected
 
 
 def test_native_generic_entities_restore_runtime_service_attributes():

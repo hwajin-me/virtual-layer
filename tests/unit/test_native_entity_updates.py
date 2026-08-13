@@ -1,5 +1,6 @@
 """Ensure native Home Assistant commands publish virtual entity changes."""
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -15,9 +16,12 @@ from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
 from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClimate
 from custom_components.virtual_layer.const import (
     ATTR_UNIQUE_ID,
+    CONF_COMMAND_ACTIONS,
     CONF_INITIAL_VALUE,
     CONF_NAME,
+    CONF_PERSISTENT,
 )
+from custom_components.virtual_layer.cover import COVER_SCHEMA, VirtualCover
 from custom_components.virtual_layer.fan import FAN_SCHEMA, VirtualFan
 from custom_components.virtual_layer.humidifier import (
     HUMIDIFIER_SCHEMA,
@@ -25,6 +29,7 @@ from custom_components.virtual_layer.humidifier import (
 )
 from custom_components.virtual_layer.light import LIGHT_SCHEMA, VirtualLight
 from custom_components.virtual_layer.lock import LOCK_SCHEMA, VirtualLock
+from custom_components.virtual_layer.sensor import SENSOR_SCHEMA, VirtualSensor
 from custom_components.virtual_layer.switch import SWITCH_SCHEMA, VirtualSwitch
 from custom_components.virtual_layer.vacuum import VACUUM_SCHEMA, VirtualVacuum
 
@@ -38,6 +43,35 @@ def _config(schema, entity_id, initial_value):
         ATTR_UNIQUE_ID: f"{entity_id}.unique",
         CONF_INITIAL_VALUE: initial_value,
     })
+
+
+def test_virtual_entity_debug_logs_do_not_expose_configuration_or_state(caplog):
+    secret = "secret-token-that-must-not-be-logged"
+    with caplog.at_level(logging.DEBUG, logger="custom_components.virtual_layer.entity"):
+        entity = VirtualSensor(
+            SENSOR_SCHEMA(
+                {
+                    CONF_NAME: "Private Sensor",
+                    ATTR_ENTITY_ID: "sensor.private",
+                    ATTR_UNIQUE_ID: "private.unique",
+                    CONF_INITIAL_VALUE: "idle",
+                    CONF_PERSISTENT: True,
+                    "command_actions": {
+                        "set_value": {
+                            "action": "rest_command.private",
+                            "data": {"authorization": secret},
+                        }
+                    },
+                }
+            ),
+            False,
+        )
+        entity._restore_state(
+            SimpleNamespace(state=secret, attributes={"private_value": secret}),
+            entity._config,
+        )
+
+    assert secret not in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -117,6 +151,70 @@ def test_virtual_camera_uses_configured_power_for_legacy_or_bad_restore(saved_va
     assert entity.is_on is False
 
 
+def test_virtual_camera_normalizes_restored_boolean_attributes():
+    entity = VirtualCamera(
+        CAMERA_SCHEMA(
+            {
+                **_config(CAMERA_SCHEMA, "camera.flags", "on"),
+                "is_recording": True,
+                "is_streaming": False,
+                "motion_detection": True,
+            }
+        ),
+        False,
+    )
+
+    entity._restore_state(
+        SimpleNamespace(
+            state="idle",
+            attributes={
+                "is_on": True,
+                "is_recording": "false",
+                "is_streaming": "true",
+                "motion_detection": "invalid",
+            },
+        ),
+        entity._config,
+    )
+
+    assert entity.is_recording is False
+    assert entity.is_streaming is True
+    assert entity.motion_detection_enabled is True
+
+
+@pytest.mark.parametrize(("restored", "expected"), [(65, 65), ("invalid", None)])
+def test_virtual_cover_restores_supported_tilt_position(restored, expected):
+    entity = VirtualCover(
+        COVER_SCHEMA(
+            {
+                CONF_NAME: "Persistent Cover",
+                ATTR_ENTITY_ID: "cover.persistent",
+                ATTR_UNIQUE_ID: "persistent-cover",
+                CONF_INITIAL_VALUE: "open",
+                CONF_COMMAND_ACTIONS: {
+                    "set_cover_tilt_position": {
+                        "action": "script.virtual_cover_tilt",
+                    }
+                },
+            }
+        ),
+        False,
+    )
+
+    entity._restore_state(
+        SimpleNamespace(
+            state="open",
+            attributes={
+                "current_position": 100,
+                "current_tilt_position": restored,
+            },
+        ),
+        entity._config,
+    )
+
+    assert entity.current_cover_tilt_position == expected
+
+
 async def test_virtual_vacuum_exposes_state_and_native_commands():
     entity = VirtualVacuum(
         VACUUM_SCHEMA({
@@ -156,6 +254,26 @@ async def test_virtual_vacuum_exposes_state_and_native_commands():
     assert entity.async_write_ha_state.call_count == 5
 
 
+def test_virtual_vacuum_rejects_invalid_state_without_stopping():
+    entity = VirtualVacuum(
+        VACUUM_SCHEMA({
+            CONF_NAME: "Robot Vacuum",
+            ATTR_ENTITY_ID: "vacuum.safe_state",
+            ATTR_UNIQUE_ID: "safe_state.unique",
+            CONF_INITIAL_VALUE: "cleaning",
+        }),
+        False,
+    )
+    entity._create_state(entity._config)
+    entity.async_schedule_update_ha_state = Mock()
+
+    with pytest.raises(ValueError, match="Invalid vacuum activity"):
+        entity.set_state("cleanign")
+
+    assert entity.activity == VacuumActivity.CLEANING
+    entity.async_schedule_update_ha_state.assert_not_called()
+
+
 async def test_virtual_vacuum_rejects_unknown_fan_speed():
     entity = VirtualVacuum(
         VACUUM_SCHEMA({
@@ -172,3 +290,39 @@ async def test_virtual_vacuum_rejects_unknown_fan_speed():
 
     with pytest.raises(ValueError):
         await entity.async_set_fan_speed("turbo")
+
+
+@pytest.mark.parametrize(
+    ("restored", "expected"),
+    [
+        (
+            {"command": "clean_room", "params": {"room": 1}},
+            {"command": "clean_room", "params": {"room": 1}},
+        ),
+        ({"command": "locate"}, {"command": "locate"}),
+        ({"command": []}, None),
+        ({"command": "clean_room", "params": "invalid"}, None),
+        (["locate"], None),
+    ],
+)
+def test_virtual_vacuum_restores_only_valid_last_command(restored, expected):
+    entity = VirtualVacuum(
+        VACUUM_SCHEMA({
+            CONF_NAME: "Robot Vacuum",
+            ATTR_ENTITY_ID: "vacuum.robot_vacuum_restore",
+            ATTR_UNIQUE_ID: "robot_vacuum_restore.unique",
+            CONF_INITIAL_VALUE: "docked",
+        }),
+        False,
+    )
+
+    entity._restore_state(
+        SimpleNamespace(
+            state="docked",
+            attributes={"last_command": restored},
+        ),
+        entity._config,
+    )
+    entity._update_attributes()
+
+    assert entity.extra_state_attributes.get("last_command") == expected

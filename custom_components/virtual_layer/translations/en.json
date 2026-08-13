@@ -10,6 +10,7 @@
       "invalid_json": "Enter a valid JSON object.",
       "invalid_template": "Fix the Jinja template syntax.",
       "invalid_entity_id": "Enter valid entity IDs.",
+      "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
       "invalid_domain_options": "Enter valid options for the selected entity domain.",
       "required": "This field is required."
     },
@@ -628,6 +629,7 @@
       "invalid_json": "Enter a valid JSON object.",
       "invalid_template": "Fix the Jinja template syntax.",
       "invalid_entity_id": "Enter valid entity IDs.",
+      "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
       "invalid_domain_options": "Enter valid options for the selected entity domain.",
       "device_not_found": "The selected virtual device was not found.",
       "entity_not_found": "The selected virtual entity was not found.",
@@ -702,6 +704,16 @@
         },
         "data_description": {
           "entity_keys": "Devices with no remaining entities are removed from this configuration."
+        }
+      },
+      "delete_device": {
+        "title": "Delete Virtual Device",
+        "description": "Delete a virtual Device and every entity assigned to it. This also removes damaged Device groups that cannot be edited.",
+        "data": {
+          "managed_device_name": "Virtual device"
+        },
+        "data_description": {
+          "managed_device_name": "All virtual entities and stored metadata belonging to the selected Device will be removed."
         }
       },
       "edit_entity": {
@@ -1891,6 +1903,7 @@
         "edit_entity": "Edit a virtual entity",
         "delete_entity": "Delete virtual entities",
         "manage_devices": "Manage virtual devices",
+        "delete_device": "Delete a virtual device",
         "finish": "Done"
       }
     },

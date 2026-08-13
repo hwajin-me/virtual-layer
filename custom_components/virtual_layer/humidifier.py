@@ -55,7 +55,7 @@ def _as_action(value) -> HumidifierAction | None:
     if isinstance(value, HumidifierAction):
         return value
     try:
-        return HumidifierAction(str(value).lower())
+        return HumidifierAction(str(value).strip().lower())
     except (TypeError, ValueError):
         return None
 
@@ -65,11 +65,13 @@ def _as_device_class(value) -> HumidifierDeviceClass | None:
         return None
     if isinstance(value, HumidifierDeviceClass):
         return value
-    return HumidifierDeviceClass(str(value).lower())
+    return HumidifierDeviceClass(str(value).strip().lower())
 
 
 def _finite_float(value, default: float) -> float:
     """Return a finite configured number or a compatibility default."""
+    if isinstance(value, bool):
+        return default
     try:
         result = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -276,9 +278,11 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         if name == "available_modes":
             if not isinstance(value, (list, tuple)):
                 raise ValueError("available_modes must render a list")
-            value = [str(item) for item in value if str(item).strip()]
+            value = [str(item).strip() for item in value if str(item).strip()]
             if len(set(value)) != len(value):
                 raise ValueError("available_modes contains duplicate values")
+        elif name == CONF_MODE:
+            value = str(value).strip()
         elif name == CONF_ACTION:
             value = _as_action(value)
             if value is None:
@@ -286,7 +290,17 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         elif name == "device_class":
             value = _as_device_class(value)
         elif name in {CONF_CURRENT_HUMIDITY, CONF_TARGET_HUMIDITY}:
-            value = self._bounded_humidity(value)
+            if value is None or value == "":
+                value = None
+            else:
+                value = _finite_float(value, float("nan"))
+                if not math.isfinite(value):
+                    raise ValueError(f"{name} must render a finite number")
+                value = self._bounded_humidity(value)
+        elif name in {CONF_MIN_HUMIDITY, CONF_MAX_HUMIDITY}:
+            value = _finite_float(value, float("nan"))
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must render a finite number")
         elif name == CONF_TARGET_HUMIDITY_STEP:
             value = _finite_float(value, float("nan"))
             if not math.isfinite(value) or value <= 0:
@@ -337,6 +351,8 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         self.async_write_ha_state()
 
     async def async_set_humidity(self, humidity: int) -> None:
+        if isinstance(humidity, bool):
+            raise ValueError("Humidity must be numeric")
         try:
             humidity = float(humidity)
         except (TypeError, ValueError, OverflowError) as err:

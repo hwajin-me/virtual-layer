@@ -44,6 +44,7 @@ SENSOR_SCHEMA = vol.Schema(virtual_schema(SENSOR_DEFAULT_INITIAL_VALUE, {
 
 _meta_lock = asyncio.Lock()
 STORAGE_VERSION = 1
+MAX_METADATA_BYTES = 10 * 1024 * 1024
 
 _CLIMATE_INITIAL_VALUES = {
     "off",
@@ -244,9 +245,12 @@ def _meta_group(payload, group_name):
 async def _async_load_json(file_name):
     _LOGGER.debug("_async_load_json1 file_name for %s", file_name)
     try:
-        async with aiofiles.open(file_name, 'r') as meta_file:
+        async with aiofiles.open(file_name, 'rb') as meta_file:
             _LOGGER.debug("_async_load_json2 file_name for %s", file_name)
-            contents = await meta_file.read()
+            contents = await meta_file.read(MAX_METADATA_BYTES + 1)
+            if len(contents) > MAX_METADATA_BYTES:
+                _LOGGER.error("Metadata file is too large: %s", file_name)
+                return {}
             _LOGGER.debug("_async_load_json3 file_name for %s", file_name)
             return json.loads(
                 contents,
@@ -264,12 +268,14 @@ async def _async_save_json(file_name, data):
     _LOGGER.debug("_async_save_json1 file_name for %s", file_name)
     temporary_file_name = f"{file_name}.{uuid.uuid4().hex}.tmp"
     try:
+        serialized = json.dumps(data, indent=4, allow_nan=False)
+        if len(serialized.encode("utf-8")) > MAX_METADATA_BYTES:
+            raise ValueError("Metadata file is too large")
         directory = os.path.dirname(file_name)
         if directory:
             await aiofiles.os.makedirs(directory, exist_ok=True)
         async with aiofiles.open(temporary_file_name, 'w') as meta_file:
-            data = json.dumps(data, indent=4, allow_nan=False)
-            await meta_file.write(data)
+            await meta_file.write(serialized)
         await aiofiles.os.replace(temporary_file_name, file_name)
     except OSError:
         _LOGGER.exception("Unable to save json file: %s", file_name)
@@ -300,11 +306,10 @@ async def _save_meta_data(hass, group_name, meta_data):
         )
 
         # Update (or add) the group piece.
-        _LOGGER.debug("meta before %s", devices)
+        _LOGGER.debug("Updating metadata for Device group %s", group_name)
         devices.update({
             group_name: meta_data
         })
-        _LOGGER.debug("meta after %s", devices)
 
         # Write it back out.
         payload[ATTR_VERSION] = STORAGE_VERSION
@@ -323,9 +328,8 @@ async def _delete_meta_data(hass, group_name):
         )
 
         # Delete the group piece.
-        _LOGGER.debug("meta before %s", devices)
+        _LOGGER.debug("Deleting metadata for Device group %s", group_name)
         devices.pop(group_name, None)
-        _LOGGER.debug("meta after %s", devices)
 
         # Write it back out.
         payload[ATTR_VERSION] = STORAGE_VERSION
@@ -1190,8 +1194,12 @@ class BlendedCfg:
         changed = False
         seen_entity_keys = set()
 
-        _LOGGER.debug("loaded-meta-data=%s", meta_data)
-        _LOGGER.debug("loaded-devices=%s", devices)
+        _LOGGER.debug(
+            "Loaded %s metadata records and %s Devices for %s",
+            len(meta_data),
+            len(devices),
+            self._group_name,
+        )
 
         # Let's fix up the devices/entities
         for device_name, entities in devices.items():
@@ -1393,7 +1401,7 @@ class BlendedCfg:
                     entity_meta[ATTR_ENTITY_ID] = entity_id
                     changed = True
 
-                _LOGGER.debug("added entity %s/%s", platform, entity)
+                _LOGGER.debug("Added virtual entity %s/%s", platform, entity_id)
 
                 # Now store in the correct place. Move off temporary meta
                 # data list.
@@ -1427,10 +1435,12 @@ class BlendedCfg:
         if changed:
             await _save_meta_data(self._hass, self._group_name, self._meta_data)
 
-        _LOGGER.debug("meta-data=%s", self._meta_data)
-        _LOGGER.debug("devices=%s", self._devices)
-        _LOGGER.debug("entities=%s", self._entities)
-        _LOGGER.debug("orphaned-entities=%s", self._orphaned_entities)
+        _LOGGER.debug(
+            "Loaded %s Devices, %s entity domains, and %s orphaned entities",
+            len(self._devices),
+            len(self._entities),
+            len(self._orphaned_entities),
+        )
 
     async def async_delete(self):
         _LOGGER.debug(f"deleting {self._group_name}")

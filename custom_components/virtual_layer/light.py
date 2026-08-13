@@ -18,6 +18,10 @@ from homeassistant.components.light import (
     ATTR_EFFECT,
     ATTR_EFFECT_LIST,
     ATTR_HS_COLOR,
+    ATTR_RGB_COLOR,
+    ATTR_RGBW_COLOR,
+    ATTR_RGBWW_COLOR,
+    ATTR_XY_COLOR,
     ColorMode,
     LightEntity,
     LightEntityFeature,
@@ -90,14 +94,19 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
 LIGHT_SCHEMA = vol.Schema(BASE_SCHEMA)
 
 
-def _as_color_temp_kelvin(value: float | str) -> int:
+def _as_color_temp_kelvin(
+    value: float | str,
+    fallback: int | None = DEFAULT_INITIAL_COLOR_TEMP,
+) -> int | None:
     """Normalize legacy mired values while storing modern Kelvin values."""
+    if isinstance(value, bool):
+        return fallback
     try:
         color_temp = float(value)
     except (TypeError, ValueError, OverflowError):
-        return DEFAULT_INITIAL_COLOR_TEMP
+        return fallback
     if not math.isfinite(color_temp) or color_temp <= 0:
-        return DEFAULT_INITIAL_COLOR_TEMP
+        return fallback
     if color_temp < 1000:
         color_temp = 1_000_000 / color_temp
     return max(1000, min(40000, round(color_temp)))
@@ -118,6 +127,8 @@ def _as_hs_color(value, fallback=None) -> tuple[float, float] | None:
     """Return a finite hue/saturation pair in Home Assistant's ranges."""
     if not isinstance(value, (list, tuple)) or len(value) != 2:
         return fallback
+    if any(isinstance(item, bool) for item in value):
+        return fallback
     try:
         hue, saturation = (float(item) for item in value)
     except (TypeError, ValueError, OverflowError):
@@ -135,6 +146,8 @@ def _as_hs_color(value, fallback=None) -> tuple[float, float] | None:
 def _as_color_tuple(value, length: int, maximum: float, fallback=None):
     """Return a finite Home Assistant color tuple with the requested shape."""
     if not isinstance(value, (list, tuple)) or len(value) != length:
+        return fallback
+    if any(isinstance(item, bool) for item in value):
         return fallback
     try:
         color = tuple(float(item) for item in value)
@@ -190,6 +203,15 @@ async def async_setup_entry(
 
 
 class VirtualLight(VirtualEntity, LightEntity):
+
+    _COLOR_ATTRIBUTES = (
+        "_attr_hs_color",
+        "_attr_xy_color",
+        "_attr_rgb_color",
+        "_attr_rgbw_color",
+        "_attr_rgbww_color",
+        "_attr_color_temp_kelvin",
+    )
 
     def __init__(self, config, old_style: bool):
         """Initialize a Virtual light."""
@@ -340,7 +362,31 @@ class VirtualLight(VirtualEntity, LightEntity):
                     DEFAULT_INITIAL_BRIGHTNESS,
                 ),
             )
-        if self._attr_supported_features & LightEntityFeature.EFFECT:
+        color_specs = {
+            ColorMode.XY: ("_attr_xy_color", ATTR_XY_COLOR, 2, 1),
+            ColorMode.RGB: ("_attr_rgb_color", ATTR_RGB_COLOR, 3, 255),
+            ColorMode.RGBW: ("_attr_rgbw_color", ATTR_RGBW_COLOR, 4, 255),
+            ColorMode.RGBWW: ("_attr_rgbww_color", ATTR_RGBWW_COLOR, 5, 255),
+        }
+        if spec := color_specs.get(self._attr_color_mode):
+            attribute_name, state_name, length, maximum = spec
+            setattr(
+                self,
+                attribute_name,
+                _as_color_tuple(
+                    state.attributes.get(state_name),
+                    length,
+                    maximum,
+                ),
+            )
+            self._attr_brightness = _as_brightness(
+                state.attributes.get(ATTR_BRIGHTNESS),
+                _as_brightness(
+                    config.get(CONF_INITIAL_BRIGHTNESS),
+                    DEFAULT_INITIAL_BRIGHTNESS,
+                ),
+            )
+        if self._attr_effect_list:
             effect = state.attributes.get(ATTR_EFFECT, config.get(CONF_INITIAL_EFFECT))
             self._attr_effect = (
                 effect
@@ -359,30 +405,86 @@ class VirtualLight(VirtualEntity, LightEntity):
                 (ATTR_EFFECT, self._attr_effect),
                 (ATTR_EFFECT_LIST, self._attr_effect_list),
                 (ATTR_HS_COLOR, self.hs_color),
+                (ATTR_XY_COLOR, self.xy_color),
+                (ATTR_RGB_COLOR, self.rgb_color),
+                (ATTR_RGBW_COLOR, self.rgbw_color),
+                (ATTR_RGBWW_COLOR, self.rgbww_color),
             ) if value is not None
         })
+
+    def _select_color(self, color_mode, attribute_name, value) -> None:
+        for current_attribute in self._COLOR_ATTRIBUTES:
+            if current_attribute != attribute_name:
+                setattr(self, current_attribute, None)
+        self._attr_color_mode = color_mode
+        setattr(self, attribute_name, value)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on."""
         _LOGGER.debug("turning %s on %s", self.name, kwargs)
-        hs_color = kwargs.get(ATTR_HS_COLOR, None)
+        snapshot = {
+            name: getattr(self, name, None)
+            for name in (
+                "_attr_is_on",
+                "_attr_brightness",
+                "_attr_color_mode",
+                "_attr_effect",
+                *self._COLOR_ATTRIBUTES,
+            )
+        }
+        try:
+            self._apply_turn_on_values(kwargs)
+        except Exception:
+            for name, value in snapshot.items():
+                setattr(self, name, value)
+            raise
+
+        self._attr_is_on = True
+        self._update_attributes()
+        self.async_write_ha_state()
+
+    def _apply_turn_on_values(self, kwargs: dict[str, Any]) -> None:
+        """Validate and stage light service values before publishing state."""
+        hs_color = kwargs.get(ATTR_HS_COLOR)
 
         if hs_color is not None and ColorMode.HS in self._attr_supported_color_modes:
-            self._attr_color_mode = ColorMode.HS
-            self._attr_hs_color = tuple(hs_color)
-            self._attr_color_temp_kelvin = None
+            parsed_hs_color = _as_hs_color(hs_color)
+            if parsed_hs_color is None:
+                raise ValueError("hs_color must be a valid hue/saturation pair")
+            self._select_color(ColorMode.HS, "_attr_hs_color", parsed_hs_color)
+
+        for color_mode, state_name, attribute_name, length, maximum in (
+            (ColorMode.XY, ATTR_XY_COLOR, "_attr_xy_color", 2, 1),
+            (ColorMode.RGB, ATTR_RGB_COLOR, "_attr_rgb_color", 3, 255),
+            (ColorMode.RGBW, ATTR_RGBW_COLOR, "_attr_rgbw_color", 4, 255),
+            (ColorMode.RGBWW, ATTR_RGBWW_COLOR, "_attr_rgbww_color", 5, 255),
+        ):
+            if state_name not in kwargs or color_mode not in self._attr_supported_color_modes:
+                continue
+            color = _as_color_tuple(kwargs[state_name], length, maximum)
+            if color is None:
+                raise ValueError(f"{state_name} contains invalid color channels")
+            self._select_color(color_mode, attribute_name, color)
 
         ct = kwargs.get(ATTR_COLOR_TEMP_KELVIN, None)
         if ct is not None and ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
-            self._attr_color_mode = ColorMode.COLOR_TEMP
-            self._attr_color_temp_kelvin = _as_color_temp_kelvin(ct)
-            self._attr_hs_color = None
+            parsed_color_temp = _as_color_temp_kelvin(ct, None)
+            if parsed_color_temp is None:
+                raise ValueError("color_temp_kelvin must be a positive number")
+            self._select_color(
+                ColorMode.COLOR_TEMP,
+                "_attr_color_temp_kelvin",
+                parsed_color_temp,
+            )
 
         brightness = kwargs.get(ATTR_BRIGHTNESS, None)
         if brightness is not None:
+            parsed_brightness = _as_brightness(brightness)
+            if parsed_brightness is None:
+                raise ValueError("brightness must be between 0 and 255")
             if self._attr_color_mode == ColorMode.UNKNOWN:
                 self._attr_color_mode = ColorMode.BRIGHTNESS
-            self._attr_brightness = max(0, min(255, int(brightness)))
+            self._attr_brightness = parsed_brightness
 
         if self._attr_color_mode == ColorMode.UNKNOWN:
             self._attr_color_mode = ColorMode.ONOFF
@@ -392,10 +494,6 @@ class VirtualLight(VirtualEntity, LightEntity):
             if self._attr_effect_list and effect not in self._attr_effect_list:
                 raise ValueError(f"Invalid light effect: {effect}")
             self._attr_effect = effect
-
-        self._attr_is_on = True
-        self._update_attributes()
-        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the light off."""
@@ -452,8 +550,12 @@ class VirtualLight(VirtualEntity, LightEntity):
             if value is None:
                 raise ValueError(f"{name} must contain valid 0..255 channels")
         elif name == "color_temp_kelvin":
-            value = _as_color_temp_kelvin(value)
+            value = _as_color_temp_kelvin(value, None)
+            if value is None:
+                raise ValueError("color_temp_kelvin must be a positive number")
         elif name in {"min_color_temp_kelvin", "max_color_temp_kelvin"}:
+            if isinstance(value, bool):
+                raise ValueError(f"{name} must be an integer")
             try:
                 value = int(value)
             except (TypeError, ValueError, OverflowError) as err:

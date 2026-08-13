@@ -19,7 +19,12 @@ from homeassistant.components.climate import (
     ClimateEntity,
     ClimateEntityFeature,
 )
-from homeassistant.components.climate.const import ATTR_HUMIDITY, HVACAction, HVACMode
+from homeassistant.components.climate.const import (
+    ATTR_HUMIDITY,
+    ATTR_HVAC_MODE,
+    HVACAction,
+    HVACMode,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, PRECISION_TENTHS, UnitOfTemperature
 from homeassistant.core import HomeAssistant
@@ -78,7 +83,7 @@ DEFAULT_HVAC_MODES = [
 def _as_hvac_mode(value) -> HVACMode:
     if isinstance(value, HVACMode):
         return value
-    return HVACMode(str(value).lower())
+    return HVACMode(str(value).strip().lower())
 
 
 def _safe_hvac_mode(value) -> HVACMode | None:
@@ -95,13 +100,15 @@ def _as_hvac_action(value) -> HVACAction | None:
     if isinstance(value, HVACAction):
         return value
     try:
-        return HVACAction(str(value).lower())
+        return HVACAction(str(value).strip().lower())
     except (TypeError, ValueError):
         return None
 
 
 def _finite_float(value, default: float) -> float:
     """Return a finite configured number or a compatibility default."""
+    if isinstance(value, bool):
+        return default
     try:
         result = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -507,7 +514,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         }:
             if not isinstance(value, (list, tuple)):
                 raise ValueError(f"{name} must render a list")
-            value = [str(item) for item in value if str(item).strip()]
+            value = [str(item).strip() for item in value if str(item).strip()]
             if len(set(value)) != len(value):
                 raise ValueError(f"{name} contains duplicate modes")
         elif name == "hvac_mode":
@@ -519,20 +526,48 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             if value is None:
                 raise ValueError("Invalid HVAC action")
         elif name in {
+            CONF_FAN_MODE,
+            CONF_PRESET_MODE,
+            CONF_SWING_MODE,
+            CONF_SWING_HORIZONTAL_MODE,
+        }:
+            value = str(value).strip()
+        elif name in {
             CONF_CURRENT_TEMPERATURE,
             CONF_TARGET_TEMPERATURE,
             CONF_TARGET_TEMPERATURE_HIGH,
             CONF_TARGET_TEMPERATURE_LOW,
         }:
-            value = self._bounded_temperature(value)
+            if value is None or value == "":
+                value = None
+            else:
+                value = _finite_float(value, float("nan"))
+                if not math.isfinite(value):
+                    raise ValueError(f"{name} must render a finite number")
+                value = self._bounded_temperature(value)
         elif name in {CONF_CURRENT_HUMIDITY, CONF_TARGET_HUMIDITY}:
-            value = self._bounded_humidity(value)
+            if value is None or value == "":
+                value = None
+            else:
+                value = _finite_float(value, float("nan"))
+                if not math.isfinite(value):
+                    raise ValueError(f"{name} must render a finite number")
+                value = self._bounded_humidity(value)
+        elif name in {
+            CONF_MIN_TEMP,
+            CONF_MAX_TEMP,
+            CONF_MIN_HUMIDITY,
+            CONF_MAX_HUMIDITY,
+        }:
+            value = _finite_float(value, float("nan"))
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must render a finite number")
         elif name in {CONF_TARGET_TEMPERATURE_STEP, CONF_TARGET_HUMIDITY_STEP}:
             value = _finite_step(value)
             if value is None:
                 raise ValueError(f"{name} must render a positive number")
         elif name == CONF_TEMPERATURE_UNIT:
-            value = str(value)
+            value = str(value).strip()
             if value not in set(UnitOfTemperature):
                 raise ValueError("Invalid temperature unit")
         return super()._apply_native_template_value(name, value)
@@ -638,6 +673,8 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         return max(self._attr_min_humidity, min(self._attr_max_humidity, humidity))
 
     def _validate_temperature(self, temperature) -> float:
+        if isinstance(temperature, bool):
+            raise ValueError("Temperature must be numeric")
         try:
             temperature = float(temperature)
         except (TypeError, ValueError, OverflowError) as err:
@@ -679,6 +716,11 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         next_temperature = self._attr_target_temperature
         next_temperature_high = self._attr_target_temperature_high
         next_temperature_low = self._attr_target_temperature_low
+        next_hvac_mode = self._attr_hvac_mode
+        if ATTR_HVAC_MODE in kwargs:
+            next_hvac_mode = _as_hvac_mode(kwargs[ATTR_HVAC_MODE])
+            if next_hvac_mode not in self._attr_hvac_modes:
+                raise ValueError(f"Unsupported HVAC mode: {next_hvac_mode}")
         if ATTR_TEMPERATURE in kwargs:
             next_temperature = self._validate_temperature(kwargs[ATTR_TEMPERATURE])
         if ATTR_TARGET_TEMPERATURE_HIGH in kwargs:
@@ -700,9 +742,16 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         self._attr_target_temperature = next_temperature
         self._attr_target_temperature_high = next_temperature_high
         self._attr_target_temperature_low = next_temperature_low
+        self._attr_hvac_mode = next_hvac_mode
+        if next_hvac_mode == HVACMode.OFF:
+            self._attr_hvac_action = HVACAction.OFF
+        elif self._attr_hvac_action in {None, HVACAction.OFF}:
+            self._attr_hvac_action = HVACAction.IDLE
         self.async_write_ha_state()
 
     async def async_set_humidity(self, humidity: int) -> None:
+        if isinstance(humidity, bool):
+            raise ValueError("Humidity must be numeric")
         try:
             humidity = float(humidity)
         except (TypeError, ValueError, OverflowError) as err:

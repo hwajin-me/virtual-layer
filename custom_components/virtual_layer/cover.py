@@ -9,8 +9,14 @@ from typing import Any
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-from homeassistant.components.cover import DOMAIN as PLATFORM_DOMAIN
-from homeassistant.components.cover import CoverEntity, CoverEntityFeature
+from homeassistant.components.cover import (
+    ATTR_CURRENT_TILT_POSITION,
+    CoverEntity,
+    CoverEntityFeature,
+)
+from homeassistant.components.cover import (
+    DOMAIN as PLATFORM_DOMAIN,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
@@ -96,6 +102,18 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
     def current_cover_position(self) -> int | None:
         return self._current_position
 
+    def _restore_state(self, state, config):
+        super()._restore_state(state, config)
+        if not self._attr_supported_features & CoverEntityFeature.SET_TILT_POSITION:
+            return
+        try:
+            position = int(state.attributes.get(ATTR_CURRENT_TILT_POSITION))
+        except (TypeError, ValueError, OverflowError):
+            position = None
+        self._attr_current_cover_tilt_position = (
+            position if position is not None and 0 <= position <= 100 else None
+        )
+
     async def async_open_cover(self, **kwargs: Any) -> None:
         _LOGGER.debug(f"opening {self.name}")
         self._set_position(100)
@@ -124,6 +142,8 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
         self.async_write_ha_state()
 
     async def async_set_cover_tilt_position(self, **kwargs: Any) -> None:
+        if isinstance(kwargs["tilt_position"], bool):
+            raise ValueError("tilt_position must be between 0 and 100")
         position = int(kwargs["tilt_position"])
         if not 0 <= position <= 100:
             raise ValueError("tilt_position must be between 0 and 100")
@@ -132,6 +152,10 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name == "current_cover_tilt_position":
+            if isinstance(value, bool):
+                raise ValueError(
+                    "current_cover_tilt_position must be between 0 and 100"
+                )
             try:
                 value = int(value)
             except (TypeError, ValueError, OverflowError) as err:

@@ -26,6 +26,7 @@ from homeassistant.components.media_player import (
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
+    RepeatMode,
 )
 from homeassistant.components.remote import RemoteEntity, RemoteEntityFeature
 from homeassistant.components.select import SelectEntity
@@ -34,6 +35,9 @@ from homeassistant.components.text import TextEntity, TextMode
 from homeassistant.components.time import TimeEntity
 from homeassistant.components.update import UpdateEntity, UpdateEntityFeature
 from homeassistant.components.water_heater import (
+    ATTR_AWAY_MODE,
+    ATTR_TARGET_TEMP_HIGH,
+    ATTR_TARGET_TEMP_LOW,
     WaterHeaterEntity,
     WaterHeaterEntityFeature,
 )
@@ -233,6 +237,8 @@ class GenericVirtualEntity(VirtualEntity, Entity):
             if name in {"cloud_coverage", "confidence", "humidity"} and value > 100:
                 raise ValueError(f"{name} must be between 0 and 100")
         elif name == "wind_bearing":
+            if isinstance(value, bool):
+                raise ValueError("wind_bearing must be a number or compass direction")
             try:
                 numeric_bearing = float(value)
             except (TypeError, ValueError, OverflowError):
@@ -378,7 +384,7 @@ def _string_list(value, default=()) -> list[str]:
     """Return a safe list of non-empty strings from persisted domain options."""
     if not isinstance(value, (list, tuple, set)):
         value = default
-    return [str(item) for item in value if str(item).strip()]
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _template_string_list(value, name: str) -> list[str]:
@@ -393,6 +399,8 @@ def _template_string_list(value, name: str) -> list[str]:
 
 def _safe_float(value, default: float) -> float:
     """Read a finite numeric option without making old settings unloadable."""
+    if isinstance(value, bool):
+        return default
     try:
         parsed = float(value)
     except (OverflowError, TypeError, ValueError):
@@ -402,6 +410,8 @@ def _safe_float(value, default: float) -> float:
 
 def _safe_int(value, default: int, minimum: int = 0) -> int:
     """Read an integer option with a lower bound from persisted data."""
+    if isinstance(value, bool):
+        return default
     try:
         parsed = int(value)
     except (OverflowError, TypeError, ValueError):
@@ -532,14 +542,32 @@ class VirtualText(_NativeGenericMixin, VirtualEntity, TextEntity):
 
     def _create_state(self, config):
         super()._create_state(config)
-        self._attr_native_value = str(config.get(CONF_INITIAL_VALUE, ""))
+        value = str(config.get(CONF_INITIAL_VALUE, ""))
+        self._attr_native_value = value if self._value_is_valid(value) else None
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        self._attr_native_value = state.state
+        restored = str(state.state)
+        fallback = str(config.get(CONF_INITIAL_VALUE, ""))
+        self._attr_native_value = (
+            restored
+            if self._value_is_valid(restored)
+            else fallback
+            if self._value_is_valid(fallback)
+            else None
+        )
 
     def set_state(self, value) -> None:
-        self._attr_native_value = str(value)
+        value = str(value)
+        if not self._value_is_valid(value):
+            raise ValueError("Text value does not satisfy its configured constraints")
+        self._attr_native_value = value
+
+    def _value_is_valid(self, value: str) -> bool:
+        return self._attr_native_min <= len(value) <= self._attr_native_max and (
+            self._pattern_regex is None
+            or self._pattern_regex.fullmatch(value) is not None
+        )
 
     async def async_set_value(self, value: str) -> None:
         if not isinstance(value, str):
@@ -599,11 +627,7 @@ class VirtualText(_NativeGenericMixin, VirtualEntity, TextEntity):
         value = self._attr_native_value
         if value is None:
             return
-        if (
-            not self._attr_native_min <= len(value) <= self._attr_native_max
-            or self._pattern_regex
-            and self._pattern_regex.fullmatch(value) is None
-        ):
+        if not self._value_is_valid(value):
             self._attr_native_value = None
 
 
@@ -617,9 +641,16 @@ class _TemporalEntityMixin(_NativeGenericMixin):
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
         self._attr_native_value = self._parse_value(state.state)
+        if self._attr_native_value is None:
+            self._attr_native_value = self._parse_value(
+                config.get(CONF_INITIAL_VALUE)
+            )
 
     def set_state(self, value) -> None:
-        self._attr_native_value = self._parse_value(value)
+        parsed = self._parse_value(value)
+        if parsed is None and _has_value(value):
+            raise ValueError(f"Invalid {self.PLATFORM_DOMAIN} value: {value}")
+        self._attr_native_value = parsed
 
     async def async_set_value(self, value) -> None:
         parsed = self._parse_value(value)
@@ -820,7 +851,9 @@ class VirtualLawnMower(_NativeGenericMixin, VirtualEntity, LawnMowerEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        self._attr_activity = self._parse_activity(state.state)
+        self._attr_activity = self._parse_activity(state.state) or self._parse_activity(
+            config.get(CONF_INITIAL_VALUE)
+        )
 
     def set_state(self, value) -> None:
         activity = self._parse_activity(value)
@@ -969,7 +1002,7 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         if not _has_value(value):
             return None
         try:
-            return MediaPlayerState(str(value).lower())
+            return MediaPlayerState(str(value).strip().lower())
         except ValueError:
             return None
 
@@ -979,7 +1012,9 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        self._attr_state = self._parse_media_state(state.state)
+        self._attr_state = self._parse_media_state(
+            state.state
+        ) or self._parse_media_state(config.get(CONF_INITIAL_VALUE))
         self._attr_volume_level = self._bounded_volume(
             state.attributes.get("volume_level", self._attr_volume_level),
             self._attr_volume_level,
@@ -991,6 +1026,19 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             state.attributes.get("is_volume_muted", self._attr_is_volume_muted),
             self._attr_is_volume_muted,
         )
+        restored_sound_mode = state.attributes.get("sound_mode")
+        if _has_value(restored_sound_mode):
+            self._attr_sound_mode = str(restored_sound_mode).strip()
+        if "shuffle" in state.attributes:
+            self._attr_shuffle = _safe_bool(state.attributes["shuffle"])
+        restored_repeat = state.attributes.get("repeat")
+        if _has_value(restored_repeat):
+            try:
+                self._attr_repeat = RepeatMode(
+                    str(restored_repeat).strip().lower(),
+                )
+            except ValueError:
+                self._attr_repeat = None
 
     def set_state(self, value) -> None:
         state = self._parse_media_state(value)
@@ -1019,7 +1067,7 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         self.async_write_ha_state()
 
     async def async_set_volume_level(self, volume: float) -> None:
-        if not 0 <= volume <= 1:
+        if isinstance(volume, bool) or not 0 <= volume <= 1:
             raise ValueError("Media player volume must be between 0 and 1")
         self._attr_volume_level = float(volume)
         self.async_write_ha_state()
@@ -1034,18 +1082,44 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         self._attr_source = source
         self.async_write_ha_state()
 
+    async def async_select_sound_mode(self, sound_mode: str) -> None:
+        sound_modes = getattr(self, "_attr_sound_mode_list", None) or []
+        if sound_mode not in sound_modes:
+            raise ValueError(f"Invalid media sound mode: {sound_mode}")
+        self._attr_sound_mode = sound_mode
+        self.async_write_ha_state()
+
+    async def async_set_shuffle(self, shuffle: bool) -> None:
+        if not isinstance(shuffle, bool):
+            raise TypeError("Media shuffle must be a boolean")
+        self._attr_shuffle = shuffle
+        self.async_write_ha_state()
+
+    async def async_set_repeat(self, repeat: RepeatMode) -> None:
+        try:
+            repeat = RepeatMode(str(repeat).strip().lower())
+        except ValueError as err:
+            raise ValueError(f"Invalid media repeat mode: {repeat}") from err
+        self._attr_repeat = repeat
+        self.async_write_ha_state()
+
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name in {"source_list", "sound_mode_list", "group_members"}:
             value = _template_string_list(value, name)
         elif name == "source":
-            value = None if not _has_value(value) else str(value)
+            value = None if not _has_value(value) else str(value).strip()
             if value is not None and self._attr_source_list and value not in self._attr_source_list:
                 raise ValueError(f"Invalid media source: {value}")
         elif name == "sound_mode":
-            value = None if not _has_value(value) else str(value)
+            value = None if not _has_value(value) else str(value).strip()
             sound_modes = getattr(self, "_attr_sound_mode_list", None) or []
             if value is not None and sound_modes and value not in sound_modes:
                 raise ValueError(f"Invalid media sound mode: {value}")
+        elif name == "repeat":
+            try:
+                value = RepeatMode(str(value).strip().lower())
+            except ValueError as err:
+                raise ValueError(f"Invalid media repeat mode: {value}") from err
         elif name == "volume_level":
             parsed = _safe_float(value, float("nan"))
             if not math.isfinite(parsed) or not 0 <= parsed <= 1:
@@ -1108,6 +1182,18 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         )
         if self._attr_source_list or "select_source" in self._command_actions:
             features |= MediaPlayerEntityFeature.SELECT_SOURCE
+        if sound_modes or "select_sound_mode" in self._command_actions:
+            features |= MediaPlayerEntityFeature.SELECT_SOUND_MODE
+        if (
+            getattr(self, "_attr_shuffle", None) is not None
+            or "set_shuffle" in self._command_actions
+        ):
+            features |= MediaPlayerEntityFeature.SHUFFLE_SET
+        if (
+            getattr(self, "_attr_repeat", None) is not None
+            or "set_repeat" in self._command_actions
+        ):
+            features |= MediaPlayerEntityFeature.REPEAT_SET
         self._attr_supported_features = features
 
 
@@ -1231,6 +1317,18 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
                 self._attr_target_temperature,
             )
         )
+        for attribute_name, target_name in (
+            (ATTR_TARGET_TEMP_HIGH, "_attr_target_temperature_high"),
+            (ATTR_TARGET_TEMP_LOW, "_attr_target_temperature_low"),
+        ):
+            if (restored := state.attributes.get(attribute_name)) is not None:
+                if (temperature := self._bounded_temperature(restored)) is not None:
+                    setattr(self, target_name, temperature)
+        if ATTR_AWAY_MODE in state.attributes:
+            self._attr_is_away_mode_on = _safe_bool(
+                state.attributes[ATTR_AWAY_MODE],
+                self._attr_is_away_mode_on is True,
+            )
 
     def set_state(self, value) -> None:
         operation = str(value).lower()
@@ -1242,7 +1340,10 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
         self._attr_current_operation = operation
 
     async def async_set_temperature(self, **kwargs) -> None:
-        temperature = float(kwargs[ATTR_TEMPERATURE])
+        requested_temperature = kwargs[ATTR_TEMPERATURE]
+        if isinstance(requested_temperature, bool):
+            raise ValueError("Water heater temperature must be a finite number")
+        temperature = float(requested_temperature)
         if not self._attr_min_temp <= temperature <= self._attr_max_temp:
             raise ValueError("Water heater temperature is outside its configured range")
         self._attr_target_temperature = temperature
@@ -1298,7 +1399,13 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             "target_temperature_high",
             "target_temperature_low",
         }:
-            value = self._bounded_temperature(value)
+            if value is None or value == "":
+                value = None
+            else:
+                parsed = _safe_float(value, float("nan"))
+                if not math.isfinite(parsed):
+                    raise ValueError(f"{name} must be a finite number")
+                value = self._bounded_temperature(parsed)
         elif name == "target_temperature_step":
             value = _safe_float(value, float("nan"))
             if not math.isfinite(value) or value <= 0:

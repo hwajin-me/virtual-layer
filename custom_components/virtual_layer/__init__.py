@@ -40,6 +40,7 @@ from .const import *
 
 _LOGGER = logging.getLogger(__name__)
 _MISSING = object()
+_MAX_SERVICE_PAYLOAD_DEPTH = 100
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(COMPONENT_DOMAIN)
 
@@ -53,17 +54,31 @@ SERVICE_SET_ATTRIBUTES = "set_attributes"
 SERVICE_CLEAR_ATTRIBUTES = "clear_attributes"
 
 
-def _finite_service_payload(value):
-    """Reject non-finite numbers before they reach HA state or attributes."""
+def _finite_service_payload(value, _seen=None, _depth=0):
+    """Reject unsafe recursive values before they reach HA state or attributes."""
+    if _depth > _MAX_SERVICE_PAYLOAD_DEPTH:
+        raise vol.Invalid("State values may not be nested more than 100 levels")
     if isinstance(value, float) and not math.isfinite(value):
         raise vol.Invalid("NaN and infinity are not valid state values")
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            _finite_service_payload(key)
-            _finite_service_payload(item)
-    elif isinstance(value, (list, tuple, set)):
-        for item in value:
-            _finite_service_payload(item)
+    if not isinstance(value, (Mapping, list, tuple, set)):
+        return value
+
+    if _seen is None:
+        _seen = set()
+    identity = id(value)
+    if identity in _seen:
+        raise vol.Invalid("State values may not contain recursive references")
+    _seen.add(identity)
+    try:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                _finite_service_payload(key, _seen, _depth + 1)
+                _finite_service_payload(item, _seen, _depth + 1)
+        else:
+            for item in value:
+                _finite_service_payload(item, _seen, _depth + 1)
+    finally:
+        _seen.remove(identity)
     return value
 
 
@@ -74,7 +89,7 @@ def _service_attributes(value):
     _finite_service_payload(value)
     try:
         json_bytes(value)
-    except (OverflowError, TypeError, ValueError) as err:
+    except (OverflowError, RecursionError, TypeError, ValueError) as err:
         raise vol.Invalid("Attributes must be serializable by Home Assistant") from err
     return value
 
@@ -86,7 +101,7 @@ def _service_state_value(value):
     _finite_service_payload(value)
     try:
         json_bytes(value)
-    except (OverflowError, TypeError, ValueError) as err:
+    except (OverflowError, RecursionError, TypeError, ValueError) as err:
         raise vol.Invalid("State value must be serializable by Home Assistant") from err
     return value
 
@@ -251,7 +266,7 @@ async def async_setup(hass, config):
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    _LOGGER.debug("async setup %s", entry.data)
+    _LOGGER.debug("Setting up Virtual Layer config entry %s", entry.entry_id)
 
     _async_ensure_runtime_data(hass)
     configured_group_name = entry.data[ATTR_GROUP_NAME]
@@ -279,7 +294,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # create the devices.
     _LOGGER.debug("creating the devices")
     for device in vcfg.devices:
-        _LOGGER.debug("creating-device=%s", device)
+        _LOGGER.debug("Creating virtual Device %s", device.get(ATTR_DEVICE_ID))
         await _async_get_or_create_virtual_device_in_registry(hass, entry, device)
     _async_remove_orphaned_diagnostic_registry_entries(hass, entry, vcfg.entities)
     _async_sync_active_entity_registry_entries(hass, entry, vcfg.entities)
@@ -317,7 +332,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     })
     if previous_group_name != entry.data[ATTR_GROUP_NAME]:
         hass.data[COMPONENT_DOMAIN].pop(previous_group_name, None)
-    _LOGGER.debug("update hass data %s", hass.data[COMPONENT_DOMAIN])
+    _LOGGER.debug("Updated runtime data for Device group %s", configured_group_name)
     _async_setup_state_only_entities(hass, entry, vcfg.entities)
 
     # Create the entities.
@@ -1578,7 +1593,7 @@ async def async_virtual_set_availability_service(hass, call):
     _assert_managed_virtual_entities(hass, entity_ids)
     for entity_id in entity_ids:
         domain = entity_id.split(".")[0]
-        _LOGGER.debug("%s set_available(value=%s)", entity_id, value)
+        _LOGGER.debug("Setting availability for %s", entity_id)
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, attributes={ATTR_AVAILABLE: value})
             continue
@@ -1653,7 +1668,7 @@ async def async_virtual_set_state_service(hass, call):
     _assert_managed_virtual_entities(hass, entity_ids)
     for entity_id in entity_ids:
         domain = entity_id.split(".")[0]
-        _LOGGER.debug("%s set_state(value=%s)", entity_id, value)
+        _LOGGER.debug("Setting state for %s", entity_id)
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, value=value)
             continue
@@ -1671,7 +1686,7 @@ async def async_virtual_set_attributes_service(hass, call):
     _assert_managed_virtual_entities(hass, entity_ids)
     for entity_id in entity_ids:
         domain = entity_id.split(".")[0]
-        _LOGGER.debug("%s set_attributes(attributes=%s)", entity_id, attributes)
+        _LOGGER.debug("Setting %s attributes for %s", len(attributes), entity_id)
         if _is_state_only_entity_id(entity_id):
             _async_set_state_only_entity(hass, entity_id, attributes=attributes)
             continue
@@ -1684,7 +1699,7 @@ async def async_virtual_clear_attributes_service(hass, call):
     _assert_managed_virtual_entities(hass, entity_ids)
     for entity_id in entity_ids:
         domain = entity_id.split(".")[0]
-        _LOGGER.debug("%s clear_attributes(attributes=%s)", entity_id, attributes)
+        _LOGGER.debug("Clearing attributes for %s", entity_id)
         if _is_state_only_entity_id(entity_id):
             _async_clear_state_only_attributes(hass, entity_id, attributes)
             continue

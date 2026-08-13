@@ -8,6 +8,7 @@ import logging
 import math
 import mimetypes
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Any
 
@@ -33,10 +34,19 @@ from homeassistant.util import dt as dt_util
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, virtual_schema
+from .entity import (
+    MAX_LOCAL_MEDIA_BYTES,
+    VirtualEntity,
+    allowed_local_path,
+    virtual_schema,
+)
 from .polygon import load_polygon_zones, render_polygon_map_svg
 
 _LOGGER = logging.getLogger(__name__)
+_IMAGE_ALIAS_CHAIN: ContextVar[frozenset[int]] = ContextVar(
+    "virtual_layer_image_alias_chain",
+    default=frozenset(),
+)
 
 DEPENDENCIES = [COMPONENT_DOMAIN]
 
@@ -215,8 +225,12 @@ class VirtualImage(VirtualEntity, ImageEntity):
             if state is None:
                 continue
             try:
-                latitude = float(state.attributes[ATTR_LATITUDE])
-                longitude = float(state.attributes[ATTR_LONGITUDE])
+                raw_latitude = state.attributes[ATTR_LATITUDE]
+                raw_longitude = state.attributes[ATTR_LONGITUDE]
+                if isinstance(raw_latitude, bool) or isinstance(raw_longitude, bool):
+                    continue
+                latitude = float(raw_latitude)
+                longitude = float(raw_longitude)
             except (KeyError, TypeError, ValueError, OverflowError):
                 continue
             if (
@@ -238,17 +252,30 @@ class VirtualImage(VirtualEntity, ImageEntity):
         """Return bytes for the synchronous ImageEntity API."""
         if not self._image_path:
             return None
-        try:
-            with open(self._image_path, "rb") as image_file:
-                return image_file.read()
-        except OSError:
-            _LOGGER.warning("Unable to read virtual image %s", self._image_path)
+        image_path = allowed_local_path(self.hass, self._image_path)
+        if image_path is None:
+            _LOGGER.warning("Blocked disallowed image path for %s", self.entity_id)
             return None
+        try:
+            with open(image_path, "rb") as image_file:
+                image = image_file.read(MAX_LOCAL_MEDIA_BYTES + 1)
+        except OSError:
+            _LOGGER.warning("Unable to read image for %s", self.entity_id)
+            return None
+        if len(image) > MAX_LOCAL_MEDIA_BYTES:
+            _LOGGER.warning("Local image is too large for %s", self.entity_id)
+            return None
+        return image
 
     async def async_image(self) -> bytes | None:
         """Return bytes from the configured source."""
         source = self._source_image()
         if source is not None:
+            marker = id(self)
+            active_aliases = _IMAGE_ALIAS_CHAIN.get()
+            if marker in active_aliases:
+                return None
+            token = _IMAGE_ALIAS_CHAIN.set(active_aliases | {marker})
             try:
                 image = await source.async_image()
             except (
@@ -265,6 +292,8 @@ class VirtualImage(VirtualEntity, ImageEntity):
                     err,
                 )
                 return None
+            finally:
+                _IMAGE_ALIAS_CHAIN.reset(token)
             if image is not None:
                 source_content_type = getattr(source, "content_type", None)
                 if isinstance(source_content_type, str) and source_content_type:
@@ -338,11 +367,22 @@ class VirtualImage(VirtualEntity, ImageEntity):
             return image
 
         if self._image_path:
+            image_path = await self.hass.async_add_executor_job(
+                allowed_local_path,
+                self.hass,
+                self._image_path,
+            )
+            if image_path is None:
+                _LOGGER.warning("Blocked disallowed image path for %s", self.entity_id)
+                return None
             try:
-                async with aiofiles.open(self._image_path, "rb") as image_file:
-                    image = await image_file.read()
+                async with aiofiles.open(image_path, "rb") as image_file:
+                    image = await image_file.read(MAX_LOCAL_MEDIA_BYTES + 1)
             except OSError:
-                _LOGGER.warning("Unable to read virtual image %s", self._image_path)
+                _LOGGER.warning("Unable to read image for %s", self.entity_id)
+                return None
+            if len(image) > MAX_LOCAL_MEDIA_BYTES:
+                _LOGGER.warning("Local image is too large for %s", self.entity_id)
                 return None
             self._mark_updated(image)
             return image
@@ -357,7 +397,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
                 OSError,
                 ValueError,
             ) as err:
-                _LOGGER.warning("Unable to fetch virtual image URL %s: %s", self._image_url, err)
+                _LOGGER.warning("Unable to fetch image for %s: %s", self.entity_id, err)
                 return None
             if image is not None:
                 self._mark_updated(image)

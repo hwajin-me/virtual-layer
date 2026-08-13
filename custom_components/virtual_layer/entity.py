@@ -7,10 +7,12 @@ This class adds persistence to an entity.
 import inspect
 import logging
 import math
+from contextvars import ContextVar
 from datetime import timedelta
 from enum import Enum
 from functools import wraps
 from math import isfinite
+from pathlib import Path
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -40,8 +42,32 @@ from .const import *
 
 _LOGGER = logging.getLogger(__name__)
 _MISSING = object()
+MAX_LOCAL_MEDIA_BYTES = 25 * 1024 * 1024
+_COMMAND_ACTION_CHAIN: ContextVar[frozenset[tuple[int, str]]] = ContextVar(
+    "virtual_layer_command_action_chain",
+    default=frozenset(),
+)
 
 positive_tick = vol.All(vol.Coerce(float), vol.Range(min=0, min_included=False))
+
+
+def allowed_local_path(hass, file_name: str) -> str | None:
+    """Resolve a media path inside HA's config or external allowlist."""
+    if not isinstance(file_name, str) or not file_name.strip():
+        return None
+    try:
+        candidate = Path(file_name)
+        if not candidate.is_absolute():
+            candidate = Path(hass.config.config_dir) / candidate
+        candidate = candidate.resolve()
+        config_root = Path(hass.config.config_dir).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if candidate.is_relative_to(config_root) or hass.config.is_allowed_path(
+        str(candidate)
+    ):
+        return str(candidate)
+    return None
 
 def virtual_schema(default_initial_value: str, extra_attrs):
     schema = {
@@ -132,7 +158,11 @@ class VirtualEntity(RestoreEntity):
 
     def __init__(self, config, domain, old_style : bool = False):
         """Initialize an Virtual Sensor."""
-        _LOGGER.debug("creating-virtual-%s=%s", domain, config)
+        _LOGGER.debug(
+            "Creating virtual %s entity %s",
+            domain,
+            config.get(ATTR_ENTITY_ID) or config.get(CONF_NAME),
+        )
         self._config = config
         self._configured_icon = config.get(CONF_ICON)
         self._attr_icon = self._configured_icon
@@ -160,7 +190,6 @@ class VirtualEntity(RestoreEntity):
         }
         self._command_actions = dict(config.get(CONF_COMMAND_ACTIONS, {}))
         self._command_scripts = {}
-        self._running_command_actions = set()
         self._pull_interval = config.get(CONF_PULL_INTERVAL, 0)
         self._source_entities = config.get(CONF_SOURCE_ENTITIES, [])
         self._template_sources = {
@@ -234,22 +263,35 @@ class VirtualEntity(RestoreEntity):
 
     def _restore_state(self, state, config):
         _LOGGER.debug("VirtualEntity %s: restoring state", self.unique_id)
-        _LOGGER.debug("VirtualEntity:: state=%s", state.state)
-        _LOGGER.debug("VirtualEntity:: attr=%s", state.attributes)
-        self._attr_available = state.attributes.get(
+        restored_availability = state.attributes.get(
             ATTR_AVAILABLE,
             config.get(CONF_INITIAL_AVAILABILITY, DEFAULT_AVAILABILITY),
         )
+        try:
+            self._attr_available = cv.boolean(restored_availability)
+        except vol.Invalid:
+            self._attr_available = config.get(
+                CONF_INITIAL_AVAILABILITY,
+                DEFAULT_AVAILABILITY,
+            )
         attribute_names = state.attributes.get(
             ATTR_VIRTUAL_ATTRIBUTES,
             list(self._virtual_attributes.keys()),
         )
+        if not isinstance(attribute_names, (list, tuple, set)):
+            attribute_names = list(self._virtual_attributes)
+        attribute_names = [
+            name for name in attribute_names if isinstance(name, str)
+        ]
         previous_configured_names = state.attributes.get(
             ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES,
             [],
         )
         if not isinstance(previous_configured_names, (list, tuple, set)):
             previous_configured_names = []
+        previous_configured_names = {
+            name for name in previous_configured_names if isinstance(name, str)
+        }
         self._virtual_attributes = {
             name: state.attributes.get(name)
             for name in attribute_names
@@ -282,7 +324,10 @@ class VirtualEntity(RestoreEntity):
         if not self._persistent or not state:
             self._create_state(self._config)
         else:
+            prerequisites_applied = self._apply_restore_prerequisite_templates()
             self._restore_state(state, self._config)
+            if prerequisites_applied:
+                self._native_templates_applied()
         self._update_attributes()
         self._setup_templates()
         self._apply_templates()
@@ -635,6 +680,7 @@ class VirtualEntity(RestoreEntity):
         """Apply capabilities and ranges before values which depend on them."""
         if name.endswith(("_modes", "_list")) or name in {
             "available_modes",
+            "effects",
             "modes",
             "options",
             "source_list",
@@ -643,9 +689,50 @@ class VirtualEntity(RestoreEntity):
             return 0
         if name.startswith(("min_", "max_")) or name.endswith(("_step", "_count")):
             return 1
+        if name in {
+            "max",
+            "min",
+            "native_min",
+            "native_max",
+            "native_min_value",
+            "native_max_value",
+            "native_step",
+            "step",
+        }:
+            return 1
         if name in {"state", "is_on"}:
             return 3
         return 2
+
+    def _apply_restore_prerequisite_templates(self) -> bool:
+        """Render dynamic capabilities and ranges before restoring native values."""
+        applied = False
+        for name, template in sorted(
+            self._native_templates.items(),
+            key=lambda item: self._native_template_priority(item[0]),
+        ):
+            if self._native_template_priority(name) > 1:
+                break
+            try:
+                self._apply_native_template_value(
+                    name,
+                    self._render_template(template, parse_result=True),
+                )
+                applied = True
+            except (
+                OverflowError,
+                TemplateError,
+                TypeError,
+                ValueError,
+                vol.Invalid,
+            ) as err:
+                _LOGGER.warning(
+                    "Unable to render restore prerequisite template %s for %s: %s",
+                    name,
+                    self.entity_id,
+                    err,
+                )
+        return applied
 
     def _command_action_spec(self, command: str):
         spec = self._command_actions.get(command)
@@ -662,7 +749,9 @@ class VirtualEntity(RestoreEntity):
     async def _async_run_command_action(self, command, method, args, kwargs):
         """Run the configured HA action sequence before a native command."""
         action_spec = self._command_action_spec(command)
-        if action_spec is None or command in self._running_command_actions:
+        action_key = (id(self), command)
+        active_actions = _COMMAND_ACTION_CHAIN.get()
+        if action_spec is None or action_key in active_actions:
             return True
         sequence, optimistic = action_spec
         if not sequence:
@@ -676,33 +765,34 @@ class VirtualEntity(RestoreEntity):
                 f"{self.entity_id} {command}",
                 COMPONENT_DOMAIN,
                 logger=_LOGGER,
+                script_mode="parallel",
                 top_level=False,
             )
             self._command_scripts[command] = script
 
+        signature = inspect.signature(method)
+        bound = signature.bind_partial(self, *args, **kwargs)
+        variables = {}
+        for name, value in bound.arguments.items():
+            if name == "self":
+                continue
+            if signature.parameters[name].kind is inspect.Parameter.VAR_KEYWORD:
+                variables.update(value)
+            else:
+                variables[name] = value
+        variables.update({
+            "command": command,
+            "entity_id": self.entity_id,
+            "this": self.hass.states.get(self.entity_id),
+        })
+        context = self._context or Context()
+        run_variables = ScriptRunVariables.create_top_level(variables)
+        run_variables["context"] = context
+        token = _COMMAND_ACTION_CHAIN.set(active_actions | {action_key})
         try:
-            signature = inspect.signature(method)
-            bound = signature.bind_partial(self, *args, **kwargs)
-            variables = {}
-            for name, value in bound.arguments.items():
-                if name == "self":
-                    continue
-                if signature.parameters[name].kind is inspect.Parameter.VAR_KEYWORD:
-                    variables.update(value)
-                else:
-                    variables[name] = value
-            variables.update({
-                "command": command,
-                "entity_id": self.entity_id,
-                "this": self.hass.states.get(self.entity_id),
-            })
-            context = self._context or Context()
-            run_variables = ScriptRunVariables.create_top_level(variables)
-            run_variables["context"] = context
-            self._running_command_actions.add(command)
             await script.async_run(run_variables, context=context)
         finally:
-            self._running_command_actions.discard(command)
+            _COMMAND_ACTION_CHAIN.reset(token)
         return optimistic
 
     def _hook_template_variables(self, hook, event):
@@ -949,7 +1039,6 @@ class VirtualOpenableEntity(VirtualEntity):
 
     def __init__(self, config, domain, old_style: bool):
         """Initialize the Virtual openable device."""
-        _LOGGER.debug("creating-virtual-openable-%s=%s", domain, config)
         super().__init__(config, domain, old_style)
 
         self._attr_device_class = config.get(CONF_CLASS)

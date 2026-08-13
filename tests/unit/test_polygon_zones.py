@@ -506,6 +506,82 @@ async def test_broken_inline_geojson_does_not_discard_valid_file_zones(
 
 
 @pytest.mark.asyncio
+async def test_oversized_geojson_file_is_rejected_without_loading_it(
+    hass,
+    tmp_path,
+    monkeypatch,
+):
+    geojson_file = tmp_path / "oversized.geojson"
+    geojson_file.write_bytes(b"{" + b" " * 32 + b"}")
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.polygon.MAX_GEOJSON_BYTES",
+        16,
+    )
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.polygon._local_geojson_path",
+        AsyncMock(return_value=str(geojson_file)),
+    )
+
+    zones, errors = await load_polygon_zones(
+        hass,
+        files=["oversized.geojson"],
+        return_errors=True,
+    )
+
+    assert zones == []
+    assert len(errors) == 1
+    assert "too large" in errors[0]
+
+
+@pytest.mark.asyncio
+async def test_remote_geojson_reads_all_network_chunks(hass, monkeypatch):
+    document = json.dumps(GEOJSON).encode()
+
+    class ChunkedContent:
+        async def iter_chunked(self, _chunk_size):
+            yield document[:17]
+            yield document[17:103]
+            yield document[103:]
+
+    class Response:
+        content_length = None
+        content = ChunkedContent()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+    session = Mock()
+    session.get.return_value = Response()
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.polygon.async_get_clientsession",
+        Mock(return_value=session),
+    )
+
+    zones = await load_polygon_zones(
+        hass,
+        files=["https://example.test/family.geojson"],
+    )
+
+    assert [zone["name"] for zone in zones] == ["Seoul", "Office", "Remote"]
+
+
+def test_geojson_complexity_budget_rejects_excessive_coordinates(monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.polygon.MAX_GEOJSON_POINTS",
+        3,
+    )
+
+    with pytest.raises(ValueError, match="too many coordinate points"):
+        parse_geojson_zones(GEOJSON)
+
+
+@pytest.mark.asyncio
 async def test_polygon_file_reload_keeps_last_working_zones_on_transient_failure(
     hass,
     monkeypatch,

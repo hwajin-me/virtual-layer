@@ -1,5 +1,6 @@
 """Regression tests for non-mergeable media and safety sensor helpers."""
 
+import asyncio
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -14,6 +15,7 @@ from homeassistant.const import (
 )
 from homeassistant.helpers.template import Template
 
+from custom_components.virtual_layer import camera as camera_platform
 from custom_components.virtual_layer import image as image_platform
 from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
 from custom_components.virtual_layer.config_flow import (
@@ -62,6 +64,7 @@ async def test_virtual_image_alias_returns_source_image(hass):
 async def test_virtual_image_reads_configured_file(hass, tmp_path):
     image_path = tmp_path / "snapshot.png"
     image_path.write_bytes(b"jpeg-bytes")
+    hass.config.allowlist_external_dirs.add(str(tmp_path))
     entity = VirtualImage(IMAGE_SCHEMA({
         CONF_NAME: "Snapshot Image",
         ATTR_ENTITY_ID: "image.snapshot",
@@ -76,6 +79,191 @@ async def test_virtual_image_reads_configured_file(hass, tmp_path):
     assert await entity.async_image() == b"jpeg-bytes"
     assert entity.image_last_updated is not None
     assert entity.state_attributes["content_type"] == "image/png"
+
+
+async def test_virtual_media_blocks_files_outside_allowed_paths(hass, tmp_path):
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    hass.config.allowlist_external_dirs.add(str(allowed_dir))
+    secret_path = tmp_path / "secret.txt"
+    secret_path.write_bytes(b"private-data")
+
+    image = VirtualImage(IMAGE_SCHEMA({
+        CONF_NAME: "Blocked Image",
+        ATTR_ENTITY_ID: "image.blocked",
+        ATTR_UNIQUE_ID: "blocked-image",
+        CONF_INITIAL_VALUE: "unknown",
+        "image_path": str(secret_path),
+    }), hass, False)
+    camera = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Blocked Camera",
+        ATTR_ENTITY_ID: "camera.blocked",
+        ATTR_UNIQUE_ID: "blocked-camera",
+        CONF_INITIAL_VALUE: "on",
+        "image_path": str(secret_path),
+    }), False)
+    for entity in (image, camera):
+        entity.hass = hass
+        entity._create_state(entity._config)
+
+    assert await image.async_image() is None
+    assert await camera.async_camera_image() is None
+
+
+async def test_virtual_media_rejects_oversized_local_files(
+    hass,
+    tmp_path,
+    monkeypatch,
+):
+    image_path = tmp_path / "oversized.png"
+    image_path.write_bytes(b"x" * 17)
+    hass.config.allowlist_external_dirs.add(str(tmp_path))
+    monkeypatch.setattr(image_platform, "MAX_LOCAL_MEDIA_BYTES", 16)
+    monkeypatch.setattr(camera_platform, "MAX_LOCAL_MEDIA_BYTES", 16)
+
+    image = VirtualImage(IMAGE_SCHEMA({
+        CONF_NAME: "Oversized Image",
+        ATTR_ENTITY_ID: "image.oversized",
+        ATTR_UNIQUE_ID: "oversized-image",
+        CONF_INITIAL_VALUE: "unknown",
+        "image_path": str(image_path),
+    }), hass, False)
+    camera = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Oversized Camera",
+        ATTR_ENTITY_ID: "camera.oversized",
+        ATTR_UNIQUE_ID: "oversized-camera",
+        CONF_INITIAL_VALUE: "on",
+        "image_path": str(image_path),
+    }), False)
+    for entity in (image, camera):
+        entity.hass = hass
+        entity._create_state(entity._config)
+
+    assert image.image() is None
+    assert await image.async_image() is None
+    assert await camera.async_camera_image() is None
+
+
+async def test_virtual_media_alias_cycles_terminate_without_recursion(hass):
+    images = {}
+    image_component = Mock()
+    image_component.get_entity.side_effect = images.get
+    hass.data["image"] = image_component
+    for slug, source in (("first", "image.second"), ("second", "image.first")):
+        entity = VirtualImage(IMAGE_SCHEMA({
+            CONF_NAME: slug.title(),
+            ATTR_ENTITY_ID: f"image.{slug}",
+            ATTR_UNIQUE_ID: f"cyclic-image-{slug}",
+            CONF_INITIAL_VALUE: "unknown",
+            "source_entity": source,
+        }), hass, False)
+        entity.hass = hass
+        images[entity.entity_id] = entity
+
+    cameras = {}
+    camera_component = Mock()
+    camera_component.get_entity.side_effect = cameras.get
+    hass.data["camera"] = camera_component
+    for slug, source in (("first", "camera.second"), ("second", "camera.first")):
+        entity = VirtualCamera(CAMERA_SCHEMA({
+            CONF_NAME: slug.title(),
+            ATTR_ENTITY_ID: f"camera.{slug}",
+            ATTR_UNIQUE_ID: f"cyclic-camera-{slug}",
+            CONF_INITIAL_VALUE: "on",
+            "source_entity": source,
+        }), False)
+        entity.hass = hass
+        entity._create_state(entity._config)
+        cameras[entity.entity_id] = entity
+
+    assert await images["image.first"].async_image() is None
+    assert await cameras["camera.first"].async_camera_image() is None
+    assert await cameras["camera.first"].stream_source() is None
+
+
+async def test_virtual_media_allows_independent_concurrent_alias_requests(hass):
+    class SourceImage:
+        def __init__(self):
+            self.calls = 0
+            self.both_started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def async_image(self):
+            self.calls += 1
+            if self.calls == 2:
+                self.both_started.set()
+            await self.release.wait()
+            return b"image"
+
+    source_image = SourceImage()
+    image_component = Mock()
+    image_component.get_entity.return_value = source_image
+    hass.data["image"] = image_component
+    image = VirtualImage(IMAGE_SCHEMA({
+        CONF_NAME: "Concurrent Image",
+        ATTR_ENTITY_ID: "image.concurrent",
+        ATTR_UNIQUE_ID: "concurrent-image",
+        CONF_INITIAL_VALUE: "unknown",
+        "source_entity": "image.source",
+    }), hass, False)
+    image.hass = hass
+
+    image_tasks = [asyncio.create_task(image.async_image()) for _ in range(2)]
+    await asyncio.wait_for(source_image.both_started.wait(), 1)
+    source_image.release.set()
+    assert await asyncio.gather(*image_tasks) == [b"image", b"image"]
+
+    class SourceCamera:
+        def __init__(self):
+            self.image_calls = 0
+            self.stream_calls = 0
+            self.image_started = asyncio.Event()
+            self.stream_started = asyncio.Event()
+            self.release_image = asyncio.Event()
+            self.release_stream = asyncio.Event()
+
+        async def async_camera_image(self, **_kwargs):
+            self.image_calls += 1
+            if self.image_calls == 2:
+                self.image_started.set()
+            await self.release_image.wait()
+            return b"camera"
+
+        async def stream_source(self):
+            self.stream_calls += 1
+            if self.stream_calls == 2:
+                self.stream_started.set()
+            await self.release_stream.wait()
+            return "rtsp://camera"
+
+    source_camera = SourceCamera()
+    camera_component = Mock()
+    camera_component.get_entity.return_value = source_camera
+    hass.data["camera"] = camera_component
+    camera = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Concurrent Camera",
+        ATTR_ENTITY_ID: "camera.concurrent",
+        ATTR_UNIQUE_ID: "concurrent-camera",
+        CONF_INITIAL_VALUE: "on",
+        "source_entity": "camera.source",
+    }), False)
+    camera.hass = hass
+    camera._create_state(camera._config)
+
+    camera_image_tasks = [
+        asyncio.create_task(camera.async_camera_image()) for _ in range(2)
+    ]
+    await asyncio.wait_for(source_camera.image_started.wait(), 1)
+    source_camera.release_image.set()
+    assert await asyncio.gather(*camera_image_tasks) == [b"camera", b"camera"]
+
+    stream_tasks = [asyncio.create_task(camera.stream_source()) for _ in range(2)]
+    await asyncio.wait_for(source_camera.stream_started.wait(), 1)
+    source_camera.release_stream.set()
+    assert await asyncio.gather(*stream_tasks) == [
+        "rtsp://camera",
+        "rtsp://camera",
+    ]
 
 
 async def test_virtual_image_renders_polygon_map_svg(hass):

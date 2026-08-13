@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import homeassistant.helpers.config_validation as cv
@@ -103,6 +103,28 @@ def _as_battery_level(value: Any, fallback: int | None = None) -> int | None:
     except (TypeError, ValueError, OverflowError):
         return fallback
     return battery_level if 0 <= battery_level <= 100 else fallback
+
+
+def _restore_last_command(value: Any) -> dict[str, Any] | None:
+    """Return a detached, valid vacuum command restored from state."""
+    if not isinstance(value, Mapping):
+        return None
+    command = value.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return None
+    restored: dict[str, Any] = {"command": command}
+    if "params" not in value:
+        return restored
+    params = value.get("params")
+    if params is None:
+        restored["params"] = None
+    elif isinstance(params, Mapping):
+        restored["params"] = dict(params)
+    elif isinstance(params, list):
+        restored["params"] = list(params)
+    else:
+        return None
+    return restored
 
 
 def validate_domain_options(config) -> None:
@@ -230,6 +252,9 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
             or restored_fan_speed in self._attr_fan_speed_list
             else config.get(CONF_FAN_SPEED)
         )
+        self._last_command = _restore_last_command(
+            state.attributes.get("last_command")
+        )
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -288,9 +313,12 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
         activity = _as_activity(value)
         if activity is None:
             value = str(value).lower()
-            activity = VacuumActivity.CLEANING if value in {
-                "on", "true", "1", "yes", "y", "t"
-            } else VacuumActivity.IDLE
+            if value in {"on", "true", "1", "yes", "y", "t"}:
+                activity = VacuumActivity.CLEANING
+            elif value in {"off", "false", "0", "no", "n", "f"}:
+                activity = VacuumActivity.IDLE
+            else:
+                raise ValueError(f"Invalid vacuum activity: {value}")
         self._attr_activity = activity
         self.async_schedule_update_ha_state()
 

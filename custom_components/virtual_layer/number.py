@@ -204,6 +204,8 @@ class VirtualNumber(VirtualEntity, NumberEntity):
 
     @staticmethod
     def _finite_bound(value, fallback: float) -> float:
+        if isinstance(value, bool):
+            return fallback
         try:
             value = float(value)
         except (TypeError, ValueError, OverflowError):
@@ -226,6 +228,8 @@ class VirtualNumber(VirtualEntity, NumberEntity):
         )
 
     def _normalize_value(self, value, fallback) -> float:
+        if isinstance(value, bool):
+            value = fallback
         try:
             native_value = float(value)
         except (TypeError, ValueError, OverflowError):
@@ -257,7 +261,7 @@ class VirtualNumber(VirtualEntity, NumberEntity):
         self.set(value)
 
     def set(self, value) -> None:
-        _LOGGER.debug("set %s to %s", self.name, value)
+        _LOGGER.debug("Setting native value for %s", self.entity_id)
         self._attr_native_value = self._normalize_value(value, self.native_value)
         self.async_schedule_update_ha_state()
 

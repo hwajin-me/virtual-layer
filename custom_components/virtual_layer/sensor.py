@@ -252,6 +252,8 @@ class VirtualSensor(VirtualEntity, SensorEntity):
     def _coerce_native_value(self, value):
         if value is None:
             return None
+        if isinstance(value, bool):
+            raise ValueError("Sensor value must not be a boolean")
         if str(value).lower() in {"unknown", "unavailable", "none"}:
             if (
                 self._attr_device_class is not None
@@ -289,7 +291,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         self._attr_extra_state_attributes.update(self._domain_options)
 
     def set(self, value) -> None:
-        _LOGGER.debug("set %s to %s", self.name, value)
+        _LOGGER.debug("Setting state for %s", self.entity_id)
         self._attr_native_value = self._coerce_native_value(value)
         self._attr_state = self._attr_native_value
         self.async_schedule_update_ha_state()
@@ -321,6 +323,10 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         elif name == "native_unit_of_measurement":
             value = None if value is None or value == "" else str(value)
         elif name == "suggested_display_precision":
+            if isinstance(value, bool):
+                raise ValueError(
+                    "suggested_display_precision must be a non-negative integer"
+                )
             try:
                 value = int(value)
             except (TypeError, ValueError, OverflowError) as err:
@@ -396,5 +402,5 @@ async def async_virtual_set_service(hass, call):
     _assert_managed_virtual_entities(hass, entity_ids)
     value = call.data[ATTR_VALUE]
     for entity_id in entity_ids:
-        _LOGGER.debug("setting %s to %s", entity_id, value)
+        _LOGGER.debug("Setting state for %s", entity_id)
         get_entity_from_domain(hass, PLATFORM_DOMAIN, entity_id).set(value)

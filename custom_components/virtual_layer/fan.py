@@ -279,19 +279,23 @@ class VirtualFan(VirtualEntity, FanEntity):
         if name == "preset_modes":
             if not isinstance(value, (list, tuple)):
                 raise ValueError("preset_modes must render a list")
-            value = [str(item) for item in value if str(item).strip()]
+            value = [str(item).strip() for item in value if str(item).strip()]
             if len(set(value)) != len(value):
                 raise ValueError("preset_modes contains duplicate values")
+        elif name == "preset_mode":
+            value = str(value).strip()
         elif name == "percentage":
             value = self._safe_percentage(value)
             if value is None:
                 raise ValueError("percentage must be between 0 and 100")
         elif name == "speed_count":
+            if isinstance(value, bool):
+                raise ValueError("speed_count must be an integer")
             value = int(value)
             if value < 0:
                 raise ValueError("speed_count cannot be negative")
         elif name == "current_direction":
-            value = str(value)
+            value = str(value).strip().lower()
             if value not in {"forward", "reverse"}:
                 raise ValueError("current_direction must be forward or reverse")
         elif name == "oscillating" and not isinstance(value, bool):

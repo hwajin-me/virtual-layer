@@ -95,6 +95,19 @@ POLYGON_RULE_KEYS = {
     "weight",
 }
 
+
+def _safe_gps_accuracy(value) -> float | None:
+    """Return a finite non-negative GPS accuracy without coercing booleans."""
+    if isinstance(value, bool):
+        return None
+    try:
+        accuracy = float(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not isfinite(accuracy):
+        return None
+    return max(0.0, accuracy)
+
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_DEVICES, default=list): cv.ensure_list
 })
@@ -311,20 +324,13 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         _LOGGER.debug(f"{self._attr_name}, entity={self.entity_id}")
 
     def _create_state(self, config):
-        _LOGGER.debug("device_tracker-create=config=%s", config)
+        _LOGGER.debug("Creating device tracker state for %s", self.entity_id)
         super()._create_state(config)
         self._location = config.get(CONF_INITIAL_VALUE)
         self._restore_location_helper_attributes()
 
     def _restore_state(self, state, config):
-        _LOGGER.debug("device_tracker-restore=state=%s", state.state)
-        _LOGGER.debug("device_tracker-restore=attrs=%s", state.attributes)
-
-        if ATTR_AVAILABLE not in state.attributes:
-            _LOGGER.debug("looks wrong, from upgrade? creating instead...")
-            self._create_state(config)
-            return
-
+        _LOGGER.debug("Restoring device tracker state for %s", self.entity_id)
         super()._restore_state(state, config)
         position = self._coordinates_from_state(state)
         if position is not None:
@@ -335,11 +341,9 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 ATTR_LATITUDE: latitude,
                 ATTR_RADIUS: 0
             }
-            try:
-                accuracy = float(state.attributes.get(CONF_GPS_ACCURACY, 0) or 0)
-            except (TypeError, ValueError, OverflowError):
-                accuracy = 0
-            self._gps_accuracy = max(0, accuracy) if isfinite(accuracy) else 0
+            self._gps_accuracy = _safe_gps_accuracy(
+                state.attributes.get(CONF_GPS_ACCURACY, 0)
+            ) or 0
         else:
             self._location = state.state
             self._coords = {}
@@ -539,9 +543,10 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             seconds=float(max_age)
         ):
             return False
-        try:
-            accuracy = float(state.attributes.get(CONF_GPS_ACCURACY, 0) or 0)
-        except (TypeError, ValueError, OverflowError):
+        accuracy = _safe_gps_accuracy(
+            state.attributes.get(CONF_GPS_ACCURACY, 0)
+        )
+        if accuracy is None:
             return False
         max_accuracy = rule.get("max_gps_accuracy")
         if max_accuracy is not None and accuracy > float(max_accuracy):
@@ -591,10 +596,11 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             if not self._polygon_rule_matches(entity_id, state, rule):
                 continue
             try:
-                accuracy = float(state.attributes.get(CONF_GPS_ACCURACY, 0) or 0)
-                if not isfinite(accuracy):
+                accuracy = _safe_gps_accuracy(
+                    state.attributes.get(CONF_GPS_ACCURACY, 0)
+                )
+                if accuracy is None:
                     continue
-                accuracy = max(0.0, accuracy)
                 samples.append({
                     "entity_id": entity_id,
                     "latitude": position[0],
@@ -652,9 +658,13 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
     @staticmethod
     def _coordinates_from_state(state):
         """Read usable GPS coordinates from a Home Assistant state."""
+        raw_latitude = state.attributes.get(ATTR_LATITUDE)
+        raw_longitude = state.attributes.get(ATTR_LONGITUDE)
+        if isinstance(raw_latitude, bool) or isinstance(raw_longitude, bool):
+            return None
         try:
-            latitude = float(state.attributes[ATTR_LATITUDE])
-            longitude = float(state.attributes[ATTR_LONGITUDE])
+            latitude = float(raw_latitude)
+            longitude = float(raw_longitude)
         except (KeyError, TypeError, ValueError, OverflowError):
             return None
 
@@ -875,7 +885,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         return self._gps_accuracy
 
     def move_to_location(self, new_location):
-        _LOGGER.debug(f"{self._attr_name} moving to {new_location}")
+        _LOGGER.debug("Moving %s to a new location", self.entity_id)
         self._location = new_location
         self._coords = {}
         self._gps_accuracy = 0
@@ -920,6 +930,8 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             latitude = value if name == ATTR_LATITUDE else self.latitude
             longitude = value if name == ATTR_LONGITUDE else self.longitude
             if latitude is None or longitude is None:
+                if isinstance(value, bool):
+                    raise ValueError(f"{name} must be numeric")
                 try:
                     parsed = float(value)
                 except (TypeError, ValueError, OverflowError) as err:
@@ -938,6 +950,8 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             self._location = None
             return changed
         if name in {CONF_GPS_ACCURACY, "location_accuracy"}:
+            if isinstance(value, bool):
+                raise ValueError("location_accuracy must be a non-negative integer")
             try:
                 value = int(value)
             except (TypeError, ValueError, OverflowError) as err:
@@ -951,6 +965,8 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
 
     @staticmethod
     def _validated_coordinates(latitude, longitude) -> tuple[float, float]:
+        if isinstance(latitude, bool) or isinstance(longitude, bool):
+            raise ValueError("GPS coordinates must be numeric")
         try:
             latitude = float(latitude)
             longitude = float(longitude)
@@ -970,7 +986,7 @@ async def async_virtual_move_service(hass, call):
     entity_ids = call.data['entity_id']
     _assert_managed_virtual_entities(hass, entity_ids)
     for entity_id in entity_ids:
-        _LOGGER.debug("moving %s --> %s", entity_id, call.data)
+        _LOGGER.debug("Moving virtual device tracker %s", entity_id)
 
         entity = get_entity_from_domain(hass, PLATFORM_DOMAIN, entity_id)
 

@@ -58,12 +58,14 @@ from custom_components.virtual_layer.config_flow import (
     InvalidDomainOptions,
     InvalidEntityId,
     InvalidEntityReference,
+    InvalidEntitySelection,
     InvalidJson,
     _append_ui_entity,
     _auto_helper_profile,
     _build_device_config,
     _build_entity_config,
     _default_virtual_entity_id,
+    _delete_ui_device,
     _delete_ui_entities,
     _domain_options_error_field,
     _entity_choices,
@@ -81,6 +83,9 @@ from custom_components.virtual_layer.config_flow import (
     _needs_domain_specific_form,
     _options_schema,
     _parse_command_actions,
+    _parse_entity_key,
+    _parse_json_object,
+    _parse_json_value,
     _parse_native_templates,
     _plain_options,
     _reference_edit_defaults,
@@ -3137,6 +3142,7 @@ def test_options_schema_allows_deleting_but_not_editing_invalid_stored_entity():
         "add_entity",
         "delete_entity",
         "manage_devices",
+        "delete_device",
         "finish",
     ]
 
@@ -3534,6 +3540,31 @@ def test_delete_ui_entities_can_remove_malformed_entity_and_metadata():
     assert next_options[ATTR_DEVICE_ATTRIBUTES] == {}
 
 
+def test_delete_ui_device_removes_entities_metadata_and_malformed_groups():
+    options = {
+        ATTR_DEVICES: {
+            "Laundry": [{CONF_PLATFORM: "sensor", CONF_NAME: "Washer"}],
+            "Broken": "not-an-entity-list",
+        },
+        ATTR_DEVICE_ATTRIBUTES: {
+            "Laundry": {ATTR_DEVICE_ID: "laundry-1"},
+            "Broken": {ATTR_DEVICE_ID: "broken-1"},
+        },
+    }
+
+    without_broken = _delete_ui_device(options, "Broken")
+    without_laundry = _delete_ui_device(without_broken, "Laundry")
+
+    assert without_broken[ATTR_DEVICES] == {
+        "Laundry": [{CONF_PLATFORM: "sensor", CONF_NAME: "Washer"}],
+    }
+    assert without_broken[ATTR_DEVICE_ATTRIBUTES] == {
+        "Laundry": {ATTR_DEVICE_ID: "laundry-1"},
+    }
+    assert without_laundry[ATTR_DEVICES] == {}
+    assert without_laundry[ATTR_DEVICE_ATTRIBUTES] == {}
+
+
 def test_entity_form_defaults_round_trips_stored_entity_config():
     defaults = _entity_form_defaults(
         "Laundry",
@@ -3638,6 +3669,65 @@ def test_entity_choices_use_stable_entity_key_when_available():
     assert _find_entity_by_selection_key(options, selection_key) == ("Laundry", 0)
 
 
+def test_entity_choices_keep_malformed_and_duplicate_stable_keys_removable():
+    options = {
+        ATTR_DEVICES: {
+            "Laundry": [
+                {
+                    CONF_PLATFORM: "sensor",
+                    CONF_NAME: "Malformed Key",
+                    ATTR_ENTITY_KEY: ["not", "a", "string"],
+                },
+                {
+                    CONF_PLATFORM: "sensor",
+                    CONF_NAME: "Duplicate One",
+                    ATTR_ENTITY_KEY: "duplicate-key",
+                },
+                {
+                    CONF_PLATFORM: "sensor",
+                    CONF_NAME: "Duplicate Two",
+                    ATTR_ENTITY_KEY: "duplicate-key",
+                },
+            ],
+        },
+    }
+
+    choices = _entity_choices(options, include_invalid=True)
+
+    assert choices == {
+        _entity_key("Laundry", 0): "Laundry / Malformed Key (sensor)",
+        _entity_key("Laundry", 1): "Laundry / Duplicate One (sensor)",
+        _entity_key("Laundry", 2): "Laundry / Duplicate Two (sensor)",
+    }
+    next_options = _delete_ui_entities(
+        options,
+        [_entity_key("Laundry", 2)],
+    )
+    assert [
+        entity[CONF_NAME]
+        for entity in next_options[ATTR_DEVICES]["Laundry"]
+    ] == ["Malformed Key", "Duplicate One"]
+
+
+def test_stable_selection_rejects_ambiguous_keys_and_boolean_indexes():
+    options = {
+        ATTR_DEVICES: {
+            "Laundry": [
+                {CONF_NAME: "One", ATTR_ENTITY_KEY: "duplicate-key"},
+                {CONF_NAME: "Two", ATTR_ENTITY_KEY: "duplicate-key"},
+            ],
+        },
+    }
+
+    with pytest.raises(InvalidEntitySelection):
+        _find_entity_by_selection_key(
+            options,
+            _entity_key_from_stable_key("duplicate-key"),
+        )
+    with pytest.raises(InvalidEntitySelection):
+        _parse_entity_key('["Laundry",true]')
+
+
 def test_delete_ui_entities_uses_stable_key_after_entity_order_changes():
     options = {
         ATTR_DEVICES: {
@@ -3715,6 +3805,14 @@ def test_native_templates_and_command_actions_parse_complex_values():
 def test_native_template_and_command_action_bad_input_is_rejected(parser, payload):
     with pytest.raises(InvalidJson):
         parser(payload)
+
+
+@pytest.mark.parametrize("parser", [_parse_json_object, _parse_json_value])
+def test_json_fields_reject_excessive_nesting(parser):
+    payload = "[" * 1100 + "0" + "]" * 1100
+
+    with pytest.raises(InvalidJson):
+        parser(payload, "deep_json")
 
 
 def test_command_actions_reject_commands_not_implemented_by_selected_domain():

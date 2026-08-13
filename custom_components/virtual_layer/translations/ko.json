@@ -10,6 +10,7 @@
       "invalid_json": "올바른 JSON 객체를 입력하세요.",
       "invalid_template": "Jinja 템플릿 문법을 수정하세요.",
       "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
+      "entity_id_used": "이미 사용 중인 엔티티 ID입니다. 고유한 엔티티 ID를 입력하세요.",
       "invalid_domain_options": "선택한 엔티티 도메인에 맞는 옵션을 입력하세요.",
       "required": "필수 항목입니다."
     },
@@ -628,6 +629,7 @@
       "invalid_json": "올바른 JSON 객체를 입력하세요.",
       "invalid_template": "Jinja 템플릿 문법을 수정하세요.",
       "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
+      "entity_id_used": "이미 사용 중인 엔티티 ID입니다. 고유한 엔티티 ID를 입력하세요.",
       "invalid_domain_options": "선택한 엔티티 도메인에 맞는 옵션을 입력하세요.",
       "device_not_found": "선택한 가상 장치를 찾지 못했습니다.",
       "entity_not_found": "선택한 가상 엔티티를 찾지 못했습니다.",
@@ -702,6 +704,16 @@
         },
         "data_description": {
           "entity_keys": "남은 엔티티가 없는 장치는 이 구성에서 제거됩니다."
+        }
+      },
+      "delete_device": {
+        "title": "가상 장치 삭제",
+        "description": "가상 장치와 그 장치에 속한 모든 엔티티를 삭제합니다. 수정할 수 없는 손상된 장치 그룹도 제거할 수 있습니다.",
+        "data": {
+          "managed_device_name": "가상 장치"
+        },
+        "data_description": {
+          "managed_device_name": "선택한 장치에 속한 모든 가상 엔티티와 저장된 메타데이터가 제거됩니다."
         }
       },
       "edit_entity": {
@@ -1891,6 +1903,7 @@
         "edit_entity": "가상 엔티티 수정",
         "delete_entity": "가상 엔티티 삭제",
         "manage_devices": "가상 장치 관리",
+        "delete_device": "가상 장치 삭제",
         "finish": "완료"
       }
     },

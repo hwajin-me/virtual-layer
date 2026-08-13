@@ -387,3 +387,54 @@ def test_lock_jam_and_direct_transitions_clear_conflicting_activity_flags():
     assert entity.is_locked is True
     assert entity.is_jammed is False
     assert entity.is_opening is False
+
+
+def test_lock_rejects_invalid_state_without_unlocking():
+    config = LOCK_SCHEMA(
+        {
+            CONF_NAME: "Safe Lock",
+            ATTR_ENTITY_ID: "lock.safe_lock",
+            ATTR_UNIQUE_ID: "safe_lock",
+            CONF_INITIAL_VALUE: "locked",
+        }
+    )
+    entity = VirtualLock(Mock(), config, False)
+    entity._create_state(config)
+
+    with pytest.raises(ValueError, match="Invalid lock state"):
+        entity.set_state("lokced")
+
+    assert entity.is_locked is True
+
+
+@pytest.mark.parametrize("restored_state", ["jammed", "locking", "unlocking", "opening"])
+def test_lock_restore_preserves_native_transitional_states(restored_state):
+    config = LOCK_SCHEMA(
+        {
+            CONF_NAME: "Restored Lock",
+            ATTR_ENTITY_ID: "lock.restored_lock",
+            ATTR_UNIQUE_ID: "restored_lock",
+            CONF_INITIAL_VALUE: "locked",
+        }
+    )
+    entity = VirtualLock(Mock(), config, False)
+
+    entity._restore_state(State("lock.restored_lock", restored_state), config)
+
+    assert entity.state == restored_state
+
+
+def test_lock_restore_falls_back_from_unavailable_state():
+    config = LOCK_SCHEMA(
+        {
+            CONF_NAME: "Restored Lock",
+            ATTR_ENTITY_ID: "lock.restored_lock",
+            ATTR_UNIQUE_ID: "restored_lock",
+            CONF_INITIAL_VALUE: "locked",
+        }
+    )
+    entity = VirtualLock(Mock(), config, False)
+
+    entity._restore_state(State("lock.restored_lock", "unavailable"), config)
+
+    assert entity.is_locked is True
