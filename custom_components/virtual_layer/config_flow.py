@@ -107,6 +107,7 @@ NEW_DEVICE_TARGET = "__new_device__"
 HELPER_UPDATE_AUTO = "automatic"
 HELPER_UPDATE_KEEP = "keep_current"
 HELPER_UPDATE_FORCE = "force_helper"
+_MISSING_NATIVE_DEFAULT = object()
 
 CLIMATE_NATIVE_TEMPLATE_PROPERTIES = (
     "hvac_modes",
@@ -155,6 +156,137 @@ HUMIDIFIER_NATIVE_TEMPLATE_PROPERTIES = (
     "max_humidity",
     "target_humidity_step",
 )
+LEGACY_STATIC_NATIVE_FIELD_ALIASES = {
+    "climate": {},
+    "fan": {
+        FAN_MODE_LIST_FIELD: "preset_modes",
+    },
+    "humidifier": {
+        "class": "device_class",
+        HUMIDIFIER_MODE_LIST_FIELD: "available_modes",
+    },
+}
+DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES = {
+    "climate": {
+        "hvac_modes": ["off", "heat", "cool", "heat_cool", "auto", "dry", "fan_only"],
+        "hvac_mode": "off",
+        "hvac_action": "off",
+        "fan_modes": [],
+        "fan_mode": None,
+        "preset_modes": [],
+        "preset_mode": None,
+        "swing_modes": [],
+        "swing_mode": None,
+        "swing_horizontal_modes": [],
+        "swing_horizontal_mode": None,
+        "current_temperature": None,
+        "target_temperature": 21,
+        "target_temperature_high": None,
+        "target_temperature_low": None,
+        "min_temp": 7,
+        "max_temp": 35,
+        "target_temperature_step": 0.1,
+        "temperature_unit": "°C",
+        "current_humidity": None,
+        "target_humidity": 50,
+        "min_humidity": 30,
+        "max_humidity": 99,
+        "target_humidity_step": 1,
+    },
+    "fan": {
+        "is_on": False,
+        "speed_count": 100,
+        "percentage": 0,
+        "preset_modes": [],
+        "preset_mode": None,
+        "oscillating": False,
+        "current_direction": "forward",
+    },
+    "humidifier": {
+        "is_on": False,
+        "device_class": "humidifier",
+        "action": "off",
+        "available_modes": [],
+        "mode": None,
+        "current_humidity": None,
+        "target_humidity": 50,
+        "min_humidity": 0,
+        "max_humidity": 100,
+        "target_humidity_step": 1,
+    },
+}
+
+DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
+    **DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES,
+    "calendar": {"event": None},
+    "camera": {"frame_interval": 1},
+    "cover": {
+        "is_closed": True,
+        "reports_position": True,
+        "supported_features": 15,
+    },
+    "device_tracker": {"location": "not_home", "gps": [0.0, 0.0]},
+    "event": {"event_type": "virtual_event"},
+    "image": {"content_type": "image/jpeg"},
+    "lawn_mower": {"activity": "docked", "supported_features": 7},
+    "light": {
+        "supported_color_modes": ["onoff"],
+        "color_mode": "onoff",
+        "hs_color": [0.0, 0.0],
+        "xy_color": [0.0, 0.0],
+        "rgb_color": [0, 0, 0],
+        "rgbw_color": [0, 0, 0, 0],
+        "rgbww_color": [0, 0, 0, 0, 0],
+        "color_temp_kelvin": 4000,
+        "min_color_temp_kelvin": 1000,
+        "max_color_temp_kelvin": 40000,
+    },
+    "lock": {"support_open": True, "is_locked": True},
+    "media_player": {
+        "media_state": "idle",
+        "volume_level": 0.5,
+        "volume_step": 0.05,
+        "repeat": "off",
+    },
+    "number": {
+        "native_min_value": 0,
+        "native_max_value": 100,
+        "native_step": 1,
+        "native_value": 0,
+        "mode": "auto",
+    },
+    "siren": {"support_volume": True, "support_duration": True},
+    "text": {
+        "native_min": 0,
+        "native_max": 255,
+        "mode": "text",
+        "native_value": "",
+    },
+    "update": {
+        "installed_version": "0.0.0",
+        "latest_version": "0.0.0",
+        "support_backup": True,
+    },
+    "vacuum": {
+        "activity": "docked",
+        "battery_level": None,
+        "supported_features": 14108,
+    },
+    "valve": {
+        "is_closed": True,
+        "reports_position": True,
+        "supported_features": 15,
+    },
+    "water_heater": {
+        "operation_list": ["off"],
+        "current_operation": "off",
+        "min_temp": 35,
+        "max_temp": 85,
+        "target_temperature_step": 1,
+        "temperature_unit": "°C",
+        "precision": 1,
+    },
+}
 DOMAIN_NATIVE_TEMPLATE_PROPERTIES = {
     "ai_task": ("supported_features",),
     "air_quality": (
@@ -445,6 +577,191 @@ NATIVE_TEMPLATE_BOOLEAN_STATE_VALUES = {
     "is_opening": {"opening"},
     "is_unlocking": {"unlocking"},
 }
+NATIVE_TEMPLATE_SUPPORTED_FEATURE_MASKS = {
+    ("lock", "support_open"): 1,
+    ("siren", "support_volume"): 8,
+    ("siren", "support_duration"): 16,
+    ("update", "support_backup"): 8,
+}
+NATIVE_TEMPLATE_BOOLEAN_PROPERTIES = frozenset({
+    "auto_update",
+    "code_arm_required",
+    "in_progress",
+    "is_away_mode_on",
+    "is_on",
+    "is_recording",
+    "is_streaming",
+    "is_volume_muted",
+    "media_image_remotely_accessible",
+    "motion_detection_enabled",
+    "oscillating",
+    "reports_position",
+    "shuffle",
+    "support_backup",
+    "support_duration",
+    "support_open",
+    "support_volume",
+    "supports_streaming",
+}) | frozenset(NATIVE_TEMPLATE_BOOLEAN_STATE_VALUES)
+NATIVE_TEMPLATE_BOOLEAN_ANY_PROPERTIES = frozenset({
+    "code_arm_required",
+    "reports_position",
+    "support_backup",
+    "support_duration",
+    "support_open",
+    "support_volume",
+    "supports_streaming",
+})
+NATIVE_TEMPLATE_LIST_PROPERTIES = frozenset({
+    property_name
+    for properties in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.values()
+    for property_name in properties
+    if property_name.endswith(("_list", "_modes", "_languages"))
+}) | frozenset({
+    "activity_list",
+    "available_tones",
+    "event_types",
+    "group_members",
+    "options",
+    "source_list",
+    "supported_color_modes",
+    "supported_bit_rates",
+    "supported_channels",
+    "supported_codecs",
+    "supported_formats",
+    "supported_sample_rates",
+    "todo_items",
+    "versions",
+})
+NATIVE_TEMPLATE_MAPPING_PROPERTIES = frozenset({
+    "default_options",
+    "event",
+    "event_attributes",
+    "tts_options",
+})
+NATIVE_TEMPLATE_ATOMIC_LIST_PROPERTIES = frozenset({
+    "gps",
+    "hs_color",
+    "rgb_color",
+    "rgbw_color",
+    "rgbww_color",
+    "xy_color",
+})
+NATIVE_TEMPLATE_BITMASK_PROPERTIES = frozenset({"supported_features"})
+NATIVE_TEMPLATE_MINIMUM_PROPERTIES = frozenset({
+    "min_color_temp_kelvin",
+    "min_humidity",
+    "min_temp",
+    "native_min",
+    "native_min_value",
+})
+NATIVE_TEMPLATE_MAXIMUM_PROPERTIES = frozenset({
+    "max_color_temp_kelvin",
+    "max_humidity",
+    "max_temp",
+    "native_max",
+    "native_max_value",
+})
+NATIVE_TEMPLATE_NUMERIC_PROPERTIES = frozenset({
+    "air_quality_index",
+    "battery_level",
+    "brightness",
+    "carbon_dioxide",
+    "carbon_monoxide",
+    "cloud_coverage",
+    "confidence",
+    "color_temp_kelvin",
+    "current_cover_position",
+    "current_cover_tilt_position",
+    "current_humidity",
+    "current_position",
+    "current_temperature",
+    "current_valve_position",
+    "display_precision",
+    "frame_interval",
+    "humidity",
+    "latitude",
+    "location_accuracy",
+    "longitude",
+    "max_humidity",
+    "max_temp",
+    "min_humidity",
+    "min_temp",
+    "native_apparent_temperature",
+    "native_dew_point",
+    "native_max",
+    "native_max_value",
+    "native_min",
+    "native_min_value",
+    "native_pressure",
+    "native_step",
+    "native_temperature",
+    "native_visibility",
+    "native_wind_gust_speed",
+    "native_wind_speed",
+    "nitrogen_dioxide",
+    "nitrogen_monoxide",
+    "nitrogen_oxide",
+    "ozone",
+    "particulate_matter_0_1",
+    "particulate_matter_10",
+    "particulate_matter_2_5",
+    "percentage",
+    "precision",
+    "media_duration",
+    "media_position",
+    "media_track",
+    "min_color_temp_kelvin",
+    "max_color_temp_kelvin",
+    "speed_count",
+    "suggested_display_precision",
+    "sulphur_dioxide",
+    "target_humidity",
+    "target_humidity_step",
+    "target_temperature",
+    "target_temperature_high",
+    "target_temperature_low",
+    "target_temperature_step",
+    "update_percentage",
+    "uv_index",
+    "volume_level",
+    "volume_step",
+}) | NATIVE_TEMPLATE_MINIMUM_PROPERTIES | NATIVE_TEMPLATE_MAXIMUM_PROPERTIES
+NATIVE_TEMPLATE_DATETIME_PROPERTIES = frozenset({
+    "image_last_updated",
+    "last_reset",
+    "media_position_updated_at",
+})
+
+
+def _native_source_helper_default(platform: str, property_name: str) -> Any:
+    """Return a valid fallback used only by generated source helpers."""
+    configured = DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES.get(platform, {})
+    if property_name in configured:
+        return copy.deepcopy(configured[property_name])
+    if property_name in NATIVE_TEMPLATE_BOOLEAN_PROPERTIES:
+        return False
+    if property_name in NATIVE_TEMPLATE_BITMASK_PROPERTIES:
+        return 0
+    if property_name == "gps":
+        return [0.0, 0.0]
+    if property_name in NATIVE_TEMPLATE_ATOMIC_LIST_PROPERTIES:
+        sizes = {
+            "hs_color": 2,
+            "xy_color": 2,
+            "rgb_color": 3,
+            "rgbw_color": 4,
+            "rgbww_color": 5,
+        }
+        return [0] * sizes.get(property_name, 0)
+    if property_name in NATIVE_TEMPLATE_LIST_PROPERTIES:
+        return []
+    if property_name in NATIVE_TEMPLATE_MAPPING_PROPERTIES:
+        return {}
+    if property_name in NATIVE_TEMPLATE_NUMERIC_PROPERTIES:
+        return 0
+    return None
+
 
 _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_PLATFORM,
@@ -487,6 +804,10 @@ _AUTO_HELPER_TEMPLATE_FIELDS = frozenset(
         CONF_NATIVE_TEMPLATES_JSON,
     }
 )
+_AUTO_HELPER_INDEPENDENT_TEMPLATE_FIELDS = frozenset({
+    CONF_AVAILABILITY_TEMPLATE,
+    CONF_ICON_TEMPLATE,
+})
 
 _ATTRIBUTE_HELPER_METADATA_NAMES = frozenset(
     {
@@ -645,9 +966,13 @@ def _helper_update_schema() -> vol.Schema:
 
 BOOLEAN_SOURCE_DOMAINS = {
     "binary_sensor",
+    "fan",
+    "humidifier",
     "input_boolean",
     "light",
     "lock",
+    "remote",
+    "siren",
     "switch",
 }
 BOOLEAN_TRUE_STATES = {"1", "on", "open", "true", "unlocked", "yes"}
@@ -673,6 +998,35 @@ SAFETY_BOOLEAN_DEVICE_CLASSES = frozenset(
     }
 )
 NON_MERGEABLE_SOURCE_DOMAINS = frozenset({"camera", "image"})
+FIRST_KNOWN_STATE_SOURCE_DOMAINS = frozenset({
+    "ai_task",
+    "air_quality",
+    "alarm_control_panel",
+    "assist_satellite",
+    "button",
+    "calendar",
+    "climate",
+    "conversation",
+    "cover",
+    "event",
+    "image_processing",
+    "infrared",
+    "lawn_mower",
+    "media_player",
+    "notify",
+    "radio_frequency",
+    "scene",
+    "stt",
+    "tag",
+    "todo",
+    "tts",
+    "update",
+    "vacuum",
+    "valve",
+    "wake_word",
+    "water_heater",
+    "weather",
+})
 UNKNOWN_STATES = {"", "none", "unknown", "unavailable"}
 TEMPLATE_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 JINJA_RESERVED_VARIABLE_NAMES = {
@@ -733,7 +1087,7 @@ def _setup_schema(
     defaults: dict[str, Any], include_entity_toggle: bool = True
 ) -> vol.Schema:
     schema = {
-        vol.Required(ATTR_GROUP_NAME, default=defaults[ATTR_GROUP_NAME]): str,
+        vol.Required(ATTR_GROUP_NAME, default=defaults.get(ATTR_GROUP_NAME, "")): str,
     }
     if include_entity_toggle:
         schema[vol.Optional(CONF_ADD_FIRST_ENTITY, default=False)] = cv.boolean
@@ -766,6 +1120,49 @@ def _flatten_entity_form_sections(user_input: Mapping | None) -> dict[str, Any]:
     # reload changed these controls into sections.
     section_values.update(flattened)
     return section_values
+
+
+def _literal_template(value: Any) -> str:
+    """Render a static native value as an editable Jinja literal."""
+    return "{{ " + repr(_plain_options(value)) + " }}"
+
+
+def _native_template_defaults(
+    platform: str,
+    defaults: Mapping,
+) -> dict[str, str]:
+    """Build complete native Jinja defaults and migrate old static fields."""
+    configured = defaults.get(CONF_NATIVE_VALUE_TEMPLATES)
+    configured = _native_template_mapping(configured)
+    legacy_aliases = LEGACY_STATIC_NATIVE_FIELD_ALIASES.get(platform, {})
+    fallback_values = DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES.get(platform, {})
+    result = {}
+    for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()):
+        template = configured.get(property_name, "").strip()
+        if template:
+            result[property_name] = template
+            continue
+
+        legacy_names = [property_name]
+        legacy_names.extend(
+            field_name
+            for field_name, native_name in legacy_aliases.items()
+            if native_name == property_name
+        )
+        legacy_value = next(
+            (
+                defaults[field_name]
+                for field_name in legacy_names
+                if field_name in defaults
+            ),
+            fallback_values.get(property_name, _MISSING_NATIVE_DEFAULT),
+        )
+        result[property_name] = (
+            _literal_template(legacy_value)
+            if legacy_value is not _MISSING_NATIVE_DEFAULT
+            else ""
+        )
+    return result
 
 
 def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
@@ -958,231 +1355,6 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         domain_schema[person_marker] = selector.EntitySelector(
             selector.EntitySelectorConfig(domain="person"),
         )
-    elif platform == "climate":
-        for field_name in CLIMATE_MODE_LIST_FIELDS:
-            if field_name in defaults:
-                marker = vol.Optional(field_name, default=defaults[field_name])
-            elif field_name == "hvac_modes":
-                marker = vol.Optional(
-                    field_name,
-                    default=list(CLIMATE_INITIAL_VALUES),
-                )
-            else:
-                marker = vol.Optional(field_name)
-            options = (
-                list(CLIMATE_INITIAL_VALUES)
-                if field_name == "hvac_modes"
-                else list(defaults.get(field_name, []))
-            )
-            domain_schema[marker] = selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=options,
-                    multiple=True,
-                    custom_value=True,
-                ),
-            )
-        for field_name, modes_field in CLIMATE_CURRENT_MODE_FIELDS.items():
-            marker = (
-                vol.Optional(field_name, default=defaults[field_name])
-                if defaults.get(field_name) not in (None, "")
-                else vol.Optional(field_name)
-            )
-            domain_schema[marker] = selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=list(defaults.get(modes_field, [])),
-                    custom_value=True,
-                ),
-            )
-        climate_number_defaults = {
-            "max_humidity": 99,
-            "max_temp": 35,
-            "min_humidity": 30,
-            "min_temp": 7,
-            "target_temperature_step": 0.1,
-        }
-        climate_number_fields = {
-            "current_humidity": (0, 100, 1),
-            "current_temperature": (-273, 1000, 0.1),
-            "max_humidity": (0, 100, 1),
-            "max_temp": (-273, 1000, 0.1),
-            "min_humidity": (0, 100, 1),
-            "min_temp": (-273, 1000, 0.1),
-            "target_humidity": (0, 100, 1),
-            "target_humidity_step": (0.1, 100, 0.1),
-            "target_temperature": (-273, 1000, 0.1),
-            "target_temperature_high": (-273, 1000, 0.1),
-            "target_temperature_low": (-273, 1000, 0.1),
-            "target_temperature_step": (0.01, 100, 0.01),
-        }
-        for field_name, (minimum, maximum, step) in climate_number_fields.items():
-            default = defaults.get(field_name, climate_number_defaults.get(field_name))
-            marker = (
-                vol.Optional(field_name, default=default)
-                if default is not None
-                else vol.Optional(field_name)
-            )
-            domain_schema[marker] = selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=minimum,
-                    max=maximum,
-                    step=step,
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            )
-        action_marker = (
-            vol.Optional("hvac_action", default=defaults["hvac_action"])
-            if defaults.get("hvac_action") in CLIMATE_ACTION_VALUES
-            else vol.Optional("hvac_action")
-        )
-        domain_schema[action_marker] = selector.SelectSelector(
-            selector.SelectSelectorConfig(options=list(CLIMATE_ACTION_VALUES)),
-        )
-        domain_schema[
-            vol.Optional(
-                "temperature_unit",
-                default=defaults.get("temperature_unit", "°C"),
-            )
-        ] = selector.SelectSelector(
-            selector.SelectSelectorConfig(options=list(TEMPERATURE_UNIT_VALUES)),
-        )
-    elif platform == "fan":
-        domain_schema.update(
-            {
-                vol.Optional(
-                    "speed_count", default=defaults.get("speed_count", 0)
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=0,
-                        max=100,
-                        step=1,
-                        mode=selector.NumberSelectorMode.BOX,
-                    )
-                ),
-                vol.Optional(
-                    "oscillate", default=defaults.get("oscillate", False)
-                ): selector.BooleanSelector(),
-                vol.Optional(
-                    "direction", default=defaults.get("direction", False)
-                ): selector.BooleanSelector(),
-                vol.Optional(
-                    FAN_MODE_LIST_FIELD,
-                    default=list(defaults.get(FAN_MODE_LIST_FIELD, [])),
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=list(defaults.get(FAN_MODE_LIST_FIELD, [])),
-                        multiple=True,
-                        custom_value=True,
-                    )
-                ),
-            }
-        )
-        if defaults.get("percentage") is not None:
-            percentage_marker = vol.Optional(
-                "percentage", default=defaults["percentage"]
-            )
-        else:
-            percentage_marker = vol.Optional("percentage")
-        domain_schema[percentage_marker] = selector.NumberSelector(
-            selector.NumberSelectorConfig(
-                min=0,
-                max=100,
-                step=1,
-                mode=selector.NumberSelectorMode.SLIDER,
-            )
-        )
-        preset_marker = (
-            vol.Optional("preset_mode", default=defaults["preset_mode"])
-            if defaults.get("preset_mode") not in (None, "")
-            else vol.Optional("preset_mode")
-        )
-        domain_schema[preset_marker] = selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=list(defaults.get(FAN_MODE_LIST_FIELD, [])),
-                custom_value=True,
-            )
-        )
-        domain_schema[
-            vol.Optional(
-                "oscillating", default=defaults.get("oscillating", False)
-            )
-        ] = selector.BooleanSelector()
-        direction_marker = (
-            vol.Optional(
-                "current_direction", default=defaults["current_direction"]
-            )
-            if defaults.get("current_direction") in {"forward", "reverse"}
-            else vol.Optional("current_direction")
-        )
-        domain_schema[direction_marker] = selector.SelectSelector(
-            selector.SelectSelectorConfig(options=["forward", "reverse"]),
-        )
-    elif platform == "humidifier":
-        domain_schema[
-            vol.Optional(
-                "class", default=defaults.get("class", "humidifier")
-            )
-        ] = selector.SelectSelector(
-            selector.SelectSelectorConfig(options=list(HUMIDIFIER_CLASS_VALUES)),
-        )
-        action_marker = (
-            vol.Optional("action", default=defaults["action"])
-            if defaults.get("action") in HUMIDIFIER_ACTION_VALUES
-            else vol.Optional("action")
-        )
-        domain_schema[action_marker] = selector.SelectSelector(
-            selector.SelectSelectorConfig(options=list(HUMIDIFIER_ACTION_VALUES)),
-        )
-        domain_schema[
-            vol.Optional(
-                HUMIDIFIER_MODE_LIST_FIELD,
-                default=list(defaults.get(HUMIDIFIER_MODE_LIST_FIELD, [])),
-            )
-        ] = selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=list(defaults.get(HUMIDIFIER_MODE_LIST_FIELD, [])),
-                multiple=True,
-                custom_value=True,
-            )
-        )
-        mode_marker = (
-            vol.Optional(
-                HUMIDIFIER_CURRENT_MODE_FIELD,
-                default=defaults[HUMIDIFIER_CURRENT_MODE_FIELD],
-            )
-            if defaults.get(HUMIDIFIER_CURRENT_MODE_FIELD) not in (None, "")
-            else vol.Optional(HUMIDIFIER_CURRENT_MODE_FIELD)
-        )
-        domain_schema[mode_marker] = selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=list(defaults.get(HUMIDIFIER_MODE_LIST_FIELD, [])),
-                custom_value=True,
-            )
-        )
-        humidifier_number_defaults = {"min_humidity": 0, "max_humidity": 100}
-        for field_name in (
-            "current_humidity",
-            "min_humidity",
-            "max_humidity",
-            "target_humidity",
-            "target_humidity_step",
-        ):
-            default = defaults.get(
-                field_name,
-                humidifier_number_defaults.get(field_name),
-            )
-            marker = (
-                vol.Optional(field_name, default=default)
-                if default is not None
-                else vol.Optional(field_name)
-            )
-            domain_schema[marker] = selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0.1 if field_name == "target_humidity_step" else 0,
-                    max=100,
-                    step=0.1 if field_name == "target_humidity_step" else 1,
-                    mode=selector.NumberSelectorMode.BOX,
-                )
-            )
     if domain_schema:
         schema[vol.Optional(CONF_DOMAIN_SETTINGS, default=dict)] = section(
             vol.Schema(domain_schema),
@@ -1190,9 +1362,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         )
     native_template_properties = DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
     if native_template_properties:
-        template_defaults = defaults.get(CONF_NATIVE_VALUE_TEMPLATES, {})
-        if not isinstance(template_defaults, Mapping):
-            template_defaults = {}
+        template_defaults = _native_template_defaults(platform, defaults)
         template_schema = {}
         for property_name in native_template_properties:
             default = template_defaults.get(property_name)
@@ -1220,16 +1390,6 @@ def _needs_domain_specific_form(user_input) -> bool:
         return True
     if platform == "device_tracker":
         return CONF_POLYGON_STRATEGY_INPUT not in user_input
-    if platform == "climate":
-        return not any(
-            field_name in user_input for field_name in CLIMATE_FORM_FIELDS
-        )
-    if platform == "fan":
-        return not any(field_name in user_input for field_name in FAN_FORM_FIELDS)
-    if platform == "humidifier":
-        return not any(
-            field_name in user_input for field_name in HUMIDIFIER_FORM_FIELDS
-        )
     return False
 
 
@@ -2970,7 +3130,12 @@ def _presence_motion_helper_template(
         f"(({variable_name} | lower) == 'off')" for variable_name in variable_names
     )
     last_changed_values = ", ".join(
-        f"as_timestamp(states[{entity_id!r}].last_changed)" for entity_id in entity_ids
+        "(as_timestamp(states["
+        + repr(entity_id)
+        + "].last_changed) if states["
+        + repr(entity_id)
+        + "] is not none else as_timestamp(now()))"
+        for entity_id in entity_ids
     )
     return (
         "{% set active = [" + active_checks + "] | select | list %}"
@@ -2997,17 +3162,18 @@ def _source_state_is_number(entity_id: str, state) -> bool:
     if domain in NUMBER_SOURCE_DOMAINS:
         return True
     try:
-        float(state.state)
+        value = float(state.state)
     except (TypeError, ValueError, OverflowError):
         return False
-    return True
+    return math.isfinite(value)
 
 
 def _source_state_as_float(state) -> float:
     try:
-        return float(state.state)
+        value = float(state.state)
     except (TypeError, ValueError, OverflowError):
         return 0.0
+    return value if math.isfinite(value) else 0.0
 
 
 def _average_known_states(states: list) -> str:
@@ -3015,6 +3181,7 @@ def _average_known_states(states: list) -> str:
         _source_state_as_float(state)
         for state in states
         if _source_state_is_known(state)
+        and _source_state_is_number(state.entity_id, state)
     ]
     return str(sum(values) / len(values)) if values else "unknown"
 
@@ -3052,10 +3219,13 @@ def _latest_datetime_state(states: list) -> str:
     return max(candidates)[1] if candidates else _latest_state(states)
 
 
-def _latest_datetime_helper_template(variable_names: list[str]) -> str:
+def _latest_datetime_helper_template(
+    variable_names: list[str],
+    empty_value: str = "'unknown'",
+) -> str:
     """Build a timezone-correct helper while preserving the selected source text."""
     return (
-        "{% set ns = namespace(value='unknown', timestamp=none) %}"
+        "{% set ns = namespace(value=" + empty_value + ", timestamp=none) %}"
         "{% for value in [" + ", ".join(variable_names) + "] %}"
         "{% if value not in ['unknown', 'unavailable', 'none', '', none] %}"
         "{% set timestamp = as_timestamp(value, none) %}"
@@ -3124,7 +3294,7 @@ def _native_source_template(entity_id: str, state, property_name: str) -> str:
     if attribute_name and attribute_name in attributes:
         return f"{{{{ state_attr({entity_id!r}, {attribute_name!r}) }}}}"
 
-    if property_name in {"source_entity", "camera_entity"}:
+    if property_name == "source_entity":
         return f"{{{{ {entity_id!r} }}}}"
     if property_name in NATIVE_TEMPLATE_STATE_PROPERTIES:
         return f"{{{{ states({entity_id!r}) }}}}"
@@ -3138,7 +3308,19 @@ def _native_source_template(entity_id: str, state, property_name: str) -> str:
             f"{{{{ states({entity_id!r}) in "
             f"{sorted(state_values)!r} }}}}"
         )
-    return ""
+    platform = entity_id.split(".", 1)[0]
+    if mask := NATIVE_TEMPLATE_SUPPORTED_FEATURE_MASKS.get(
+        (platform, property_name)
+    ):
+        features = f"(state_attr({entity_id!r}, 'supported_features') | int(0))"
+        return f"{{{{ (({features} // {mask}) % 2) == 1 }}}}"
+    if property_name == "reports_position":
+        return f"{{{{ state_attr({entity_id!r}, 'current_position') is number }}}}"
+    attribute_name = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(
+        property_name,
+        property_name,
+    )
+    return f"{{{{ state_attr({entity_id!r}, {attribute_name!r}) }}}}"
 
 
 def _native_reference_templates(
@@ -3146,20 +3328,186 @@ def _native_reference_templates(
     entity_ids: list[str],
     states: list,
 ) -> dict[str, str]:
-    """Generate editable native Jinja helpers for a single source entity."""
-    if len(entity_ids) != 1 or len(states) != 1:
+    """Generate editable native Jinja helpers for source entities."""
+    if not entity_ids or len(entity_ids) != len(states):
         return {}
-    return {
-        property_name: template
-        for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
-        if (
-            template := _native_source_template(
-                entity_ids[0],
-                states[0],
-                property_name,
-            )
+    templates = {}
+    for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()):
+        source_templates = [
+            _native_source_template(entity_id, state, property_name)
+            for entity_id, state in zip(entity_ids, states, strict=True)
+        ]
+        aliases = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES
+        source_has_values = [
+            property_name in state.attributes
+            or aliases.get(property_name) in state.attributes
+            or property_name
+            in {
+                "is_on",
+                "reports_position",
+                "source_entity",
+                *NATIVE_TEMPLATE_STATE_PROPERTIES,
+                *NATIVE_TEMPLATE_BOOLEAN_STATE_VALUES,
+            }
+            or (platform, property_name) in NATIVE_TEMPLATE_SUPPORTED_FEATURE_MASKS
+            or property_name
+            in DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES.get(platform, {})
+            for state in states
+        ]
+        attribute_name = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(
+            property_name,
+            property_name,
         )
-    }
+        source_templates = [
+            template
+            or f"{{{{ state_attr({entity_id!r}, {attribute_name!r}) }}}}"
+            for entity_id, template in zip(entity_ids, source_templates, strict=True)
+        ]
+        if len(source_templates) == 1:
+            templates[property_name] = source_templates[0] or _literal_template(
+                _native_source_helper_default(platform, property_name)
+            )
+            continue
+
+        values = []
+        for state in states:
+            attribute_name = property_name
+            if attribute_name not in state.attributes:
+                attribute_name = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(
+                    property_name,
+                    "",
+                )
+            values.append(
+                state.attributes.get(attribute_name)
+                if attribute_name
+                else state.state
+            )
+        merged_template = _merged_native_template(
+            platform,
+            property_name,
+            source_templates,
+            values,
+        )
+        fallback = _native_source_helper_default(platform, property_name)
+        if any(source_has_values):
+            templates[property_name] = merged_template
+        else:
+            templates[property_name] = _literal_template(fallback)
+    return templates
+
+
+def _merged_native_template(
+    platform: str,
+    property_name: str,
+    source_templates: list[str],
+    values: list[Any],
+) -> str:
+    """Combine native source expressions according to their value shape."""
+    expressions = [
+        template.removeprefix("{{").removesuffix("}}").strip()
+        for template in source_templates
+    ]
+    if property_name in NATIVE_TEMPLATE_BOOLEAN_ANY_PROPERTIES:
+        return (
+            "{% set values = ["
+            + ", ".join(expressions)
+            + "] | select('boolean') | list %}"
+            "{{ (values | select | list | count) > 0 }}"
+        )
+    if property_name in NATIVE_TEMPLATE_BOOLEAN_PROPERTIES or all(
+        isinstance(value, bool) for value in values
+    ):
+        return (
+            "{% set values = ["
+            + ", ".join(expressions)
+            + "] | select('boolean') | list %}"
+            "{{ (values | count) > 0 and (values | reject | list | count) == 0 }}"
+        )
+    if property_name in NATIVE_TEMPLATE_BITMASK_PROPERTIES:
+        bitmask = f"({expressions[0]} | int(0))"
+        for expression in expressions[1:]:
+            bitmask = f"({bitmask} | bitwise_or({expression} | int(0)))"
+        return f"{{{{ {bitmask} }}}}"
+    if property_name in NATIVE_TEMPLATE_MINIMUM_PROPERTIES:
+        return (
+            "{% set values = ["
+            + ", ".join(expressions)
+            + "] | select('is_number') | map('float') | list %}"
+            "{{ (values | min) if values else none }}"
+        )
+    if property_name in NATIVE_TEMPLATE_MAXIMUM_PROPERTIES:
+        return (
+            "{% set values = ["
+            + ", ".join(expressions)
+            + "] | select('is_number') | map('float') | list %}"
+            "{{ (values | max) if values else none }}"
+        )
+    if platform == "datetime" and property_name == "native_value":
+        return _latest_datetime_helper_template(expressions, "none")
+    if property_name in NATIVE_TEMPLATE_DATETIME_PROPERTIES:
+        return _latest_datetime_helper_template(expressions, "none")
+    if platform in {"date", "time"} and property_name == "native_value":
+        return (
+            "{{ ["
+            + ", ".join(expressions)
+            + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) "
+            "| list | sort | last | default(none) }}"
+        )
+    if platform == "text" and property_name == "native_value":
+        return (
+            "{% set values = ["
+            + ", ".join(expressions)
+            + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | list %}"
+            "{{ values | join('') }}"
+        )
+    if (
+        property_name in NATIVE_TEMPLATE_NUMERIC_PROPERTIES
+        or (platform == "number" and property_name == "native_value")
+        or all(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in values
+        )
+    ):
+        return (
+            "{% set values = ["
+            + ", ".join(expressions)
+            + "] | select('is_number') | map('float') | list %}"
+            "{{ (values | average) if values else none }}"
+        )
+    if property_name in NATIVE_TEMPLATE_ATOMIC_LIST_PROPERTIES:
+        return (
+            "{% set values = ["
+            + ", ".join(expressions)
+            + "] | select('list') | list %}"
+            "{{ values[0] if values else none }}"
+        )
+    if property_name in NATIVE_TEMPLATE_LIST_PROPERTIES or all(
+        isinstance(value, (list, tuple, set)) for value in values
+    ):
+        return (
+            "{% set ns = namespace(values=[]) %}"
+            "{% for items in ["
+            + ", ".join(expressions)
+            + "] %}{% if items is list %}{% for value in items %}"
+            "{% if value not in ns.values %}{% set ns.values = ns.values + [value] %}"
+            "{% endif %}{% endfor %}{% endif %}{% endfor %}{{ ns.values }}"
+        )
+    if property_name in NATIVE_TEMPLATE_MAPPING_PROPERTIES or all(
+        isinstance(value, Mapping) for value in values
+    ):
+        return (
+            "{% set ns = namespace(value={}) %}{% for item in ["
+            + ", ".join(expressions)
+            + "] %}{% if item is mapping %}"
+            "{% set ns.value = dict((ns.value.items() | list) + (item.items() | list)) %}"
+            "{% endif %}{% endfor %}{{ ns.value }}"
+        )
+    return (
+        "{% set values = ["
+        + ", ".join(expressions)
+        + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | list %}"
+        "{{ values[0] if values else none }}"
+    )
 
 
 def _native_source_attribute_names(platform: str, state) -> set[str]:
@@ -3186,12 +3534,17 @@ def _merged_attribute_template(
         for entity_id in entity_ids
     ]
     if all(isinstance(value, bool) for value in values):
-        return "{{ " + " and ".join(f"({item} | bool)" for item in expressions) + " }}"
+        return (
+            "{% set values = ["
+            + ", ".join(expressions)
+            + "] | select('boolean') | list %}"
+            "{{ (values | count) > 0 and (values | reject | list | count) == 0 }}"
+        )
     if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
         return (
             "{% set values = ["
             + ", ".join(expressions)
-            + "] | select('number') | map('float') | list %}"
+            + "] | select('is_number') | map('float') | list %}"
             "{{ (values | average) if values else none }}"
         )
     if all(isinstance(value, Mapping) for value in values):
@@ -3237,11 +3590,10 @@ def _attribute_reference_templates(
 
     attribute_names = {
         name
-        for name in states[0].attributes
+        for state in states
+        for name in state.attributes
         if isinstance(name, str) and name.strip()
     }
-    for state in states[1:]:
-        attribute_names.intersection_update(state.attributes)
     attribute_names.difference_update(_ATTRIBUTE_HELPER_METADATA_NAMES)
     attribute_names.difference_update(RESERVED_VIRTUAL_ATTRIBUTE_NAMES)
     for state in states:
@@ -3251,8 +3603,13 @@ def _attribute_reference_templates(
 
     templates = {}
     for attribute_name in sorted(attribute_names):
-        values = [state.attributes[attribute_name] for state in states]
-        if len(states) == 1:
+        available = [
+            (entity_id, state.attributes[attribute_name])
+            for entity_id, state in zip(entity_ids, states, strict=True)
+            if attribute_name in state.attributes
+        ]
+        values = [value for _entity_id, value in available]
+        if len(entity_ids) == 1:
             templates[attribute_name] = (
                 f"{{{{ state_attr({entity_ids[0]!r}, {attribute_name!r}) }}}}"
             )
@@ -3301,7 +3658,12 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     safety_boolean_sources = (
         _safety_boolean_sources(entity_ids, states) if all_boolean else False
     )
-    if len(entity_ids) == 1 and source_domains[0] in VIRTUAL_ENTITY_DOMAINS:
+    if len(entity_ids) > 1 and all_location:
+        platform = "device_tracker"
+    elif (
+        len(set(source_domains)) == 1
+        and source_domains[0] in VIRTUAL_ENTITY_DOMAINS
+    ):
         platform = source_domains[0]
     elif all_location:
         platform = "device_tracker"
@@ -3345,7 +3707,12 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         initial_value = _latest_state(states)
     elif all_location:
         initial_value = _location_state(states)
-    elif all_enum:
+    elif all_enum or (
+        len(set(source_domains)) == 1
+        and platform == source_domains[0]
+        and platform != "sensor"
+        and platform in DOMAIN_NATIVE_TEMPLATE_PROPERTIES
+    ):
         initial_value = _first_known_state(states)
     else:
         initial_value = "".join(str(state.state) for state in states)
@@ -3374,9 +3741,20 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             + " }}"
         ),
     }
-    if len(entity_ids) == 1 and first_state.attributes.get(CONF_ICON):
+    if len(entity_ids) == 1:
         defaults[CONF_ICON_TEMPLATE] = (
-            f"{{{{ state_attr({entity_ids[0]!r}, {CONF_ICON!r}) }}}}"
+            f"{{{{ state_attr({entity_ids[0]!r}, {CONF_ICON!r}) "
+            "| default('', true) }}"
+        )
+    elif entity_ids:
+        defaults[CONF_ICON_TEMPLATE] = (
+            "{% set icons = ["
+            + ", ".join(
+                f"state_attr({entity_id!r}, {CONF_ICON!r})"
+                for entity_id in entity_ids
+            )
+            + "] | reject('in', [none, '']) | list %}"
+            "{{ icons[0] if icons else '' }}"
         )
     source_device_classes = {
         str(state.attributes.get("device_class", "")).lower() for state in states
@@ -3479,7 +3857,7 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         defaults[CONF_VALUE_TEMPLATE] = ""
     elif len(entity_ids) == 1:
         defaults[CONF_VALUE_TEMPLATE] = f"{{{{ {variable_names[0]} }}}}"
-    elif platform == "binary_sensor":
+    elif all_boolean:
         boolean_checks = [
             f"(({variable_name} | lower) in ['1', 'on', 'open', 'true', 'unlocked', 'yes'])"
             for variable_name in variable_names
@@ -3489,7 +3867,7 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         defaults[CONF_VALUE_TEMPLATE] = (
             "{% set values = ["
             + ", ".join(variable_names)
-            + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | map('float') | list %}"
+            + "] | select('is_number') | map('float') | list %}"
             "{{ (values | average) if values else 'unknown' }}"
         )
     elif all_datetime:
@@ -3500,7 +3878,9 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             + ", ".join(variable_names)
             + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | list | sort | last | default('unknown') }}"
         )
-    elif all_enum:
+    elif all_enum or len(set(source_domains)) == 1 and (
+        source_domains[0] in FIRST_KNOWN_STATE_SOURCE_DOMAINS
+    ):
         defaults[CONF_VALUE_TEMPLATE] = (
             "{% set values = ["
             + ", ".join(variable_names)
@@ -3508,7 +3888,12 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             "{{ values[0] if values else 'unknown' }}"
         )
     else:
-        defaults[CONF_VALUE_TEMPLATE] = "{{ " + " ~ ".join(variable_names) + " }}"
+        defaults[CONF_VALUE_TEMPLATE] = (
+            "{% set values = ["
+            + ", ".join(variable_names)
+            + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | list %}"
+            "{{ values | join('') }}"
+        )
         attribute_templates.update(
             {
                 variable_name: f"{{{{ {variable_name} }}}}"
@@ -3525,9 +3910,18 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     if attribute_templates:
         defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] = _json_default(attribute_templates)
 
-    native_templates = _native_reference_templates(platform, entity_ids, states)
-    if native_templates:
-        defaults[CONF_NATIVE_VALUE_TEMPLATES] = native_templates
+    native_templates = (
+        {}
+        if all_location and platform == "device_tracker"
+        else _native_reference_templates(platform, entity_ids, states)
+    )
+    if platform in DOMAIN_NATIVE_TEMPLATE_PROPERTIES and not (
+        all_location and platform == "device_tracker"
+    ):
+        defaults[CONF_NATIVE_VALUE_TEMPLATES] = _native_template_defaults(
+            platform,
+            {CONF_NATIVE_VALUE_TEMPLATES: native_templates},
+        )
 
     return defaults
 
@@ -3586,6 +3980,17 @@ def _reference_edit_defaults(
             continue
         if field in _AUTO_HELPER_TEMPLATE_FIELDS:
             if templates_are_generated:
+                merged[field] = reference_defaults.get(field, "")
+            continue
+        if field in _AUTO_HELPER_INDEPENDENT_TEMPLATE_FIELDS:
+            current_value = _canonical_auto_helper_value(
+                field,
+                current_defaults.get(field, ""),
+            )
+            baseline_value = (
+                auto_profile.get(field, "") if auto_profile is not None else ""
+            )
+            if force_template_helper or current_value == baseline_value:
                 merged[field] = reference_defaults.get(field, "")
             continue
         if (
@@ -4122,7 +4527,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
 
         if current_entry:
             return {
-                "title": f"{group_name} - {COMPONENT_DOMAIN}",
+                "title": group_name,
                 ATTR_GROUP_NAME: group_name,
             }
 
@@ -4131,7 +4536,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             if str(group).strip() == group_name:
                 raise GroupNameAlreadyUsed
         return {
-            "title": f"{group_name} - {COMPONENT_DOMAIN}",
+            "title": group_name,
             ATTR_GROUP_NAME: group_name,
         }
 
@@ -4159,9 +4564,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             except MissingGroupName:
                 errors[ATTR_GROUP_NAME] = "required"
 
-        defaults = user_input or {
-            ATTR_GROUP_NAME: IMPORTED_GROUP_NAME,
-        }
+        defaults = user_input or {}
 
         return self.async_show_form(
             step_id="user",
@@ -4182,7 +4585,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 await _rename_meta_data(self.hass, old_group_name, new_group_name)
                 return self.async_update_reload_and_abort(
                     entry,
-                    title=f"{new_group_name} - {COMPONENT_DOMAIN}",
+                    title=new_group_name,
                     data_updates={
                         ATTR_GROUP_NAME: new_group_name,
                     },

@@ -1041,3 +1041,34 @@ def test_invalid_native_template_values_are_isolated(hass, caplog):
     assert "humidity" not in weather.extra_state_attributes
     assert weather.extra_state_attributes["temperature"] == -5
     assert "Unable to render native template" in caplog.text
+
+
+def test_sensor_native_templates_reconcile_incompatible_metadata(hass):
+    sensor = VirtualSensor(
+        SENSOR_SCHEMA(
+            _base(
+                "sensor.dynamic_enum",
+                "eco",
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "device_class": "{{ 'enum' }}",
+                        "state_class": "{{ 'measurement' }}",
+                        "options": "{{ ['eco', 'boost'] }}",
+                        "native_unit_of_measurement": "{{ 'mode' }}",
+                        "suggested_unit_of_measurement": "{{ 'mode' }}",
+                        "last_reset": "{{ '2026-08-12T10:00:00+09:00' }}",
+                    }
+                },
+            )
+        ),
+        False,
+    )
+
+    _render_native_templates(sensor, hass)
+
+    assert sensor.device_class.value == "enum"
+    assert sensor.state_class is None
+    assert sensor.native_unit_of_measurement is None
+    assert sensor.suggested_unit_of_measurement is None
+    assert sensor.last_reset is None
+    assert sensor.options == ["eco", "boost"]

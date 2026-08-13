@@ -10,12 +10,14 @@ from datetime import date, datetime
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.components.sensor import (
-    DOMAIN as PLATFORM_DOMAIN,
-)
-from homeassistant.components.sensor import (
+    DEVICE_CLASS_STATE_CLASSES,
+    NON_NUMERIC_DEVICE_CLASSES,
     SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
+)
+from homeassistant.components.sensor import (
+    DOMAIN as PLATFORM_DOMAIN,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -332,6 +334,8 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         elif name == "suggested_unit_of_measurement":
             value = None if value is None or value == "" else str(value)
         elif name == "last_reset":
+            if value is None or value == "":
+                return super()._apply_native_template_value(name, None)
             if isinstance(value, datetime):
                 parsed = value
             else:
@@ -342,6 +346,17 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:
+        if self._attr_device_class in NON_NUMERIC_DEVICE_CLASSES:
+            self._attr_native_unit_of_measurement = None
+            self._attr_suggested_unit_of_measurement = None
+        valid_state_classes = DEVICE_CLASS_STATE_CLASSES.get(self._attr_device_class)
+        if (
+            valid_state_classes is not None
+            and self._attr_state_class not in valid_state_classes
+        ):
+            self._attr_state_class = None
+        if self._attr_state_class is not SensorStateClass.TOTAL:
+            self._attr_last_reset = None
         self._attr_unit_of_measurement = self._attr_native_unit_of_measurement
         self._attr_native_value = self._safe_native_value(self._attr_native_value)
         self._attr_state = self._attr_native_value

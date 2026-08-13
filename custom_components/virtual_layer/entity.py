@@ -810,7 +810,7 @@ class VirtualEntity(RestoreEntity):
                     name,
                     self._render_template(template, parse_result=True),
                 ) or native_changed
-            except (OverflowError, TemplateError, TypeError, ValueError) as e:
+            except (OverflowError, TemplateError, TypeError, ValueError, vol.Invalid) as e:
                 _LOGGER.warning(
                     "Unable to render native template %s for %s: %s",
                     name,

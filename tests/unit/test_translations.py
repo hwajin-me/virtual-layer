@@ -83,6 +83,27 @@ def _assert_form_translation_fields(catalog, section, step_id, schema):
     assert fields <= set(step.get("data", {})), step_id
     section_fields = set(step.get("sections", {}))
     assert fields - section_fields <= set(step.get("data_description", {})), step_id
+    for section_name in fields & section_fields:
+        translated_section = step["sections"][section_name]
+        section_validator = next(
+            validator
+            for marker, validator in schema.schema.items()
+            if str(getattr(marker, "schema", marker)) == section_name
+        )
+        section_fields = _schema_key_names(section_validator.schema)
+        assert translated_section["name"]
+        assert translated_section["description"]
+        translated_data = set(step.get("data", {})) | set(
+            translated_section.get("data", {})
+        )
+        translated_descriptions = set(step.get("data_description", {})) | set(
+            translated_section.get("data_description", {})
+        )
+        assert section_fields <= translated_data, (
+            step_id,
+            section_name,
+        )
+        assert section_fields <= translated_descriptions, (step_id, section_name)
 
 
 def _selector_options(schema, translation_key: str) -> set[str]:
@@ -130,6 +151,20 @@ def test_native_template_sections_are_translated_for_add_and_edit():
                 assert set(properties) <= set(
                     translated_section["data_description"]
                 ), platform
+                assert all(
+                    translated_section["data_description"][property_name].strip()
+                    for property_name in properties
+                ), platform
+
+
+def test_entity_forms_have_descriptions_for_every_dynamic_field_in_both_languages():
+    for translation_file in (TRANSLATIONS / "en.json", TRANSLATIONS / "ko.json"):
+        catalog = json.loads(translation_file.read_text(encoding="utf-8"))
+        for platform in DOMAIN_NATIVE_TEMPLATE_PROPERTIES:
+            schema = _entity_schema({CONF_PLATFORM: platform})
+            _assert_form_translation_fields(catalog, "config", "entity", schema)
+            _assert_form_translation_fields(catalog, "options", "entity", schema)
+            _assert_form_translation_fields(catalog, "options", "edit_entity", schema)
 
 
 def test_english_translation_covers_config_flow_forms_and_errors():

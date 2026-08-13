@@ -143,8 +143,6 @@ DEFAULT_AVAILABILITY = True
 DEFAULT_PERSISTENT = True
 DIAGNOSTIC_UNIQUE_ID_MARKER = ".virtual_layer_diagnostic."
 
-IMPORTED_GROUP_NAME = "imported"
-
 VIRTUAL_ENTITY_DOMAINS = [
     "ai_task",
     "air_quality",

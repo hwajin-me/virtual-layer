@@ -302,6 +302,10 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
             name = "activity"
             value = activity
         elif name == CONF_BATTERY_LEVEL:
+            if value is None or value == "":
+                changed = self._battery_level is not None
+                self._battery_level = None
+                return changed
             value = _as_battery_level(value)
             if value is None:
                 raise ValueError("battery_level must be between 0 and 100")

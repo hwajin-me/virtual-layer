@@ -255,6 +255,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     _async_ensure_runtime_data(hass)
     configured_group_name = entry.data[ATTR_GROUP_NAME]
+    legacy_title = f"{configured_group_name} - {COMPONENT_DOMAIN}"
+    if entry.title == legacy_title:
+        hass.config_entries.async_update_entry(entry, title=configured_group_name)
     configured_group = hass.data[COMPONENT_DOMAIN].get(configured_group_name)
     if (
         isinstance(configured_group, Mapping)

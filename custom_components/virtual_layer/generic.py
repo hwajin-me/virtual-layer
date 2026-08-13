@@ -1066,6 +1066,8 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             if value < 0:
                 raise ValueError("media_track must be a non-negative integer")
         elif name == "media_position_updated_at":
+            if value is None or value == "":
+                return super()._apply_native_template_value(name, None)
             if isinstance(value, datetime):
                 parsed = value
             else:

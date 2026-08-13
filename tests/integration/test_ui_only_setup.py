@@ -63,6 +63,8 @@ from custom_components.virtual_layer.config_flow import (
     ACTION_EDIT_ENTITY,
     ACTION_FINISH,
     ACTION_MANAGE_DEVICES,
+    CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
+    DOMAIN_NATIVE_TEMPLATE_PROPERTIES,
     CONF_ACTION,
     CONF_ADVANCED_SETTINGS,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
@@ -208,7 +210,12 @@ async def test_options_flow_persists_native_templates_and_command_actions(hass):
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = result["data"][ATTR_DEVICES]["Linked HVAC"][0]
-    assert entity[CONF_NATIVE_TEMPLATES] == native_templates
+    assert set(entity[CONF_NATIVE_TEMPLATES]) == set(CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
+    assert {
+        name: entity[CONF_NATIVE_TEMPLATES][name]
+        for name in native_templates
+    } == native_templates
+    assert all(entity[CONF_NATIVE_TEMPLATES].values())
     assert entity[CONF_COMMAND_ACTIONS] == command_actions
 
 
@@ -396,6 +403,16 @@ async def test_config_import_is_rejected(hass):
     assert result["reason"] == "import_not_supported"
 
 
+async def test_initial_config_flow_device_name_is_blank(hass):
+    result = await hass.config_entries.flow.async_init(
+        COMPONENT_DOMAIN,
+        context={"source": SOURCE_USER},
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["data_schema"]({})[ATTR_GROUP_NAME] == ""
+
+
 async def test_config_flow_normalizes_and_validates_device_group_names(hass):
     result = await hass.config_entries.flow.async_init(
         COMPONENT_DOMAIN,
@@ -405,6 +422,7 @@ async def test_config_flow_normalizes_and_validates_device_group_names(hass):
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][ATTR_GROUP_NAME] == "Upstairs"
+    assert result["title"] == "Upstairs"
 
     result = await hass.config_entries.flow.async_init(
         COMPONENT_DOMAIN,
@@ -1989,14 +2007,19 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][ATTR_DEVICES]["Kitchen"][0].pop(ATTR_ENTITY_KEY)
     assert result["data"][ATTR_DEVICES]["Kitchen"][0].pop("auto_helper")
-    assert result["data"][ATTR_DEVICES]["Kitchen"] == [
-        {
+    saved = result["data"][ATTR_DEVICES]["Kitchen"][0]
+    native_templates = saved.pop(CONF_NATIVE_TEMPLATES)
+    assert result["data"][ATTR_DEVICES]["Kitchen"] == [{
             CONF_PLATFORM: "light",
             CONF_NAME: "Kitchen Lamp",
             ATTR_ENTITY_ID: "light.virtual_kitchen_lamp",
             CONF_INITIAL_VALUE: "on",
             CONF_INITIAL_AVAILABILITY: True,
             CONF_PERSISTENT: True,
+            CONF_ICON_TEMPLATE: (
+                "{{ state_attr('light.kitchen_lamp', 'icon') "
+                "| default('', true) }}"
+            ),
             CONF_SOURCE_ENTITIES: ["light.kitchen_lamp"],
             CONF_TEMPLATE_SOURCES: {
                 "kitchen_lamp": {
@@ -2010,17 +2033,20 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
                     "['unknown', 'unavailable'] }}"
                 ),
                 CONF_ATTRIBUTES: {"brightness": 128},
-                CONF_NATIVE_TEMPLATES: {
-                    "is_on": (
-                        "{{ states('light.kitchen_lamp') not in "
-                        "['off', 'unknown', 'unavailable'] }}"
-                    ),
-                    "brightness": (
-                        "{{ state_attr('light.kitchen_lamp', 'brightness') }}"
-                    ),
-                },
             },
         ]
+    assert set(native_templates) == set(
+        DOMAIN_NATIVE_TEMPLATE_PROPERTIES["light"]
+    )
+    assert native_templates["is_on"]
+    assert native_templates["brightness"]
+    assert native_templates["is_on"] == (
+        "{{ states('light.kitchen_lamp') not in "
+        "['off', 'unknown', 'unavailable'] }}"
+    )
+    assert native_templates["brightness"] == (
+        "{{ state_attr('light.kitchen_lamp', 'brightness') }}"
+    )
 
 
 async def test_options_flow_prefills_climate_native_mode_options(hass):
@@ -2062,23 +2088,18 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
 
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_PLATFORM] == "climate"
-    assert defaults["hvac_modes"] == ["off", "cool", "dry", "fan_only"]
-    assert defaults["fan_mode"] == "auto"
-    assert defaults["fan_modes"] == ["medium", "high", "turbo", "auto"]
-    assert defaults["preset_mode"] == "none"
-    assert defaults["preset_modes"] == [
-        "none",
-        "sleep",
-        "quiet",
-        "speed",
-        "ai_comfort",
-    ]
-    assert defaults["swing_modes"] == []
-    assert defaults["target_temperature"] == 23.0
-    assert defaults["target_temperature_step"] == 1.0
-    assert defaults["current_temperature"] == 24.0
-    assert defaults["min_temp"] == 18.0
-    assert defaults["max_temp"] == 30.0
+    native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert set(native_templates) == set(CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
+    assert native_templates["hvac_modes"] == (
+        "{{ state_attr('climate.bedroom', 'hvac_modes') }}"
+    )
+    assert native_templates["fan_mode"] == (
+        "{{ state_attr('climate.bedroom', 'fan_mode') }}"
+    )
+    assert native_templates["target_temperature"] == (
+        "{{ state_attr('climate.bedroom', 'temperature') }}"
+    )
+    assert all(native_templates.values())
     assert defaults[CONF_DOMAIN_OPTIONS_JSON] == ""
     assert defaults["attributes_json"] == ""
 
@@ -2093,16 +2114,15 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = result["data"][ATTR_DEVICES]["Bedroom"][0]
-    assert entity["fan_modes"] == ["medium", "high", "turbo", "auto"]
-    assert entity["preset_modes"] == [
-        "none",
-        "sleep",
-        "quiet",
-        "speed",
-        "ai_comfort",
-    ]
-    assert entity["swing_modes"] == []
-    assert entity["target_temperature"] == 23.0
+    assert set(entity[CONF_NATIVE_TEMPLATES]) == set(
+        CLIMATE_NATIVE_TEMPLATE_PROPERTIES
+    )
+    assert entity[CONF_NATIVE_TEMPLATES]["fan_modes"] == (
+        "{{ state_attr('climate.bedroom', 'fan_modes') }}"
+    )
+    assert entity[CONF_NATIVE_TEMPLATES]["target_temperature"] == (
+        "{{ state_attr('climate.bedroom', 'temperature') }}"
+    )
     assert "supported_features" not in entity.get(CONF_ATTRIBUTES, {})
 
 
@@ -2142,15 +2162,17 @@ async def test_options_flow_prefills_and_creates_native_dehumidifier(hass):
 
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_PLATFORM] == "humidifier"
-    assert defaults["class"] == "dehumidifier"
-    assert defaults["action"] == "drying"
-    assert defaults["current_humidity"] == 65
-    assert defaults["min_humidity"] == 30
-    assert defaults["max_humidity"] == 80
-    assert defaults["target_humidity"] == 50
-    assert defaults["target_humidity_step"] == 1
-    assert defaults["modes"] == ["auto", "sleep"]
-    assert defaults["mode"] == "auto"
+    native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert native_templates["device_class"] == (
+        "{{ state_attr('humidifier.basement', 'device_class') }}"
+    )
+    assert native_templates["available_modes"] == (
+        "{{ state_attr('humidifier.basement', 'available_modes') }}"
+    )
+    assert native_templates["target_humidity"] == (
+        "{{ state_attr('humidifier.basement', 'humidity') }}"
+    )
+    assert all(native_templates.values())
     assert defaults[CONF_DOMAIN_OPTIONS_JSON] == ""
 
     result = await hass.config_entries.options.async_configure(
@@ -2164,11 +2186,7 @@ async def test_options_flow_prefills_and_creates_native_dehumidifier(hass):
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = result["data"][ATTR_DEVICES]["Basement"][0]
-    assert entity["class"] == "dehumidifier"
-    assert entity["action"] == "drying"
-    assert entity["target_humidity"] == 50
-    assert entity["modes"] == ["auto", "sleep"]
-    assert entity["mode"] == "auto"
+    assert entity[CONF_NATIVE_TEMPLATES] == native_templates
     assert "supported_features" not in entity.get(CONF_ATTRIBUTES, {})
 
 
@@ -2215,40 +2233,42 @@ async def test_options_flow_can_edit_all_climate_modes(hass):
 
     assert result["step_id"] == "edit_entity"
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
-    assert defaults["fan_modes"] == ["auto", "turbo"]
-    assert defaults["preset_mode"] == "none"
-    assert defaults["swing_modes"] == ["off", "vertical"]
-    assert defaults["swing_horizontal_mode"] == "left"
+    native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert native_templates["fan_modes"] == "{{ ['auto', 'turbo'] }}"
+    assert native_templates["preset_mode"] == "{{ 'none' }}"
+    assert native_templates["swing_modes"] == "{{ ['off', 'vertical'] }}"
+    assert native_templates["swing_horizontal_mode"] == "{{ 'left' }}"
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
             **defaults,
             CONF_INITIAL_VALUE: "heat",
-            "hvac_modes": ["off", "heat", "cool"],
-            "fan_modes": ["auto", "quiet"],
-            "fan_mode": "quiet",
-            "preset_modes": ["none", "eco"],
-            "preset_mode": "eco",
-            "swing_modes": ["auto", "vertical"],
-            "swing_mode": "auto",
-            "swing_horizontal_modes": ["left", "right"],
-            "swing_horizontal_mode": "right",
+            CONF_NATIVE_VALUE_TEMPLATES: {
+                **native_templates,
+                "hvac_modes": "{{ ['off', 'heat', 'cool'] }}",
+                "fan_modes": "{{ ['auto', 'quiet'] }}",
+                "fan_mode": "{{ 'quiet' }}",
+                "preset_modes": "{{ ['none', 'eco'] }}",
+                "preset_mode": "{{ 'eco' }}",
+                "swing_modes": "{{ ['auto', 'vertical'] }}",
+                "swing_mode": "{{ 'auto' }}",
+                "swing_horizontal_modes": "{{ ['left', 'right'] }}",
+                "swing_horizontal_mode": "{{ 'right' }}",
+            },
         },
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = result["data"][ATTR_DEVICES]["Bedroom"][0]
     assert entity[CONF_INITIAL_VALUE] == "heat"
-    assert entity["hvac_modes"] == ["off", "heat", "cool"]
-    assert entity["fan_modes"] == ["auto", "quiet"]
-    assert entity["fan_mode"] == "quiet"
-    assert entity["preset_modes"] == ["none", "eco"]
-    assert entity["preset_mode"] == "eco"
-    assert entity["swing_modes"] == ["auto", "vertical"]
-    assert entity["swing_mode"] == "auto"
-    assert entity["swing_horizontal_modes"] == ["left", "right"]
-    assert entity["swing_horizontal_mode"] == "right"
+    saved_templates = entity[CONF_NATIVE_TEMPLATES]
+    assert saved_templates["hvac_modes"] == "{{ ['off', 'heat', 'cool'] }}"
+    assert saved_templates["fan_modes"] == "{{ ['auto', 'quiet'] }}"
+    assert saved_templates["fan_mode"] == "{{ 'quiet' }}"
+    assert saved_templates["preset_modes"] == "{{ ['none', 'eco'] }}"
+    assert saved_templates["swing_mode"] == "{{ 'auto' }}"
+    assert saved_templates["swing_horizontal_mode"] == "{{ 'right' }}"
 
 
 async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_entities(hass):
@@ -2304,6 +2324,7 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
         CONF_INITIAL_VALUE: "on",
         CONF_INITIAL_AVAILABILITY: True,
         CONF_PERSISTENT: True,
+        CONF_ICON_TEMPLATE: defaults[CONF_ICON_TEMPLATE],
         CONF_SOURCE_ENTITIES: [
             "binary_sensor.front_door",
             "binary_sensor.back_door",
@@ -2319,8 +2340,9 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
             },
             },
             CONF_VALUE_TEMPLATE: defaults[CONF_VALUE_TEMPLATE],
-            CONF_AVAILABILITY_TEMPLATE: defaults[CONF_AVAILABILITY_TEMPLATE],
-        }
+        CONF_AVAILABILITY_TEMPLATE: defaults[CONF_AVAILABILITY_TEMPLATE],
+        CONF_NATIVE_TEMPLATES: {"device_class": "{{ None }}"},
+    }
 
 
 async def test_options_flow_adds_entity_to_selected_existing_device(hass):
@@ -2642,7 +2664,7 @@ async def test_options_flow_can_prefill_composite_sensor_with_average_template(h
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_PLATFORM] == "sensor"
     assert defaults[CONF_INITIAL_VALUE] == "23.0"
-    assert "reject('in'" in defaults[CONF_VALUE_TEMPLATE]
+    assert "select('is_number')" in defaults[CONF_VALUE_TEMPLATE]
     assert "values | average" in defaults[CONF_VALUE_TEMPLATE]
 
 
@@ -3340,6 +3362,7 @@ async def test_reconfigure_group_name_preserves_identity_and_cleans_runtime_cach
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id) is True
     await hass.async_block_till_done()
+    assert entry.title == "old"
 
     original_registry_entry = er.async_get(hass).async_get("sensor.stable_sensor")
     original_unique_id = original_registry_entry.unique_id
@@ -3357,7 +3380,7 @@ async def test_reconfigure_group_name_preserves_identity_and_cleans_runtime_cach
     await hass.async_block_till_done()
 
     assert entry.data[ATTR_GROUP_NAME] == "new"
-    assert entry.title == "new - virtual_layer"
+    assert entry.title == "new"
     assert "old" not in hass.data[COMPONENT_DOMAIN]
     assert hass.data[COMPONENT_DOMAIN]["new"][ATTR_CONFIG_ENTRY_ID] == entry.entry_id
     renamed_registry_entry = er.async_get(hass).async_get("sensor.stable_sensor")

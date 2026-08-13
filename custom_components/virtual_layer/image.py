@@ -390,6 +390,8 @@ class VirtualImage(VirtualEntity, ImageEntity):
                 raise ValueError("content_type must be an image MIME type")
             name = "content_type"
         elif name == "image_last_updated":
+            if value is None or value == "":
+                return super()._apply_native_template_value(name, None)
             if isinstance(value, datetime):
                 parsed = value
             else:
