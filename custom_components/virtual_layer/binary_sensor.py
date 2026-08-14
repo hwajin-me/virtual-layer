@@ -114,8 +114,8 @@ class VirtualBinarySensor(VirtualEntity, BinarySensorEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-
-        self._attr_is_on = state.state.lower() == STATE_ON
+        restored = self._restored_state_value(state, config)
+        self._attr_is_on = str(restored).lower() == STATE_ON
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -142,7 +142,7 @@ class VirtualBinarySensor(VirtualEntity, BinarySensorEntity):
             self.turn_on()
 
     def set_state(self, value) -> None:
-        if str(value).lower() in ["y", "yes", "t", "true", "on", "1"]:
+        if self._template_to_bool(value):
             self.turn_on()
         else:
             self.turn_off()

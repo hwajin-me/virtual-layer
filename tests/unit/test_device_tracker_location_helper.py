@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import voluptuous as vol
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
@@ -29,6 +30,8 @@ from custom_components.virtual_layer.device_tracker import (
     ATTR_LOCATION_PRIORITY_SOURCE,
     ATTR_LOCATION_SOURCE_LAST_MOVED,
     ATTR_LOCATION_SOURCE_POSITIONS,
+    CONF_GPS,
+    SERVICE_SCHEMA,
     VirtualDeviceTracker,
 )
 
@@ -114,6 +117,55 @@ def test_tracker_restore_rejects_invalid_gps_coordinates(hass, latitude, longitu
     assert tracker.location_accuracy == 0
 
 
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            {
+                ATTR_ENTITY_ID: ["device_tracker.family_location"],
+                CONF_GPS: {ATTR_LATITUDE: True, ATTR_LONGITUDE: 127},
+            },
+            "boolean",
+        ),
+        (
+            {
+                ATTR_ENTITY_ID: ["device_tracker.family_location"],
+                CONF_GPS: {ATTR_LATITUDE: 37.5, ATTR_LONGITUDE: 127},
+                "gps_accuracy": True,
+            },
+            "boolean",
+        ),
+        ({ATTR_ENTITY_ID: ["device_tracker.family_location"]}, "exactly one"),
+        (
+            {
+                ATTR_ENTITY_ID: ["device_tracker.family_location"],
+                "location": "home",
+                CONF_GPS: {ATTR_LATITUDE: 37.5, ATTR_LONGITUDE: 127},
+            },
+            "exactly one",
+        ),
+        (
+            {
+                ATTR_ENTITY_ID: ["device_tracker.family_location"],
+                "location": "   ",
+            },
+            "must not be empty",
+        ),
+        (
+            {
+                ATTR_ENTITY_ID: ["device_tracker.family_location"],
+                "location": "home",
+                "gps_accuracy": 5,
+            },
+            "only valid with gps",
+        ),
+    ],
+)
+def test_tracker_move_schema_rejects_ambiguous_or_invalid_payloads(payload, message):
+    with pytest.raises(vol.Invalid, match=message):
+        SERVICE_SCHEMA(payload)
+
+
 def test_tracker_restore_normalizes_valid_gps_coordinates_and_accuracy(hass):
     tracker = _helper_tracker(hass)
 
@@ -134,6 +186,22 @@ def test_tracker_restore_normalizes_valid_gps_coordinates_and_accuracy(hass):
     assert tracker.latitude == 37.5
     assert tracker.longitude == 127.0
     assert tracker.location_accuracy == 0
+
+
+def test_tracker_restore_uses_initial_location_after_unavailable(hass):
+    tracker = _helper_tracker(hass)
+    tracker._config[CONF_INITIAL_VALUE] = "home"
+
+    tracker._restore_state(
+        SimpleNamespace(
+            state="unavailable",
+            attributes={"available": False},
+        ),
+        tracker._config,
+    )
+    tracker._attr_available = True
+
+    assert tracker.state == "home"
 
 
 @pytest.mark.parametrize(
@@ -261,7 +329,15 @@ def test_location_helper_restores_source_movement_history(hass):
             ATTR_LOCATION_SOURCE_LAST_MOVED
         ],
     })
+    restored._virtual_attributes[ATTR_LOCATION_SOURCE_POSITIONS][
+        "device_tracker.first_phone"
+    ] = [True, False]
+    restored._virtual_attributes[ATTR_LOCATION_SOURCE_LAST_MOVED][
+        "device_tracker.first_phone"
+    ] = True
     restored._restore_location_helper_attributes()
+    assert "device_tracker.first_phone" not in restored._source_positions
+    assert "device_tracker.first_phone" not in restored._source_last_moved
     restored._source_last_moved["device_tracker.travel_phone"] = (
         dt_util.utcnow() - timedelta(minutes=31)
     )

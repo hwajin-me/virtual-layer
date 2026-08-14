@@ -73,6 +73,8 @@ from custom_components.virtual_layer.sensor import (
     UNITS_OF_MEASUREMENT,
     VirtualSensor,
 )
+from custom_components.virtual_layer.cover import COVER_SCHEMA, VirtualCover
+from custom_components.virtual_layer.generic import GenericVirtualEntity
 from custom_components.virtual_layer.vacuum import VACUUM_SCHEMA, VirtualVacuum
 
 pytestmark = pytest.mark.unit
@@ -88,6 +90,72 @@ def _config(schema, domain: str, initial_value: str = "unknown", **options):
             **options,
         }
     )
+
+
+def test_openable_restore_does_not_turn_unavailable_closed_entity_open():
+    cover = VirtualCover(_config(COVER_SCHEMA, "cover", "closed"), False)
+
+    cover._restore_state(
+        SimpleNamespace(
+            state="unavailable",
+            attributes={"available": False, "current_position": True},
+        ),
+        cover._config,
+    )
+
+    assert cover.is_closed is True
+    assert cover.current_cover_position == 0
+
+
+def test_generic_restore_does_not_expose_unavailable_as_business_state():
+    config = _config(
+        __import__(
+            "custom_components.virtual_layer.weather",
+            fromlist=["ENTITY_SCHEMA"],
+        ).ENTITY_SCHEMA,
+        "weather",
+        "sunny",
+    )
+    entity = GenericVirtualEntity(config, "weather", False)
+
+    entity._restore_state(
+        SimpleNamespace(state="unavailable", attributes={"available": False}),
+        config,
+    )
+
+    assert entity.state == "sunny"
+
+
+def test_sensor_restore_uses_initial_value_when_ha_saved_unavailable():
+    sensor = VirtualSensor(_config(SENSOR_SCHEMA, "sensor", "42"), False)
+
+    sensor._restore_state(
+        SimpleNamespace(state="unavailable", attributes={"available": False}),
+        sensor._config,
+    )
+
+    assert sensor.native_value == "42"
+
+
+@pytest.mark.parametrize("domain", ["select", "text"])
+def test_string_controls_restore_initial_value_instead_of_unavailable(domain):
+    module = __import__(
+        f"custom_components.virtual_layer.{domain}",
+        fromlist=["ENTITY_CLASS", "ENTITY_SCHEMA"],
+    )
+    options = {"options": ["configured", "unavailable"]} if domain == "select" else {}
+    entity = module.ENTITY_CLASS(
+        _config(module.ENTITY_SCHEMA, domain, "configured", **options),
+        False,
+    )
+
+    entity._restore_state(
+        SimpleNamespace(state="unavailable", attributes={"available": False}),
+        entity._config,
+    )
+
+    value = entity.current_option if domain == "select" else entity.native_value
+    assert value == "configured"
 
 
 def test_light_schema_mutable_defaults_are_isolated_per_entity():
@@ -517,6 +585,12 @@ def test_fan_source_options_and_legacy_attributes_are_promoted():
     assert migrated["modes"] == ["eco", "boost"]
     assert migrated["preset_mode"] == "eco"
     assert migrated[CONF_ATTRIBUTES] == {"vendor": "kept"}
+
+    malformed_options, _ = extract_fan_options({
+        "percentage_step": True,
+        "supported_features": True,
+    })
+    assert "speed_count" not in malformed_options
 
 
 @pytest.mark.parametrize(
@@ -1293,6 +1367,8 @@ def test_climate_and_humidifier_restore_home_assistant_native_target_keys():
         SimpleNamespace(
             state="heat",
             attributes={
+                "current_temperature": True,
+                "current_humidity": False,
                 "temperature": 24,
                 "target_temp_high": 27,
                 "target_temp_low": 17,
@@ -1304,7 +1380,11 @@ def test_climate_and_humidifier_restore_home_assistant_native_target_keys():
     humidifier._restore_state(
         SimpleNamespace(
             state="on",
-            attributes={"humidity": 55, "mode": "removed"},
+            attributes={
+                "current_humidity": True,
+                "humidity": 55,
+                "mode": "removed",
+            },
         ),
         humidifier._config,
     )
@@ -1313,7 +1393,10 @@ def test_climate_and_humidifier_restore_home_assistant_native_target_keys():
     assert climate.target_temperature_high == 27
     assert climate.target_temperature_low == 17
     assert climate.target_humidity == 48
+    assert climate.current_temperature is None
+    assert climate.current_humidity is None
     assert humidifier.target_humidity == 55
+    assert humidifier.current_humidity is None
     assert humidifier.mode == "normal"
 
 
@@ -1575,7 +1658,10 @@ def test_native_generic_restore_rejects_removed_options_and_bad_values():
         select._config,
     )
     water_heater._restore_state(
-        SimpleNamespace(state="removed", attributes={}),
+        SimpleNamespace(
+            state="removed",
+            attributes={"current_temperature": True, "temperature": False},
+        ),
         water_heater._config,
     )
 
@@ -1587,6 +1673,8 @@ def test_native_generic_restore_rejects_removed_options_and_bad_values():
     assert select.options == ["eco"]
     assert water_heater.current_operation == "off"
     assert water_heater.operation_list == ["off", "eco"]
+    assert water_heater.current_temperature is None
+    assert water_heater.target_temperature is None
 
     with pytest.raises(ValueError):
         select.set_state("removed")

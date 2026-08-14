@@ -317,4 +317,4 @@ class VirtualCamera(VirtualEntity, Camera):
         self._attr_supported_features = features
 
     def set_state(self, value) -> None:
-        self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]
+        self._attr_is_on = self._template_to_bool(value)

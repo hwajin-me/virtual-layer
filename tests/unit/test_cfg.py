@@ -134,7 +134,7 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
             CONF_PLATFORM: "number",
             CONF_NAME: "Damaged number",
             CONF_INITIAL_VALUE: float("nan"),
-            CONF_MIN: float("nan"),
+            CONF_MIN: True,
             CONF_MAX: float("inf"),
             CONF_ATTRIBUTES: {
                 " nested ": [1, float("-inf")],
@@ -151,6 +151,7 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
                 "event_type": "virtual_layer_update",
                 "debounce": float("inf"),
             }],
+            CONF_PULL_INTERVAL: True,
         },
         "Damaged Device",
         0,
@@ -165,6 +166,7 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
         "trigger": "event",
         "event_type": "virtual_layer_update",
     }]
+    assert normalized[CONF_PULL_INTERVAL] == 0
 
 
 def test_stored_config_sanitizes_integers_outside_home_assistant_json_range():
@@ -189,6 +191,13 @@ def test_stored_config_sanitizes_integers_outside_home_assistant_json_range():
     )
     assert device[ATTR_DEVICE_ID] == "Damaged Device"
     assert device[CONF_NAME] == "Damaged Device"
+
+    boolean_device = _device_config_for_key(
+        "Boolean Device",
+        {"Boolean Device": {ATTR_DEVICE_ID: True, CONF_NAME: False}},
+    )
+    assert boolean_device[ATTR_DEVICE_ID] == "Boolean Device"
+    assert boolean_device[CONF_NAME] == "Boolean Device"
 
 
 def test_stored_config_sanitizes_recursive_and_excessively_deep_values():

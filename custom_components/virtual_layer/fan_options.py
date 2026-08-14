@@ -38,6 +38,8 @@ FAN_NATIVE_ATTRIBUTE_FIELDS = frozenset(
 
 def _speed_count_from_step(value: Any) -> int | None:
     """Convert Home Assistant's percentage step to a speed count."""
+    if isinstance(value, bool):
+        return None
     try:
         step = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -69,8 +71,11 @@ def extract_fan_options(attributes: Mapping) -> tuple[dict[str, Any], set[str]]:
     if speed_count is not None:
         options["speed_count"] = speed_count
 
+    configured_features = attributes.get("supported_features", 0)
     try:
-        supported_features = FanEntityFeature(int(attributes.get("supported_features", 0)))
+        if isinstance(configured_features, bool):
+            raise TypeError
+        supported_features = FanEntityFeature(int(configured_features))
     except (TypeError, ValueError, OverflowError):
         supported_features = FanEntityFeature(0)
     options["oscillate"] = (

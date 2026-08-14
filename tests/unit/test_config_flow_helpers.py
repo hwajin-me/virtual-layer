@@ -862,7 +862,8 @@ def test_json_default_sanitizes_values_that_cannot_be_saved_by_home_assistant():
     assert result["not_finite"] == "nan"
 
 
-def test_build_entity_config_rejects_non_finite_numeric_strings():
+@pytest.mark.parametrize("debounce", ["Infinity", True])
+def test_build_entity_config_rejects_invalid_event_hook_debounce(debounce):
     with pytest.raises(InvalidJson) as err:
         _build_entity_config(
             _entity_input(
@@ -872,7 +873,7 @@ def test_build_entity_config_rejects_non_finite_numeric_strings():
                             {
                                 "trigger": "event",
                                 "event_type": "virtual_layer_update",
-                                "debounce": "Infinity",
+                                "debounce": debounce,
                             }
                         ]
                     ),

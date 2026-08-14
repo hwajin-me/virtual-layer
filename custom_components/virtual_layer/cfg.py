@@ -190,6 +190,8 @@ def _normalize_event_hooks(value, device_name, index):
 
         if "debounce" in hook:
             try:
+                if isinstance(hook["debounce"], bool):
+                    raise TypeError
                 debounce = float(hook["debounce"])
                 if not math.isfinite(debounce):
                     raise ValueError
@@ -395,7 +397,10 @@ def _device_config_for_key(device_name, device_attributes):
         CONF_VIA_DEVICE_ID,
     ):
         value = device.get(key)
-        if value is not None and not isinstance(value, (str, int, float)):
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (str, int, float))
+        ):
             _LOGGER.warning("Ignoring invalid %s for device %s", key, device_name)
             device.pop(key, None)
         elif value is not None:
@@ -478,6 +483,8 @@ def _normalize_common_entity_config(entity, device_name, index):
     if entity.get(CONF_PLATFORM) == "number":
         for key, default in ((CONF_MIN, _DEFAULT_NUMBER_MIN), (CONF_MAX, _DEFAULT_NUMBER_MAX)):
             try:
+                if isinstance(entity.get(key, default), bool):
+                    raise TypeError
                 entity[key] = float(entity.get(key, default))
                 if not math.isfinite(entity[key]):
                     raise ValueError
@@ -657,10 +664,13 @@ def _normalize_common_entity_config(entity, device_name, index):
 
     pull_interval = entity.get(CONF_PULL_INTERVAL)
     if pull_interval is not None:
-        try:
-            pull_interval = int(pull_interval)
-        except (TypeError, ValueError, OverflowError):
+        if isinstance(pull_interval, bool):
             pull_interval = 0
+        else:
+            try:
+                pull_interval = int(pull_interval)
+            except (TypeError, ValueError, OverflowError):
+                pull_interval = 0
         entity[CONF_PULL_INTERVAL] = max(0, pull_interval)
 
     for key, default in (

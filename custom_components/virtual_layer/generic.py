@@ -156,7 +156,7 @@ class GenericVirtualEntity(VirtualEntity, Entity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        self._attr_state = state.state
+        self._attr_state = self._restored_state_value(state, config)
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -469,7 +469,7 @@ class VirtualSelect(_NativeGenericMixin, VirtualEntity, SelectEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        restored = str(state.state)
+        restored = str(self._restored_state_value(state, config))
         initial = str(config.get(CONF_INITIAL_VALUE, ""))
         self._attr_current_option = (
             restored
@@ -547,7 +547,7 @@ class VirtualText(_NativeGenericMixin, VirtualEntity, TextEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        restored = str(state.state)
+        restored = str(self._restored_state_value(state, config))
         fallback = str(config.get(CONF_INITIAL_VALUE, ""))
         self._attr_native_value = (
             restored
@@ -774,10 +774,10 @@ class VirtualSiren(_NativeGenericMixin, VirtualEntity, SirenEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        self.set_state(state.state)
+        self.set_state(self._restored_state_value(state, config))
 
     def set_state(self, value) -> None:
-        self._attr_is_on = str(value).lower() in {"1", "on", "true", "yes"}
+        self._attr_is_on = self._template_to_bool(value)
 
     async def async_turn_on(self, **kwargs) -> None:
         tone = kwargs.get("tone")
@@ -908,7 +908,7 @@ class VirtualRemote(_NativeGenericMixin, VirtualEntity, RemoteEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        self.set_state(state.state)
+        self.set_state(self._restored_state_value(state, config))
         restored_activity = state.attributes.get("current_activity")
         if (
             _has_value(restored_activity)
@@ -917,7 +917,7 @@ class VirtualRemote(_NativeGenericMixin, VirtualEntity, RemoteEntity):
             self._attr_current_activity = restored_activity
 
     def set_state(self, value) -> None:
-        self._attr_is_on = str(value).lower() in {"1", "on", "true", "yes"}
+        self._attr_is_on = self._template_to_bool(value)
 
     async def async_turn_on(self, **kwargs) -> None:
         activity = kwargs.get("activity")
@@ -1277,7 +1277,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             self._attr_supported_features |= WaterHeaterEntityFeature.AWAY_MODE
 
     def _bounded_temperature(self, value):
-        if value is None:
+        if value is None or isinstance(value, bool):
             return None
         try:
             parsed = float(value)
@@ -1343,7 +1343,14 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
         requested_temperature = kwargs[ATTR_TEMPERATURE]
         if isinstance(requested_temperature, bool):
             raise ValueError("Water heater temperature must be a finite number")
-        temperature = float(requested_temperature)
+        try:
+            temperature = float(requested_temperature)
+        except (TypeError, ValueError, OverflowError) as err:
+            raise ValueError(
+                "Water heater temperature must be a finite number"
+            ) from err
+        if not math.isfinite(temperature):
+            raise ValueError("Water heater temperature must be a finite number")
         if not self._attr_min_temp <= temperature <= self._attr_max_temp:
             raise ValueError("Water heater temperature is outside its configured range")
         self._attr_target_temperature = temperature

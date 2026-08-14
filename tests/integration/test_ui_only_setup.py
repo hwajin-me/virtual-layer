@@ -30,7 +30,13 @@ from custom_components.virtual_layer import (
     SERVICE_SET_STATE_SCHEMA,
     _async_delete_virtual_device_from_registry,
     _async_delete_virtual_entity_from_registry,
+    _async_apply_state_only_event_hook,
+    _async_remove_device_metadata_guard,
+    _async_remove_entity_id_guard,
     _async_remove_orphaned_diagnostic_registry_entries,
+    _async_apply_state_only_templates,
+    _async_setup_device_metadata_guard,
+    _async_setup_entity_id_guard,
     _async_setup_state_only_templates,
     _async_verify_admin,
     _async_verify_target_entity_control,
@@ -629,6 +635,47 @@ async def test_config_entry_setup_skips_forwarding_empty_platforms(hass):
     forward_setups.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    ("title", "data", "expected_group_name"),
+    [
+        ("Damaged legacy entry", {}, None),
+        (
+            " Spaced Device ",
+            {ATTR_GROUP_NAME: " Spaced Device "},
+            "Spaced Device",
+        ),
+    ],
+)
+async def test_config_entry_setup_recovers_and_normalizes_device_name(
+    hass,
+    title,
+    data,
+    expected_group_name,
+):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        title=title,
+        data=dict(data),
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    with patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        AsyncMock(return_value=True),
+    ) as forward_setups:
+        assert await async_setup_entry(hass, entry) is True
+
+    group_name = expected_group_name or f"recovered_{entry.entry_id}"
+    assert entry.data[ATTR_GROUP_NAME] == group_name
+    assert entry.title == group_name
+    assert hass.data[COMPONENT_DOMAIN][group_name][
+        ATTR_CONFIG_ENTRY_ID
+    ] == entry.entry_id
+    forward_setups.assert_not_awaited()
+
+
 async def test_setup_failure_cleans_runtime_state_and_listeners(hass):
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
@@ -713,6 +760,17 @@ async def test_number_entity_supports_native_service_and_virtual_state_clamping(
             ATTR_VALUE: 99,
         }),
     )
+    await hass.async_block_till_done()
+    assert hass.states.get("number.current_limit").state == "20.0"
+
+    with pytest.raises(ValueError, match="Number value"):
+        await async_virtual_set_state_service(
+            hass,
+            SimpleNamespace(data={
+                ATTR_ENTITY_ID: ["number.current_limit"],
+                ATTR_VALUE: "not-a-number",
+            }),
+        )
     await hass.async_block_till_done()
     assert hass.states.get("number.current_limit").state == "20.0"
 
@@ -3141,6 +3199,150 @@ async def test_entity_registry_rename_is_restored_to_configured_id(
     assert entity_registry.async_get("sensor.renamed_by_user") is None
 
 
+async def test_stale_entity_id_guard_task_cannot_override_reconfigured_id(hass):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "guard-race"},
+    )
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "sensor",
+        COMPONENT_DOMAIN,
+        "guard-race-unique",
+        suggested_object_id="old_guard_id",
+        config_entry=entry,
+    )
+    old_entities = {
+        "sensor": [{
+            ATTR_UNIQUE_ID: "guard-race-unique",
+            ATTR_ENTITY_ID: "sensor.old_guard_id",
+        }],
+    }
+    new_entities = {
+        "sensor": [{
+            ATTR_UNIQUE_ID: "guard-race-unique",
+            ATTR_ENTITY_ID: "sensor.new_guard_id",
+        }],
+    }
+    _async_setup_entity_id_guard(hass, entry, old_entities)
+    pending = []
+    with patch.object(
+        hass,
+        "async_create_task",
+        side_effect=lambda coro: pending.append(coro),
+    ):
+        registry.async_update_entity(
+            "sensor.old_guard_id",
+            new_entity_id="sensor.new_guard_id",
+        )
+
+    assert len(pending) == 1
+    _async_remove_entity_id_guard(hass, entry.entry_id)
+    _async_setup_entity_id_guard(hass, entry, new_entities)
+    await pending[0]
+
+    assert registry.async_get("sensor.new_guard_id") is not None
+    assert registry.async_get("sensor.old_guard_id") is None
+
+
+async def test_stale_device_metadata_guard_task_cannot_override_new_config(hass):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "device-guard-race"},
+    )
+    entry.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    device = registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(COMPONENT_DOMAIN, "guard-device")},
+        name="Guard Device",
+        manufacturer="Old Manufacturer",
+    )
+    old_devices = [{
+        ATTR_DEVICE_ID: "guard-device",
+        CONF_NAME: "Guard Device",
+        CONF_MANUFACTURER: "Old Manufacturer",
+    }]
+    new_devices = [{
+        ATTR_DEVICE_ID: "guard-device",
+        CONF_NAME: "Guard Device",
+        CONF_MANUFACTURER: "New Manufacturer",
+    }]
+    _async_setup_device_metadata_guard(hass, entry, old_devices)
+    pending = []
+    with patch.object(
+        hass,
+        "async_create_task",
+        side_effect=lambda coro: pending.append(coro),
+    ):
+        registry.async_update_device(device.id, manufacturer="External Edit")
+
+    assert len(pending) == 1
+    _async_remove_device_metadata_guard(hass, entry.entry_id)
+    registry.async_update_device(device.id, manufacturer="New Manufacturer")
+    _async_setup_device_metadata_guard(hass, entry, new_devices)
+    await pending[0]
+
+    assert registry.async_get(device.id).manufacturer == "New Manufacturer"
+
+
+async def test_shared_device_metadata_guards_converge_without_update_loop(hass):
+    entries = [
+        MockConfigEntry(
+            domain=COMPONENT_DOMAIN,
+            data={ATTR_GROUP_NAME: f"shared-{index}"},
+        )
+        for index in range(2)
+    ]
+    for entry in entries:
+        entry.add_to_hass(hass)
+
+    registry = dr.async_get(hass)
+    device = registry.async_get_or_create(
+        config_entry_id=entries[0].entry_id,
+        identifiers={(COMPONENT_DOMAIN, "shared-guard-device")},
+        name="Shared Guard Device",
+    )
+    registry.async_update_device(
+        device.id,
+        add_config_entry_id=entries[1].entry_id,
+    )
+    configured_manufacturers = {
+        entries[0].entry_id: "Manufacturer A",
+        entries[1].entry_id: "Manufacturer B",
+    }
+    for entry in entries:
+        _async_setup_device_metadata_guard(hass, entry, [{
+            ATTR_DEVICE_ID: "shared-guard-device",
+            CONF_NAME: "Shared Guard Device",
+            CONF_MANUFACTURER: configured_manufacturers[entry.entry_id],
+        }])
+
+    pending = []
+    with patch.object(
+        hass,
+        "async_create_task",
+        side_effect=lambda coro: pending.append(coro),
+    ):
+        registry.async_update_device(device.id, manufacturer="External Edit")
+        processed = 0
+        while pending and processed < 20:
+            await pending.pop(0)
+            processed += 1
+
+    for coroutine in pending:
+        coroutine.close()
+    for entry in entries:
+        _async_remove_device_metadata_guard(hass, entry.entry_id)
+
+    assert not pending
+    owner_entry_id = min(entry.entry_id for entry in entries)
+    assert registry.async_get(device.id).manufacturer == configured_manufacturers[
+        owner_entry_id
+    ]
+
+
 async def test_setup_entry_removes_orphaned_entity_and_device_registry_entries(hass, tmp_path, monkeypatch):
     meta_file = tmp_path / "virtual_layer.meta.json"
     meta_file.write_text(json.dumps({
@@ -3723,6 +3925,92 @@ async def test_state_only_virtual_entities_can_be_updated_with_services(hass):
     assert "source" not in state.attributes
 
 
+def test_state_only_invalid_templates_keep_current_values(hass):
+    entity = {
+        ATTR_ENTITY_ID: "tag.template_availability",
+        CONF_AVAILABILITY_TEMPLATE: "{{ 'not-a-boolean' }}",
+        CONF_NATIVE_TEMPLATES: {
+            "supported_features": "{{ true }}",
+            "latitude": "{{ true }}",
+            "longitude": "{{ false }}",
+            "confidence": "{{ true }}",
+        },
+    }
+    hass.states.async_set(
+        entity[ATTR_ENTITY_ID],
+        "ready",
+        {
+            ATTR_AVAILABLE: True,
+            "supported_features": 8,
+            "latitude": 37.5,
+            "longitude": 127.0,
+            "confidence": 75,
+        },
+    )
+
+    _async_apply_state_only_templates(hass, entity)
+
+    state = hass.states.get(entity[ATTR_ENTITY_ID])
+    assert state.attributes[ATTR_AVAILABLE] is True
+    assert state.attributes["supported_features"] == 8
+    assert state.attributes["latitude"] == 37.5
+    assert state.attributes["longitude"] == 127.0
+    assert state.attributes["confidence"] == 75
+
+    _async_apply_state_only_event_hook(
+        hass,
+        entity,
+        {CONF_AVAILABILITY_TEMPLATE: "{{ 'not-a-boolean' }}"},
+        SimpleNamespace(data={}),
+    )
+
+    assert hass.states.get(entity[ATTR_ENTITY_ID]).attributes[ATTR_AVAILABLE] is True
+
+
+async def test_state_only_reload_falls_back_from_unavailable_state(
+    hass,
+    tmp_path,
+    monkeypatch,
+):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {"Tags": [{
+            "platform": "tag",
+            "name": "Persistent Tag",
+            ATTR_ENTITY_ID: "tag.persistent_tag",
+            CONF_INITIAL_VALUE: "configured",
+            CONF_PERSISTENT: True,
+        }]}},
+    )
+    entry.add_to_hass(hass)
+
+    with patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        AsyncMock(return_value=True),
+    ):
+        assert await async_setup_entry(hass, entry) is True
+
+    state = hass.states.get("tag.persistent_tag")
+    hass.states.async_set(state.entity_id, "unavailable", state.attributes)
+    assert await async_unload_entry(hass, entry) is True
+
+    with patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        AsyncMock(return_value=True),
+    ):
+        assert await async_setup_entry(hass, entry) is True
+
+    assert hass.states.get("tag.persistent_tag").state == "configured"
+
+
 async def test_state_only_entities_honor_persistent_setting_across_reload(
     hass,
     tmp_path,
@@ -4174,7 +4462,11 @@ async def test_custom_event_bus_hook_filters_and_updates_virtual_entity(hass):
     await entity.async_will_remove_from_hass()
 
 
-async def test_custom_hooks_ignore_damaged_sources_and_non_finite_debounce(hass):
+@pytest.mark.parametrize("invalid_debounce", ["Infinity", True])
+async def test_custom_hooks_ignore_damaged_sources_and_invalid_debounce(
+    hass,
+    invalid_debounce,
+):
     config = {
         CONF_NAME: "Recovered Hook Sensor",
         ATTR_ENTITY_ID: "sensor.recovered_hook_sensor",
@@ -4192,7 +4484,7 @@ async def test_custom_hooks_ignore_damaged_sources_and_non_finite_debounce(hass)
             {
                 "trigger": "event",
                 "event_type": "virtual_layer_recovered_update",
-                "debounce": "Infinity",
+                "debounce": invalid_debounce,
                 CONF_VALUE_TEMPLATE: "{{ trigger.data.value }}",
             },
         ],

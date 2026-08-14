@@ -30,7 +30,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, virtual_schema
+from .entity import VirtualEntity, number_float, virtual_schema
 from .humidifier_options import migrate_legacy_humidifier_attributes
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,13 +86,13 @@ BASE_SCHEMA = virtual_schema(
         vol.Optional(
             CONF_CLASS, default=HumidifierDeviceClass.HUMIDIFIER
         ): _as_device_class,
-        vol.Optional(CONF_CURRENT_HUMIDITY): vol.Coerce(float),
-        vol.Optional(CONF_MAX_HUMIDITY, default=100): vol.Coerce(float),
-        vol.Optional(CONF_MIN_HUMIDITY, default=0): vol.Coerce(float),
+        vol.Optional(CONF_CURRENT_HUMIDITY): number_float,
+        vol.Optional(CONF_MAX_HUMIDITY, default=100): number_float,
+        vol.Optional(CONF_MIN_HUMIDITY, default=0): number_float,
         vol.Optional(CONF_MODE): cv.string,
         vol.Optional(CONF_MODES, default=list): vol.All(cv.ensure_list, [cv.string]),
-        vol.Optional(CONF_TARGET_HUMIDITY): vol.Coerce(float),
-        vol.Optional(CONF_TARGET_HUMIDITY_STEP): vol.Coerce(float),
+        vol.Optional(CONF_TARGET_HUMIDITY): number_float,
+        vol.Optional(CONF_TARGET_HUMIDITY_STEP): number_float,
     },
 )
 
@@ -215,7 +215,8 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        self._attr_is_on = state.state.lower() == STATE_ON
+        restored = self._restored_state_value(state, config)
+        self._attr_is_on = str(restored).lower() == STATE_ON
         self._attr_action = _as_action(
             state.attributes.get(CONF_ACTION, config.get(CONF_ACTION))
         )
@@ -249,7 +250,7 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         )
 
     def _bounded_humidity(self, humidity):
-        if humidity is None:
+        if humidity is None or isinstance(humidity, bool):
             return None
         try:
             humidity = float(humidity)
@@ -373,7 +374,7 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         self.async_write_ha_state()
 
     def set_state(self, value) -> None:
-        self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]
+        self._attr_is_on = self._template_to_bool(value)
         if not self._attr_is_on:
             self._attr_action = HumidifierAction.OFF
         elif self._attr_action in {None, HumidifierAction.OFF}:

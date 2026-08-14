@@ -45,7 +45,7 @@ from .climate_options import (
     migrate_legacy_climate_attributes,
 )
 from .const import *
-from .entity import VirtualEntity
+from .entity import VirtualEntity, nonnegative_int, positive_tick
 from .fan_options import (
     FAN_FORM_FIELDS,
     FAN_MODE_LIST_FIELD,
@@ -1300,7 +1300,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         ): MULTILINE_TEXT_SELECTOR,
         vol.Optional(
             CONF_PULL_INTERVAL, default=defaults.get(CONF_PULL_INTERVAL, 0)
-        ): vol.All(vol.Coerce(int), vol.Range(min=0)),
+        ): nonnegative_int,
         vol.Optional(
             CONF_VALUE_TEMPLATE, default=defaults.get(CONF_VALUE_TEMPLATE, "")
         ): TEMPLATE_SELECTOR,
@@ -1337,7 +1337,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 vol.Optional(
                     CONF_POLYGON_DISTANCE_INPUT,
                     default=defaults.get(CONF_POLYGON_DISTANCE_INPUT, 300),
-                ): vol.All(vol.Coerce(float), vol.Range(min=1)),
+                ): vol.All(positive_tick, vol.Range(min=1)),
                 vol.Optional(
                     CONF_POLYGON_TRACKER_RULES_JSON,
                     default=defaults.get(CONF_POLYGON_TRACKER_RULES_JSON, ""),
@@ -1746,6 +1746,8 @@ def _parse_event_hooks(value: str) -> list[dict[str, Any]]:
 
         if "debounce" in next_hook:
             try:
+                if isinstance(next_hook["debounce"], bool):
+                    raise TypeError
                 debounce = float(next_hook["debounce"])
             except (TypeError, ValueError, OverflowError) as err:
                 raise InvalidJson(CONF_EVENT_HOOKS_JSON) from err
@@ -2509,6 +2511,8 @@ def _boolean_default(value: Any, default: bool) -> bool:
 
 
 def _nonnegative_int_default(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
     try:
         value = int(value)
     except (TypeError, ValueError, OverflowError):
@@ -2517,6 +2521,8 @@ def _nonnegative_int_default(value: Any) -> int:
 
 
 def _positive_float_default(value: Any, default: float) -> float:
+    if isinstance(value, bool):
+        return default
     try:
         value = float(value)
     except (TypeError, ValueError, OverflowError):

@@ -38,7 +38,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, virtual_schema
+from .entity import VirtualEntity, nonnegative_int, virtual_schema
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ BASE_SCHEMA = virtual_schema(DEFAULT_LIGHT_VALUE, {
         default=lambda: list(DEFAULT_INITIAL_COLOR),
     ): cv.ensure_list,
     vol.Optional(CONF_SUPPORT_COLOR_TEMP, default=DEFAULT_SUPPORT_COLOR_TEMP): cv.boolean,
-    vol.Optional(CONF_INITIAL_COLOR_TEMP, default=DEFAULT_INITIAL_COLOR_TEMP): cv.positive_int,
+    vol.Optional(CONF_INITIAL_COLOR_TEMP, default=DEFAULT_INITIAL_COLOR_TEMP): nonnegative_int,
     vol.Optional(CONF_SUPPORT_WHITE_VALUE, default=DEFAULT_SUPPORT_WHITE_VALUE): cv.boolean,
     vol.Optional(CONF_INITIAL_WHITE_VALUE, default=DEFAULT_INITIAL_WHITE_VALUE): cv.byte,
     vol.Optional(CONF_SUPPORT_EFFECT, default=DEFAULT_SUPPORT_EFFECT): cv.boolean,
@@ -311,8 +311,8 @@ class VirtualLight(VirtualEntity, LightEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-
-        self._attr_is_on = state.state.lower() == STATE_ON
+        restored = self._restored_state_value(state, config)
+        self._attr_is_on = str(restored).lower() == STATE_ON
 
         try:
             restored_color_mode = ColorMode(
@@ -618,5 +618,5 @@ class VirtualLight(VirtualEntity, LightEntity):
             self._attr_supported_features |= LightEntityFeature.EFFECT
 
     def set_state(self, value) -> None:
-        self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]
+        self._attr_is_on = self._template_to_bool(value)
         self._update_attributes()

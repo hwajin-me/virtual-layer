@@ -12,6 +12,10 @@ from homeassistant.components.vacuum import (
 )
 from homeassistant.const import ATTR_ENTITY_ID
 
+from custom_components.virtual_layer.binary_sensor import (
+    BINARY_SENSOR_SCHEMA,
+    VirtualBinarySensor,
+)
 from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
 from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClimate
 from custom_components.virtual_layer.const import (
@@ -29,7 +33,13 @@ from custom_components.virtual_layer.humidifier import (
 )
 from custom_components.virtual_layer.light import LIGHT_SCHEMA, VirtualLight
 from custom_components.virtual_layer.lock import LOCK_SCHEMA, VirtualLock
+from custom_components.virtual_layer.remote import (
+    ENTITY_CLASS as VirtualRemote,
+)
+from custom_components.virtual_layer.remote import ENTITY_SCHEMA as REMOTE_SCHEMA
 from custom_components.virtual_layer.sensor import SENSOR_SCHEMA, VirtualSensor
+from custom_components.virtual_layer.siren import ENTITY_CLASS as VirtualSiren
+from custom_components.virtual_layer.siren import ENTITY_SCHEMA as SIREN_SCHEMA
 from custom_components.virtual_layer.switch import SWITCH_SCHEMA, VirtualSwitch
 from custom_components.virtual_layer.vacuum import VACUUM_SCHEMA, VirtualVacuum
 
@@ -180,6 +190,61 @@ def test_virtual_camera_normalizes_restored_boolean_attributes():
     assert entity.is_recording is False
     assert entity.is_streaming is True
     assert entity.motion_detection_enabled is True
+
+
+@pytest.mark.parametrize(
+    "entity",
+    [
+        VirtualBinarySensor(
+            _config(BINARY_SENSOR_SCHEMA, "binary_sensor.restore_on", "on"),
+            False,
+        ),
+        VirtualSwitch(_config(SWITCH_SCHEMA, "switch.restore_on", "on"), False),
+        VirtualFan(_config(FAN_SCHEMA, "fan.restore_on", "on"), False),
+        VirtualHumidifier(
+            _config(HUMIDIFIER_SCHEMA, "humidifier.restore_on", "on"),
+            False,
+        ),
+        VirtualLight(_config(LIGHT_SCHEMA, "light.restore_on", "on"), False),
+        VirtualSiren(_config(SIREN_SCHEMA, "siren.restore_on", "on"), False),
+        VirtualRemote(_config(REMOTE_SCHEMA, "remote.restore_on", "on"), False),
+    ],
+)
+def test_power_entities_restore_configured_state_after_unavailable(entity):
+    entity._restore_state(
+        SimpleNamespace(state="unavailable", attributes={"available": False}),
+        entity._config,
+    )
+
+    assert entity.is_on is True
+
+
+@pytest.mark.parametrize(
+    "entity",
+    [
+        VirtualBinarySensor(
+            _config(BINARY_SENSOR_SCHEMA, "binary_sensor.reject_bad", "on"),
+            False,
+        ),
+        VirtualSwitch(_config(SWITCH_SCHEMA, "switch.reject_bad", "on"), False),
+        VirtualFan(_config(FAN_SCHEMA, "fan.reject_bad", "on"), False),
+        VirtualHumidifier(
+            _config(HUMIDIFIER_SCHEMA, "humidifier.reject_bad", "on"),
+            False,
+        ),
+        VirtualLight(_config(LIGHT_SCHEMA, "light.reject_bad", "on"), False),
+        VirtualCamera(_config(CAMERA_SCHEMA, "camera.reject_bad", "on"), False),
+        VirtualSiren(_config(SIREN_SCHEMA, "siren.reject_bad", "on"), False),
+        VirtualRemote(_config(REMOTE_SCHEMA, "remote.reject_bad", "on"), False),
+    ],
+)
+def test_power_entities_reject_invalid_state_without_turning_off(entity):
+    entity._create_state(entity._config)
+
+    with pytest.raises(ValueError):
+        entity.set_state("definitely-not-a-power-state")
+
+    assert entity.is_on is True
 
 
 @pytest.mark.parametrize(("restored", "expected"), [(65, 65), ("invalid", None)])

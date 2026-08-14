@@ -29,7 +29,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, virtual_schema
+from .entity import VirtualEntity, nonnegative_int, virtual_schema
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -148,7 +148,7 @@ def validate_domain_options(config) -> None:
 
 BASE_SCHEMA = virtual_schema(DEFAULT_VACUUM_VALUE, {
     vol.Optional(CONF_ACTIVITY): vol.Any(cv.string, _as_activity),
-    vol.Optional(CONF_BATTERY_LEVEL): vol.Coerce(int),
+    vol.Optional(CONF_BATTERY_LEVEL): vol.All(nonnegative_int, vol.Range(max=100)),
     vol.Optional(CONF_FAN_SPEED): cv.string,
     vol.Optional(CONF_FAN_SPEED_LIST, default=list): vol.All(cv.ensure_list, [cv.string]),
     vol.Optional(CONF_SUPPORTED_FEATURES): _as_supported_features,

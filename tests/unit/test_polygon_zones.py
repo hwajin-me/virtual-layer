@@ -137,12 +137,19 @@ def test_polygon_map_svg_aligns_date_line_features_and_renders_safe_markers():
         ],
     })
 
-    svg = render_polygon_map_svg(zones, markers=[{
-        "entity_id": 'device_tracker.phone"unsafe',
-        "label": "Phone <A>",
-        "latitude": 0.5,
-        "longitude": -179.5,
-    }])
+    svg = render_polygon_map_svg(zones, markers=[
+        {
+            "entity_id": 'device_tracker.phone"unsafe',
+            "label": "Phone <A>",
+            "latitude": 0.5,
+            "longitude": -179.5,
+        },
+        {
+            "entity_id": "device_tracker.boolean",
+            "latitude": True,
+            "longitude": False,
+        },
+    ])
 
     polygon_paths = re.findall(r'<path d="([^"]+)" fill=', svg)
     path_widths = []
@@ -151,7 +158,7 @@ def test_polygon_map_svg_aligns_date_line_features_and_renders_safe_markers():
         x_values = coordinates[::2]
         path_widths.append(max(x_values) - min(x_values))
     assert min(path_widths) > 100
-    assert '<circle cx=' in svg
+    assert svg.count('<circle cx=') == 1
     assert 'data-entity-id="device_tracker.phone&quot;unsafe"' in svg
     assert "Phone &lt;A&gt;" in svg
 
@@ -171,6 +178,8 @@ def test_polygon_map_svg_rejects_invalid_dimensions(width, height):
         (_feature("Line", [], geometry_type="LineString"), None),
         (_feature("", [SEOUL_OUTER]), None),
         (_feature("Bad", [[[181, 37], [127, 37], [127, 38]]]), None),
+        (_feature("Boolean", [[[True, 37], [127, 37], [127, 38]]]), "numeric"),
+        (_feature("Boolean priority", [SEOUL_OUTER], priority=True), "priority"),
         (
             _feature(
                 "Not A Number",
@@ -268,7 +277,34 @@ def test_polygon_crossing_the_date_line_is_detected():
     assert find_polygon_zone(10.0, 0.0, 0, zones) is None
 
 
-def test_polygon_domain_options_validate_rules_and_survive_invalid_stored_data():
+@pytest.mark.parametrize(
+    "invalid_options",
+    [
+        {
+            CONF_POLYGON_GEOJSON: GEOJSON,
+            CONF_POLYGON_TRACKER_RULES: {
+                "device_tracker.phone": {"weight": 0},
+            },
+        },
+        {
+            CONF_POLYGON_GEOJSON: GEOJSON,
+            "distance_threshold_meters": float("nan"),
+        },
+        {
+            CONF_POLYGON_GEOJSON: GEOJSON,
+            "distance_threshold_meters": True,
+        },
+        {
+            CONF_POLYGON_GEOJSON: GEOJSON,
+            CONF_POLYGON_TRACKER_RULES: {
+                "device_tracker.phone": {"weight": True},
+            },
+        },
+    ],
+)
+def test_polygon_domain_options_validate_rules_and_survive_invalid_stored_data(
+    invalid_options,
+):
     valid = {
         CONF_POLYGON_GEOJSON: GEOJSON,
         CONF_POLYGON_TRACKER_RULES: {
@@ -283,27 +319,15 @@ def test_polygon_domain_options_validate_rules_and_survive_invalid_stored_data()
     validate_domain_options({CONF_POLYGONAL_ZONE: valid})
 
     with pytest.raises(vol.Invalid):
-        validate_domain_options({
-            CONF_POLYGONAL_ZONE: {
-                CONF_POLYGON_GEOJSON: GEOJSON,
-                CONF_POLYGON_TRACKER_RULES: {
-                    "device_tracker.phone": {"weight": 0},
-                },
-            },
-        })
-
-    with pytest.raises(vol.Invalid):
-        validate_domain_options({
-            CONF_POLYGONAL_ZONE: {
-                CONF_POLYGON_GEOJSON: GEOJSON,
-                "distance_threshold_meters": float("nan"),
-            },
-        })
+        validate_domain_options({CONF_POLYGONAL_ZONE: invalid_options})
 
     assert VirtualDeviceTracker._normalize_polygon_config({"broken": True}) is None
     assert VirtualDeviceTracker._normalize_polygon_config(valid) is not None
     assert VirtualDeviceTracker._normalize_location_helper({
         "distance_threshold_meters": float("nan"),
+    }) is None
+    assert VirtualDeviceTracker._normalize_location_helper({
+        "priority_window_seconds": True,
     }) is None
 
 

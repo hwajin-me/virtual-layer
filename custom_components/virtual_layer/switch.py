@@ -86,8 +86,8 @@ class VirtualSwitch(VirtualEntity, SwitchEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-
-        self._attr_is_on = state.state.lower() == STATE_ON
+        restored = self._restored_state_value(state, config)
+        self._attr_is_on = str(restored).lower() == STATE_ON
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -108,7 +108,7 @@ class VirtualSwitch(VirtualEntity, SwitchEntity):
         self.async_write_ha_state()
 
     def set_state(self, value) -> None:
-        self._attr_is_on = str(value).lower() in ["y", "yes", "t", "true", "on", "1"]
+        self._attr_is_on = self._template_to_bool(value)
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name == "device_class":

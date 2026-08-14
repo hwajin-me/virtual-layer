@@ -232,7 +232,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         super()._restore_state(state, config)
 
         self._attr_native_value = self._safe_native_value(
-            state.state,
+            self._restored_state_value(state, config),
             config.get(CONF_INITIAL_VALUE),
         )
         self._attr_state = self._attr_native_value

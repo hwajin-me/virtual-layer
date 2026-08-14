@@ -35,7 +35,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import get_entity_configs
 from .climate_options import migrate_legacy_climate_attributes
 from .const import *
-from .entity import VirtualEntity, virtual_schema
+from .entity import VirtualEntity, number_float, virtual_schema
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -138,8 +138,8 @@ def _valid_mode_choice(restored, configured, available_modes):
 BASE_SCHEMA = virtual_schema(
     DEFAULT_CLIMATE_VALUE,
     {
-        vol.Optional(CONF_CURRENT_HUMIDITY): vol.Coerce(float),
-        vol.Optional(CONF_CURRENT_TEMPERATURE): vol.Coerce(float),
+        vol.Optional(CONF_CURRENT_HUMIDITY): number_float,
+        vol.Optional(CONF_CURRENT_TEMPERATURE): number_float,
         vol.Optional(CONF_FAN_MODE): cv.string,
         vol.Optional(CONF_FAN_MODES, default=list): vol.All(
             cv.ensure_list, [cv.string]
@@ -148,10 +148,10 @@ BASE_SCHEMA = virtual_schema(
         vol.Optional(CONF_HVAC_MODES, default=lambda: DEFAULT_HVAC_MODES): vol.All(
             cv.ensure_list, [_as_hvac_mode]
         ),
-        vol.Optional(CONF_MAX_HUMIDITY, default=99): vol.Coerce(float),
-        vol.Optional(CONF_MAX_TEMP, default=35): vol.Coerce(float),
-        vol.Optional(CONF_MIN_HUMIDITY, default=30): vol.Coerce(float),
-        vol.Optional(CONF_MIN_TEMP, default=7): vol.Coerce(float),
+        vol.Optional(CONF_MAX_HUMIDITY, default=99): number_float,
+        vol.Optional(CONF_MAX_TEMP, default=35): number_float,
+        vol.Optional(CONF_MIN_HUMIDITY, default=30): number_float,
+        vol.Optional(CONF_MIN_TEMP, default=7): number_float,
         vol.Optional(CONF_PRESET_MODE): cv.string,
         vol.Optional(CONF_PRESET_MODES, default=list): vol.All(
             cv.ensure_list, [cv.string]
@@ -164,14 +164,14 @@ BASE_SCHEMA = virtual_schema(
         vol.Optional(CONF_SWING_HORIZONTAL_MODES, default=list): vol.All(
             cv.ensure_list, [cv.string]
         ),
-        vol.Optional(CONF_TARGET_HUMIDITY): vol.Coerce(float),
-        vol.Optional(CONF_TARGET_HUMIDITY_STEP): vol.Coerce(float),
-        vol.Optional(CONF_TARGET_TEMPERATURE): vol.Coerce(float),
-        vol.Optional(CONF_TARGET_TEMPERATURE_HIGH): vol.Coerce(float),
-        vol.Optional(CONF_TARGET_TEMPERATURE_LOW): vol.Coerce(float),
+        vol.Optional(CONF_TARGET_HUMIDITY): number_float,
+        vol.Optional(CONF_TARGET_HUMIDITY_STEP): number_float,
+        vol.Optional(CONF_TARGET_TEMPERATURE): number_float,
+        vol.Optional(CONF_TARGET_TEMPERATURE_HIGH): number_float,
+        vol.Optional(CONF_TARGET_TEMPERATURE_LOW): number_float,
         vol.Optional(
             CONF_TARGET_TEMPERATURE_STEP, default=PRECISION_TENTHS
-        ): vol.Coerce(float),
+        ): number_float,
         vol.Optional(
             CONF_TEMPERATURE_UNIT, default=UnitOfTemperature.CELSIUS
         ): cv.string,
@@ -413,10 +413,15 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        restored_mode = _safe_hvac_mode(state.state)
+        restored_mode = _safe_hvac_mode(
+            self._restored_state_value(state, config),
+        )
+        configured_mode = _safe_hvac_mode(config.get(CONF_INITIAL_VALUE))
         self._attr_hvac_mode = (
             restored_mode
             if restored_mode in self._attr_hvac_modes
+            else configured_mode
+            if configured_mode in self._attr_hvac_modes
             else self._default_hvac_mode()
         )
         self._attr_hvac_action = _as_hvac_action(
@@ -651,7 +656,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         return HVACMode.OFF
 
     def _bounded_temperature(self, temperature):
-        if temperature is None:
+        if temperature is None or isinstance(temperature, bool):
             return None
         try:
             temperature = float(temperature)
@@ -662,7 +667,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         return max(self._attr_min_temp, min(self._attr_max_temp, temperature))
 
     def _bounded_humidity(self, humidity):
-        if humidity is None:
+        if humidity is None or isinstance(humidity, bool):
             return None
         try:
             humidity = float(humidity)

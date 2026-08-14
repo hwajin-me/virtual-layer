@@ -51,7 +51,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, virtual_schema
+from .entity import VirtualEntity, number_float, virtual_schema
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,17 +87,17 @@ def validate_domain_options(config) -> None:
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(virtual_schema(DEFAULT_NUMBER_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
-    vol.Required(CONF_MIN): vol.Coerce(float),
-    vol.Required(CONF_MAX): vol.Coerce(float),
-    vol.Optional(ATTR_STEP, default=DEFAULT_STEP): vol.Coerce(float),
+    vol.Required(CONF_MIN): number_float,
+    vol.Required(CONF_MAX): number_float,
+    vol.Optional(ATTR_STEP, default=DEFAULT_STEP): number_float,
     vol.Optional(CONF_MODE, default=NumberMode.AUTO): _as_number_mode,
     vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
 }))
 NUMBER_SCHEMA = vol.Schema(virtual_schema(DEFAULT_NUMBER_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
-    vol.Required(CONF_MIN): vol.Coerce(float),
-    vol.Required(CONF_MAX): vol.Coerce(float),
-    vol.Optional(ATTR_STEP, default=DEFAULT_STEP): vol.Coerce(float),
+    vol.Required(CONF_MIN): number_float,
+    vol.Required(CONF_MAX): number_float,
+    vol.Optional(ATTR_STEP, default=DEFAULT_STEP): number_float,
     vol.Optional(CONF_MODE, default=NumberMode.AUTO): _as_number_mode,
     vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
 }))
@@ -262,6 +262,14 @@ class VirtualNumber(VirtualEntity, NumberEntity):
 
     def set(self, value) -> None:
         _LOGGER.debug("Setting native value for %s", self.entity_id)
+        if isinstance(value, bool):
+            raise ValueError("Number value must be numeric")
+        try:
+            value = float(value)
+        except (TypeError, ValueError, OverflowError) as err:
+            raise ValueError("Number value must be numeric") from err
+        if not math.isfinite(value):
+            raise ValueError("Number value must be finite")
         self._attr_native_value = self._normalize_value(value, self.native_value)
         self.async_schedule_update_ha_state()
 

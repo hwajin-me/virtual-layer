@@ -22,6 +22,7 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ICON,
     STATE_CLOSED,
+    STATE_UNAVAILABLE,
 )
 from homeassistant.core import Context, callback
 from homeassistant.helpers.entity import DeviceInfo
@@ -48,7 +49,34 @@ _COMMAND_ACTION_CHAIN: ContextVar[frozenset[tuple[int, str]]] = ContextVar(
     default=frozenset(),
 )
 
-positive_tick = vol.All(vol.Coerce(float), vol.Range(min=0, min_included=False))
+def nonnegative_int(value) -> int:
+    """Coerce a non-negative integer without accepting booleans as numbers."""
+    if isinstance(value, bool):
+        raise vol.Invalid("value must be a non-negative integer")
+    return cv.positive_int(value)
+
+
+def number_float(value) -> float:
+    """Coerce a number without accepting booleans as 0/1."""
+    if isinstance(value, bool):
+        raise vol.Invalid("value must be a number")
+    try:
+        return float(value)
+    except (TypeError, ValueError, OverflowError) as err:
+        raise vol.Invalid("value must be a number") from err
+
+
+def finite_float(value) -> float:
+    """Coerce a finite number without accepting booleans as 0/1."""
+    value = number_float(value)
+    if not math.isfinite(value):
+        raise vol.Invalid("value must be a finite number")
+    return value
+
+
+def positive_tick(value) -> float:
+    """Coerce a positive timer interval without accepting booleans."""
+    return vol.All(finite_float, vol.Range(min=0, min_included=False))(value)
 
 
 def allowed_local_path(hass, file_name: str) -> str | None:
@@ -85,7 +113,7 @@ def virtual_schema(default_initial_value: str, extra_attrs):
         vol.Optional(CONF_AVAILABILITY_TEMPLATE): cv.template,
         vol.Optional(CONF_EVENT_HOOKS, default=list): vol.All(cv.ensure_list, [dict]),
         vol.Optional(CONF_PERSISTENT, default=DEFAULT_PERSISTENT): cv.boolean,
-        vol.Optional(CONF_PULL_INTERVAL, default=0): vol.All(vol.Coerce(int), vol.Range(min=0)),
+        vol.Optional(CONF_PULL_INTERVAL, default=0): nonnegative_int,
         vol.Optional(CONF_SOURCE_ENTITIES, default=list): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional(CONF_TEMPLATE_SOURCES, default=dict): dict,
         vol.Optional(CONF_VALUE_TEMPLATE): cv.template,
@@ -373,6 +401,14 @@ class VirtualEntity(RestoreEntity):
     def set_state(self, value) -> None:
         raise NotImplementedError
 
+    @staticmethod
+    def _restored_state_value(state, config):
+        """Return the configured value when HA only restored an unavailable state."""
+        value = state.state
+        if str(value).strip().lower() == STATE_UNAVAILABLE:
+            return config.get(CONF_INITIAL_VALUE)
+        return value
+
     @callback
     def _setup_templates(self):
         source_entities = set(self._source_entities)
@@ -536,6 +572,8 @@ class VirtualEntity(RestoreEntity):
     @callback
     def _schedule_event_hook(self, index: int, hook, event):
         try:
+            if isinstance(hook.get("debounce", 0), bool):
+                raise TypeError
             delay = float(hook.get("debounce", 0) or 0)
         except (TypeError, ValueError, OverflowError):
             delay = 0
@@ -841,8 +879,14 @@ class VirtualEntity(RestoreEntity):
         return variables
 
     def _template_to_bool(self, value) -> bool:
+        if isinstance(value, bool):
+            return value
         value = str(value).strip().lower()
-        return value in ["y", "yes", "t", "true", "on", "1"]
+        if value in {"y", "yes", "t", "true", "on", "1"}:
+            return True
+        if value in {"n", "no", "f", "false", "off", "0"}:
+            return False
+        raise ValueError(f"Expected a boolean, got {value!r}")
 
     @callback
     def _apply_templates(self):
@@ -1066,19 +1110,23 @@ class VirtualOpenableEntity(VirtualEntity):
 
         # Cover and valve use the same position state. If this changes we will
         # need to add this into the derived class.
-        self._attr_is_closed = state.state.lower() == STATE_CLOSED
+        restored_state = self._restored_state_value(state, config)
+        self._attr_is_closed = str(restored_state).lower() == STATE_CLOSED
         fallback_position = 0.0 if self._attr_is_closed else 100.0
         restored_position = state.attributes.get(
             ATTR_CURRENT_POSITION,
             fallback_position,
         )
         try:
+            if isinstance(restored_position, bool):
+                raise TypeError
             restored_position = float(restored_position)
         except (TypeError, ValueError, OverflowError):
             restored_position = fallback_position
         if not isfinite(restored_position):
             restored_position = fallback_position
         self._current_position = max(0.0, min(100.0, restored_position))
+        self._attr_is_closed = self._current_position == 0
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -1122,9 +1170,18 @@ class VirtualOpenableEntity(VirtualEntity):
     def _set_position(self, position: int) -> None:
         _LOGGER.debug(f"setting {self.name} position {position}")
 
-        self._cancel_timer()
+        # Validate before changing an active transition. The generic
+        # virtual-layer.set_state service accepts text values, so a bad value
+        # must not inadvertently stop a cover or valve that is already moving.
+        if isinstance(position, bool):
+            raise ValueError("position must be an integer")
+        try:
+            position = int(position)
+        except (TypeError, ValueError, OverflowError) as err:
+            raise ValueError("position must be an integer") from err
+        position = max(0, min(100, position))
 
-        position = max(0, min(100, int(position)))
+        self._cancel_timer()
 
         self._target_position = position
 

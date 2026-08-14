@@ -32,7 +32,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, virtual_schema
+from .entity import VirtualEntity, nonnegative_int, virtual_schema
 from .fan_options import migrate_legacy_fan_attributes
 
 _LOGGER = logging.getLogger(__name__)
@@ -55,14 +55,14 @@ BASE_SCHEMA = virtual_schema(
     DEFAULT_FAN_VALUE,
     {
         vol.Optional(CONF_SPEED, default=False): cv.boolean,
-        vol.Optional(CONF_SPEED_COUNT, default=0): cv.positive_int,
+        vol.Optional(CONF_SPEED_COUNT, default=0): nonnegative_int,
         vol.Optional(CONF_OSCILLATE, default=False): cv.boolean,
         vol.Optional(CONF_DIRECTION, default=False): cv.boolean,
         vol.Optional(CONF_MODES, default=list): vol.All(
             cv.ensure_list, [cv.string]
         ),
         vol.Optional(CONF_PERCENTAGE): vol.All(
-            vol.Coerce(int), vol.Range(min=0, max=100)
+            nonnegative_int, vol.Range(max=100)
         ),
         vol.Optional(CONF_PRESET_MODE): cv.string,
         vol.Optional(CONF_CURRENT_DIRECTION): vol.In({"forward", "reverse"}),
@@ -214,7 +214,8 @@ class VirtualFan(VirtualEntity, FanEntity):
         restored_preset_mode = (
             preset_mode if preset_mode in self._attr_preset_modes else None
         )
-        if str(state.state).lower() == "on":
+        restored_state = self._restored_state_value(state, config)
+        if str(restored_state).lower() == "on":
             self._attr_preset_mode = restored_preset_mode
             self._attr_percentage = restored_percentage
             if self._attr_preset_mode is None and not self._attr_percentage:
@@ -316,6 +317,8 @@ class VirtualFan(VirtualEntity, FanEntity):
         self._refresh_supported_features()
 
     def _set_percentage(self, percentage: int) -> None:
+        if isinstance(percentage, bool):
+            raise ValueError("Fan percentage must be between 0 and 100")
         percentage = int(percentage)
         if not 0 <= percentage <= 100:
             raise ValueError("Fan percentage must be between 0 and 100")

@@ -139,6 +139,27 @@ async def test_number_uses_native_state_and_clamps_template_and_service_values()
     assert entity.native_value == 20
 
 
+@pytest.mark.parametrize("value", ["not-a-number", float("nan"), float("inf"), True])
+def test_number_rejects_invalid_runtime_values_without_changing_state(value):
+    config = NUMBER_SCHEMA(
+        {
+            CONF_NAME: "Safe Number",
+            ATTR_ENTITY_ID: "number.safe_number",
+            ATTR_UNIQUE_ID: "safe_number",
+            CONF_INITIAL_VALUE: 12,
+            CONF_MIN: 10,
+            CONF_MAX: 20,
+        }
+    )
+    entity = VirtualNumber(config, False)
+    entity._create_state(config)
+
+    with pytest.raises(ValueError, match="Number value"):
+        entity.set_state(value)
+
+    assert entity.native_value == 12
+
+
 def test_number_supports_step_and_input_mode():
     config = NUMBER_SCHEMA(
         {
@@ -269,6 +290,41 @@ def test_openable_retargeting_current_position_clears_motion_and_timer():
     assert entity.is_opening is False
     assert entity.is_closing is False
     assert entity.is_closed is True
+
+
+@pytest.mark.parametrize("position", ["not-a-position", True])
+def test_openable_rejects_invalid_position_without_stopping_active_motion(position):
+    config = VALVE_SCHEMA(
+        {
+            CONF_NAME: "Timed Valve",
+            ATTR_ENTITY_ID: "valve.timed_valve",
+            ATTR_UNIQUE_ID: "timed_valve",
+            CONF_INITIAL_VALUE: "closed",
+            "open_close_duration": 10,
+            "open_close_tick": 1,
+        }
+    )
+    entity = VirtualValve(config, False)
+    entity.hass = Mock()
+    entity._create_state(config)
+    entity.async_write_ha_state = Mock()
+    entity.async_schedule_update_ha_state = Mock()
+    cancel_timer = Mock()
+
+    with patch(
+        "custom_components.virtual_layer.entity.async_call_later",
+        return_value=cancel_timer,
+    ):
+        entity._set_position(100)
+        cancel_timer.reset_mock()
+
+        with pytest.raises(ValueError, match="position must be an integer"):
+            entity._set_position(position)
+
+    cancel_timer.assert_not_called()
+    assert entity._target_position == 100
+    assert entity.is_opening is True
+    assert entity.is_closing is False
 
 
 @pytest.mark.parametrize(

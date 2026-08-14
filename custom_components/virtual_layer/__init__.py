@@ -17,7 +17,12 @@ import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
 from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, CONF_ICON, CONF_PLATFORM
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_ICON,
+    CONF_PLATFORM,
+    STATE_UNAVAILABLE,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, Unauthorized, UnknownUser
 from homeassistant.helpers.entity import async_generate_entity_id
@@ -194,6 +199,41 @@ def _async_ensure_runtime_data(hass: HomeAssistant) -> None:
     hass.data.setdefault(COMPONENT_SERVICES, {})
 
 
+def _configured_group_name(hass: HomeAssistant, entry: ConfigEntry) -> str:
+    """Return a usable Device group name, repairing damaged entry data once."""
+    configured_group_name = entry.data.get(ATTR_GROUP_NAME)
+    if isinstance(configured_group_name, str):
+        normalized_group_name = configured_group_name.strip()
+        if normalized_group_name:
+            if normalized_group_name != configured_group_name:
+                data = dict(entry.data)
+                data[ATTR_GROUP_NAME] = normalized_group_name
+                hass.config_entries.async_update_entry(
+                    entry,
+                    title=normalized_group_name,
+                    data=data,
+                )
+            return normalized_group_name
+
+    # An entry without a group name used to fail before its options flow could
+    # expose the malformed records for repair or deletion. The entry ID is
+    # stable, unique, and safe to persist as a recovery-only Device name.
+    recovered_group_name = f"recovered_{entry.entry_id}"
+    _LOGGER.warning(
+        "Virtual Layer config entry %s has no valid Device name; recovering it as %s",
+        entry.entry_id,
+        recovered_group_name,
+    )
+    data = dict(entry.data)
+    data[ATTR_GROUP_NAME] = recovered_group_name
+    hass.config_entries.async_update_entry(
+        entry,
+        title=recovered_group_name,
+        data=data,
+    )
+    return recovered_group_name
+
+
 def _runtime_group_name_for_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Find cached group data even when the config entry name has changed."""
     groups = hass.data.get(COMPONENT_DOMAIN, {})
@@ -269,7 +309,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug("Setting up Virtual Layer config entry %s", entry.entry_id)
 
     _async_ensure_runtime_data(hass)
-    configured_group_name = entry.data[ATTR_GROUP_NAME]
+    configured_group_name = _configured_group_name(hass, entry)
     legacy_title = f"{configured_group_name} - {COMPONENT_DOMAIN}"
     if entry.title == legacy_title:
         hass.config_entries.async_update_entry(entry, title=configured_group_name)
@@ -324,13 +364,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Update the component data.
     hass.data[COMPONENT_DOMAIN].update({
-        entry.data[ATTR_GROUP_NAME]: {
+        configured_group_name: {
             ATTR_CONFIG_ENTRY_ID: entry.entry_id,
             ATTR_ENTITIES: vcfg.entities,
             ATTR_DEVICES: vcfg.devices,
         }
     })
-    if previous_group_name != entry.data[ATTR_GROUP_NAME]:
+    if previous_group_name != configured_group_name:
         hass.data[COMPONENT_DOMAIN].pop(previous_group_name, None)
     _LOGGER.debug("Updated runtime data for Device group %s", configured_group_name)
     _async_setup_state_only_entities(hass, entry, vcfg.entities)
@@ -362,7 +402,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    _LOGGER.debug(f"unloading virtual group {entry.data[ATTR_GROUP_NAME]}")
+    _LOGGER.debug("unloading virtual group %s", entry.data.get(ATTR_GROUP_NAME))
     # _LOGGER.debug(f"before hass={hass.data[COMPONENT_DOMAIN]}")
     _runtime_group_name, group_data = _runtime_group_for_entry(hass, entry)
     group_data = group_data or {}
@@ -542,11 +582,17 @@ def _async_setup_entity_id_guard(hass, entry, entities) -> None:
         return
 
     entity_registry = er.async_get(hass)
+    remove_listener = None
 
     async def _async_restore_configured_entity_id(current_entity_id) -> None:
         # Let the entity platform complete its rename first so the old state ID
         # is released before the registry moves the entity back.
         await asyncio.sleep(0)
+        if (
+            hass.data.get(_ENTITY_ID_GUARD_LISTENERS_DATA, {}).get(entry.entry_id)
+            is not remove_listener
+        ):
+            return
         entity_entry = entity_registry.async_get(current_entity_id)
         if (
             entity_entry is None
@@ -581,10 +627,11 @@ def _async_setup_entity_id_guard(hass, entry, entities) -> None:
         )
 
     listeners = hass.data.setdefault(_ENTITY_ID_GUARD_LISTENERS_DATA, {})
-    listeners[entry.entry_id] = hass.bus.async_listen(
+    remove_listener = hass.bus.async_listen(
         er.EVENT_ENTITY_REGISTRY_UPDATED,
         _async_handle_registry_update,
     )
+    listeners[entry.entry_id] = remove_listener
 
 
 @callback
@@ -636,6 +683,17 @@ def _device_registry_updates_for_config(hass, device: Mapping, registry_entry=No
     return updates
 
 
+def _device_metadata_owner_entry_id(hass, registry_entry) -> str | None:
+    """Choose one Virtual Layer entry to guard metadata on a shared Device."""
+    entry_ids = [
+        entry_id
+        for entry_id in registry_entry.config_entries
+        if (config_entry := hass.config_entries.async_get_entry(entry_id)) is not None
+        and config_entry.domain == COMPONENT_DOMAIN
+    ]
+    return min(entry_ids) if entry_ids else None
+
+
 @callback
 def _async_setup_device_metadata_guard(hass, entry, devices) -> None:
     """Keep configured Virtual Layer Device registry metadata aligned."""
@@ -661,11 +719,22 @@ def _async_setup_device_metadata_guard(hass, entry, devices) -> None:
     if not devices_by_registry_id:
         return
 
+    remove_listener = None
+
     async def _async_restore_device_metadata(device_id) -> None:
         await asyncio.sleep(0)
+        if (
+            hass.data.get(_DEVICE_METADATA_GUARD_LISTENERS_DATA, {}).get(
+                entry.entry_id
+            )
+            is not remove_listener
+        ):
+            return
         registry_entry = registry.async_get(device_id)
         device = devices_by_registry_id.get(device_id)
         if registry_entry is None or device is None:
+            return
+        if _device_metadata_owner_entry_id(hass, registry_entry) != entry.entry_id:
             return
         updates = _device_registry_updates_for_config(hass, device, registry_entry)
         if not updates:
@@ -689,10 +758,11 @@ def _async_setup_device_metadata_guard(hass, entry, devices) -> None:
         hass.async_create_task(_async_restore_device_metadata(device_id))
 
     listeners = hass.data.setdefault(_DEVICE_METADATA_GUARD_LISTENERS_DATA, {})
-    listeners[entry.entry_id] = hass.bus.async_listen(
+    remove_listener = hass.bus.async_listen(
         dr.EVENT_DEVICE_REGISTRY_UPDATED,
         _async_handle_device_registry_update,
     )
+    listeners[entry.entry_id] = remove_listener
 
 
 def get_entity_configs(hass, group_name, domain):
@@ -801,6 +871,8 @@ def _state_only_initial_state(hass, entity) -> tuple[object, dict]:
         return value, attributes
 
     value = stored.state.state
+    if str(value).strip().lower() == STATE_UNAVAILABLE:
+        value = entity.get(CONF_INITIAL_VALUE, "unknown")
     restored_attributes = dict(stored.state.attributes)
     previous_managed = restored_attributes.pop(ATTR_VIRTUAL_ATTRIBUTES, [])
     current_managed = _state_only_managed_attribute_names(entity)
@@ -918,6 +990,8 @@ def _state_only_native_template_value(name: str, value):
     if name in _STATE_ONLY_BOOLEAN_NATIVE_PROPERTIES:
         return cv.boolean(value)
     if name == "supported_features":
+        if isinstance(value, bool):
+            raise ValueError("supported_features must be a non-negative integer")
         try:
             value = int(value)
         except (TypeError, ValueError, OverflowError) as err:
@@ -928,6 +1002,8 @@ def _state_only_native_template_value(name: str, value):
             raise ValueError("supported_features must be a non-negative integer")
         return value
     if name in {"latitude", "longitude"}:
+        if isinstance(value, bool):
+            raise ValueError(f"{name} is outside its valid range")
         try:
             value = float(value)
         except (TypeError, ValueError, OverflowError) as err:
@@ -937,6 +1013,8 @@ def _state_only_native_template_value(name: str, value):
             raise ValueError(f"{name} is outside its valid range")
         return value
     if name == "confidence":
+        if isinstance(value, bool):
+            raise ValueError("confidence must be between 0 and 100")
         try:
             value = float(value)
         except (TypeError, ValueError, OverflowError) as err:
@@ -945,6 +1023,18 @@ def _state_only_native_template_value(name: str, value):
             raise ValueError("confidence must be between 0 and 100")
         return value
     return value
+
+
+def _state_only_template_to_bool(value) -> bool:
+    """Parse a template result without treating arbitrary text as false."""
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"y", "yes", "t", "true", "on", "1"}:
+        return True
+    if normalized in {"n", "no", "f", "false", "off", "0"}:
+        return False
+    raise ValueError(f"Expected a boolean, got {value!r}")
 
 
 def _state_only_hook_values_match(configured, actual) -> bool:
@@ -1052,9 +1142,13 @@ def _async_apply_state_only_templates(hass, entity) -> None:
 
     if entity.get(CONF_AVAILABILITY_TEMPLATE):
         try:
-            available = str(
-                _render_state_only_template(hass, entity, entity[CONF_AVAILABILITY_TEMPLATE])
-            ).strip().lower() in {"y", "yes", "t", "true", "on", "1"}
+            available = _state_only_template_to_bool(
+                _render_state_only_template(
+                    hass,
+                    entity,
+                    entity[CONF_AVAILABILITY_TEMPLATE],
+                )
+            )
             changed = attributes.get(ATTR_AVAILABLE) != available or changed
             attributes[ATTR_AVAILABLE] = available
         except (OverflowError, TemplateError, TypeError, ValueError) as err:
@@ -1178,12 +1272,14 @@ def _async_apply_state_only_event_hook(hass, entity, hook, event) -> None:
 
     if hook.get(CONF_AVAILABILITY_TEMPLATE):
         try:
-            available = str(_render_state_only_template(
-                hass,
-                entity,
-                hook[CONF_AVAILABILITY_TEMPLATE],
-                variables,
-            )).strip().lower() in {"y", "yes", "t", "true", "on", "1"}
+            available = _state_only_template_to_bool(
+                _render_state_only_template(
+                    hass,
+                    entity,
+                    hook[CONF_AVAILABILITY_TEMPLATE],
+                    variables,
+                )
+            )
             changed = attributes.get(ATTR_AVAILABLE) != available or changed
             attributes[ATTR_AVAILABLE] = available
         except (OverflowError, TemplateError, TypeError, ValueError) as err:
@@ -1286,6 +1382,8 @@ def _async_setup_state_only_event_hooks(hass, entity, listeners) -> None:
     @callback
     def _schedule(index, hook, event):
         try:
+            if isinstance(hook.get("debounce", 0), bool):
+                raise TypeError
             delay = float(hook.get("debounce", 0) or 0)
         except (TypeError, ValueError, OverflowError):
             delay = 0

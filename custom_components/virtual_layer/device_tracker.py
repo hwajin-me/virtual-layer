@@ -134,15 +134,21 @@ def validate_domain_options(config) -> None:
         if set(value) - allowed:
             raise vol.Invalid("unknown location_helper option")
 
+        raw_distance_threshold = value.get(
+            CONF_LOCATION_HELPER_DISTANCE_METERS,
+            DEFAULT_LOCATION_HELPER_DISTANCE_METERS,
+        )
+        raw_priority_window = value.get(
+            CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
+            DEFAULT_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
+        )
+        if isinstance(raw_distance_threshold, bool) or isinstance(
+            raw_priority_window, bool
+        ):
+            raise vol.Invalid("invalid location_helper option")
         try:
-            distance_threshold = float(value.get(
-                CONF_LOCATION_HELPER_DISTANCE_METERS,
-                DEFAULT_LOCATION_HELPER_DISTANCE_METERS,
-            ))
-            priority_window = int(value.get(
-                CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
-                DEFAULT_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
-            ))
+            distance_threshold = float(raw_distance_threshold)
+            priority_window = int(raw_priority_window)
         except (TypeError, ValueError, OverflowError) as err:
             raise vol.Invalid("invalid location_helper option") from err
 
@@ -187,11 +193,14 @@ def validate_domain_options(config) -> None:
             raise vol.Invalid("polygon person entity must use the person domain")
     if not str(polygon.get(CONF_POLYGON_AWAY_STATE, "not_home")).strip():
         raise vol.Invalid("polygon away state must not be empty")
+    raw_distance = polygon.get(
+        CONF_POLYGON_DISTANCE_METERS,
+        DEFAULT_LOCATION_HELPER_DISTANCE_METERS,
+    )
+    if isinstance(raw_distance, bool):
+        raise vol.Invalid("invalid polygon distance threshold")
     try:
-        distance = float(polygon.get(
-            CONF_POLYGON_DISTANCE_METERS,
-            DEFAULT_LOCATION_HELPER_DISTANCE_METERS,
-        ))
+        distance = float(raw_distance)
     except (TypeError, ValueError, OverflowError) as err:
         raise vol.Invalid("invalid polygon distance threshold") from err
     if not isfinite(distance) or distance <= 0:
@@ -227,6 +236,8 @@ def _validate_polygon_rules(rules) -> None:
             raise vol.Invalid("invalid polygon tracker rule")
         for key in ("max_age_seconds", "max_gps_accuracy", "weight"):
             if key in rule:
+                if isinstance(rule[key], bool):
+                    raise vol.Invalid(f"invalid polygon tracker {key}")
                 try:
                     value = float(rule[key])
                 except (TypeError, ValueError, OverflowError) as err:
@@ -234,6 +245,8 @@ def _validate_polygon_rules(rules) -> None:
                 if not isfinite(value) or value <= 0:
                     raise vol.Invalid(f"polygon tracker {key} must be positive")
         if "priority" in rule:
+            if isinstance(rule["priority"], bool):
+                raise vol.Invalid("invalid polygon tracker priority")
             try:
                 if not isfinite(float(rule["priority"])):
                     raise ValueError
@@ -246,16 +259,42 @@ def _validate_polygon_rules(rules) -> None:
                 raise vol.Invalid(f"polygon tracker {key} must be a boolean")
 
 SERVICE_MOVE = "move"
-SERVICE_SCHEMA = vol.Schema({
+
+
+def _reject_boolean_number(value):
+    """Reject booleans before Home Assistant numeric coercion turns them into 0/1."""
+    if isinstance(value, bool):
+        raise vol.Invalid("boolean is not a numeric value")
+    return value
+
+
+def _validate_move_service_data(data):
+    """Require one unambiguous move target and target-specific options."""
+    has_location = CONF_LOCATION in data
+    has_gps = CONF_GPS in data
+    if has_location == has_gps:
+        raise vol.Invalid("exactly one of location or gps is required")
+    if has_location:
+        if not data[CONF_LOCATION].strip():
+            raise vol.Invalid("location must not be empty")
+        if CONF_GPS_ACCURACY in data:
+            raise vol.Invalid("gps_accuracy is only valid with gps")
+    return data
+
+
+SERVICE_SCHEMA = vol.All(vol.Schema({
     vol.Required(ATTR_ENTITY_ID): cv.comp_entity_ids,
     vol.Optional(CONF_LOCATION): cv.string,
     vol.Optional(CONF_GPS): {
-        vol.Required(ATTR_LATITUDE): cv.latitude,
-        vol.Required(ATTR_LONGITUDE): cv.longitude,
+        vol.Required(ATTR_LATITUDE): vol.All(_reject_boolean_number, cv.latitude),
+        vol.Required(ATTR_LONGITUDE): vol.All(_reject_boolean_number, cv.longitude),
         vol.Optional(ATTR_RADIUS): cv.string,
     },
-    vol.Optional(CONF_GPS_ACCURACY): cv.positive_int,
-})
+    vol.Optional(CONF_GPS_ACCURACY): vol.All(
+        _reject_boolean_number,
+        cv.positive_int,
+    ),
+}), _validate_move_service_data)
 
 async def async_setup_scanner(hass, config, async_see, _discovery_info=None):
     """Ignore scanner setup; Virtual Layer entities are config-entry only."""
@@ -345,7 +384,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 state.attributes.get(CONF_GPS_ACCURACY, 0)
             ) or 0
         else:
-            self._location = state.state
+            self._location = self._restored_state_value(state, config)
             self._coords = {}
             self._gps_accuracy = 0
         self._restore_location_helper_attributes()
@@ -356,15 +395,22 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         if not isinstance(value, dict):
             return None
 
+        raw_distance_threshold = value.get(
+            CONF_LOCATION_HELPER_DISTANCE_METERS,
+            DEFAULT_LOCATION_HELPER_DISTANCE_METERS,
+        )
+        raw_priority_window = value.get(
+            CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
+            DEFAULT_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
+        )
+        if isinstance(raw_distance_threshold, bool) or isinstance(
+            raw_priority_window, bool
+        ):
+            _LOGGER.warning("Ignoring invalid location helper configuration")
+            return None
         try:
-            distance_threshold = float(value.get(
-                CONF_LOCATION_HELPER_DISTANCE_METERS,
-                DEFAULT_LOCATION_HELPER_DISTANCE_METERS,
-            ))
-            priority_window = int(value.get(
-                CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
-                DEFAULT_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
-            ))
+            distance_threshold = float(raw_distance_threshold)
+            priority_window = int(raw_priority_window)
         except (TypeError, ValueError, OverflowError):
             _LOGGER.warning("Ignoring invalid location helper configuration")
             return None
@@ -423,11 +469,10 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 if len(position) != 2:
                     continue
                 try:
-                    latitude, longitude = map(float, position)
+                    latitude, longitude = self._validated_coordinates(*position)
                 except (TypeError, ValueError, OverflowError):
                     continue
-                if -90 <= latitude <= 90 and -180 <= longitude <= 180:
-                    self._source_positions[entity_id] = (latitude, longitude)
+                self._source_positions[entity_id] = (latitude, longitude)
 
         source_last_moved = self._virtual_attributes.get(ATTR_LOCATION_SOURCE_LAST_MOVED)
         if isinstance(source_last_moved, dict):
@@ -435,6 +480,8 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 if entity_id not in source_entities:
                     continue
                 try:
+                    if isinstance(timestamp, bool):
+                        raise TypeError
                     self._source_last_moved[entity_id] = datetime.fromtimestamp(
                         float(timestamp),
                         tz=timezone.utc,
@@ -892,6 +939,25 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         self.async_schedule_update_ha_state()
 
     def move_to_coords(self, new_coords, accuracy):
+        if not isinstance(new_coords, dict):
+            raise ValueError("GPS coordinates must be an object")
+        latitude, longitude = self._validated_coordinates(
+            new_coords.get(ATTR_LATITUDE),
+            new_coords.get(ATTR_LONGITUDE),
+        )
+        if isinstance(accuracy, bool):
+            raise ValueError("GPS accuracy must be a non-negative integer")
+        try:
+            accuracy = int(accuracy)
+        except (TypeError, ValueError, OverflowError) as err:
+            raise ValueError("GPS accuracy must be a non-negative integer") from err
+        if accuracy < 0:
+            raise ValueError("GPS accuracy must be a non-negative integer")
+        new_coords = {
+            **new_coords,
+            ATTR_LATITUDE: latitude,
+            ATTR_LONGITUDE: longitude,
+        }
         _LOGGER.debug(
             "%s moving via GPS to %s (%sm)",
             self._attr_name,

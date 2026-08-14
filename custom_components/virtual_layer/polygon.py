@@ -40,6 +40,8 @@ class InvalidGeoJson(ValueError):
 def _coordinate(value) -> tuple[float, float]:
     if not isinstance(value, (list, tuple)) or len(value) < 2:
         raise ValueError("GeoJSON coordinates must contain longitude and latitude")
+    if isinstance(value[0], bool) or isinstance(value[1], bool):
+        raise ValueError("GeoJSON coordinate must be numeric")
     longitude = float(value[0])
     latitude = float(value[1])
     if (
@@ -131,6 +133,8 @@ def _unwrap_ring(ring) -> list[tuple[float, float]]:
 
 def parse_geojson_zones(data, default_priority: int = 0) -> list[dict[str, Any]]:
     """Parse supported GeoJSON features into a compact runtime representation."""
+    if isinstance(default_priority, bool):
+        raise ValueError("Default polygon priority must be an integer")
     if isinstance(data, str):
         if len(data.encode("utf-8")) > MAX_GEOJSON_BYTES:
             raise InvalidGeoJson("GeoJSON document is too large")
@@ -168,7 +172,10 @@ def parse_geojson_zones(data, default_priority: int = 0) -> list[dict[str, Any]]
         if not isinstance(name, str) or not name.strip():
             raise ValueError("Every polygon zone needs a name property")
         try:
-            priority = int(properties.get("priority", default_priority))
+            raw_priority = properties.get("priority", default_priority)
+            if isinstance(raw_priority, bool):
+                raise TypeError
+            priority = int(raw_priority)
         except (TypeError, ValueError, OverflowError) as err:
             raise ValueError(f"Invalid priority for polygon zone {name}") from err
 
@@ -331,6 +338,10 @@ def render_polygon_map_svg(
     render_markers = []
     for marker in markers or []:
         try:
+            if isinstance(marker.get("latitude"), bool) or isinstance(
+                marker.get("longitude"), bool
+            ):
+                raise TypeError
             latitude = float(marker["latitude"])
             longitude = float(marker["longitude"])
         except (KeyError, TypeError, ValueError):

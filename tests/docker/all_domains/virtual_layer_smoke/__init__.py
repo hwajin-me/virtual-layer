@@ -1971,6 +1971,16 @@ async def _async_test_invalid_services(hass: HomeAssistant) -> list[str]:
             "set_state",
             {"entity_id": "water_heater.docker_water_heater", "value": "invalid"},
         ),
+        (
+            COMPONENT_DOMAIN,
+            "set_state",
+            {"entity_id": "switch.docker_switch", "value": "invalid"},
+        ),
+        (
+            COMPONENT_DOMAIN,
+            "set_state",
+            {"entity_id": "number.docker_number", "value": "not-a-number"},
+        ),
     ]
 
     for domain, service, data in cases:
@@ -1995,6 +2005,71 @@ async def _async_test_invalid_services(hass: HomeAssistant) -> list[str]:
             errors.append(f"{domain}.{service}: invalid input removed {entity_id}")
         elif after.state != before_state or dict(after.attributes) != before_attributes:
             errors.append(f"{domain}.{service}: invalid input changed {entity_id}")
+    return errors
+
+
+async def _async_test_unavailable_restore(
+    hass: HomeAssistant,
+    entry,
+    configured_entity_ids: list[str],
+) -> list[str]:
+    """Ensure an unavailable HA state is not restored as the native value."""
+    errors: list[str] = []
+    expected = {
+        "cover.docker_cover": ("closed", {"current_position": 0}),
+        "sensor.docker_sensor": ("unknown", {}),
+        "tag.docker_tag": ("docker_smoke", {}),
+        "text.docker_text": ("hello", {}),
+    }
+    targets = list(expected)
+    await _async_call(
+        hass,
+        errors,
+        COMPONENT_DOMAIN,
+        "set_available",
+        {"entity_id": targets, "value": False},
+    )
+    if errors:
+        return errors
+    await _async_call(
+        hass,
+        errors,
+        COMPONENT_DOMAIN,
+        "set_state",
+        {"entity_id": "tag.docker_tag", "value": "unavailable"},
+    )
+    if errors:
+        return errors
+    await asyncio.sleep(0.1)
+    if not await hass.config_entries.async_reload(entry.entry_id):
+        return ["unavailable restore reload failed"]
+    missing = await _async_wait_for_states(hass, configured_entity_ids)
+    if missing:
+        return [f"unavailable restore reload missing entities: {missing}"]
+    await _async_call(
+        hass,
+        errors,
+        COMPONENT_DOMAIN,
+        "set_available",
+        {"entity_id": targets, "value": True},
+    )
+    await asyncio.sleep(0.1)
+    for entity_id, (expected_state, expected_attributes) in expected.items():
+        state = hass.states.get(entity_id)
+        if state is None:
+            errors.append(f"{entity_id}: missing after unavailable restore")
+            continue
+        if state.state != expected_state:
+            errors.append(
+                f"{entity_id}: unavailable restore expected {expected_state!r}, "
+                f"got {state.state!r}"
+            )
+        for name, expected_value in expected_attributes.items():
+            if state.attributes.get(name) != expected_value:
+                errors.append(
+                    f"{entity_id}.{name}: unavailable restore expected "
+                    f"{expected_value!r}, got {state.attributes.get(name)!r}"
+                )
     return errors
 
 
@@ -2423,6 +2498,18 @@ async def _async_run(hass: HomeAssistant) -> None:
             and not feature_reload_missing_entities
             else []
         )
+        unavailable_restore_errors = (
+            await _async_test_unavailable_restore(
+                hass,
+                entry,
+                configured_entity_ids,
+            )
+            if not missing_entities
+            and not reload_missing_entities
+            and not feature_reload_missing_entities
+            and not invalid_service_errors
+            else []
+        )
         removed_option_restore_errors = (
             await _async_test_removed_option_restore(
                 hass,
@@ -2434,6 +2521,7 @@ async def _async_run(hass: HomeAssistant) -> None:
             and not reload_missing_entities
             and not feature_reload_missing_entities
             and not invalid_service_errors
+            and not unavailable_restore_errors
             else []
         )
         state_only_persistent_errors = (
@@ -2538,6 +2626,7 @@ async def _async_run(hass: HomeAssistant) -> None:
                 "climate_fan_matrix_errors": climate_fan_matrix_errors,
                 "command_action_errors": command_action_errors,
                 "invalid_service_errors": invalid_service_errors,
+                "unavailable_restore_errors": unavailable_restore_errors,
                 "removed_option_restore_errors": removed_option_restore_errors,
                 "state_only_persistent_errors": state_only_persistent_errors,
                 "nonpersistent_reset_errors": nonpersistent_reset_errors,
@@ -2570,6 +2659,7 @@ async def _async_run(hass: HomeAssistant) -> None:
                     climate_fan_matrix_errors,
                     command_action_errors,
                     invalid_service_errors,
+                    unavailable_restore_errors,
                     removed_option_restore_errors,
                     state_only_persistent_errors,
                     nonpersistent_reset_errors,

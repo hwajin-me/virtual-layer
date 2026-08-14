@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+import voluptuous as vol
 from homeassistant.components.climate import ClimateEntityFeature, HVACMode
 from homeassistant.components.climate.const import HVACAction
 from homeassistant.components.fan import FanEntityFeature
@@ -26,6 +27,7 @@ from homeassistant.components.siren import SirenEntityFeature
 from homeassistant.components.update import UpdateEntityFeature
 from homeassistant.components.vacuum import VacuumActivity, VacuumEntityFeature
 from homeassistant.const import ATTR_ENTITY_ID, UnitOfTemperature
+from homeassistant.core import State
 from homeassistant.util import dt as dt_util
 
 from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
@@ -108,6 +110,36 @@ def test_command_contracts_match_wrapped_platform_methods():
         }
 
         assert wrapped_commands == expected_commands, domain
+
+
+@pytest.mark.parametrize(
+    ("schema", "config"),
+    [
+        (
+            CLIMATE_SCHEMA,
+            _base(
+                "climate.boolean_config",
+                "off",
+                hvac_modes=["off", "heat"],
+                current_temperature=True,
+            ),
+        ),
+        (
+            HUMIDIFIER_SCHEMA,
+            _base("humidifier.boolean_config", "off", current_humidity=True),
+        ),
+        (FAN_SCHEMA, _base("fan.boolean_config", "off", speed_count=True)),
+        (NUMBER_SCHEMA, _base("number.boolean_config", "1", min=True, max=10)),
+        (VACUUM_SCHEMA, _base("vacuum.boolean_config", "docked", battery_level=True)),
+        (COVER_SCHEMA, _base("cover.boolean_config", "open", open_close_duration=True)),
+        (VALVE_SCHEMA, _base("valve.boolean_config", "open", open_close_duration=True)),
+        (LIGHT_SCHEMA, _base("light.boolean_config", "on", initial_color_temp=True)),
+        (LOCK_SCHEMA, _base("lock.boolean_config", "locked", test_jamming=True)),
+    ],
+)
+def test_numeric_schemas_reject_boolean_values(schema, config):
+    with pytest.raises(vol.Invalid):
+        schema(config)
 
 
 def test_numeric_native_templates_reject_boolean_values(hass):
@@ -236,6 +268,10 @@ async def test_numeric_services_reject_boolean_values():
         ),
         False,
     )
+    fan = VirtualFan(
+        FAN_SCHEMA(_base("fan.boolean_service", "off", speed_count=4)),
+        False,
+    )
     cover = VirtualCover(
         COVER_SCHEMA(_base("cover.boolean_service", "open")),
         False,
@@ -255,7 +291,7 @@ async def test_numeric_services_reject_boolean_values():
         ),
         False,
     )
-    for entity in (climate, humidifier, cover, media, heater):
+    for entity in (climate, humidifier, fan, cover, media, heater):
         entity._create_state(entity._config)
         entity.async_write_ha_state = Mock()
 
@@ -266,11 +302,15 @@ async def test_numeric_services_reject_boolean_values():
     with pytest.raises(ValueError):
         await humidifier.async_set_humidity(True)
     with pytest.raises(ValueError):
+        await fan.async_set_percentage(True)
+    with pytest.raises(ValueError):
         await cover.async_set_cover_tilt_position(tilt_position=True)
     with pytest.raises(ValueError):
         await media.async_set_volume_level(True)
     with pytest.raises(ValueError):
         await heater.async_set_temperature(temperature=True)
+    with pytest.raises(ValueError, match="finite"):
+        await heater.async_set_temperature(temperature=float("nan"))
 
 
 async def test_light_turn_on_rolls_back_all_values_when_validation_fails():
@@ -557,6 +597,27 @@ def test_hvac_fan_and_humidifier_templates_normalize_mode_whitespace(hass):
     assert humidifier.mode == "sleep"
     assert humidifier.action == HumidifierAction.DRYING
     assert humidifier.device_class == HumidifierDeviceClass.DEHUMIDIFIER
+
+
+@pytest.mark.parametrize("restored_state", ["unavailable", "unknown", "invalid"])
+def test_climate_restore_uses_configured_initial_mode_for_invalid_state(
+    restored_state,
+):
+    config = CLIMATE_SCHEMA(
+        _base(
+            "climate.restore_fallback",
+            "cool",
+            hvac_modes=["off", "cool"],
+        )
+    )
+    entity = VirtualClimate(config, False)
+
+    entity._restore_state(
+        State("climate.restore_fallback", restored_state),
+        config,
+    )
+
+    assert entity.hvac_mode == HVACMode.COOL
 
 
 def test_attribute_template_preserves_structured_jinja_result(hass):

@@ -28,7 +28,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, virtual_schema
+from .entity import VirtualEntity, nonnegative_int, virtual_schema
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,12 +46,12 @@ DEFAULT_TEST_JAMMING = 0
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(virtual_schema(DEFAULT_LOCK_VALUE, {
     vol.Optional(CONF_CHANGE_TIME, default=DEFAULT_CHANGE_TIME): vol.All(cv.time_period, cv.positive_timedelta),
     vol.Optional(CONF_SUPPORT_OPEN, default=DEFAULT_SUPPORT_OPEN): cv.boolean,
-    vol.Optional(CONF_TEST_JAMMING, default=DEFAULT_TEST_JAMMING): cv.positive_int,
+    vol.Optional(CONF_TEST_JAMMING, default=DEFAULT_TEST_JAMMING): nonnegative_int,
 }))
 LOCK_SCHEMA = vol.Schema(virtual_schema(DEFAULT_LOCK_VALUE, {
     vol.Optional(CONF_CHANGE_TIME, default=DEFAULT_CHANGE_TIME): vol.All(cv.time_period, cv.positive_timedelta),
     vol.Optional(CONF_SUPPORT_OPEN, default=DEFAULT_SUPPORT_OPEN): cv.boolean,
-    vol.Optional(CONF_TEST_JAMMING, default=DEFAULT_TEST_JAMMING): cv.positive_int,
+    vol.Optional(CONF_TEST_JAMMING, default=DEFAULT_TEST_JAMMING): nonnegative_int,
 }))
 
 
