@@ -226,6 +226,46 @@ async def test_options_flow_persists_native_templates_and_command_actions(hass):
     assert entity[CONF_COMMAND_ACTIONS] == command_actions
 
 
+async def test_options_flow_can_copy_standard_energy_sensor(hass):
+    hass.states.async_set(
+        "sensor.energy_monitor",
+        "12.5",
+        {
+            "friendly_name": "Energy",
+            "device_class": "energy",
+            "state_class": "total_increasing",
+            "unit_of_measurement": "kWh",
+            CONF_ICON: "mdi:flash",
+        },
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["sensor.energy_monitor"]},
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "entity"
+    assert result["errors"] == {}
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert defaults[CONF_PLATFORM] == "sensor"
+    assert defaults[CONF_INITIAL_VALUE] == "12.5"
+    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+        "class": "energy",
+        "unit_of_measurement": "kWh",
+    }
+
+
 async def test_options_flow_rejects_invalid_jinja_before_saving(hass):
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,

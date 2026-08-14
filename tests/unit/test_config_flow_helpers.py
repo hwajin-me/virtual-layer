@@ -1,6 +1,7 @@
 """Unit tests for Virtual Layer config flow helpers."""
 
 import json
+import logging
 from datetime import timedelta
 from types import MappingProxyType
 
@@ -75,7 +76,9 @@ from custom_components.virtual_layer.config_flow import (
     _entity_schema,
     _find_entity_by_selection_key,
     _flatten_entity_form_sections,
+    _flow_errors,
     _json_default,
+    _log_unhandled_flow_errors,
     _managed_device_choices,
     _merged_native_template,
     _native_reference_templates,
@@ -1897,6 +1900,64 @@ def test_reference_entity_defaults_preserves_water_usage_class_and_unit(hass):
         "class": "water",
         "unit_of_measurement": "L",
     }
+
+
+def test_reference_entity_defaults_accepts_standard_energy_sensor(hass):
+    """Copying a normal Energy dashboard sensor must not fail the source step."""
+    hass.states.async_set(
+        "sensor.energy_monitor",
+        "12.5",
+        {
+            ATTR_FRIENDLY_NAME: "Energy",
+            "device_class": "energy",
+            "state_class": "total_increasing",
+            "unit_of_measurement": "kWh",
+            CONF_ICON: "mdi:flash",
+        },
+    )
+
+    defaults = _reference_entity_defaults(hass, ["sensor.energy_monitor"])
+
+    assert defaults[CONF_PLATFORM] == "sensor"
+    assert defaults[CONF_INITIAL_VALUE] == "12.5"
+    assert defaults[CONF_DOMAIN_OPTIONS_JSON]
+
+
+def test_config_flow_validation_errors_are_logged_at_error(caplog):
+    errors = _flow_errors(object(), "entity")
+
+    with caplog.at_level(
+        logging.ERROR,
+        logger="custom_components.virtual_layer.config_flow",
+    ):
+        errors["value_template"] = "invalid_template"
+
+    assert "config-flow validation error" in caplog.text
+    assert "step=entity" in caplog.text
+    assert "field=value_template" in caplog.text
+    assert "error=invalid_template" in caplog.text
+
+
+async def test_unhandled_config_flow_errors_include_traceback(caplog):
+    @_log_unhandled_flow_errors
+    class BrokenFlow:
+        async def async_step_entity(self, user_input=None):
+            raise RuntimeError("source defaults exploded")
+
+    with caplog.at_level(
+        logging.ERROR,
+        logger="custom_components.virtual_layer.config_flow",
+    ), pytest.raises(RuntimeError, match="source defaults exploded"):
+        await BrokenFlow().async_step_entity({"source_entities": []})
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.name == "custom_components.virtual_layer.config_flow"
+    )
+    assert record.levelno == logging.ERROR
+    assert record.exc_info is not None
+    assert "Unhandled Virtual Layer config-flow error" in record.message
 
 
 def test_reference_entity_defaults_combines_string_sources_with_concat_template(hass):

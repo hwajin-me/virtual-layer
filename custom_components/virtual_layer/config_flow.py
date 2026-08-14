@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import logging
 import math
 import re
 from collections.abc import Mapping
+from functools import wraps
 from importlib import import_module
 from typing import Any
 
@@ -4614,6 +4616,78 @@ def _entity_form_defaults(
     return defaults
 
 
+class _FlowErrors(dict[str, str]):
+    """Config-flow errors that leave an actionable log record."""
+
+    def __init__(self, flow: Any, step: str) -> None:
+        super().__init__()
+        self._flow = type(flow).__name__
+        self._step = step
+        entry = getattr(flow, "config_entry", None)
+        self._entry_id = getattr(entry, "entry_id", None)
+
+    def __setitem__(self, field: str, error: str) -> None:
+        _LOGGER.error(
+            "Virtual Layer config-flow validation error "
+            "(flow=%s, step=%s, entry_id=%s, field=%s, error=%s)",
+            self._flow,
+            self._step,
+            self._entry_id or "new",
+            field,
+            error,
+        )
+        super().__setitem__(field, error)
+
+    def update(self, *args: Any, **kwargs: str) -> None:
+        """Preserve logging when an initial error mapping is supplied."""
+        values = dict(*args, **kwargs)
+        for field, error in values.items():
+            self[field] = error
+
+
+def _flow_errors(flow: Any, step: str, initial: Mapping[str, str] | None = None):
+    """Create a logging error mapping for a config-flow form."""
+    errors = _FlowErrors(flow, step)
+    if initial:
+        errors.update(initial)
+    return errors
+
+
+def _log_unhandled_flow_errors(cls):
+    """Log exceptions that would otherwise become an opaque UI error."""
+    for name, method in list(vars(cls).items()):
+        if not name.startswith("async_step_") or not inspect.iscoroutinefunction(
+            method
+        ):
+            continue
+
+        @wraps(method)
+        async def logged_step(self, *args, __method=method, __name=name, **kwargs):
+            try:
+                return await __method(self, *args, **kwargs)
+            except Exception:
+                entry = getattr(self, "config_entry", None)
+                user_input = args[0] if args else kwargs.get("user_input")
+                input_keys = (
+                    sorted(str(key) for key in user_input)
+                    if isinstance(user_input, Mapping)
+                    else []
+                )
+                _LOGGER.exception(
+                    "Unhandled Virtual Layer config-flow error "
+                    "(flow=%s, step=%s, entry_id=%s, input_keys=%s)",
+                    type(self).__name__,
+                    __name.removeprefix("async_step_"),
+                    getattr(entry, "entry_id", None) or "new",
+                    input_keys,
+                )
+                raise
+
+        setattr(cls, name, logged_step)
+    return cls
+
+
+@_log_unhandled_flow_errors
 class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
     """Virtual Layer config flow."""
 
@@ -4658,7 +4732,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
     async def async_step_user(self, user_input=None):
         _LOGGER.debug("Starting Virtual Layer user configuration step")
 
-        errors = {}
+        errors = _flow_errors(self, "user")
         if user_input is not None:
             try:
                 info = await self.validate_input(user_input)
@@ -4690,7 +4764,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
     async def async_step_reconfigure(self, user_input=None):
         """Reconfigure group metadata."""
         entry = self._get_reconfigure_entry()
-        errors = {}
+        errors = _flow_errors(self, "reconfigure")
 
         if user_input is not None:
             try:
@@ -4722,7 +4796,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
 
     async def async_step_entity_source(self, user_input=None):
         """Choose an existing entity to prefill a new virtual entity."""
-        errors = {}
+        errors = _flow_errors(self, "entity_source")
         if user_input is not None:
             try:
                 self._reference_defaults = _reference_entity_defaults(
@@ -4731,7 +4805,21 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 )
                 self._entity_defaults = self._reference_defaults
                 return await self.async_step_entity()
-            except InvalidEntityReference:
+            except (
+                InvalidEntityReference,
+                KeyError,
+                TypeError,
+                ValueError,
+                OverflowError,
+                RecursionError,
+                vol.Invalid,
+            ) as err:
+                _LOGGER.exception(
+                    "Unable to build defaults for selected source entities "
+                    "(flow=%s, step=entity_source): %s",
+                    type(self).__name__,
+                    err,
+                )
                 errors[CONF_REFERENCE_ENTITY_ID] = "invalid_entity_id"
 
         return self.async_show_form(
@@ -4742,7 +4830,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
 
     async def async_step_entity(self, user_input=None):
         """Add the first UI-managed virtual entity."""
-        errors = {}
+        errors = _flow_errors(self, "entity")
         if user_input is not None:
             user_input = _flatten_entity_form_sections(user_input)
             user_input = _align_form_entity_id_domain(user_input)
@@ -4821,6 +4909,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         return self.async_abort(reason="import_not_supported")
 
 
+@_log_unhandled_flow_errors
 class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
     """Virtual Layer options flow."""
 
@@ -4838,7 +4927,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._edit_sources_changed = False
 
     async def async_step_init(self, user_input=None):
-        errors = {}
+        errors = _flow_errors(self, "init")
         if user_input is not None:
             if user_input[CONF_ACTION] == ACTION_FINISH:
                 return self.async_create_entry(
@@ -4862,12 +4951,12 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
     async def async_step_select_device(self, user_input=None):
         """Select a logical Device without exposing entity-specific settings."""
-        errors = {}
+        errors = _flow_errors(self, "select_device")
         if not _managed_device_choices(self.config_entry.options):
             return self.async_show_form(
                 step_id="init",
                 data_schema=_options_schema(self.config_entry.options),
-                errors={"base": "no_devices"},
+                errors=_flow_errors(self, "init", {"base": "no_devices"}),
             )
 
         if user_input is not None:
@@ -4890,7 +4979,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         if self._managed_device_name not in _options_devices(self.config_entry.options):
             return await self.async_step_select_device()
 
-        errors = {}
+        errors = _flow_errors(self, "edit_device")
         if user_input is not None:
             try:
                 new_device_name = _make_device_name(
@@ -4923,7 +5012,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
     async def async_step_entity_source(self, user_input=None):
         """Choose an existing entity to prefill a new virtual entity."""
-        errors = {}
+        errors = _flow_errors(self, "entity_source")
         if user_input is not None:
             try:
                 self._reference_defaults = _reference_entity_defaults(
@@ -4936,7 +5025,21 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     user_input.get(CONF_TARGET_DEVICE_NAME),
                 )
                 return await self.async_step_entity()
-            except InvalidEntityReference:
+            except (
+                InvalidEntityReference,
+                KeyError,
+                TypeError,
+                ValueError,
+                OverflowError,
+                RecursionError,
+                vol.Invalid,
+            ) as err:
+                _LOGGER.exception(
+                    "Unable to build defaults for selected source entities "
+                    "(flow=%s, step=entity_source): %s",
+                    type(self).__name__,
+                    err,
+                )
                 errors[CONF_REFERENCE_ENTITY_ID] = "invalid_entity_id"
 
         return self.async_show_form(
@@ -4951,7 +5054,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
     async def async_step_entity(self, user_input=None):
         """Add a UI-managed virtual entity."""
-        errors = {}
+        errors = _flow_errors(self, "entity")
         if user_input is not None:
             user_input = _flatten_entity_form_sections(user_input)
             user_input = _align_form_entity_id_domain(user_input)
@@ -5023,12 +5126,12 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
     async def async_step_select_entity(self, user_input=None):
         """Select a UI-managed virtual entity to edit."""
-        errors = {}
+        errors = _flow_errors(self, "select_entity")
         if not _entity_choices(self.config_entry.options):
             return self.async_show_form(
                 step_id="init",
                 data_schema=_options_schema(self.config_entry.options),
-                errors={"base": "no_entities"},
+                errors=_flow_errors(self, "init", {"base": "no_entities"}),
             )
 
         if user_input is not None:
@@ -5052,12 +5155,12 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
     async def async_step_delete_entities(self, user_input=None):
         """Delete one or more UI-managed virtual entities."""
-        errors = {}
+        errors = _flow_errors(self, "delete_entities")
         if not _entity_choices(self.config_entry.options, include_invalid=True):
             return self.async_show_form(
                 step_id="init",
                 data_schema=_options_schema(self.config_entry.options),
-                errors={"base": "no_entities"},
+                errors=_flow_errors(self, "init", {"base": "no_entities"}),
             )
 
         if user_input is not None:
@@ -5078,12 +5181,12 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
     async def async_step_delete_device(self, user_input=None):
         """Delete a Device, including malformed groups that cannot be edited."""
-        errors = {}
+        errors = _flow_errors(self, "delete_device")
         if not _managed_device_choices(self.config_entry.options):
             return self.async_show_form(
                 step_id="init",
                 data_schema=_options_schema(self.config_entry.options),
-                errors={"base": "no_devices"},
+                errors=_flow_errors(self, "init", {"base": "no_devices"}),
             )
 
         if user_input is not None:
@@ -5104,7 +5207,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
     async def async_step_edit_entity_source(self, user_input=None):
         """Choose an existing entity to prefill an edited virtual entity."""
-        errors = {}
+        errors = _flow_errors(self, "edit_entity_source")
         if self._edit_device_name is None or self._edit_index is None:
             return await self.async_step_select_entity()
 
@@ -5216,7 +5319,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
     async def async_step_edit_entity(self, user_input=None):
         """Edit a UI-managed virtual entity."""
-        errors = {}
+        errors = _flow_errors(self, "edit_entity")
         if self._edit_device_name is None or self._edit_index is None:
             return await self.async_step_select_entity()
 
