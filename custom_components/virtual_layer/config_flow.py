@@ -8,7 +8,7 @@ import json
 import logging
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from functools import wraps
 from importlib import import_module
 from typing import Any
@@ -545,6 +545,8 @@ NATIVE_TEMPLATE_ATTRIBUTE_ALIASES = {
     "current_cover_tilt_position": "current_tilt_position",
     "current_direction": "direction",
     "current_valve_position": "current_position",
+    "is_away_mode_on": "away_mode",
+    "motion_detection_enabled": "motion_detection",
     "native_max": "max",
     "native_max_value": "max",
     "native_min": "min",
@@ -558,6 +560,22 @@ NATIVE_TEMPLATE_ATTRIBUTE_ALIASES = {
     "target_temperature_step": "target_temp_step",
     "temperature_unit": "unit_of_measurement",
 }
+NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.update(
+    {
+        "native_apparent_temperature": "apparent_temperature",
+        "native_dew_point": "dew_point",
+        "native_precipitation_unit": "precipitation_unit",
+        "native_pressure": "pressure",
+        "native_pressure_unit": "pressure_unit",
+        "native_temperature": "temperature",
+        "native_temperature_unit": "temperature_unit",
+        "native_visibility": "visibility",
+        "native_visibility_unit": "visibility_unit",
+        "native_wind_gust_speed": "wind_gust_speed",
+        "native_wind_speed": "wind_speed",
+        "native_wind_speed_unit": "wind_speed_unit",
+    }
+)
 NATIVE_TEMPLATE_STATE_PROPERTIES = frozenset({
     "activity",
     "condition",
@@ -565,6 +583,7 @@ NATIVE_TEMPLATE_STATE_PROPERTIES = frozenset({
     "current_option",
     "event_type",
     "hvac_mode",
+    "image_last_updated",
     "location",
     "media_state",
     "native_value",
@@ -1493,6 +1512,23 @@ def _default_virtual_entity_id(platform: str, entity_name: str) -> str:
     return f"{platform}.{object_id}"
 
 
+def _default_virtual_entity_id_for_sources(
+    platform: str,
+    entity_name: str,
+    source_entity_ids: Collection[str],
+) -> str:
+    """Generate a copy-safe default ID without changing the domain prefix."""
+    entity_id = _default_virtual_entity_id(platform, entity_name)
+    if entity_id not in source_entity_ids:
+        return entity_id
+
+    suffix = "_copy"
+    object_id = slugify(str(entity_name).removeprefix("+")) or "virtual_entity"
+    object_id = object_id[: MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH - len(suffix)]
+    object_id = object_id.rstrip("_") + suffix
+    return f"{platform}.{object_id}"
+
+
 def _reject_json_constant(value: str):
     """Reject Python-only JSON constants such as NaN and Infinity."""
     raise ValueError(f"Invalid JSON constant: {value}")
@@ -1535,15 +1571,31 @@ def _validate_ha_json_value(value, field_name: str):
     return value
 
 
-def _parse_source_entities(value: str) -> list[str]:
-    if not value:
+def _parse_source_entities(value: Any) -> list[str]:
+    """Normalize source IDs from current and legacy form payload shapes."""
+    if value is None:
         return []
-    raw_entities = value.replace(",", "\n").splitlines()
+    if isinstance(value, str):
+        if not value:
+            return []
+        raw_entities = value.replace(",", "\n").splitlines()
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        raw_entities = list(value)
+        if isinstance(value, (set, frozenset)):
+            raw_entities.sort(key=lambda item: str(item))
+    else:
+        raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
+
+    normalized_entities = []
+    for entity_id in raw_entities:
+        if not isinstance(entity_id, str):
+            raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
+        entity_id = entity_id.strip()
+        if entity_id:
+            normalized_entities.append(entity_id)
     try:
         source_entities = [
-            cv.entity_id(entity_id.strip())
-            for entity_id in raw_entities
-            if entity_id.strip()
+            cv.entity_id(entity_id) for entity_id in normalized_entities
         ]
     except vol.Invalid as err:
         raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT) from err
@@ -2027,19 +2079,22 @@ def _build_entity_config(
     validate_domain_options=None,
 ) -> tuple[str, dict[str, Any]]:
     user_input = _flatten_entity_form_sections(user_input)
-    device_name = user_input[CONF_DEVICE_NAME].strip()
-    entity_name = user_input[CONF_ENTITY_NAME].strip()
-    platform = user_input[CONF_PLATFORM]
+    device_name = _text_default(user_input.get(CONF_DEVICE_NAME)).strip()
+    entity_name = _text_default(user_input.get(CONF_ENTITY_NAME)).strip()
+    platform = user_input.get(CONF_PLATFORM)
 
     if not device_name:
         raise MissingDeviceName
     if not entity_name:
         raise MissingEntityName
 
-    initial_value = user_input[CONF_INITIAL_VALUE]
+    initial_value = user_input.get(CONF_INITIAL_VALUE, "")
     if platform in DEFAULT_INITIAL_VALUES and initial_value == DEFAULT_ENTITY_VALUE:
         initial_value = DEFAULT_INITIAL_VALUES[platform]
-    if platform == "climate" and initial_value.lower() not in CLIMATE_INITIAL_VALUES:
+    if platform == "climate" and (
+        not isinstance(initial_value, str)
+        or initial_value.lower() not in CLIMATE_INITIAL_VALUES
+    ):
         raise InvalidDomainOptions
 
     entity = {
@@ -2050,15 +2105,15 @@ def _build_entity_config(
         CONF_PERSISTENT: user_input[CONF_PERSISTENT],
     }
 
-    icon = user_input.get(CONF_ICON, "").strip()
+    icon = _text_default(user_input.get(CONF_ICON)).strip()
     if icon:
         entity[CONF_ICON] = icon
 
-    icon_template = user_input.get(CONF_ICON_TEMPLATE, "").strip()
+    icon_template = _text_default(user_input.get(CONF_ICON_TEMPLATE)).strip()
     if icon_template:
         entity[CONF_ICON_TEMPLATE] = icon_template
 
-    entity_id = user_input.get(ATTR_ENTITY_ID, "").strip()
+    entity_id = _text_default(user_input.get(ATTR_ENTITY_ID)).strip()
     if entity_id:
         try:
             entity_id = cv.entity_id(entity_id)
@@ -2075,7 +2130,7 @@ def _build_entity_config(
         entity[CONF_SOURCE_ENTITIES] = source_entities
 
     template_sources = _parse_template_sources(
-        user_input.get(CONF_TEMPLATE_SOURCES_JSON, "").strip(),
+        _text_default(user_input.get(CONF_TEMPLATE_SOURCES_JSON)),
     )
     if template_sources:
         entity[CONF_TEMPLATE_SOURCES] = template_sources
@@ -2084,33 +2139,37 @@ def _build_entity_config(
     if pull_interval:
         entity[CONF_PULL_INTERVAL] = pull_interval
 
-    value_template = user_input.get(CONF_VALUE_TEMPLATE, "").strip()
+    value_template = _text_default(user_input.get(CONF_VALUE_TEMPLATE)).strip()
     if value_template:
         entity[CONF_VALUE_TEMPLATE] = value_template
 
-    availability_template = user_input.get(CONF_AVAILABILITY_TEMPLATE, "").strip()
+    availability_template = _text_default(
+        user_input.get(CONF_AVAILABILITY_TEMPLATE)
+    ).strip()
     if availability_template:
         entity[CONF_AVAILABILITY_TEMPLATE] = availability_template
 
-    event_hooks = _parse_event_hooks(user_input.get(CONF_EVENT_HOOKS_JSON, "").strip())
+    event_hooks = _parse_event_hooks(
+        _text_default(user_input.get(CONF_EVENT_HOOKS_JSON))
+    )
     if event_hooks:
         entity[CONF_EVENT_HOOKS] = event_hooks
 
     attributes = _parse_json_object(
-        user_input.get(CONF_ATTRIBUTES_JSON, "").strip(), CONF_ATTRIBUTES_JSON
+        _text_default(user_input.get(CONF_ATTRIBUTES_JSON)), CONF_ATTRIBUTES_JSON
     )
     attributes = _normalize_attribute_mapping(attributes, CONF_ATTRIBUTES_JSON)
     if attributes:
         entity[CONF_ATTRIBUTES] = attributes
 
     attribute_sources = _parse_attribute_sources(
-        user_input.get(CONF_ATTRIBUTE_SOURCES_JSON, "").strip(),
+        _text_default(user_input.get(CONF_ATTRIBUTE_SOURCES_JSON)),
     )
     if attribute_sources:
         entity[CONF_ATTRIBUTE_SOURCES] = attribute_sources
 
     attribute_templates = _parse_json_object(
-        user_input.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "").strip(),
+        _text_default(user_input.get(CONF_ATTRIBUTE_TEMPLATES_JSON)),
         CONF_ATTRIBUTE_TEMPLATES_JSON,
     )
     attribute_templates = _normalize_attribute_mapping(
@@ -2122,7 +2181,7 @@ def _build_entity_config(
         entity[CONF_ATTRIBUTE_TEMPLATES] = attribute_templates
 
     native_templates = _parse_native_templates(
-        user_input.get(CONF_NATIVE_TEMPLATES_JSON, "").strip(),
+        _text_default(user_input.get(CONF_NATIVE_TEMPLATES_JSON)),
     )
     native_value_templates = user_input.get(CONF_NATIVE_VALUE_TEMPLATES, {})
     if not isinstance(native_value_templates, Mapping):
@@ -2141,14 +2200,14 @@ def _build_entity_config(
         entity[CONF_NATIVE_TEMPLATES] = native_templates
 
     command_actions = _parse_command_actions(
-        user_input.get(CONF_COMMAND_ACTIONS_JSON, "").strip(),
+        _text_default(user_input.get(CONF_COMMAND_ACTIONS_JSON)),
         platform,
     )
     if command_actions:
         entity[CONF_COMMAND_ACTIONS] = command_actions
 
     domain_options = _parse_domain_options(
-        user_input.get(CONF_DOMAIN_OPTIONS_JSON, "").strip(),
+        _text_default(user_input.get(CONF_DOMAIN_OPTIONS_JSON)),
     )
     if platform == "climate":
         for field_name in CLIMATE_MODE_LIST_FIELDS:
@@ -2214,14 +2273,27 @@ def _build_entity_config(
                 domain_options[field_name] = value
     entity.update(domain_options)
 
-    polygon_geojson_text = user_input.get(CONF_POLYGON_GEOJSON_JSON, "").strip()
+    polygon_geojson_text = _text_default(
+        user_input.get(CONF_POLYGON_GEOJSON_JSON)
+    ).strip()
     polygon_files = [
         item.strip()
-        for item in user_input.get(CONF_POLYGON_FILES_TEXT, "").splitlines()
+        for item in _multiline_list_default(
+            user_input.get(CONF_POLYGON_FILES_TEXT)
+        ).splitlines()
         if item.strip()
     ]
-    polygon_person = str(user_input.get(CONF_POLYGON_PERSON, "") or "").strip()
-    polygon_rules_text = user_input.get(CONF_POLYGON_TRACKER_RULES_JSON, "").strip()
+    polygon_person = _text_default(user_input.get(CONF_POLYGON_PERSON)).strip()
+    if polygon_person:
+        try:
+            polygon_person = cv.entity_id(polygon_person)
+        except vol.Invalid as err:
+            raise InvalidEntityReference(CONF_POLYGON_PERSON) from err
+        if not polygon_person.startswith("person."):
+            raise InvalidEntityReference(CONF_POLYGON_PERSON)
+    polygon_rules_text = _text_default(
+        user_input.get(CONF_POLYGON_TRACKER_RULES_JSON)
+    ).strip()
     if any((polygon_geojson_text, polygon_files, polygon_person, polygon_rules_text)):
         if platform != "device_tracker":
             raise InvalidDomainOptions
@@ -2400,7 +2472,7 @@ def _build_device_config(
     user_input: dict[str, Any], device_name: str
 ) -> dict[str, Any]:
     """Build Home Assistant device metadata from the UI form."""
-    device_id = user_input.get(CONF_DEVICE_ID, "").strip() or device_name
+    device_id = _text_default(user_input.get(CONF_DEVICE_ID)).strip() or device_name
     if not device_id:
         raise MissingDeviceName
 
@@ -2419,7 +2491,7 @@ def _build_device_config(
         CONF_DEVICE_VIA_DEVICE_ID: CONF_VIA_DEVICE_ID,
     }
     for form_field, config_field in optional_fields.items():
-        value = user_input.get(form_field, "").strip()
+        value = _text_default(user_input.get(form_field)).strip()
         if value:
             device[config_field] = value
     return device
@@ -2471,7 +2543,7 @@ def _text_default(value: Any, default: str = "") -> str:
         return value
     try:
         return str(value)
-    except (TypeError, ValueError, OverflowError):
+    except (RecursionError, TypeError, ValueError, OverflowError):
         return default
 
 
@@ -3102,18 +3174,29 @@ def _fallback_entity_name(entity_id: str) -> str:
     return object_id.replace("_", " ").title()
 
 
-def _normalize_reference_entity_ids(value) -> list[str]:
-    if not value:
+def _normalize_reference_entity_ids(value: Any) -> list[str]:
+    """Normalize source-picker values without leaking Python type errors."""
+    if value is None:
         return []
     if isinstance(value, str):
+        if not value:
+            return []
         values = [value]
-    else:
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        if not value:
+            return []
         values = list(value)
+        if isinstance(value, (set, frozenset)):
+            values.sort(key=lambda item: str(item))
+    else:
+        raise InvalidEntityReference(CONF_REFERENCE_ENTITY_ID)
 
     entity_ids = []
     for entity_id in values:
+        if not isinstance(entity_id, str):
+            raise InvalidEntityReference(CONF_REFERENCE_ENTITY_ID)
         try:
-            entity_ids.append(cv.entity_id(str(entity_id).strip()))
+            entity_ids.append(cv.entity_id(entity_id.strip()))
         except vol.Invalid as err:
             raise InvalidEntityReference(CONF_REFERENCE_ENTITY_ID) from err
     return list(dict.fromkeys(entity_ids))
@@ -3364,14 +3447,41 @@ def _combined_entity_name(states: list) -> str:
     return _shorten_generated_text(combined_name, MAX_GENERATED_ENTITY_NAME_LENGTH)
 
 
-def _native_source_template(entity_id: str, state, property_name: str) -> str:
+def _native_source_template(
+    entity_id: str,
+    state,
+    property_name: str,
+    platform: str | None = None,
+    use_fallback: bool = True,
+) -> str:
     """Build a native-property helper from a source state when possible."""
     attributes = state.attributes
+    source_platform = entity_id.split(".", 1)[0]
     attribute_name = property_name
     if attribute_name not in attributes:
         attribute_name = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(property_name, "")
     if attribute_name and attribute_name in attributes:
         return f"{{{{ state_attr({entity_id!r}, {attribute_name!r}) }}}}"
+
+    if source_platform == "calendar" and property_name == "event":
+        return (
+            "{{ {"
+            f"'summary': state_attr({entity_id!r}, 'message'), "
+            f"'start': state_attr({entity_id!r}, 'start_time'), "
+            f"'end': state_attr({entity_id!r}, 'end_time'), "
+            f"'all_day': state_attr({entity_id!r}, 'all_day'), "
+            f"'location': state_attr({entity_id!r}, 'location'), "
+            f"'description': state_attr({entity_id!r}, 'description')"
+            "} }}"
+        )
+    if source_platform == "event" and property_name == "event_attributes":
+        return (
+            "{{ states["
+            + repr(entity_id)
+            + "].attributes if states["
+            + repr(entity_id)
+            + "] else {} }}"
+        )
 
     if property_name == "source_entity":
         return f"{{{{ {entity_id!r} }}}}"
@@ -3387,19 +3497,51 @@ def _native_source_template(entity_id: str, state, property_name: str) -> str:
             f"{{{{ states({entity_id!r}) in "
             f"{sorted(state_values)!r} }}}}"
         )
-    platform = entity_id.split(".", 1)[0]
     if mask := NATIVE_TEMPLATE_SUPPORTED_FEATURE_MASKS.get(
-        (platform, property_name)
+        (source_platform, property_name)
     ):
         features = f"(state_attr({entity_id!r}, 'supported_features') | int(0))"
         return f"{{{{ (({features} // {mask}) % 2) == 1 }}}}"
     if property_name == "reports_position":
         return f"{{{{ state_attr({entity_id!r}, 'current_position') is number }}}}"
+    if source_platform == "fan" and property_name == "speed_count":
+        percentage_step = (
+            f"state_attr({entity_id!r}, 'percentage_step') | float(0)"
+        )
+        fallback = _native_source_helper_default(
+            platform or source_platform,
+            property_name,
+        )
+        fallback_expression = (
+            repr(_plain_options(fallback)) if use_fallback else "none"
+        )
+        return (
+            "{% set step = "
+            + percentage_step
+            + " %}{{ (100 / step) | round(0) | int if step > 0 else "
+            + fallback_expression
+            + " }}"
+        )
     attribute_name = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(
         property_name,
         property_name,
     )
-    return f"{{{{ state_attr({entity_id!r}, {attribute_name!r}) }}}}"
+    expression = f"state_attr({entity_id!r}, {attribute_name!r})"
+    fallback = _native_source_helper_default(
+        platform or source_platform,
+        property_name,
+    )
+    if fallback is None or not use_fallback:
+        return f"{{{{ {expression} }}}}"
+    return (
+        "{{ "
+        + expression
+        + " if "
+        + expression
+        + " is not none else "
+        + repr(_plain_options(fallback))
+        + " }}"
+    )
 
 
 def _native_reference_templates(
@@ -3413,7 +3555,13 @@ def _native_reference_templates(
     templates = {}
     for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()):
         source_templates = [
-            _native_source_template(entity_id, state, property_name)
+            _native_source_template(
+                entity_id,
+                state,
+                property_name,
+                platform,
+                use_fallback=len(entity_ids) == 1,
+            )
             for entity_id, state in zip(entity_ids, states, strict=True)
         ]
         aliases = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES
@@ -3429,8 +3577,19 @@ def _native_reference_templates(
                 *NATIVE_TEMPLATE_BOOLEAN_STATE_VALUES,
             }
             or (platform, property_name) in NATIVE_TEMPLATE_SUPPORTED_FEATURE_MASKS
-            or property_name
-            in DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES.get(platform, {})
+            or (
+                platform == "calendar"
+                and property_name == "event"
+            )
+            or (
+                platform == "event"
+                and property_name == "event_attributes"
+            )
+            or (
+                platform == "fan"
+                and property_name == "speed_count"
+                and "percentage_step" in state.attributes
+            )
             for state in states
         ]
         attribute_name = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(
@@ -3820,6 +3979,19 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             + " }}"
         ),
     }
+    generated_entity_id = _default_virtual_entity_id_for_sources(
+        platform,
+        defaults[CONF_ENTITY_NAME],
+        entity_ids,
+    )
+    if generated_entity_id != _default_virtual_entity_id(
+        platform,
+        defaults[CONF_ENTITY_NAME],
+    ):
+        # Copying an existing virtual entity commonly preserves its friendly
+        # name. Avoid making the new form self-reference its source before the
+        # user has had a chance to customize the generated ID.
+        defaults[ATTR_ENTITY_ID] = generated_entity_id
     if len(entity_ids) == 1:
         defaults[CONF_ICON_TEMPLATE] = (
             f"{{{{ state_attr({entity_ids[0]!r}, {CONF_ICON!r}) "

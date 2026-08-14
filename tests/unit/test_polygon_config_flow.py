@@ -168,6 +168,17 @@ def test_invalid_polygon_geometry_is_reported_on_the_geojson_field():
     assert err.value.field_name == CONF_POLYGON_GEOJSON_JSON
 
 
+@pytest.mark.parametrize("person", ["not-an-entity", "sensor.family"])
+def test_invalid_polygon_person_is_reported_on_person_field(person):
+    form = _entity_schema({CONF_PLATFORM: "device_tracker"})({})
+    form.update({CONF_POLYGON_PERSON: person})
+
+    with pytest.raises(InvalidEntityReference) as err:
+        _build_entity_config(form, DEVICE_TRACKER_SCHEMA, validate_domain_options)
+
+    assert err.value.field_name == CONF_POLYGON_PERSON
+
+
 def test_polygon_configuration_requires_a_tracker_or_person():
     form = _entity_schema({CONF_PLATFORM: "device_tracker"})({})
     form.update({

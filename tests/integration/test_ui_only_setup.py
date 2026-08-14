@@ -2270,6 +2270,41 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     )
 
 
+async def test_options_flow_copy_existing_entity_avoids_source_entity_id(hass):
+    hass.states.async_set(
+        "sensor.kitchen_lamp",
+        "on",
+        {"friendly_name": "Kitchen Lamp"},
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["sensor.kitchen_lamp"]},
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+
+    assert defaults[ATTR_ENTITY_ID] == "sensor.kitchen_lamp_copy"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {**defaults, CONF_DEVICE_NAME: "Kitchen"},
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][ATTR_DEVICES]["Kitchen"][0][ATTR_ENTITY_ID] == (
+        "sensor.kitchen_lamp_copy"
+    )
+
+
 async def test_options_flow_refreshes_untouched_helpers_when_add_sources_change(hass):
     old_sources = [
         "binary_sensor.door_one",

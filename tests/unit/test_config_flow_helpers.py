@@ -42,6 +42,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_EVENT_HOOKS_JSON,
     CONF_NATIVE_TEMPLATES_JSON,
     CONF_NATIVE_VALUE_TEMPLATES,
+    CONF_REFERENCE_ENTITY_ID,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
     DOMAIN_NATIVE_TEMPLATE_PROPERTIES,
@@ -84,7 +85,9 @@ from custom_components.virtual_layer.config_flow import (
     _native_reference_templates,
     _native_source_template,
     _needs_domain_specific_form,
+    _normalize_reference_entity_ids,
     _options_schema,
+    _parse_source_entities,
     _parse_command_actions,
     _parse_entity_key,
     _parse_json_object,
@@ -221,6 +224,31 @@ def _section_validators(schema, section_name):
         marker.schema: validator
         for marker, validator in section_schema.schema.items()
     }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [123, {}, ["sensor.valid", 42], ("sensor.valid", None)],
+)
+def test_source_entity_parser_reports_malformed_payloads_as_field_errors(value):
+    with pytest.raises(InvalidEntityReference) as err:
+        _parse_source_entities(value)
+
+    assert err.value.field_name == CONF_SOURCE_ENTITIES_TEXT
+
+
+def test_source_entity_parser_accepts_legacy_sequence_payloads():
+    assert _parse_source_entities(
+        [" sensor.first ", "sensor.second", "sensor.first"]
+    ) == ["sensor.first", "sensor.second"]
+
+
+@pytest.mark.parametrize("value", [123, {}, ["sensor.valid", 42]])
+def test_reference_entity_parser_reports_malformed_payloads_as_field_errors(value):
+    with pytest.raises(InvalidEntityReference) as err:
+        _normalize_reference_entity_ids(value)
+
+    assert err.value.field_name == CONF_REFERENCE_ENTITY_ID
 
 
 def test_entity_form_collapses_secondary_fields_and_flattens_submissions():
@@ -488,6 +516,168 @@ def test_missing_climate_mode_attribute_remains_dynamic(hass):
         {"hvac_modes": ["off", "cool"], "fan_mode": "auto"},
     )
     assert Template(template, hass).async_render(parse_result=True) == "auto"
+
+
+def test_reference_weather_uses_standard_native_attribute_aliases(hass):
+    entity_id = "weather.home"
+    hass.states.async_set(
+        entity_id,
+        "partlycloudy",
+        {
+            "temperature": 23,
+            "apparent_temperature": 24,
+            "dew_point": 12,
+            "temperature_unit": "°C",
+            "pressure": 1012,
+            "pressure_unit": "hPa",
+            "visibility": 10,
+            "visibility_unit": "km",
+            "wind_speed": 5,
+            "wind_speed_unit": "km/h",
+            "wind_gust_speed": 8,
+            "wind_bearing": 180,
+        },
+    )
+
+    templates = _reference_entity_defaults(hass, [entity_id])[
+        CONF_NATIVE_VALUE_TEMPLATES
+    ]
+
+    assert Template(templates["native_temperature"], hass).async_render(
+        parse_result=True
+    ) == 23
+    assert Template(templates["native_temperature_unit"], hass).async_render(
+        parse_result=True
+    ) == "°C"
+    assert Template(templates["native_pressure"], hass).async_render(
+        parse_result=True
+    ) == 1012
+    assert Template(templates["native_wind_speed"], hass).async_render(
+        parse_result=True
+    ) == 5
+
+
+def test_reference_water_heater_maps_standard_away_mode_attribute(hass):
+    entity_id = "water_heater.home"
+    hass.states.async_set(
+        entity_id,
+        "eco",
+        {
+            "away_mode": "on",
+            "operation_list": ["off", "eco"],
+            "temperature": 45,
+        },
+    )
+
+    template = _reference_entity_defaults(hass, [entity_id])[
+        CONF_NATIVE_VALUE_TEMPLATES
+    ]["is_away_mode_on"]
+
+    assert Template(template, hass).async_render(parse_result=True) == "on"
+
+
+def test_reference_fan_derives_speed_count_from_percentage_step(hass):
+    entity_id = "fan.home"
+    hass.states.async_set(
+        entity_id,
+        "on",
+        {"percentage": 50, "percentage_step": 25},
+    )
+
+    template = _reference_entity_defaults(hass, [entity_id])[
+        CONF_NATIVE_VALUE_TEMPLATES
+    ]["speed_count"]
+
+    assert Template(template, hass).async_render(parse_result=True) == 4
+
+
+def test_reference_calendar_builds_event_from_standard_source_attributes(hass):
+    entity_id = "calendar.home"
+    hass.states.async_set(
+        entity_id,
+        "on",
+        {
+            "message": "Dentist",
+            "start_time": "2026-08-14 10:00:00",
+            "end_time": "2026-08-14 11:00:00",
+            "all_day": False,
+            "location": "Clinic",
+            "description": "Bring documents",
+        },
+    )
+
+    template = _reference_entity_defaults(hass, [entity_id])[
+        CONF_NATIVE_VALUE_TEMPLATES
+    ]["event"]
+    event = Template(template, hass).async_render(parse_result=True)
+
+    assert event == {
+        "summary": "Dentist",
+        "start": "2026-08-14 10:00:00",
+        "end": "2026-08-14 11:00:00",
+        "all_day": False,
+        "location": "Clinic",
+        "description": "Bring documents",
+    }
+
+
+def test_reference_event_copies_event_attributes_mapping(hass):
+    entity_id = "event.button"
+    hass.states.async_set(
+        entity_id,
+        "pressed",
+        {"event_type": "pressed", "button": 1},
+    )
+
+    template = _reference_entity_defaults(hass, [entity_id])[
+        CONF_NATIVE_VALUE_TEMPLATES
+    ]["event_attributes"]
+    attributes = Template(template, hass).async_render(parse_result=True)
+
+    assert attributes["event_type"] == "pressed"
+    assert attributes["button"] == 1
+
+
+def test_reference_image_uses_source_state_for_last_updated(hass):
+    entity_id = "image.camera_snapshot"
+    timestamp = "2026-08-14T10:15:00+00:00"
+    hass.states.async_set(entity_id, timestamp, {"content_type": "image/jpeg"})
+
+    template = _reference_entity_defaults(hass, [entity_id])[
+        CONF_NATIVE_VALUE_TEMPLATES
+    ]["image_last_updated"]
+
+    assert Template(template, hass).async_render(parse_result=True) == timestamp
+
+
+@pytest.mark.parametrize(
+    ("platform", "property_name", "expected"),
+    [
+        ("climate", "target_temperature", 21),
+        ("fan", "speed_count", 100),
+        ("todo", "todo_items", []),
+        ("event", "event_attributes", {}),
+    ],
+)
+def test_multi_source_missing_native_values_use_safe_defaults(
+    hass,
+    platform,
+    property_name,
+    expected,
+):
+    entity_ids = [f"{platform}.first", f"{platform}.second"]
+    for entity_id in entity_ids:
+        hass.states.async_set(entity_id, "active")
+
+    templates = _native_reference_templates(
+        platform,
+        entity_ids,
+        [hass.states.get(entity_id) for entity_id in entity_ids],
+    )
+
+    assert Template(templates[property_name], hass).async_render(
+        parse_result=True
+    ) == expected
 
 
 def test_sparse_native_attribute_tracks_all_selected_sources(hass):
@@ -1730,6 +1920,28 @@ def test_reference_entity_defaults_combines_boolean_sources_with_and_template(ha
     assert "alarm_ready | lower" in defaults[CONF_VALUE_TEMPLATE]
 
 
+def test_reference_entity_defaults_avoids_source_id_for_a_single_entity_copy(hass):
+    hass.states.async_set(
+        "sensor.kitchen_lamp",
+        "on",
+        {ATTR_FRIENDLY_NAME: "Kitchen Lamp"},
+    )
+
+    defaults = _reference_entity_defaults(hass, ["sensor.kitchen_lamp"])
+
+    assert defaults[ATTR_ENTITY_ID] == "sensor.kitchen_lamp_copy"
+
+
+def test_reference_entity_defaults_copy_id_keeps_suffix_after_slug_limit(hass):
+    source_id = "sensor." + "a" * 80
+    hass.states.async_set(source_id, "on")
+
+    defaults = _reference_entity_defaults(hass, [source_id])
+
+    assert defaults[ATTR_ENTITY_ID].endswith("_copy")
+    assert defaults[ATTR_ENTITY_ID] != source_id
+
+
 def test_presence_motion_helper_uses_majority_and_delayed_all_off_clear(
     hass, monkeypatch
 ):
@@ -1958,6 +2170,7 @@ async def test_unhandled_config_flow_errors_include_traceback(caplog):
     assert record.levelno == logging.ERROR
     assert record.exc_info is not None
     assert "Unhandled Virtual Layer config-flow error" in record.message
+    assert "input_keys=['source_entities']" in record.getMessage()
 
 
 def test_reference_entity_defaults_combines_string_sources_with_concat_template(hass):
