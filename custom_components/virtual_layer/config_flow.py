@@ -2475,14 +2475,30 @@ async def _async_build_entity_config(
 
 def _validate_entity_templates(hass, entity: Mapping) -> None:
     """Reject invalid Jinja syntax while the user can still edit the form."""
+    platform = str(entity.get(CONF_PLATFORM, "unknown"))
+    configured_entity_id = str(entity.get(ATTR_ENTITY_ID, "not_configured"))
 
-    def _validate(value, field_name: str) -> None:
+    def _validate(
+        value,
+        field_name: str,
+        template_name: str | None = None,
+    ) -> None:
         if not isinstance(value, str) or not value.strip():
             return
         try:
             Template(value, hass).ensure_valid()
         except TemplateError as err:
-            raise InvalidTemplate(field_name) from err
+            template_name = template_name or field_name
+            _LOGGER.error(
+                "Invalid Virtual Layer Jinja template "
+                "(platform=%s, entity_id=%s, field=%s, template=%s): %s",
+                platform,
+                configured_entity_id,
+                field_name,
+                template_name,
+                err,
+            )
+            raise InvalidTemplate(field_name, template_name, str(err)) from err
 
     for field_name in (
         CONF_VALUE_TEMPLATE,
@@ -2491,10 +2507,11 @@ def _validate_entity_templates(hass, entity: Mapping) -> None:
     ):
         _validate(entity.get(field_name), field_name)
 
-    for template in _mapping_or_empty(entity.get(CONF_ATTRIBUTE_TEMPLATES)).values():
-        _validate(template, CONF_ATTRIBUTE_TEMPLATES_JSON)
+    for attribute_name, template in _mapping_or_empty(
+        entity.get(CONF_ATTRIBUTE_TEMPLATES)
+    ).items():
+        _validate(template, CONF_ATTRIBUTE_TEMPLATES_JSON, attribute_name)
 
-    platform = entity.get(CONF_PLATFORM)
     managed_properties = set(DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()))
     for property_name, template in _mapping_or_empty(
         entity.get(CONF_NATIVE_TEMPLATES)
@@ -2504,27 +2521,37 @@ def _validate_entity_templates(hass, entity: Mapping) -> None:
             property_name
             if property_name in managed_properties
             else CONF_NATIVE_TEMPLATES_JSON,
+            property_name,
         )
 
-    for hook in entity.get(CONF_EVENT_HOOKS, []):
+    for hook_index, hook in enumerate(entity.get(CONF_EVENT_HOOKS, []), start=1):
         if not isinstance(hook, Mapping):
             continue
         for field_name in (CONF_VALUE_TEMPLATE, CONF_AVAILABILITY_TEMPLATE):
-            _validate(hook.get(field_name), CONF_EVENT_HOOKS_JSON)
-        for template in _mapping_or_empty(
+            _validate(
+                hook.get(field_name),
+                CONF_EVENT_HOOKS_JSON,
+                f"hook_{hook_index}.{field_name}",
+            )
+        for attribute_name, template in _mapping_or_empty(
             hook.get(CONF_ATTRIBUTE_TEMPLATES)
-        ).values():
-            _validate(template, CONF_EVENT_HOOKS_JSON)
+        ).items():
+            _validate(
+                template,
+                CONF_EVENT_HOOKS_JSON,
+                f"hook_{hook_index}.{attribute_name}",
+            )
 
     polygon = entity.get(CONF_POLYGONAL_ZONE)
     if isinstance(polygon, Mapping):
         rules = polygon.get(CONF_POLYGON_TRACKER_RULES, {})
         if isinstance(rules, Mapping):
-            for rule in rules.values():
+            for rule_name, rule in rules.items():
                 if isinstance(rule, Mapping):
                     _validate(
                         rule.get("condition_template"),
                         CONF_POLYGON_TRACKER_RULES_JSON,
+                        f"{rule_name}.condition_template",
                     )
 
 
@@ -5888,9 +5915,16 @@ class InvalidJson(exceptions.HomeAssistantError):
 class InvalidTemplate(exceptions.HomeAssistantError):
     """Error indicating invalid Jinja syntax in a form field."""
 
-    def __init__(self, field_name: str) -> None:
+    def __init__(
+        self,
+        field_name: str,
+        template_name: str | None = None,
+        reason: str | None = None,
+    ) -> None:
         super().__init__(field_name)
         self.field_name = field_name
+        self.template_name = template_name or field_name
+        self.reason = reason
 
 
 class InvalidEntityReference(exceptions.HomeAssistantError):

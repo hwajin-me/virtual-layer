@@ -280,7 +280,7 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
     }
 
 
-async def test_options_flow_rejects_invalid_jinja_before_saving(hass):
+async def test_options_flow_rejects_invalid_jinja_before_saving(hass, caplog):
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "ui"},
@@ -300,15 +300,22 @@ async def test_options_flow_rejects_invalid_jinja_before_saving(hass):
     defaults[CONF_ADVANCED_SETTINGS][CONF_ATTRIBUTE_TEMPLATES_JSON] = (
         '{"broken": "{{ broken + }}"}'
     )
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        defaults,
-    )
+    with caplog.at_level(
+        "ERROR",
+        logger="custom_components.virtual_layer.config_flow",
+    ):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            defaults,
+        )
 
     assert result["type"] == FlowResultType.FORM
     assert result["errors"] == {
         CONF_ATTRIBUTE_TEMPLATES_JSON: "invalid_template"
     }
+    assert "field=attribute_templates_json" in caplog.text
+    assert "template=broken" in caplog.text
+    assert "unexpected 'end of print statement'" in caplog.text
     assert entry.options[ATTR_DEVICES] == {}
 
 

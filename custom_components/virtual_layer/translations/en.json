@@ -8,7 +8,7 @@
       "device_name_used": "That Device name belongs to a different Device ID. Choose another name or use the existing Device.",
       "group_name_used": "That device name is already in use, try another.",
       "invalid_json": "Enter a valid JSON object.",
-      "invalid_template": "Fix the Jinja template syntax.",
+      "invalid_template": "Fix the Jinja template syntax. In JSON fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
       "invalid_entity_id": "Enter valid entity IDs.",
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
       "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
@@ -578,7 +578,7 @@
     "error": {
       "device_name_used": "That Device name belongs to a different Device ID. Choose another name or use the existing Device.",
       "invalid_json": "Enter a valid JSON object.",
-      "invalid_template": "Fix the Jinja template syntax.",
+      "invalid_template": "Fix the Jinja template syntax. In JSON fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
       "invalid_entity_id": "Enter valid entity IDs.",
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
       "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
