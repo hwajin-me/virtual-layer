@@ -94,6 +94,7 @@ CONF_ENTITY_KEYS = "entity_keys"
 CONF_MANAGED_DEVICE_NAME = "managed_device_name"
 CONF_REFERENCE_ENTITY_ID = "reference_entity_id"
 CONF_HELPER_UPDATE_MODE = "helper_update_mode"
+CONF_USE_TEMPLATE_HELPER = "use_template_helper"
 CONF_SOURCE_ENTITIES_TEXT = "source_entities_text"
 CONF_TEMPLATE_SOURCES_JSON = "template_sources_json"
 CONF_TARGET_DEVICE_NAME = "target_device_name"
@@ -929,6 +930,20 @@ ENTITY_SELECTOR = selector.EntitySelector(
         reorder=True,
     ),
 )
+PULL_INTERVAL_SELECTOR = selector.NumberSelector(
+    selector.NumberSelectorConfig(
+        min=0,
+        step=1,
+        mode=selector.NumberSelectorMode.BOX,
+    ),
+)
+POLYGON_DISTANCE_SELECTOR = selector.NumberSelector(
+    selector.NumberSelectorConfig(
+        min=1,
+        step="any",
+        mode=selector.NumberSelectorMode.BOX,
+    ),
+)
 
 
 def _reference_entity_schema(
@@ -982,6 +997,18 @@ def _helper_update_schema() -> vol.Schema:
                     mode=selector.SelectSelectorMode.LIST,
                 )
             ),
+        }
+    )
+
+
+def _helper_usage_schema() -> vol.Schema:
+    """Choose whether source-based helpers populate a new entity form."""
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_USE_TEMPLATE_HELPER,
+                default=True,
+            ): selector.BooleanSelector(),
         }
     )
 
@@ -1321,7 +1348,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         ): MULTILINE_TEXT_SELECTOR,
         vol.Optional(
             CONF_PULL_INTERVAL, default=defaults.get(CONF_PULL_INTERVAL, 0)
-        ): nonnegative_int,
+        ): PULL_INTERVAL_SELECTOR,
         vol.Optional(
             CONF_VALUE_TEMPLATE, default=defaults.get(CONF_VALUE_TEMPLATE, "")
         ): TEMPLATE_SELECTOR,
@@ -1358,7 +1385,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 vol.Optional(
                     CONF_POLYGON_DISTANCE_INPUT,
                     default=defaults.get(CONF_POLYGON_DISTANCE_INPUT, 300),
-                ): vol.All(positive_tick, vol.Range(min=1)),
+                ): POLYGON_DISTANCE_SELECTOR,
                 vol.Optional(
                     CONF_POLYGON_TRACKER_RULES_JSON,
                     default=defaults.get(CONF_POLYGON_TRACKER_RULES_JSON, ""),
@@ -1435,6 +1462,38 @@ def _with_hidden_native_template_defaults(
         **user_input,
         CONF_NATIVE_TEMPLATES_JSON: hidden_templates,
     }
+
+
+def _merge_entity_form_defaults(
+    user_input: dict[str, Any],
+    defaults: Mapping | None,
+) -> dict[str, Any]:
+    """Keep collapsed form sections while applying submitted edits."""
+    if not isinstance(defaults, Mapping):
+        return user_input
+    merged = _flatten_entity_form_sections(defaults)
+    for field, value in user_input.items():
+        if field == CONF_NATIVE_VALUE_TEMPLATES and isinstance(value, Mapping):
+            previous = merged.get(field)
+            if isinstance(previous, Mapping):
+                merged[field] = {**previous, **value}
+                continue
+        merged[field] = value
+    return merged
+
+
+def _complete_domain_form_defaults(user_input: dict[str, Any]) -> dict[str, Any]:
+    """Fill the selected domain's dynamic controls before reopening its form."""
+    completed = dict(user_input)
+    platform = completed.get(CONF_PLATFORM)
+    if platform in DOMAIN_NATIVE_TEMPLATE_PROPERTIES:
+        completed[CONF_NATIVE_VALUE_TEMPLATES] = _native_template_defaults(
+            platform,
+            completed,
+        )
+    if platform == "device_tracker":
+        completed.setdefault(CONF_POLYGON_STRATEGY_INPUT, "majority")
+    return completed
 
 
 def _align_form_entity_id_domain(user_input: dict[str, Any]) -> dict[str, Any]:
@@ -1858,6 +1917,11 @@ def _validate_platform_entity(
         ValueError,
         vol.Invalid,
     ) as err:
+        _LOGGER.error(
+            "Virtual Layer domain validation failed (platform=%s, error=%s)",
+            platform,
+            err,
+        )
         raise InvalidDomainOptions from err
 
 
@@ -2135,7 +2199,10 @@ def _build_entity_config(
     if template_sources:
         entity[CONF_TEMPLATE_SOURCES] = template_sources
 
-    pull_interval = user_input.get(CONF_PULL_INTERVAL, 0) or 0
+    try:
+        pull_interval = nonnegative_int(user_input.get(CONF_PULL_INTERVAL, 0) or 0)
+    except vol.Invalid as err:
+        raise InvalidDomainOptions from err
     if pull_interval:
         entity[CONF_PULL_INTERVAL] = pull_interval
 
@@ -2297,16 +2364,21 @@ def _build_entity_config(
     if any((polygon_geojson_text, polygon_files, polygon_person, polygon_rules_text)):
         if platform != "device_tracker":
             raise InvalidDomainOptions
+        try:
+            polygon_distance = positive_tick(
+                user_input.get(CONF_POLYGON_DISTANCE_INPUT, 300),
+            )
+            if polygon_distance < 1:
+                raise vol.Invalid("polygon distance must be at least 1 meter")
+        except vol.Invalid as err:
+            raise InvalidDomainOptions from err
         polygon = {
             CONF_POLYGON_FILES: polygon_files,
             CONF_POLYGON_STRATEGY: user_input.get(
                 CONF_POLYGON_STRATEGY_INPUT,
                 "majority",
             ),
-            CONF_POLYGON_DISTANCE_METERS: user_input.get(
-                CONF_POLYGON_DISTANCE_INPUT,
-                300,
-            ),
+            CONF_POLYGON_DISTANCE_METERS: polygon_distance,
             CONF_POLYGON_AWAY_STATE: str(
                 user_input.get(
                     CONF_POLYGON_AWAY_STATE_INPUT,
@@ -4279,6 +4351,8 @@ def _refresh_add_reference_defaults(
     hass,
     user_input: dict[str, Any],
     reference_defaults: dict[str, Any],
+    *,
+    use_template_helper: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Refresh untouched generated fields after sources change on an add form."""
     submitted_sources = _parse_source_entities(
@@ -4304,13 +4378,48 @@ def _refresh_add_reference_defaults(
         # cannot provide state or attributes for helper generation yet.
         refreshed_reference_defaults = {}
 
-    refreshed_input = _reference_edit_defaults(
-        user_input,
-        refreshed_reference_defaults,
-        _auto_helper_profile(reference_defaults),
-        source_entities_text="\n".join(submitted_sources),
-    )
+    if use_template_helper:
+        refreshed_input = _reference_edit_defaults(
+            user_input,
+            refreshed_reference_defaults,
+            _auto_helper_profile(reference_defaults),
+            source_entities_text="\n".join(submitted_sources),
+        )
+    else:
+        refreshed_input = dict(user_input)
+        refreshed_input[CONF_SOURCE_ENTITIES_TEXT] = "\n".join(submitted_sources)
     return refreshed_input, refreshed_reference_defaults
+
+
+def _without_template_helpers(reference_defaults: Mapping) -> dict[str, Any]:
+    """Keep copied source values while removing generated helper templates."""
+    defaults = dict(reference_defaults)
+    for field_name in (
+        CONF_VALUE_TEMPLATE,
+        CONF_AVAILABILITY_TEMPLATE,
+        CONF_ICON_TEMPLATE,
+        CONF_TEMPLATE_SOURCES_JSON,
+        CONF_ATTRIBUTE_TEMPLATES_JSON,
+        CONF_NATIVE_TEMPLATES_JSON,
+        CONF_NATIVE_VALUE_TEMPLATES,
+    ):
+        defaults.pop(field_name, None)
+
+    domain_options_text = _text_default(
+        defaults.get(CONF_DOMAIN_OPTIONS_JSON),
+    ).strip()
+    if domain_options_text:
+        try:
+            domain_options = _parse_domain_options(domain_options_text)
+        except InvalidJson:
+            domain_options = None
+        if isinstance(domain_options, dict) and CONF_LOCATION_HELPER in domain_options:
+            domain_options.pop(CONF_LOCATION_HELPER, None)
+            if domain_options:
+                defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
+            else:
+                defaults.pop(CONF_DOMAIN_OPTIONS_JSON, None)
+    return defaults
 
 
 def _attribute_template_mapping(value: Any) -> dict[str, str]:
@@ -4870,6 +4979,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         self._pending_title: str | None = None
         self._entity_defaults: dict[str, Any] | None = None
         self._reference_defaults: dict[str, Any] = {}
+        self._add_use_template_helper = True
 
     @staticmethod
     @callback
@@ -4975,7 +5085,9 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                     self.hass,
                     user_input.get(CONF_REFERENCE_ENTITY_ID),
                 )
-                self._entity_defaults = self._reference_defaults
+                if self._reference_defaults:
+                    return await self.async_step_entity_helper()
+                self._entity_defaults = {}
                 return await self.async_step_entity()
             except (
                 InvalidEntityReference,
@@ -5000,18 +5112,44 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             errors=errors,
         )
 
+    async def async_step_entity_helper(self, user_input=None):
+        """Choose whether helpers populate a newly copied entity."""
+        if not self._reference_defaults:
+            return await self.async_step_entity_source()
+
+        if user_input is not None:
+            self._add_use_template_helper = cv.boolean(
+                user_input[CONF_USE_TEMPLATE_HELPER],
+            )
+            self._entity_defaults = (
+                dict(self._reference_defaults)
+                if self._add_use_template_helper
+                else _without_template_helpers(self._reference_defaults)
+            )
+            return await self.async_step_entity()
+
+        return self.async_show_form(
+            step_id="entity_helper",
+            data_schema=_helper_usage_schema(),
+        )
+
     async def async_step_entity(self, user_input=None):
         """Add the first UI-managed virtual entity."""
         errors = _flow_errors(self, "entity")
         if user_input is not None:
             user_input = _flatten_entity_form_sections(user_input)
             user_input = _align_form_entity_id_domain(user_input)
+            user_input = _merge_entity_form_defaults(
+                user_input,
+                self._entity_defaults,
+            )
             try:
                 user_input, self._reference_defaults = (
                     _refresh_add_reference_defaults(
                         self.hass,
                         user_input,
                         self._reference_defaults,
+                        use_template_helper=self._add_use_template_helper,
                     )
                 )
             except InvalidEntityReference as err:
@@ -5021,6 +5159,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             and not errors
             and _needs_domain_specific_form(user_input)
         ):
+            user_input = _complete_domain_form_defaults(user_input)
+            self._entity_defaults = user_input
             return self.async_show_form(
                 step_id="entity",
                 data_schema=_entity_schema(user_input),
@@ -5037,7 +5177,11 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 _set_auto_helper_profile(
                     entity,
                     user_input,
-                    self._reference_defaults,
+                    (
+                        self._reference_defaults
+                        if self._add_use_template_helper
+                        else {}
+                    ),
                 )
                 device_config = _build_device_config(user_input, device_name)
                 options = _append_ui_entity(
@@ -5070,6 +5214,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             except MissingEntityName:
                 errors[CONF_ENTITY_NAME] = "required"
 
+        if user_input is not None:
+            self._entity_defaults = user_input
         return self.async_show_form(
             step_id="entity",
             data_schema=_entity_schema(user_input or self._entity_defaults),
@@ -5091,6 +5237,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._managed_device_name: str | None = None
         self._entity_defaults: dict[str, Any] | None = None
         self._reference_defaults: dict[str, Any] = {}
+        self._add_target_device_name: str | None = None
+        self._add_use_template_helper = True
         self._edit_auto_helper_profile: dict[str, Any] | None = None
         self._edit_current_defaults: dict[str, Any] | None = None
         self._edit_target_device_name: str | None = None
@@ -5191,10 +5339,15 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     self.hass,
                     user_input.get(CONF_REFERENCE_ENTITY_ID),
                 )
+                self._add_target_device_name = user_input.get(
+                    CONF_TARGET_DEVICE_NAME,
+                )
+                if self._reference_defaults:
+                    return await self.async_step_entity_helper()
                 self._entity_defaults = _with_existing_device_defaults(
-                    self._reference_defaults,
+                    {},
                     self.config_entry.options,
-                    user_input.get(CONF_TARGET_DEVICE_NAME),
+                    self._add_target_device_name,
                 )
                 return await self.async_step_entity()
             except (
@@ -5224,18 +5377,49 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             errors=errors,
         )
 
+    async def async_step_entity_helper(self, user_input=None):
+        """Choose whether helpers populate a newly copied entity."""
+        if not self._reference_defaults:
+            return await self.async_step_entity_source()
+
+        if user_input is not None:
+            self._add_use_template_helper = cv.boolean(
+                user_input[CONF_USE_TEMPLATE_HELPER],
+            )
+            defaults = (
+                dict(self._reference_defaults)
+                if self._add_use_template_helper
+                else _without_template_helpers(self._reference_defaults)
+            )
+            self._entity_defaults = _with_existing_device_defaults(
+                defaults,
+                self.config_entry.options,
+                self._add_target_device_name,
+            )
+            return await self.async_step_entity()
+
+        return self.async_show_form(
+            step_id="entity_helper",
+            data_schema=_helper_usage_schema(),
+        )
+
     async def async_step_entity(self, user_input=None):
         """Add a UI-managed virtual entity."""
         errors = _flow_errors(self, "entity")
         if user_input is not None:
             user_input = _flatten_entity_form_sections(user_input)
             user_input = _align_form_entity_id_domain(user_input)
+            user_input = _merge_entity_form_defaults(
+                user_input,
+                self._entity_defaults,
+            )
             try:
                 user_input, self._reference_defaults = (
                     _refresh_add_reference_defaults(
                         self.hass,
                         user_input,
                         self._reference_defaults,
+                        use_template_helper=self._add_use_template_helper,
                     )
                 )
             except InvalidEntityReference as err:
@@ -5245,6 +5429,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             and not errors
             and _needs_domain_specific_form(user_input)
         ):
+            user_input = _complete_domain_form_defaults(user_input)
+            self._entity_defaults = user_input
             return self.async_show_form(
                 step_id="entity",
                 data_schema=_entity_schema(user_input),
@@ -5261,7 +5447,11 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 _set_auto_helper_profile(
                     entity,
                     user_input,
-                    self._reference_defaults,
+                    (
+                        self._reference_defaults
+                        if self._add_use_template_helper
+                        else {}
+                    ),
                 )
                 device_config = _build_device_config(user_input, device_name)
                 options = _append_ui_entity(
@@ -5290,6 +5480,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             except MissingEntityName:
                 errors[CONF_ENTITY_NAME] = "required"
 
+        if user_input is not None:
+            self._entity_defaults = user_input
         return self.async_show_form(
             step_id="entity",
             data_schema=_entity_schema(user_input or self._entity_defaults),
@@ -5479,10 +5671,39 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             return await self.async_step_edit_entity_source()
 
         if user_input is not None:
-            self._prepare_edit_entity_defaults(
-                helper_update_mode=user_input[CONF_HELPER_UPDATE_MODE],
-            )
-            return await self.async_step_edit_entity()
+            try:
+                self._prepare_edit_entity_defaults(
+                    helper_update_mode=user_input[CONF_HELPER_UPDATE_MODE],
+                )
+                return await self.async_step_edit_entity()
+            except Exception:
+                # A damaged legacy helper must not make the entity impossible
+                # to edit. Keep the newly selected sources and current values,
+                # then let the user repair templates in the normal form.
+                _LOGGER.exception(
+                    "Unable to apply Virtual Layer helper update; preserving "
+                    "current templates (flow=%s, entry_id=%s)",
+                    type(self).__name__,
+                    getattr(self.config_entry, "entry_id", None) or "new",
+                )
+                fallback_defaults = dict(self._edit_current_defaults)
+                fallback_defaults[CONF_SOURCE_ENTITIES_TEXT] = "\n".join(
+                    self._edit_source_entities
+                )
+                self._edit_helper_update_mode = HELPER_UPDATE_KEEP
+                self._entity_defaults = _with_existing_device_defaults(
+                    fallback_defaults,
+                    self.config_entry.options,
+                    self._edit_target_device_name,
+                )
+                errors = _flow_errors(self, "edit_entity", {
+                    "base": "helper_update_failed",
+                })
+                return self.async_show_form(
+                    step_id="edit_entity",
+                    data_schema=_entity_schema(self._entity_defaults),
+                    errors=errors,
+                )
 
         return self.async_show_form(
             step_id="edit_entity_helper",
@@ -5498,7 +5719,13 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         if user_input is not None:
             user_input = _flatten_entity_form_sections(user_input)
             user_input = _align_form_entity_id_domain(user_input)
+            user_input = _merge_entity_form_defaults(
+                user_input,
+                self._entity_defaults,
+            )
         if user_input is not None and _needs_domain_specific_form(user_input):
+            user_input = _complete_domain_form_defaults(user_input)
+            self._entity_defaults = user_input
             return self.async_show_form(
                 step_id="edit_entity",
                 data_schema=_entity_schema(user_input),
@@ -5602,6 +5829,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             except InvalidEntitySelection:
                 errors["base"] = "entity_not_found"
 
+        if user_input is not None:
+            self._entity_defaults = user_input
         defaults = user_input
         if defaults is None:
             if self._entity_defaults is not None:

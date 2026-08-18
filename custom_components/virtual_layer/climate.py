@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import homeassistant.helpers.config_validation as cv
@@ -189,6 +189,21 @@ def normalize_domain_options(config):
 
 def validate_domain_options(config) -> None:
     """Validate mode relationships submitted through the config flow."""
+    native_templates = config.get(CONF_NATIVE_TEMPLATES, {})
+    native_fields = (
+        {
+            str(name)
+            for name, template in native_templates.items()
+            if isinstance(template, str) and template.strip()
+        }
+        if isinstance(native_templates, Mapping)
+        else set()
+    )
+
+    def is_dynamic(*fields: str) -> bool:
+        """Return whether a native Jinja field supersedes static fallback data."""
+        return any(field in native_fields for field in fields)
+
     for field_name in (
         CONF_HVAC_MODES,
         CONF_FAN_MODES,
@@ -196,6 +211,8 @@ def validate_domain_options(config) -> None:
         CONF_SWING_MODES,
         CONF_SWING_HORIZONTAL_MODES,
     ):
+        if is_dynamic(field_name):
+            continue
         modes = config.get(field_name, [])
         if any(not str(mode).strip() for mode in modes):
             raise vol.Invalid(f"{field_name} cannot contain empty modes")
@@ -203,10 +220,12 @@ def validate_domain_options(config) -> None:
             raise vol.Invalid(f"{field_name} cannot contain duplicate modes")
 
     hvac_modes = config.get(CONF_HVAC_MODES, [])
-    if not hvac_modes:
+    if not is_dynamic(CONF_HVAC_MODES) and not hvac_modes:
         raise vol.Invalid("At least one HVAC mode is required")
     initial_mode = _safe_hvac_mode(config.get(CONF_INITIAL_VALUE))
-    if initial_mode not in hvac_modes:
+    if initial_mode is None:
+        raise vol.Invalid("Initial value must be a valid HVAC mode")
+    if not is_dynamic(CONF_HVAC_MODES, "hvac_mode") and initial_mode not in hvac_modes:
         raise vol.Invalid("Initial value must be included in HVAC modes")
 
     for current_field, modes_field in (
@@ -215,14 +234,16 @@ def validate_domain_options(config) -> None:
         (CONF_SWING_MODE, CONF_SWING_MODES),
         (CONF_SWING_HORIZONTAL_MODE, CONF_SWING_HORIZONTAL_MODES),
     ):
+        if is_dynamic(current_field, modes_field):
+            continue
         current_mode = config.get(current_field)
         if current_mode is not None and current_mode not in config.get(modes_field, []):
             raise vol.Invalid(f"{current_field} must be included in {modes_field}")
 
     action = config.get(CONF_HVAC_ACTION)
-    if action is not None and _as_hvac_action(action) is None:
+    if not is_dynamic(CONF_HVAC_ACTION) and action is not None and _as_hvac_action(action) is None:
         raise vol.Invalid("hvac_action is invalid")
-    if config.get(CONF_TEMPERATURE_UNIT) not in {
+    if not is_dynamic(CONF_TEMPERATURE_UNIT) and config.get(CONF_TEMPERATURE_UNIT) not in {
         UnitOfTemperature.CELSIUS,
         UnitOfTemperature.FAHRENHEIT,
         UnitOfTemperature.KELVIN,
@@ -233,13 +254,22 @@ def validate_domain_options(config) -> None:
     max_temp = _finite_float(config.get(CONF_MAX_TEMP), float("nan"))
     min_humidity = _finite_float(config.get(CONF_MIN_HUMIDITY), float("nan"))
     max_humidity = _finite_float(config.get(CONF_MAX_HUMIDITY), float("nan"))
-    if not all(
+    if not is_dynamic(CONF_MIN_TEMP, CONF_MAX_TEMP) and not all(
         math.isfinite(value)
-        for value in (min_temp, max_temp, min_humidity, max_humidity)
+        for value in (min_temp, max_temp)
     ):
-        raise vol.Invalid("climate ranges must be finite")
-    if min_temp > max_temp or min_humidity > max_humidity:
-        raise vol.Invalid("climate minimum cannot exceed maximum")
+        raise vol.Invalid("temperature ranges must be finite")
+    if not is_dynamic(CONF_MIN_HUMIDITY, CONF_MAX_HUMIDITY) and not all(
+        math.isfinite(value) for value in (min_humidity, max_humidity)
+    ):
+        raise vol.Invalid("humidity ranges must be finite")
+    if not is_dynamic(CONF_MIN_TEMP, CONF_MAX_TEMP) and min_temp > max_temp:
+        raise vol.Invalid("temperature minimum cannot exceed maximum")
+    if (
+        not is_dynamic(CONF_MIN_HUMIDITY, CONF_MAX_HUMIDITY)
+        and min_humidity > max_humidity
+    ):
+        raise vol.Invalid("humidity minimum cannot exceed maximum")
 
     for field_name in (
         CONF_CURRENT_TEMPERATURE,
@@ -247,17 +277,37 @@ def validate_domain_options(config) -> None:
         CONF_TARGET_TEMPERATURE_HIGH,
         CONF_TARGET_TEMPERATURE_LOW,
     ):
-        if field_name in config and not min_temp <= float(config[field_name]) <= max_temp:
+        if (
+            field_name in config
+            and not is_dynamic(field_name, CONF_MIN_TEMP, CONF_MAX_TEMP)
+            and not min_temp <= float(config[field_name]) <= max_temp
+        ):
             raise vol.Invalid(f"{field_name} must be within the temperature range")
     for field_name in (CONF_CURRENT_HUMIDITY, CONF_TARGET_HUMIDITY):
-        if field_name in config and not min_humidity <= float(config[field_name]) <= max_humidity:
+        if (
+            field_name in config
+            and not is_dynamic(field_name, CONF_MIN_HUMIDITY, CONF_MAX_HUMIDITY)
+            and not min_humidity <= float(config[field_name]) <= max_humidity
+        ):
             raise vol.Invalid(f"{field_name} must be within the humidity range")
     low = config.get(CONF_TARGET_TEMPERATURE_LOW)
     high = config.get(CONF_TARGET_TEMPERATURE_HIGH)
-    if low is not None and high is not None and float(low) > float(high):
+    if (
+        not is_dynamic(
+            CONF_TARGET_TEMPERATURE_LOW,
+            CONF_TARGET_TEMPERATURE_HIGH,
+        )
+        and low is not None
+        and high is not None
+        and float(low) > float(high)
+    ):
         raise vol.Invalid("target temperature low cannot exceed high")
     for field_name in (CONF_TARGET_TEMPERATURE_STEP, CONF_TARGET_HUMIDITY_STEP):
-        if field_name in config and _finite_step(config[field_name]) is None:
+        if (
+            field_name in config
+            and not is_dynamic(field_name)
+            and _finite_step(config[field_name]) is None
+        ):
             raise vol.Invalid(f"{field_name} must be positive")
 
 

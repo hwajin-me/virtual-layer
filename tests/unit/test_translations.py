@@ -16,6 +16,7 @@ from custom_components.virtual_layer.config_flow import (
     _device_schema,
     _entity_schema,
     _helper_update_schema,
+    _helper_usage_schema,
     _options_schema,
     _reference_entity_schema,
     _select_device_schema,
@@ -29,6 +30,7 @@ from custom_components.virtual_layer.const import (
     ATTR_GROUP_NAME,
     CONF_INITIAL_VALUE,
     CONF_NAME,
+    VIRTUAL_ENTITY_DOMAINS,
 )
 
 pytestmark = pytest.mark.unit
@@ -80,8 +82,8 @@ def _assert_form_translation_fields(catalog, section, step_id, schema):
 
     assert step["title"]
     assert step["description"]
-    assert fields <= set(step.get("data", {})), step_id
     section_fields = set(step.get("sections", {}))
+    assert fields <= set(step.get("data", {})) | section_fields, step_id
     assert fields - section_fields <= set(step.get("data_description", {})), step_id
     for section_name in fields & section_fields:
         translated_section = step["sections"][section_name]
@@ -93,17 +95,16 @@ def _assert_form_translation_fields(catalog, section, step_id, schema):
         section_fields = _schema_key_names(section_validator.schema)
         assert translated_section["name"]
         assert translated_section["description"]
-        translated_data = set(step.get("data", {})) | set(
-            translated_section.get("data", {})
-        )
-        translated_descriptions = set(step.get("data_description", {})) | set(
-            translated_section.get("data_description", {})
-        )
-        assert section_fields <= translated_data, (
+        assert section_fields <= set(translated_section.get("data", {})), (
             step_id,
             section_name,
         )
-        assert section_fields <= translated_descriptions, (step_id, section_name)
+        assert section_fields <= set(
+            translated_section.get("data_description", {})
+        ), (
+            step_id,
+            section_name,
+        )
 
 
 def _selector_options(schema, translation_key: str) -> set[str]:
@@ -160,11 +161,38 @@ def test_native_template_sections_are_translated_for_add_and_edit():
 def test_entity_forms_have_descriptions_for_every_dynamic_field_in_both_languages():
     for translation_file in (TRANSLATIONS / "en.json", TRANSLATIONS / "ko.json"):
         catalog = json.loads(translation_file.read_text(encoding="utf-8"))
-        for platform in DOMAIN_NATIVE_TEMPLATE_PROPERTIES:
+        expected_fields = set()
+        expected_sections = set()
+        expected_section_fields = {}
+        for platform in VIRTUAL_ENTITY_DOMAINS:
             schema = _entity_schema({CONF_PLATFORM: platform})
+            for marker, validator in schema.schema.items():
+                field = str(getattr(marker, "schema", marker))
+                nested = getattr(validator, "schema", None)
+                if hasattr(nested, "schema"):
+                    expected_sections.add(field)
+                    expected_section_fields.setdefault(field, set()).update(
+                        _schema_key_names(nested)
+                    )
+                else:
+                    expected_fields.add(field)
             _assert_form_translation_fields(catalog, "config", "entity", schema)
             _assert_form_translation_fields(catalog, "options", "entity", schema)
             _assert_form_translation_fields(catalog, "options", "edit_entity", schema)
+
+        for root, step_id in (
+            ("config", "entity"),
+            ("options", "entity"),
+            ("options", "edit_entity"),
+        ):
+            translated_step = catalog[root]["step"][step_id]
+            assert set(translated_step["data"]) == expected_fields
+            assert set(translated_step["data_description"]) == expected_fields
+            assert set(translated_step["sections"]) == expected_sections
+            for section_name, fields in expected_section_fields.items():
+                translated_section = translated_step["sections"][section_name]
+                assert set(translated_section["data"]) == fields
+                assert set(translated_section["data_description"]) == fields
 
 
 def test_english_translation_covers_config_flow_forms_and_errors():
@@ -192,6 +220,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
             include_entity_toggle=False,
         ),
         "entity_source": _reference_entity_schema(),
+        "entity_helper": _helper_usage_schema(),
         "entity": _entity_schema(),
     }
     option_steps = {
@@ -203,6 +232,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
         "delete_device": _select_device_schema(entity_options),
         "edit_entity": _entity_schema(),
         "edit_entity_helper": _helper_update_schema(),
+        "entity_helper": _helper_usage_schema(),
         "edit_entity_source": _reference_entity_schema(
             ["sensor.washer_phase"],
             [{"value": "Laundry", "label": "Laundry"}],

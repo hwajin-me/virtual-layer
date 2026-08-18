@@ -1,9 +1,0 @@
-default_config:
-
-virtual_layer_smoke:
-
-logger:
-  default: warning
-  logs:
-    custom_components.virtual_layer: info
-    custom_components.virtual_layer_smoke: info

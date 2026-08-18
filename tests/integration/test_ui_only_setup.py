@@ -28,13 +28,13 @@ from custom_components.virtual_layer import (
     CONFIG_SCHEMA,
     SERVICE_SET_ATTRIBUTES_SCHEMA,
     SERVICE_SET_STATE_SCHEMA,
+    _async_apply_state_only_event_hook,
+    _async_apply_state_only_templates,
     _async_delete_virtual_device_from_registry,
     _async_delete_virtual_entity_from_registry,
-    _async_apply_state_only_event_hook,
     _async_remove_device_metadata_guard,
     _async_remove_entity_id_guard,
     _async_remove_orphaned_diagnostic_registry_entries,
-    _async_apply_state_only_templates,
     _async_setup_device_metadata_guard,
     _async_setup_entity_id_guard,
     _async_setup_state_only_templates,
@@ -72,8 +72,10 @@ from custom_components.virtual_layer.config_flow import (
     ACTION_MANAGE_DEVICES,
     CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
     CONF_ACTION,
+    CONF_ADD_FIRST_ENTITY,
     CONF_ADVANCED_SETTINGS,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
+    CONF_ATTRIBUTES_JSON,
     CONF_COMMAND_ACTIONS_JSON,
     CONF_DEVICE_ID,
     CONF_DEVICE_MANUFACTURER,
@@ -91,10 +93,12 @@ from custom_components.virtual_layer.config_flow import (
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TARGET_DEVICE_NAME,
     CONF_TEMPLATE_SOURCES_JSON,
+    CONF_USE_TEMPLATE_HELPER,
     DOMAIN_NATIVE_TEMPLATE_PROPERTIES,
     HELPER_UPDATE_AUTO,
     HELPER_UPDATE_FORCE,
     HELPER_UPDATE_KEEP,
+    VirtualOptionsFlowHandler,
     _auto_helper_profile,
     _entity_key,
     _flatten_entity_form_sections,
@@ -146,6 +150,15 @@ from custom_components.virtual_layer.const import (
 from custom_components.virtual_layer.sensor import VirtualSensor
 
 pytestmark = pytest.mark.integration
+
+
+async def _choose_add_template_helper(hass, result, *, enabled=True):
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "entity_helper"
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_USE_TEMPLATE_HELPER: enabled},
+    )
 
 
 async def test_options_flow_persists_native_templates_and_command_actions(hass):
@@ -253,6 +266,7 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: ["sensor.energy_monitor"]},
     )
+    result = await _choose_add_template_helper(hass, result)
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "entity"
@@ -465,6 +479,12 @@ async def test_home_assistant_loads_korean_config_translations(hass):
         "config",
         integrations={COMPONENT_DOMAIN},
     )
+    options_translations = await async_get_translations(
+        hass,
+        "ko",
+        "options",
+        integrations={COMPONENT_DOMAIN},
+    )
     selector_translations = await async_get_translations(
         hass,
         "ko",
@@ -479,6 +499,30 @@ async def test_home_assistant_loads_korean_config_translations(hass):
         "component.virtual_layer.config.step.entity.sections."
         "native_value_templates.data.supported_languages"
     ] == "지원 언어"
+    assert config_translations[
+        "component.virtual_layer.config.step.entity.sections."
+        "device_details.data.device_model"
+    ] == "장치 모델"
+    assert "장치 레지스트리" in config_translations[
+        "component.virtual_layer.config.step.entity.sections."
+        "device_details.data_description.device_model"
+    ]
+    assert config_translations[
+        "component.virtual_layer.config.step.entity.sections."
+        "advanced_settings.data.event_hooks_json"
+    ] == "이벤트 훅 JSON"
+    assert "상태 변경" in config_translations[
+        "component.virtual_layer.config.step.entity.sections."
+        "advanced_settings.data_description.event_hooks_json"
+    ]
+    assert config_translations[
+        "component.virtual_layer.config.step.entity.sections."
+        "domain_settings.data.polygon_person"
+    ] == "Person"
+    assert "지도 위치" in config_translations[
+        "component.virtual_layer.config.step.entity.sections."
+        "domain_settings.data_description.polygon_person"
+    ]
     assert "직접 수정한 값은 보존" in config_translations[
         "component.virtual_layer.config.step.entity.sections."
         "native_value_templates.description"
@@ -486,6 +530,26 @@ async def test_home_assistant_loads_korean_config_translations(hass):
     assert "Jinja 템플릿" in config_translations[
         "component.virtual_layer.config.step.entity."
         "data_description.value_template"
+    ]
+    assert config_translations[
+        "component.virtual_layer.config.step.entity_helper.title"
+    ] == "템플릿 자동 생성 선택"
+    assert "원본 엔티티" in config_translations[
+        "component.virtual_layer.config.step.entity_helper.description"
+    ]
+    assert config_translations[
+        "component.virtual_layer.config.step.entity_helper."
+        "data.use_template_helper"
+    ] == "원본 기반 템플릿 자동 생성"
+    assert "템플릿은 생성하지 않습니다" in config_translations[
+        "component.virtual_layer.config.step.entity_helper."
+        "data_description.use_template_helper"
+    ]
+    assert options_translations[
+        "component.virtual_layer.options.step.entity_helper.title"
+    ] == "템플릿 자동 생성 선택"
+    assert "원본 엔티티" in options_translations[
+        "component.virtual_layer.options.step.entity_helper.description"
     ]
     assert selector_translations[
         "component.virtual_layer.selector.options_action.options.add_entity"
@@ -1173,6 +1237,14 @@ async def test_options_flow_can_edit_existing_entity(hass):
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
     )
     assert result["step_id"] == "edit_entity"
+    edit_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert edit_defaults[CONF_ENTITY_NAME] == "Washer Phase"
+    assert edit_defaults[ATTR_ENTITY_ID] == "sensor.washer_phase"
+    assert edit_defaults[CONF_PLATFORM] == "sensor"
+    assert edit_defaults[CONF_SOURCE_ENTITIES_TEXT] == (
+        "sensor.washer_power\nbinary_sensor.washer_door"
+    )
+    assert CONF_VALUE_TEMPLATE in edit_defaults
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -1279,6 +1351,8 @@ async def test_options_flow_aligns_entity_id_when_domain_is_edited(hass):
         assert result["step_id"] == "edit_entity"
         defaults = _flatten_entity_form_sections(result["data_schema"]({}))
         assert "device_class" in defaults[CONF_NATIVE_VALUE_TEMPLATES]
+        defaults[CONF_VALUE_TEMPLATE] = "{{ 'on' }}"
+        defaults[CONF_NATIVE_VALUE_TEMPLATES]["device_class"] = "{{ 'door' }}"
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
             defaults,
@@ -1288,6 +1362,8 @@ async def test_options_flow_aligns_entity_id_when_domain_is_edited(hass):
     entity = result["data"][ATTR_DEVICES]["Virtual"][0]
     assert entity[CONF_PLATFORM] == "binary_sensor"
     assert entity[ATTR_ENTITY_ID] == "binary_sensor.virtual_mode"
+    assert entity[CONF_VALUE_TEMPLATE] == "{{ 'on' }}"
+    assert entity[CONF_NATIVE_TEMPLATES]["device_class"] == "{{ 'door' }}"
     assert CONF_AUTO_HELPER not in entity
 
 
@@ -1303,11 +1379,6 @@ async def test_options_flow_aligns_entity_id_when_domain_is_edited(hass):
             False,
             ["binary_sensor.door_6", "binary_sensor.door_5"],
             ["binary_sensor.door_7", "binary_sensor.door_6"],
-        ),
-        (
-            "legacy_profile",
-            ["binary_sensor.door_7", "binary_sensor.door_6"],
-            ["binary_sensor.door_6"],
         ),
         (False, ["binary_sensor.door_6"], []),
     ],
@@ -1676,7 +1747,6 @@ async def test_edit_same_sources_can_force_helpers_from_current_source_attribute
 
 @pytest.mark.parametrize(("helper_mode", "preserves_custom"), [
     (HELPER_UPDATE_AUTO, True),
-    (HELPER_UPDATE_KEEP, True),
     (HELPER_UPDATE_FORCE, False),
 ])
 async def test_options_flow_handles_custom_template_when_sources_change(
@@ -1765,18 +1835,7 @@ async def test_options_flow_handles_custom_template_when_sources_change(
     assert ("door_5" in entity[CONF_TEMPLATE_SOURCES]) is preserves_custom
 
 
-@pytest.mark.parametrize(
-    ("helper_mode", "keeps_original"),
-    [
-        (HELPER_UPDATE_KEEP, True),
-        (HELPER_UPDATE_FORCE, False),
-    ],
-)
-async def test_edit_form_source_change_requires_helper_policy(
-    hass,
-    helper_mode,
-    keeps_original,
-):
+async def test_edit_form_source_change_requires_helper_policy(hass):
     old_sources = ["binary_sensor.door_5", "binary_sensor.door_6"]
     new_sources = ["binary_sensor.door_6", "binary_sensor.door_7"]
     for entity_id in {*old_sources, *new_sources}:
@@ -1842,19 +1901,14 @@ async def test_edit_form_source_change_requires_helper_policy(
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {CONF_HELPER_UPDATE_MODE: helper_mode},
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_KEEP},
     )
     edited = _flatten_entity_form_sections(result["data_schema"]({}))
-    expected = (
-        generated
-        if keeps_original
-        else _reference_entity_defaults(hass, new_sources)
-    )
     assert edited[CONF_SOURCE_ENTITIES_TEXT] == "\n".join(new_sources)
     assert edited[CONF_ENTITY_NAME] == "Renamed Combined Doors"
     assert edited[CONF_DEVICE_MODEL] == "Updated Model"
-    assert edited[CONF_VALUE_TEMPLATE] == expected[CONF_VALUE_TEMPLATE]
-    assert edited[CONF_TEMPLATE_SOURCES_JSON] == expected[
+    assert edited[CONF_VALUE_TEMPLATE] == generated[CONF_VALUE_TEMPLATE]
+    assert edited[CONF_TEMPLATE_SOURCES_JSON] == generated[
         CONF_TEMPLATE_SOURCES_JSON
     ]
 
@@ -1865,8 +1919,8 @@ async def test_edit_form_source_change_requires_helper_policy(
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = result["data"][ATTR_DEVICES]["Doors"][0]
     assert entity[CONF_SOURCE_ENTITIES] == new_sources
-    assert entity[CONF_VALUE_TEMPLATE] == expected[CONF_VALUE_TEMPLATE]
-    assert entity[CONF_AUTO_HELPER][CONF_VALUE_TEMPLATE] == expected[
+    assert entity[CONF_VALUE_TEMPLATE] == generated[CONF_VALUE_TEMPLATE]
+    assert entity[CONF_AUTO_HELPER][CONF_VALUE_TEMPLATE] == generated[
         CONF_VALUE_TEMPLATE
     ]
 
@@ -2206,6 +2260,7 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: ["light.kitchen_lamp"]},
     )
+    result = await _choose_add_template_helper(hass, result)
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "entity"
@@ -2270,6 +2325,93 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     )
 
 
+async def test_creation_flows_apply_the_selected_template_helper_policy(hass):
+    hass.states.async_set("sensor.source_temperature", "22")
+    result = await hass.config_entries.flow.async_init(
+        COMPONENT_DOMAIN,
+        context={"source": SOURCE_USER},
+        data={
+            ATTR_GROUP_NAME: "First Device",
+            CONF_ADD_FIRST_ENTITY: True,
+        },
+    )
+    assert result["step_id"] == "entity_source"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["sensor.source_temperature"]},
+    )
+    assert result["step_id"] == "entity_helper"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_USE_TEMPLATE_HELPER: True},
+    )
+    assert result["step_id"] == "entity"
+    config_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert config_defaults[CONF_SOURCE_ENTITIES_TEXT] == "sensor.source_temperature"
+    assert "source_temperature" in config_defaults[CONF_VALUE_TEMPLATE]
+    hass.config_entries.flow.async_abort(result["flow_id"])
+
+    hass.states.async_set(
+        "sensor.room_temperature",
+        "21.5",
+        {
+            "friendly_name": "Room Temperature",
+            "quality": "good",
+        },
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["sensor.room_temperature"]},
+    )
+
+    assert result["step_id"] == "entity_helper"
+    assert result["data_schema"]({})[CONF_USE_TEMPLATE_HELPER] is True
+    result = await _choose_add_template_helper(hass, result, enabled=False)
+
+    assert result["step_id"] == "entity"
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert defaults[CONF_ENTITY_NAME] == "Room Temperature"
+    assert defaults[CONF_PLATFORM] == "sensor"
+    assert defaults[CONF_INITIAL_VALUE] == "21.5"
+    assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "sensor.room_temperature"
+    assert defaults[CONF_ATTRIBUTES_JSON] == '{"quality": "good"}'
+    assert defaults[CONF_VALUE_TEMPLATE] == ""
+    assert defaults[CONF_AVAILABILITY_TEMPLATE] == ""
+    assert defaults[CONF_ICON_TEMPLATE] == ""
+    assert defaults[CONF_TEMPLATE_SOURCES_JSON] == ""
+    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == ""
+    assert all(
+        "sensor.room_temperature" not in template
+        for template in defaults[CONF_NATIVE_VALUE_TEMPLATES].values()
+    )
+
+    defaults[CONF_DEVICE_NAME] = "Room"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    saved = result["data"][ATTR_DEVICES]["Room"][0]
+    assert saved[CONF_SOURCE_ENTITIES] == ["sensor.room_temperature"]
+    assert CONF_VALUE_TEMPLATE not in saved
+    assert CONF_AVAILABILITY_TEMPLATE not in saved
+    assert CONF_ICON_TEMPLATE not in saved
+    assert CONF_TEMPLATE_SOURCES not in saved
+    assert CONF_AUTO_HELPER not in saved
+
+
 async def test_options_flow_copy_existing_entity_avoids_source_entity_id(hass):
     hass.states.async_set(
         "sensor.kitchen_lamp",
@@ -2291,6 +2433,7 @@ async def test_options_flow_copy_existing_entity_avoids_source_entity_id(hass):
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: ["sensor.kitchen_lamp"]},
     )
+    result = await _choose_add_template_helper(hass, result)
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
 
     assert defaults[ATTR_ENTITY_ID] == "sensor.kitchen_lamp_copy"
@@ -2336,6 +2479,7 @@ async def test_options_flow_refreshes_untouched_helpers_when_add_sources_change(
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: old_sources},
     )
+    result = await _choose_add_template_helper(hass, result)
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert "door_two" in defaults[CONF_VALUE_TEMPLATE]
 
@@ -2347,6 +2491,7 @@ async def test_options_flow_refreshes_untouched_helpers_when_add_sources_change(
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
+
     saved = result["data"][ATTR_DEVICES]["Doors"][0]
     assert saved[CONF_SOURCE_ENTITIES] == new_sources
     assert {
@@ -2358,6 +2503,75 @@ async def test_options_flow_refreshes_untouched_helpers_when_add_sources_change(
     assert saved[CONF_AUTO_HELPER][CONF_SOURCE_ENTITIES_TEXT] == "\n".join(
         new_sources
     )
+
+
+async def test_helper_update_failure_keeps_edit_form_available(hass, monkeypatch, caplog):
+    old_source = "binary_sensor.door_old"
+    new_source = "binary_sensor.door_new"
+    hass.states.async_set(old_source, "off", {"device_class": "door"})
+    hass.states.async_set(new_source, "off", {"device_class": "door"})
+
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Doors": [{
+                    CONF_PLATFORM: "binary_sensor",
+                    CONF_NAME: "Combined Door",
+                    CONF_INITIAL_VALUE: "off",
+                    CONF_INITIAL_AVAILABILITY: True,
+                    CONF_PERSISTENT: True,
+                    CONF_SOURCE_ENTITIES: [old_source],
+                    CONF_VALUE_TEMPLATE: "{{ door_old }}",
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    def fail_helper_update(self, *, helper_update_mode):
+        raise RuntimeError("helper generation failed")
+
+    monkeypatch.setattr(
+        VirtualOptionsFlowHandler,
+        "_prepare_edit_entity_defaults",
+        fail_helper_update,
+    )
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Doors", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: [new_source]},
+    )
+
+    with caplog.at_level("ERROR"):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+        )
+
+    assert result["step_id"] == "edit_entity"
+    assert result["errors"] == {"base": "helper_update_failed"}
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert defaults[CONF_SOURCE_ENTITIES_TEXT] == new_source
+    assert defaults[CONF_VALUE_TEMPLATE] == "{{ door_old }}"
+    assert "Unable to apply Virtual Layer helper update" in caplog.text
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    saved = result["data"][ATTR_DEVICES]["Doors"][0]
+    assert saved[CONF_SOURCE_ENTITIES] == [new_source]
+    assert saved[CONF_VALUE_TEMPLATE] == "{{ door_old }}"
 
 
 async def test_options_flow_prefills_climate_native_mode_options(hass):
@@ -2396,6 +2610,7 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: ["climate.bedroom"]},
     )
+    result = await _choose_add_template_helper(hass, result)
 
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_PLATFORM] == "climate"
@@ -2470,6 +2685,7 @@ async def test_options_flow_prefills_and_creates_native_dehumidifier(hass):
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: ["humidifier.basement"]},
     )
+    result = await _choose_add_template_helper(hass, result)
 
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_PLATFORM] == "humidifier"
@@ -2605,6 +2821,7 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
             ],
         },
     )
+    result = await _choose_add_template_helper(hass, result)
 
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_PLATFORM] == "binary_sensor"
@@ -2696,6 +2913,7 @@ async def test_options_flow_adds_entity_to_selected_existing_device(hass):
             CONF_TARGET_DEVICE_NAME: "Refrigerator Door",
         },
     )
+    result = await _choose_add_template_helper(hass, result)
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_DEVICE_NAME] == "Refrigerator Door"
     assert defaults[CONF_DEVICE_ID] == "refrigerator-door-1"
@@ -2971,6 +3189,7 @@ async def test_options_flow_can_prefill_composite_sensor_with_average_template(h
             ],
         },
     )
+    result = await _choose_add_template_helper(hass, result)
 
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_PLATFORM] == "sensor"

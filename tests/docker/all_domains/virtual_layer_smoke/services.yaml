@@ -1,8 +1,0 @@
-capture:
-  fields:
-    command:
-      selector:
-        text:
-    value:
-      selector:
-        object:

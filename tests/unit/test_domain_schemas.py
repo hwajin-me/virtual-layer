@@ -9,6 +9,7 @@ from custom_components.virtual_layer.const import (
     CONF_ATTRIBUTE,
     CONF_INITIAL_VALUE,
     CONF_NAME,
+    CONF_NATIVE_TEMPLATES,
     CONF_TEMPLATE_SOURCES,
     VIRTUAL_ENTITY_DOMAINS,
 )
@@ -93,3 +94,29 @@ def test_generic_domain_schemas_accept_direct_ui_options():
         })
 
         assert validated["yaml_only_option"] == direct_option, domain
+
+
+def test_climate_native_templates_override_stale_static_fallbacks():
+    """Jinja native values must be able to replace legacy copied options."""
+    from custom_components.virtual_layer.climate import validate_domain_options
+
+    validate_domain_options({
+        CONF_INITIAL_VALUE: "heat",
+        "hvac_modes": ["off", "cool"],
+        "fan_modes": ["auto"],
+        "fan_mode": "auto",
+        "target_temperature": 40,
+        "min_temp": 7,
+        "max_temp": 35,
+        "temperature_unit": "°C",
+        "min_humidity": 0,
+        "max_humidity": 100,
+        CONF_NATIVE_TEMPLATES: {
+            "hvac_modes": "{{ ['off', 'heat'] }}",
+            "fan_modes": "{{ ['auto', 'quiet'] }}",
+            "fan_mode": "{{ 'quiet' }}",
+            "target_temperature": "{{ 21 }}",
+            "min_temp": "{{ 18 }}",
+            "max_temp": "{{ 25 }}",
+        },
+    })

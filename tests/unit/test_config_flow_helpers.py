@@ -14,9 +14,11 @@ from homeassistant.const import (
     CONF_NAME,
     CONF_PLATFORM,
 )
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import selector
 from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
+from voluptuous_serialize import convert
 
 from custom_components.virtual_layer.config_flow import (
     CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
@@ -67,8 +69,10 @@ from custom_components.virtual_layer.config_flow import (
     _build_device_config,
     _build_entity_config,
     _default_virtual_entity_id,
+    _delete_entities_schema,
     _delete_ui_device,
     _delete_ui_entities,
+    _device_schema,
     _domain_options_error_field,
     _entity_choices,
     _entity_form_defaults,
@@ -78,6 +82,8 @@ from custom_components.virtual_layer.config_flow import (
     _find_entity_by_selection_key,
     _flatten_entity_form_sections,
     _flow_errors,
+    _helper_update_schema,
+    _helper_usage_schema,
     _json_default,
     _log_unhandled_flow_errors,
     _managed_device_choices,
@@ -87,18 +93,22 @@ from custom_components.virtual_layer.config_flow import (
     _needs_domain_specific_form,
     _normalize_reference_entity_ids,
     _options_schema,
-    _parse_source_entities,
     _parse_command_actions,
     _parse_entity_key,
     _parse_json_object,
     _parse_json_value,
     _parse_native_templates,
+    _parse_source_entities,
     _plain_options,
     _reference_edit_defaults,
     _reference_entity_defaults,
+    _reference_entity_schema,
     _replace_ui_device,
     _replace_ui_entity,
+    _select_device_schema,
+    _select_entity_schema,
     _set_auto_helper_profile,
+    _setup_schema,
     _stored_entity_ids,
     _validate_platform_entity,
 )
@@ -312,6 +322,38 @@ def test_entity_form_uses_icon_and_template_selectors():
     assert isinstance(validators[CONF_ICON_TEMPLATE], selector.TemplateSelector)
 
 
+def test_all_config_flow_forms_are_frontend_serializable():
+    options = {
+        ATTR_DEVICES: {
+            "Laundry": [{
+                CONF_PLATFORM: "sensor",
+                CONF_NAME: "Washer Phase",
+                CONF_INITIAL_VALUE: "idle",
+            }],
+        },
+    }
+    schemas = [
+        *(
+            (f"entity:{platform}", _entity_schema({CONF_PLATFORM: platform}))
+            for platform in VIRTUAL_ENTITY_DOMAINS
+        ),
+        ("setup", _setup_schema({})),
+        ("options", _options_schema(options)),
+        ("reference", _reference_entity_schema(
+            device_options=[{"value": "Laundry", "label": "Laundry"}],
+        )),
+        ("helper_update", _helper_update_schema()),
+        ("helper_usage", _helper_usage_schema()),
+        ("device", _device_schema()),
+        ("select_device", _select_device_schema(options)),
+        ("select_entity", _select_entity_schema(options)),
+        ("delete_entities", _delete_entities_schema(options)),
+    ]
+
+    for name, schema in schemas:
+        assert convert(schema, custom_serializer=cv.custom_serializer), name
+
+
 def test_native_value_template_sections_match_domain_properties():
     common_template_only_domains = {
         "infrared",
@@ -347,37 +389,6 @@ def test_native_value_template_sections_match_domain_properties():
             isinstance(validator, selector.TemplateSelector)
             for validator in template_validators.values()
         ), platform
-
-
-@pytest.mark.parametrize(
-    ("platform", "properties"),
-    DOMAIN_NATIVE_TEMPLATE_PROPERTIES.items(),
-)
-def test_every_native_jinja_field_gets_a_source_helper_when_attribute_exists(
-    hass,
-    platform,
-    properties,
-):
-    entity_id = f"{platform}.helper_source"
-    hass.states.async_set(
-        entity_id,
-        "active",
-        {property_name: property_name for property_name in properties},
-    )
-
-    defaults = _reference_entity_defaults(hass, [entity_id])
-
-    if platform == "device_tracker":
-        assert CONF_NATIVE_VALUE_TEMPLATES not in defaults
-        return
-    assert set(defaults[CONF_NATIVE_VALUE_TEMPLATES]) == set(properties)
-    for property_name in properties:
-        expected = _native_source_template(
-            entity_id,
-            hass.states.get(entity_id),
-            property_name,
-        )
-        assert defaults[CONF_NATIVE_VALUE_TEMPLATES][property_name] == expected
 
 
 def _native_helper_sample(platform: str, property_name: str, index: int):
@@ -422,53 +433,63 @@ def _native_helper_sample(platform: str, property_name: str, index: int):
     return f"value-{index}"
 
 
-@pytest.mark.parametrize(
-    ("platform", "properties"),
-    DOMAIN_NATIVE_TEMPLATE_PROPERTIES.items(),
-)
-def test_every_native_jinja_field_generates_a_renderable_multi_source_helper(
-    hass,
-    platform,
-    properties,
-):
-    entity_ids = [f"{platform}.helper_first", f"{platform}.helper_second"]
-    for index, entity_id in enumerate(entity_ids):
+def test_all_native_jinja_fields_have_renderable_source_helpers(hass):
+    for platform, properties in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.items():
+        source = f"{platform}.helper_source"
         hass.states.async_set(
-            entity_id,
+            source,
             "active",
-            {
-                property_name: _native_helper_sample(platform, property_name, index)
-                for property_name in properties
-            },
+            {property_name: property_name for property_name in properties},
         )
-    states = [hass.states.get(entity_id) for entity_id in entity_ids]
+        defaults = _reference_entity_defaults(hass, [source])
 
-    templates = _native_reference_templates(platform, entity_ids, states)
+        if platform == "device_tracker":
+            assert CONF_NATIVE_VALUE_TEMPLATES not in defaults, platform
+        else:
+            assert set(defaults[CONF_NATIVE_VALUE_TEMPLATES]) == set(properties), platform
+            for property_name in properties:
+                expected = _native_source_template(
+                    source,
+                    hass.states.get(source),
+                    property_name,
+                )
+                assert defaults[CONF_NATIVE_VALUE_TEMPLATES][property_name] == expected, (
+                    f"{platform}.{property_name}"
+                )
 
-    assert set(templates) == set(properties), platform
-    for property_name, template in templates.items():
-        rendered = Template(template, hass).async_render(parse_result=True)
-        assert rendered is not None, f"{platform}.{property_name}: {template}"
+        sources = [f"{platform}.helper_first", f"{platform}.helper_second"]
+        for index, entity_id in enumerate(sources):
+            hass.states.async_set(
+                entity_id,
+                "active",
+                {
+                    property_name: _native_helper_sample(
+                        platform, property_name, index
+                    )
+                    for property_name in properties
+                },
+            )
+        templates = _native_reference_templates(
+            platform,
+            sources,
+            [hass.states.get(entity_id) for entity_id in sources],
+        )
+        assert set(templates) == set(properties), platform
+        for property_name, template in templates.items():
+            rendered = Template(template, hass).async_render(parse_result=True)
+            assert rendered is not None, f"{platform}.{property_name}: {template}"
 
-
-@pytest.mark.parametrize("platform", DOMAIN_NATIVE_TEMPLATE_PROPERTIES)
-def test_every_native_field_gets_a_helper_when_source_attribute_is_missing(
-    hass,
-    platform,
-):
-    entity_id = f"{platform}.minimal_source"
-    hass.states.async_set(entity_id, "active")
-
-    templates = _native_reference_templates(
-        platform,
-        [entity_id],
-        [hass.states.get(entity_id)],
-    )
-
-    assert set(templates) == set(DOMAIN_NATIVE_TEMPLATE_PROPERTIES[platform]), platform
-    assert all(templates.values()), platform
-    for template in templates.values():
-        Template(template, hass).async_render(parse_result=True)
+        missing_source = f"{platform}.minimal_source"
+        hass.states.async_set(missing_source, "active")
+        missing_templates = _native_reference_templates(
+            platform,
+            [missing_source],
+            [hass.states.get(missing_source)],
+        )
+        assert set(missing_templates) == set(properties), platform
+        assert all(missing_templates.values()), platform
+        for property_name, template in missing_templates.items():
+            Template(template, hass).async_render(parse_result=True)
 
 
 @pytest.mark.parametrize(
@@ -727,52 +748,47 @@ def test_native_multi_source_helpers_use_property_semantics(hass):
     ]
 
 
-@pytest.mark.parametrize(
-    "platform",
-    sorted(
-        set(DOMAIN_NATIVE_TEMPLATE_PROPERTIES)
-        - {
-            "binary_sensor",
-            "camera",
-            "date",
-            "datetime",
-            "device_tracker",
-            "fan",
-            "geolocation",
-            "humidifier",
-            "image",
-            "light",
-            "lock",
-            "number",
-            "remote",
-            "select",
-            "sensor",
-            "siren",
-            "switch",
-            "text",
-            "time",
-        }
-    ),
-)
-def test_same_domain_state_helpers_select_first_known_value(hass, platform):
-    first = f"{platform}.first"
-    second = f"{platform}.second"
-    hass.states.async_set(first, "unavailable")
-    hass.states.async_set(second, "active")
-
-    defaults = _reference_entity_defaults(hass, [first, second])
-    variables = {
-        name: hass.states.get(entity_id).state
-        for name, entity_id in json.loads(
-            defaults[CONF_TEMPLATE_SOURCES_JSON]
-        ).items()
+def test_same_domain_state_helpers_select_first_known_value(hass):
+    excluded_domains = {
+        "binary_sensor",
+        "camera",
+        "date",
+        "datetime",
+        "device_tracker",
+        "fan",
+        "geolocation",
+        "humidifier",
+        "image",
+        "light",
+        "lock",
+        "number",
+        "remote",
+        "select",
+        "sensor",
+        "siren",
+        "switch",
+        "text",
+        "time",
     }
+    for platform in sorted(set(DOMAIN_NATIVE_TEMPLATE_PROPERTIES) - excluded_domains):
+        first = f"{platform}.first"
+        second = f"{platform}.second"
+        hass.states.async_set(first, "unavailable")
+        hass.states.async_set(second, "active")
 
-    assert defaults[CONF_PLATFORM] == platform
-    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
-        variables=variables,
-        parse_result=False,
-    ) == "active"
+        defaults = _reference_entity_defaults(hass, [first, second])
+        variables = {
+            name: hass.states.get(entity_id).state
+            for name, entity_id in json.loads(
+                defaults[CONF_TEMPLATE_SOURCES_JSON]
+            ).items()
+        }
+
+        assert defaults[CONF_PLATFORM] == platform
+        assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+            variables=variables,
+            parse_result=False,
+        ) == "active", platform
 
 
 def test_attribute_helpers_include_attributes_present_on_only_one_source(hass):
