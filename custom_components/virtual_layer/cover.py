@@ -74,14 +74,20 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
         """Initialize the Virtual cover device."""
         super().__init__(config, PLATFORM_DOMAIN, old_style)
 
+        self._attr_current_cover_tilt_position = None
+        self._refresh_supported_features()
+
+        _LOGGER.debug(f"VirtualCover: {self.name} created")
+
+    def _refresh_supported_features(self) -> None:
+        """Expose tilt controls only when a value or action supports them."""
         self._attr_supported_features = CoverEntityFeature(
             CoverEntityFeature.OPEN |
             CoverEntityFeature.CLOSE |
             CoverEntityFeature.STOP |
             CoverEntityFeature.SET_POSITION
         )
-        self._attr_current_cover_tilt_position = None
-        if "current_cover_tilt_position" in self._native_templates or any(
+        if self._attr_current_cover_tilt_position is not None or any(
             command in self._command_actions
             for command in (
                 "open_cover_tilt",
@@ -97,15 +103,21 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
                 | CoverEntityFeature.SET_TILT_POSITION
             )
 
-        _LOGGER.debug(f"VirtualCover: {self.name} created")
-
     @property
     def current_cover_position(self) -> int | None:
         return self._current_position
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        if not self._attr_supported_features & CoverEntityFeature.SET_TILT_POSITION:
+        if "current_cover_tilt_position" not in self._native_templates and not any(
+            command in self._command_actions
+            for command in (
+                "open_cover_tilt",
+                "close_cover_tilt",
+                "stop_cover_tilt",
+                "set_cover_tilt_position",
+            )
+        ):
             return
         try:
             restored_position = state.attributes.get(ATTR_CURRENT_TILT_POSITION)
@@ -117,6 +129,7 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
         self._attr_current_cover_tilt_position = (
             position if position is not None and 0 <= position <= 100 else None
         )
+        self._refresh_supported_features()
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         _LOGGER.debug(f"opening {self.name}")
@@ -136,10 +149,12 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
 
     async def async_open_cover_tilt(self, **kwargs: Any) -> None:
         self._attr_current_cover_tilt_position = 100
+        self._refresh_supported_features()
         self.async_write_ha_state()
 
     async def async_close_cover_tilt(self, **kwargs: Any) -> None:
         self._attr_current_cover_tilt_position = 0
+        self._refresh_supported_features()
         self.async_write_ha_state()
 
     async def async_stop_cover_tilt(self, **kwargs: Any) -> None:
@@ -152,10 +167,13 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
         if not 0 <= position <= 100:
             raise ValueError("tilt_position must be between 0 and 100")
         self._attr_current_cover_tilt_position = position
+        self._refresh_supported_features()
         self.async_write_ha_state()
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name == "current_cover_tilt_position":
+            if value is None or value == "":
+                return super()._apply_native_template_value(name, None)
             if isinstance(value, bool):
                 raise ValueError(
                     "current_cover_tilt_position must be between 0 and 100"
@@ -171,3 +189,6 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
                     "current_cover_tilt_position must be between 0 and 100"
                 )
         return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        self._refresh_supported_features()

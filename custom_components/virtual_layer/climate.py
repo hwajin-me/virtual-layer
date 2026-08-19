@@ -370,6 +370,18 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         self._attr_target_humidity_step = _finite_step(
             config.get(CONF_TARGET_HUMIDITY_STEP),
         )
+        self._attr_target_temperature = self._bounded_temperature(
+            config.get(CONF_TARGET_TEMPERATURE),
+        )
+        self._attr_target_temperature_high = self._bounded_temperature(
+            config.get(CONF_TARGET_TEMPERATURE_HIGH),
+        )
+        self._attr_target_temperature_low = self._bounded_temperature(
+            config.get(CONF_TARGET_TEMPERATURE_LOW),
+        )
+        self._attr_target_humidity = self._bounded_humidity(
+            config.get(CONF_TARGET_HUMIDITY),
+        )
         self._attr_temperature_unit = config.get(CONF_TEMPERATURE_UNIT)
         self._attr_fan_modes = config.get(CONF_FAN_MODES)
         self._attr_preset_modes = config.get(CONF_PRESET_MODES)
@@ -387,22 +399,18 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             features |= ClimateEntityFeature.TURN_ON
         if HVACMode.OFF in self._attr_hvac_modes:
             features |= ClimateEntityFeature.TURN_OFF
-        if (
-            self._config.get(CONF_TARGET_HUMIDITY) is not None
-            or self._config.get(CONF_TARGET_HUMIDITY_STEP) is not None
-            or CONF_TARGET_HUMIDITY in self._native_templates
-            or "humidity" in self._native_templates
-            or "set_humidity" in self._command_actions
-        ):
+        target_humidity = self._attr_target_humidity
+        target_temperature = self._attr_target_temperature
+        target_temperature_high = self._attr_target_temperature_high
+        target_temperature_low = self._attr_target_temperature_low
+        if target_humidity is not None or "set_humidity" in self._command_actions:
             features |= ClimateEntityFeature.TARGET_HUMIDITY
-        if (
-            self._config.get(CONF_TARGET_TEMPERATURE_HIGH) is not None
-            or self._config.get(CONF_TARGET_TEMPERATURE_LOW) is not None
-            or CONF_TARGET_TEMPERATURE_HIGH in self._native_templates
-            or CONF_TARGET_TEMPERATURE_LOW in self._native_templates
-        ):
+        if target_temperature_high is not None and target_temperature_low is not None:
             features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
-        else:
+        elif (
+            target_temperature is not None
+            or "set_temperature" in self._command_actions
+        ):
             features |= ClimateEntityFeature.TARGET_TEMPERATURE
         if self._attr_fan_modes or "set_fan_mode" in self._command_actions:
             features |= ClimateEntityFeature.FAN_MODE
@@ -460,6 +468,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             config.get(CONF_SWING_HORIZONTAL_MODE),
             self._attr_swing_horizontal_modes,
         )
+        self._refresh_supported_features()
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
@@ -547,6 +556,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             config.get(CONF_SWING_HORIZONTAL_MODE),
             self._attr_swing_horizontal_modes,
         )
+        self._refresh_supported_features()
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         name = {
@@ -577,8 +587,9 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             if value not in self._attr_hvac_modes:
                 raise ValueError(f"Unsupported HVAC mode: {value}")
         elif name == CONF_HVAC_ACTION:
+            rendered_value = value
             value = _as_hvac_action(value)
-            if value is None:
+            if value is None and rendered_value not in (None, ""):
                 raise ValueError("Invalid HVAC action")
         elif name in {
             CONF_FAN_MODE,
@@ -802,6 +813,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             self._attr_hvac_action = HVACAction.OFF
         elif self._attr_hvac_action in {None, HVACAction.OFF}:
             self._attr_hvac_action = HVACAction.IDLE
+        self._refresh_supported_features()
         self.async_write_ha_state()
 
     async def async_set_humidity(self, humidity: int) -> None:
@@ -818,6 +830,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
                 "Humidity must be within the configured minimum and maximum"
             )
         self._attr_target_humidity = humidity
+        self._refresh_supported_features()
         self.async_write_ha_state()
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:

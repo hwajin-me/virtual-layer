@@ -58,6 +58,7 @@ from custom_components.virtual_layer.config_flow import (
     NATIVE_TEMPLATE_MAXIMUM_PROPERTIES,
     NATIVE_TEMPLATE_MINIMUM_PROPERTIES,
     NATIVE_TEMPLATE_NUMERIC_PROPERTIES,
+    NATIVE_TEMPLATE_ATTRIBUTE_ALIASES,
     DeviceNameAlreadyUsed,
     InvalidDomainOptions,
     InvalidEntityId,
@@ -491,6 +492,42 @@ def test_all_native_jinja_fields_have_renderable_source_helpers(hass):
         for property_name, template in missing_templates.items():
             Template(template, hass).async_render(parse_result=True)
 
+        missing_sources = [
+            f"{platform}.minimal_first",
+            f"{platform}.minimal_second",
+        ]
+        for entity_id in missing_sources:
+            hass.states.async_set(entity_id, "active")
+        missing_merged_templates = _native_reference_templates(
+            platform,
+            missing_sources,
+            [hass.states.get(entity_id) for entity_id in missing_sources],
+        )
+        assert set(missing_merged_templates) == set(properties), platform
+        for property_name, template in missing_merged_templates.items():
+            Template(template, hass).async_render(parse_result=True)
+
+        for property_name in properties:
+            alias = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(property_name)
+            if not alias or alias == property_name:
+                continue
+            alias_sources = [
+                f"{platform}.alias_first_{property_name}",
+                f"{platform}.alias_second_{property_name}",
+            ]
+            for index, entity_id in enumerate(alias_sources):
+                hass.states.async_set(
+                    entity_id,
+                    "active",
+                    {alias: _native_helper_sample(platform, property_name, index)},
+                )
+            alias_template = _native_reference_templates(
+                platform,
+                alias_sources,
+                [hass.states.get(entity_id) for entity_id in alias_sources],
+            )[property_name]
+            Template(alias_template, hass).async_render(parse_result=True)
+
 
 @pytest.mark.parametrize(
     ("platform", "property_name", "features", "expected"),
@@ -605,11 +642,22 @@ def test_reference_fan_derives_speed_count_from_percentage_step(hass):
         {"percentage": 50, "percentage_step": 25},
     )
 
-    template = _reference_entity_defaults(hass, [entity_id])[
-        CONF_NATIVE_VALUE_TEMPLATES
-    ]["speed_count"]
+    defaults = _reference_entity_defaults(hass, [entity_id])
+    template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"]
 
     assert Template(template, hass).async_render(parse_result=True) == 4
+    assert defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "") == ""
+
+
+def test_multiple_fan_speed_count_helpers_remain_valid_jinja(hass):
+    hass.states.async_set("fan.first", "on", {"percentage_step": 25})
+    hass.states.async_set("fan.second", "on", {"percentage_step": 20})
+
+    defaults = _reference_entity_defaults(hass, ["fan.first", "fan.second"])
+    template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"]
+
+    assert Template(template, hass).async_render(parse_result=True) == 4.5
+    assert defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "") == ""
 
 
 def test_reference_calendar_builds_event_from_standard_source_attributes(hass):
@@ -627,9 +675,8 @@ def test_reference_calendar_builds_event_from_standard_source_attributes(hass):
         },
     )
 
-    template = _reference_entity_defaults(hass, [entity_id])[
-        CONF_NATIVE_VALUE_TEMPLATES
-    ]["event"]
+    defaults = _reference_entity_defaults(hass, [entity_id])
+    template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["event"]
     event = Template(template, hass).async_render(parse_result=True)
 
     assert event == {
@@ -640,6 +687,7 @@ def test_reference_calendar_builds_event_from_standard_source_attributes(hass):
         "location": "Clinic",
         "description": "Bring documents",
     }
+    assert defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "") == ""
 
 
 def test_reference_event_copies_event_attributes_mapping(hass):
@@ -650,13 +698,27 @@ def test_reference_event_copies_event_attributes_mapping(hass):
         {"event_type": "pressed", "button": 1},
     )
 
-    template = _reference_entity_defaults(hass, [entity_id])[
-        CONF_NATIVE_VALUE_TEMPLATES
-    ]["event_attributes"]
+    defaults = _reference_entity_defaults(hass, [entity_id])
+    template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["event_attributes"]
     attributes = Template(template, hass).async_render(parse_result=True)
 
     assert attributes["event_type"] == "pressed"
     assert attributes["button"] == 1
+    assert defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "") == ""
+
+
+def test_reference_calendar_keeps_non_event_vendor_attributes(hass):
+    hass.states.async_set(
+        "calendar.work",
+        "on",
+        {"message": "Meeting", "vendor_color": "blue"},
+    )
+
+    defaults = _reference_entity_defaults(hass, ["calendar.work"])
+
+    assert json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
+        "vendor_color": "{{ state_attr('calendar.work', 'vendor_color') }}",
+    }
 
 
 def test_reference_image_uses_source_state_for_last_updated(hass):
@@ -674,8 +736,12 @@ def test_reference_image_uses_source_state_for_last_updated(hass):
 @pytest.mark.parametrize(
     ("platform", "property_name", "expected"),
     [
-        ("climate", "target_temperature", 21),
-        ("fan", "speed_count", 100),
+        ("climate", "target_temperature", None),
+        ("fan", "speed_count", 0),
+        ("cover", "current_cover_tilt_position", None),
+        ("media_player", "shuffle", None),
+        ("update", "update_percentage", None),
+        ("water_heater", "is_away_mode_on", None),
         ("todo", "todo_items", []),
         ("event", "event_attributes", {}),
     ],
@@ -1256,17 +1322,44 @@ def test_build_entity_config_rejects_non_string_event_attribute_templates():
 
 
 def test_reference_entity_defaults_avoids_jinja_reserved_source_variable_names(hass):
-    hass.states.async_set("sensor.none", "first")
-    hass.states.async_set("sensor.true", "second")
+    entity_ids = [
+        "sensor.none",
+        "sensor.true",
+        "sensor.states",
+        "sensor.state_attr",
+        "sensor.this",
+        "sensor.trigger",
+        "sensor.namespace",
+    ]
+    for index, entity_id in enumerate(entity_ids):
+        hass.states.async_set(entity_id, f"value-{index}")
 
-    defaults = _reference_entity_defaults(hass, ["sensor.none", "sensor.true"])
+    defaults = _reference_entity_defaults(hass, entity_ids)
 
-    assert json.loads(defaults[CONF_TEMPLATE_SOURCES_JSON]) == {
+    template_sources = json.loads(defaults[CONF_TEMPLATE_SOURCES_JSON])
+    assert template_sources == {
         "source_none": "sensor.none",
         "source_true": "sensor.true",
+        "source_states": "sensor.states",
+        "source_state_attr": "sensor.state_attr",
+        "source_this": "sensor.this",
+        "source_trigger": "sensor.trigger",
+        "source_namespace": "sensor.namespace",
     }
     assert "values | join('')" in defaults[CONF_VALUE_TEMPLATE]
-    assert "source_none, source_true" in defaults[CONF_VALUE_TEMPLATE]
+    assert "source_none, source_true, source_states" in defaults[CONF_VALUE_TEMPLATE]
+    variables = {
+        name: hass.states.get(entity_id).state
+        for name, entity_id in template_sources.items()
+    }
+    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+        variables=variables,
+        parse_result=False,
+    ) == "".join(f"value-{index}" for index in range(len(entity_ids)))
+    assert Template(defaults[CONF_AVAILABILITY_TEMPLATE], hass).async_render(
+        variables=variables,
+        parse_result=True,
+    ) is True
 
 
 def test_build_entity_config_preserves_domain_options_and_normalizes_climate_default():

@@ -1116,10 +1116,13 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             if value is not None and sound_modes and value not in sound_modes:
                 raise ValueError(f"Invalid media sound mode: {value}")
         elif name == "repeat":
-            try:
-                value = RepeatMode(str(value).strip().lower())
-            except ValueError as err:
-                raise ValueError(f"Invalid media repeat mode: {value}") from err
+            if value is not None and value != "":
+                try:
+                    value = RepeatMode(str(value).strip().lower())
+                except ValueError as err:
+                    raise ValueError(f"Invalid media repeat mode: {value}") from err
+            else:
+                value = None
         elif name == "volume_level":
             parsed = _safe_float(value, float("nan"))
             if not math.isfinite(parsed) or not 0 <= parsed <= 1:
@@ -1153,7 +1156,7 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             "is_volume_muted",
             "media_image_remotely_accessible",
             "shuffle",
-        }:
+        } and value is not None:
             value = value if isinstance(value, bool) else self._template_to_bool(value)
         elif name in {"state", "media_state"}:
             state = self._parse_media_state(value)
@@ -1270,7 +1273,6 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
         )
         if (
             self._attr_is_away_mode_on is not None
-            or "is_away_mode_on" in self._native_templates
             or "turn_away_mode_on" in self._command_actions
             or "turn_away_mode_off" in self._command_actions
         ):
@@ -1421,7 +1423,11 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             value = str(value).strip()
             if not value:
                 raise ValueError("temperature_unit must not be empty")
-        elif name == "is_away_mode_on" and not isinstance(value, bool):
+        elif (
+            name == "is_away_mode_on"
+            and value is not None
+            and not isinstance(value, bool)
+        ):
             value = self._template_to_bool(value)
         elif name == "precision":
             value = _safe_float(value, float("nan"))
@@ -1531,8 +1537,7 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
             self._attr_supported_features |= UpdateEntityFeature.RELEASE_NOTES
         if (
             self._attr_update_percentage is not None
-            or "update_percentage" in self._native_templates
-            or "in_progress" in self._native_templates
+            or self._attr_in_progress is True
         ):
             self._attr_supported_features |= UpdateEntityFeature.PROGRESS
 
@@ -1586,10 +1591,18 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
             changed = self._release_notes != value
             self._release_notes = value
             return changed
-        if name in {"auto_update", "in_progress"} and not isinstance(value, bool):
+        if (
+            name in {"auto_update", "in_progress"}
+            and value is not None
+            and not isinstance(value, bool)
+        ):
             value = self._template_to_bool(value)
         elif name == "update_percentage":
-            value = self._bounded_update_percentage(value)
+            value = (
+                None
+                if value is None or value == ""
+                else self._bounded_update_percentage(value)
+            )
         elif name == "display_precision":
             value = _safe_int(value, -1, -1)
             if value < 0:

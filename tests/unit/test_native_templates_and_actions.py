@@ -10,6 +10,7 @@ import pytest
 import voluptuous as vol
 from homeassistant.components.climate import ClimateEntityFeature, HVACMode
 from homeassistant.components.climate.const import HVACAction
+from homeassistant.components.cover import CoverEntityFeature
 from homeassistant.components.fan import FanEntityFeature
 from homeassistant.components.humidifier import (
     HumidifierAction,
@@ -26,6 +27,7 @@ from homeassistant.components.remote import RemoteEntityFeature
 from homeassistant.components.siren import SirenEntityFeature
 from homeassistant.components.update import UpdateEntityFeature
 from homeassistant.components.vacuum import VacuumActivity, VacuumEntityFeature
+from homeassistant.components.water_heater import WaterHeaterEntityFeature
 from homeassistant.const import ATTR_ENTITY_ID, UnitOfTemperature
 from homeassistant.core import State
 from homeassistant.util import dt as dt_util
@@ -1322,6 +1324,72 @@ def test_water_heater_and_update_templates_reconcile_ranges_and_features(hass):
     assert UpdateEntityFeature.BACKUP not in update.supported_features
     assert UpdateEntityFeature.RELEASE_NOTES in update.supported_features
     assert UpdateEntityFeature.PROGRESS in update.supported_features
+
+
+def test_empty_optional_templates_do_not_advertise_unsupported_features(hass):
+    cover = VirtualCover(
+        COVER_SCHEMA(
+            _base(
+                "cover.no_tilt",
+                "closed",
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "current_cover_tilt_position": "{{ none }}",
+                    }
+                },
+            )
+        ),
+        False,
+    )
+    heater = VirtualWaterHeater(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "water_heater.no_away",
+                "off",
+                **{CONF_NATIVE_TEMPLATES: {"is_away_mode_on": "{{ none }}"}},
+            )
+        ),
+        False,
+    )
+    update = VirtualUpdate(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "update.no_progress",
+                "1.0",
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "in_progress": "{{ none }}",
+                        "update_percentage": "{{ none }}",
+                    }
+                },
+            )
+        ),
+        False,
+    )
+    media = VirtualMediaPlayer(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "media_player.no_shuffle_repeat",
+                "idle",
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "shuffle": "{{ none }}",
+                        "repeat": "{{ none }}",
+                    }
+                },
+            )
+        ),
+        False,
+    )
+
+    for entity in (cover, heater, update, media):
+        _render_native_templates(entity, hass)
+
+    assert CoverEntityFeature.SET_TILT_POSITION not in cover.supported_features
+    assert WaterHeaterEntityFeature.AWAY_MODE not in heater.supported_features
+    assert UpdateEntityFeature.PROGRESS not in update.supported_features
+    assert MediaPlayerEntityFeature.SHUFFLE_SET not in media.supported_features
+    assert MediaPlayerEntityFeature.REPEAT_SET not in media.supported_features
 
 
 def test_light_number_and_vacuum_templates_use_native_types(hass):

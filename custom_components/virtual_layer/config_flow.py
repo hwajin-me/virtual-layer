@@ -51,6 +51,7 @@ from .entity import VirtualEntity, nonnegative_int, positive_tick
 from .fan_options import (
     FAN_FORM_FIELDS,
     FAN_MODE_LIST_FIELD,
+    FAN_NATIVE_ATTRIBUTE_FIELDS,
     extract_fan_options,
     migrate_legacy_fan_attributes,
 )
@@ -191,7 +192,7 @@ DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES = {
         "target_temperature_step": 0.1,
         "temperature_unit": "°C",
         "current_humidity": None,
-        "target_humidity": 50,
+        "target_humidity": None,
         "min_humidity": 30,
         "max_humidity": 99,
         "target_humidity_step": 1,
@@ -223,7 +224,21 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
     **DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES,
     "calendar": {"event": None},
     "camera": {"frame_interval": 1},
+    "climate": {
+        **DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES["climate"],
+        "hvac_action": None,
+        "target_humidity": None,
+        "target_temperature": None,
+    },
+    "fan": {
+        **DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES["fan"],
+        "speed_count": 0,
+        "percentage": None,
+        "oscillating": None,
+        "current_direction": None,
+    },
     "cover": {
+        "current_cover_tilt_position": None,
         "is_closed": True,
         "reports_position": True,
         "supported_features": 15,
@@ -249,7 +264,8 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
         "media_state": "idle",
         "volume_level": 0.5,
         "volume_step": 0.05,
-        "repeat": "off",
+        "shuffle": None,
+        "repeat": None,
     },
     "number": {
         "native_min_value": 0,
@@ -268,6 +284,8 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
     "update": {
         "installed_version": "0.0.0",
         "latest_version": "0.0.0",
+        "in_progress": None,
+        "update_percentage": None,
         "support_backup": True,
     },
     "vacuum": {
@@ -287,6 +305,7 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
         "max_temp": 85,
         "target_temperature_step": 1,
         "temperature_unit": "°C",
+        "is_away_mode_on": None,
         "precision": 1,
     },
 }
@@ -1107,6 +1126,64 @@ JINJA_RESERVED_VARIABLE_NAMES = {
     "true",
     "with",
 }
+
+# These names are valid Jinja identifiers, so legacy/custom template sources
+# may keep using them. Newly generated variables avoid them because they would
+# shadow Home Assistant globals or per-render context.
+JINJA_CONTEXT_VARIABLE_NAMES = {
+    "area_devices",
+    "area_entities",
+    "area_id",
+    "area_name",
+    "areas",
+    "as_datetime",
+    "as_local",
+    "as_timestamp",
+    "closest",
+    "config_entry_attr",
+    "config_entry_device",
+    "config_entry_entities",
+    "config_entry_id",
+    "cycler",
+    "device_attr",
+    "device_entities",
+    "device_id",
+    "dict",
+    "distance",
+    "expand",
+    "floor_areas",
+    "floor_devices",
+    "floor_entities",
+    "has_value",
+    "integration_entities",
+    "is_state",
+    "is_state_attr",
+    "issues",
+    "joiner",
+    "label_devices",
+    "label_entities",
+    "labels",
+    "lipsum",
+    "namespace",
+    "now",
+    "range",
+    "state_attr",
+    "states",
+    "this",
+    "timedelta",
+    "today_at",
+    "trigger",
+    "utcnow",
+}
+
+CALENDAR_EVENT_SOURCE_ATTRIBUTES = frozenset({
+    "all_day",
+    "description",
+    "end_time",
+    "location",
+    "message",
+    "start_time",
+})
 
 
 def _options_schema(options: dict[str, Any]) -> vol.Schema:
@@ -3318,7 +3395,8 @@ def _source_variable_name(entity_id: str, existing: set[str]) -> str:
     variable_name = slugify(object_id) or "source"
     if (
         variable_name[0].isdigit()
-        or variable_name.casefold() in JINJA_RESERVED_VARIABLE_NAMES
+        or variable_name.casefold()
+        in JINJA_RESERVED_VARIABLE_NAMES | JINJA_CONTEXT_VARIABLE_NAMES
     ):
         variable_name = f"source_{variable_name}"
 
@@ -3615,9 +3693,11 @@ def _native_source_template(
             repr(_plain_options(fallback)) if use_fallback else "none"
         )
         return (
-            "{% set step = "
+            "{{ (100 / ("
             + percentage_step
-            + " %}{{ (100 / step) | round(0) | int if step > 0 else "
+            + ")) | round(0) | int if ("
+            + percentage_step
+            + ") > 0 else "
             + fallback_expression
             + " }}"
         )
@@ -3851,6 +3931,16 @@ def _native_source_attribute_names(platform: str, state) -> set[str]:
     """Return source attributes already represented by native templates."""
     attributes = state.attributes
     names = set()
+    if platform == "fan":
+        # percentage_step is converted into the native speed_count helper. It
+        # must not also become a generic attribute template.
+        names.update(FAN_NATIVE_ATTRIBUTE_FIELDS & attributes.keys())
+    elif platform == "calendar":
+        names.update(CALENDAR_EVENT_SOURCE_ATTRIBUTES & attributes.keys())
+    elif platform == "event":
+        # event_attributes copies the complete source mapping and the event
+        # platform publishes it again as native state attributes.
+        names.update(attributes.keys())
     for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()):
         if property_name in attributes:
             names.add(property_name)

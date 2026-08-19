@@ -9,6 +9,8 @@ import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
 import pytest
 import voluptuous as vol
+from homeassistant.components.climate import ClimateEntityFeature, HVACMode
+from homeassistant.components.fan import FanEntityFeature
 from homeassistant.config_entries import SOURCE_IMPORT, SOURCE_RECONFIGURE, SOURCE_USER
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -62,7 +64,8 @@ from custom_components.virtual_layer.camera import (
 from custom_components.virtual_layer.camera import (
     CONF_SOURCE_ENTITY as CAMERA_SOURCE_ENTITY,
 )
-from custom_components.virtual_layer.climate import CLIMATE_SCHEMA
+from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClimate
+from custom_components.virtual_layer.fan import FAN_SCHEMA, VirtualFan
 from custom_components.virtual_layer.config_flow import (
     ACTION_ADD_ENTITY,
     ACTION_DELETE_DEVICE,
@@ -2657,6 +2660,111 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
         "{{ state_attr('climate.bedroom', 'temperature') }}"
     )
     assert "supported_features" not in entity.get(CONF_ATTRIBUTES, {})
+
+    runtime_config = {
+        key: value
+        for key, value in entity.items()
+        if key not in {CONF_PLATFORM, ATTR_ENTITY_KEY, CONF_AUTO_HELPER}
+    }
+    climate = VirtualClimate(CLIMATE_SCHEMA(runtime_config), False)
+    climate.hass = hass
+    climate._create_state(climate._config)
+    climate.async_schedule_update_ha_state = Mock()
+    climate._apply_templates()
+
+    assert climate.hvac_mode == HVACMode.COOL
+    assert climate.current_temperature == 24
+    assert climate.target_temperature == 23
+    assert climate.fan_modes == ["medium", "high", "turbo", "auto"]
+    assert climate.fan_mode == "auto"
+    assert climate.preset_mode == "none"
+    assert climate.swing_modes == []
+    assert climate.swing_mode is None
+    assert climate.target_humidity is None
+    assert ClimateEntityFeature.TARGET_TEMPERATURE in climate.supported_features
+    assert ClimateEntityFeature.FAN_MODE in climate.supported_features
+    assert ClimateEntityFeature.PRESET_MODE in climate.supported_features
+    assert (
+        ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+        not in climate.supported_features
+    )
+    assert ClimateEntityFeature.TARGET_HUMIDITY not in climate.supported_features
+    assert ClimateEntityFeature.SWING_MODE not in climate.supported_features
+    assert int(climate.supported_features) == 409
+    state_attributes = climate.state_attributes
+    assert state_attributes["current_temperature"] == 24
+    assert state_attributes["temperature"] == 23
+    assert "humidity" not in state_attributes
+    assert "target_temp_high" not in state_attributes
+    assert "target_temp_low" not in state_attributes
+
+
+async def test_options_flow_copies_fan_without_duplicate_attribute_templates(hass):
+    hass.states.async_set(
+        "fan.air_ventilator",
+        "on",
+        {
+            "friendly_name": "Air Ventilator",
+            "percentage": 40,
+            "percentage_step": 20,
+            "preset_mode": "Manual",
+            "preset_modes": ["Manual", "Auto", "Sleep 1", "Sleep 2", "Sleep 3"],
+            "supported_features": 57,
+        },
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["fan.air_ventilator"]},
+    )
+    result = await _choose_add_template_helper(hass, result)
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+
+    assert defaults[CONF_PLATFORM] == "fan"
+    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == ""
+    assert "percentage_step" in defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"]
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_DEVICE_NAME: "Air Ventilator",
+            ATTR_ENTITY_ID: "fan.air_ventilator_copy",
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entity = result["data"][ATTR_DEVICES]["Air Ventilator"][0]
+    assert CONF_ATTRIBUTE_TEMPLATES not in entity
+    assert entity["speed_count"] == 5
+
+    runtime_config = {
+        key: value
+        for key, value in entity.items()
+        if key not in {CONF_PLATFORM, ATTR_ENTITY_KEY, CONF_AUTO_HELPER}
+    }
+    fan = VirtualFan(FAN_SCHEMA(runtime_config), False)
+    fan.hass = hass
+    fan._create_state(fan._config)
+    fan.async_schedule_update_ha_state = Mock()
+    fan._apply_templates()
+
+    assert fan.percentage == 40
+    assert fan.preset_modes == ["Manual", "Auto", "Sleep 1", "Sleep 2", "Sleep 3"]
+    assert fan.preset_mode == "Manual"
+    assert fan.oscillating is None
+    assert fan.current_direction is None
+    assert fan.supported_features == FanEntityFeature(57)
 
 
 async def test_options_flow_prefills_and_creates_native_dehumidifier(hass):

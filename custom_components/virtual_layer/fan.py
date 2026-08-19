@@ -159,19 +159,18 @@ class VirtualFan(VirtualEntity, FanEntity):
         features = FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
         if (
             self._attr_speed_count > 0
-            or "percentage" in self._native_templates
             or "set_percentage" in self._command_actions
         ):
             features |= FanEntityFeature.SET_SPEED
         if (
             self._config.get(CONF_OSCILLATE, False)
-            or "oscillating" in self._native_templates
+            or self._attr_oscillating is not None
             or "oscillate" in self._command_actions
         ):
             features |= FanEntityFeature.OSCILLATE
         if (
             self._config.get(CONF_DIRECTION, False)
-            or "current_direction" in self._native_templates
+            or self._attr_current_direction in {"forward", "reverse"}
             or "set_direction" in self._command_actions
         ):
             features |= FanEntityFeature.DIRECTION
@@ -284,22 +283,30 @@ class VirtualFan(VirtualEntity, FanEntity):
             if len(set(value)) != len(value):
                 raise ValueError("preset_modes contains duplicate values")
         elif name == "preset_mode":
-            value = str(value).strip()
+            value = None if value is None else str(value).strip() or None
         elif name == "percentage":
-            value = self._safe_percentage(value)
-            if value is None:
-                raise ValueError("percentage must be between 0 and 100")
+            if value is not None:
+                parsed_percentage = self._safe_percentage(value)
+                if parsed_percentage is None:
+                    raise ValueError("percentage must be between 0 and 100")
+                value = parsed_percentage
         elif name == "speed_count":
+            if value is None:
+                value = 0
             if isinstance(value, bool):
                 raise ValueError("speed_count must be an integer")
             value = int(value)
             if value < 0:
                 raise ValueError("speed_count cannot be negative")
         elif name == "current_direction":
-            value = str(value).strip().lower()
-            if value not in {"forward", "reverse"}:
+            value = None if value is None else str(value).strip().lower() or None
+            if value is not None and value not in {"forward", "reverse"}:
                 raise ValueError("current_direction must be forward or reverse")
-        elif name == "oscillating" and not isinstance(value, bool):
+        elif (
+            name == "oscillating"
+            and value is not None
+            and not isinstance(value, bool)
+        ):
             value = self._template_to_bool(value)
         elif name in {"state", "is_on"}:
             old_is_on = self.is_on
