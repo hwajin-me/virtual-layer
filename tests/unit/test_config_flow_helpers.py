@@ -112,6 +112,7 @@ from custom_components.virtual_layer.config_flow import (
     _setup_schema,
     _stored_entity_ids,
     _validate_platform_entity,
+    _without_template_helpers,
 )
 from custom_components.virtual_layer.const import (
     ATTR_DEVICE_ATTRIBUTES,
@@ -1525,6 +1526,56 @@ def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
     assert entity["target_temperature"] == 23.0
     assert entity["target_temperature_step"] == 1.0
     assert "supported_features" not in entity[CONF_ATTRIBUTES]
+
+
+def test_reference_heating_only_climate_builds_heat_off_boiler_helper(hass):
+    hass.states.async_set(
+        "climate.boiler",
+        "heat",
+        {
+            ATTR_FRIENDLY_NAME: "Boiler",
+            "current_temperature": 29.0,
+            "temperature": 26.0,
+            "hvac_modes": ["auto", "heat", "fan_only", "off"],
+            "min_temp": 10.0,
+            "max_temp": 35.0,
+        },
+    )
+
+    defaults = _reference_entity_defaults(hass, ["climate.boiler"])
+
+    assert defaults[CONF_PLATFORM] == "climate"
+    assert defaults[CONF_INITIAL_VALUE] == "heat"
+    assert defaults["hvac_modes"] == ["off", "heat"]
+    assert defaults[CONF_VALUE_TEMPLATE] == (
+        "{{ 'heat' if states('climate.boiler') == 'heat' else 'off' }}"
+    )
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_modes"] == (
+        "{{ ['off', 'heat'] }}"
+    )
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_mode"] == (
+        defaults[CONF_VALUE_TEMPLATE]
+    )
+    actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    assert set(actions) == {
+        "set_hvac_mode",
+        "set_temperature",
+        "turn_off",
+        "turn_on",
+    }
+    assert actions["turn_off"] == [
+        {
+            "action": "climate.set_hvac_mode",
+            "data": {"hvac_mode": "off"},
+            "target": {ATTR_ENTITY_ID: "climate.boiler"},
+        }
+    ]
+    assert all(
+        action.get("target", {}).get(ATTR_ENTITY_ID) != "switch.hot_water"
+        for sequence in (actions["turn_on"], actions["turn_off"])
+        for action in sequence
+    )
+    assert CONF_COMMAND_ACTIONS_JSON not in _without_template_helpers(defaults)
 
 
 def test_climate_entity_form_uses_only_jinja_native_controls():
@@ -3061,6 +3112,60 @@ def test_auto_helper_refreshes_generated_climate_modes_but_preserves_custom_mode
     assert refreshed_custom["fan_modes"] == ["auto", "quiet"]
     assert refreshed_custom["fan_mode"] == "quiet"
     assert refreshed_custom["preset_modes"] == ["none", "eco"]
+
+
+def test_auto_helper_refreshes_generated_boiler_actions_but_preserves_custom_actions():
+    generated = {
+        CONF_PLATFORM: "climate",
+        CONF_SOURCE_ENTITIES_TEXT: "climate.boiler",
+        CONF_COMMAND_ACTIONS_JSON: json.dumps({
+            "turn_off": [{"action": "climate.turn_off"}],
+        }),
+    }
+    reference = {
+        CONF_PLATFORM: "climate",
+        CONF_SOURCE_ENTITIES_TEXT: "climate.boiler\nswitch.hot_water",
+        CONF_COMMAND_ACTIONS_JSON: json.dumps({
+            "turn_off": [
+                {"action": "climate.turn_off"},
+                {"action": "switch.turn_on"},
+            ],
+        }),
+    }
+
+    refreshed = _reference_edit_defaults(
+        generated,
+        reference,
+        _auto_helper_profile(generated),
+    )
+    assert refreshed[CONF_COMMAND_ACTIONS_JSON] == reference[
+        CONF_COMMAND_ACTIONS_JSON
+    ]
+
+    customized = {
+        **generated,
+        CONF_COMMAND_ACTIONS_JSON: json.dumps({
+            "turn_off": [{"action": "script.custom_boiler_off"}],
+        }),
+    }
+    refreshed_custom = _reference_edit_defaults(
+        customized,
+        reference,
+        _auto_helper_profile(generated),
+    )
+    assert refreshed_custom[CONF_COMMAND_ACTIONS_JSON] == customized[
+        CONF_COMMAND_ACTIONS_JSON
+    ]
+
+    forced = _reference_edit_defaults(
+        customized,
+        reference,
+        _auto_helper_profile(generated),
+        force_template_helper=True,
+    )
+    assert forced[CONF_COMMAND_ACTIONS_JSON] == reference[
+        CONF_COMMAND_ACTIONS_JSON
+    ]
 
 
 def test_auto_helper_refreshes_native_jinja_per_field_and_preserves_custom_values():

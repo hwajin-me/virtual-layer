@@ -348,6 +348,143 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
     assert sensor.suggested_display_precision is None
 
 
+async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass):
+    hass.states.async_set(
+        "climate.boiler",
+        "heat",
+        {
+            "friendly_name": "Boiler",
+            "current_temperature": 29.0,
+            "temperature": 26.0,
+            "hvac_modes": ["auto", "heat", "fan_only", "off"],
+            "min_temp": 10.0,
+            "max_temp": 35.0,
+        },
+    )
+    hass.states.async_set(
+        "switch.hot_water",
+        "on",
+        {"friendly_name": "Hot water mode"},
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_REFERENCE_ENTITY_ID: [
+                "switch.hot_water",
+                "climate.boiler",
+            ]
+        },
+    )
+    result = await _choose_add_template_helper(hass, result)
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "entity"
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert defaults[CONF_PLATFORM] == "climate"
+    assert defaults[CONF_ENTITY_NAME] == "Boiler"
+    assert defaults[CONF_INITIAL_VALUE] == "heat"
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_modes"] == (
+        "{{ ['off', 'heat'] }}"
+    )
+    assert "switch.hot_water" not in defaults[CONF_NATIVE_VALUE_TEMPLATES][
+        "current_temperature"
+    ]
+    generated_actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    assert generated_actions["turn_off"] == [
+        {
+            "action": "climate.set_hvac_mode",
+            "data": {"hvac_mode": "off"},
+            "target": {ATTR_ENTITY_ID: "climate.boiler"},
+        },
+        {
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+        },
+    ]
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_DEVICE_NAME: "Boiler",
+            ATTR_ENTITY_ID: "climate.virtual_boiler",
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    stored = result["data"][ATTR_DEVICES]["Boiler"][0]
+    runtime_config = {
+        key: value
+        for key, value in stored.items()
+        if key not in {CONF_PLATFORM, ATTR_ENTITY_KEY, CONF_AUTO_HELPER}
+    }
+    boiler = VirtualClimate(CLIMATE_SCHEMA(runtime_config), False)
+    boiler.hass = hass
+    boiler._create_state(boiler._config)
+    boiler.async_write_ha_state = Mock()
+    boiler.async_schedule_update_ha_state = Mock()
+    boiler._apply_templates()
+    assert boiler.hvac_modes == [HVACMode.OFF, HVACMode.HEAT]
+    assert boiler.hvac_mode is HVACMode.HEAT
+    assert boiler.current_temperature == 29.0
+    assert boiler.target_temperature == 26.0
+
+    calls = []
+
+    async def _capture(call):
+        calls.append((call.domain, call.service, dict(call.data)))
+
+    for domain, service in (
+        ("climate", "set_hvac_mode"),
+        ("climate", "set_temperature"),
+        ("switch", "turn_on"),
+        ("switch", "turn_off"),
+    ):
+        hass.services.async_register(domain, service, _capture)
+
+    await boiler.async_set_hvac_mode(HVACMode.OFF)
+    assert [(domain, service) for domain, service, _data in calls] == [
+        ("climate", "set_hvac_mode"),
+        ("switch", "turn_on"),
+    ]
+    assert calls[0][2]["hvac_mode"] == "off"
+
+    calls.clear()
+    await boiler.async_set_hvac_mode(HVACMode.HEAT)
+    assert [(domain, service) for domain, service, _data in calls] == [
+        ("switch", "turn_off"),
+        ("climate", "set_hvac_mode"),
+    ]
+    assert calls[1][2]["hvac_mode"] == "heat"
+
+    calls.clear()
+    await boiler.async_set_temperature(temperature=27)
+    assert [(domain, service) for domain, service, _data in calls] == [
+        ("climate", "set_temperature"),
+    ]
+    assert calls[0][2]["temperature"] == 27
+
+    calls.clear()
+    with pytest.raises(ValueError, match="Unsupported HVAC mode"):
+        await boiler.async_set_hvac_mode(HVACMode.COOL)
+    assert calls == []
+
+    with pytest.raises(ValueError, match="configured minimum and maximum"):
+        await boiler.async_set_temperature(temperature=100)
+    assert calls == []
+
+
 async def test_options_flow_rejects_invalid_jinja_before_saving(hass, caplog):
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
@@ -2182,10 +2319,13 @@ async def test_options_flow_refreshes_untouched_native_jinja_and_keeps_custom_fi
 
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
-    assert native_templates["hvac_mode"] == "{{ states('climate.new_unit') }}"
-    assert native_templates["hvac_modes"] == (
-        "{{ state_attr('climate.new_unit', 'hvac_modes') }}"
-    )
+    expected = _reference_entity_defaults(hass, ["climate.new_unit"])
+    assert native_templates["hvac_mode"] == expected[
+        CONF_NATIVE_VALUE_TEMPLATES
+    ]["hvac_mode"]
+    assert native_templates["hvac_modes"] == expected[
+        CONF_NATIVE_VALUE_TEMPLATES
+    ]["hvac_modes"]
     assert native_templates["fan_mode"] == "{{ 'quiet' }}"
 
 

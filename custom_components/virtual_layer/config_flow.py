@@ -4061,6 +4061,141 @@ def _shorten_generated_text(value: str, max_length: int) -> str:
     return value[: max_length - 3].rstrip() + "..."
 
 
+def _heating_only_climate(state) -> bool:
+    """Return whether a climate source represents a heat-only appliance."""
+    raw_modes = state.attributes.get("hvac_modes")
+    if not isinstance(raw_modes, (list, tuple, set, frozenset)):
+        return False
+    modes = {
+        str(mode).strip().lower()
+        for mode in raw_modes
+        if str(mode).strip()
+    }
+    return {"off", "heat"}.issubset(modes) and not modes.intersection(
+        {"cool", "dry", "heat_cool"}
+    )
+
+
+def _boiler_source_profile(
+    entity_ids: list[str],
+    states: list,
+) -> tuple[int, str | None] | None:
+    """Return the climate index and optional hot-water switch for a boiler."""
+    climate_indexes = [
+        index
+        for index, entity_id in enumerate(entity_ids)
+        if entity_id.startswith("climate.")
+    ]
+    switch_ids = [
+        entity_id for entity_id in entity_ids if entity_id.startswith("switch.")
+    ]
+    if len(entity_ids) == 2 and len(climate_indexes) == 1 and len(switch_ids) == 1:
+        return climate_indexes[0], switch_ids[0]
+    if (
+        len(entity_ids) == 1
+        and len(climate_indexes) == 1
+        and _heating_only_climate(states[climate_indexes[0]])
+    ):
+        return climate_indexes[0], None
+    return None
+
+
+def _boiler_mode_template(climate_entity_id: str) -> str:
+    """Map a boiler source to the two virtual HVAC modes."""
+    return (
+        "{{ 'heat' if states("
+        + repr(climate_entity_id)
+        + ") == 'heat' else 'off' }}"
+    )
+
+
+def _boiler_mode_action_sequence(
+    climate_entity_id: str,
+    hot_water_switch_id: str | None,
+    hvac_mode: str,
+) -> list[dict[str, Any]]:
+    """Build the source actions for one boiler HVAC mode."""
+    sequence = []
+    if hvac_mode == "heat" and hot_water_switch_id:
+        sequence.append({
+            "action": "switch.turn_off",
+            "target": {ATTR_ENTITY_ID: hot_water_switch_id},
+        })
+    sequence.append({
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: climate_entity_id},
+        "data": {"hvac_mode": hvac_mode},
+    })
+    if hvac_mode == "off" and hot_water_switch_id:
+        sequence.append({
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: hot_water_switch_id},
+        })
+    return sequence
+
+
+def _boiler_command_actions(
+    climate_entity_id: str,
+    climate_state,
+    hot_water_switch_id: str | None,
+) -> dict[str, Any]:
+    """Build editable command actions for a heat/off boiler alias."""
+    heat_sequence = _boiler_mode_action_sequence(
+        climate_entity_id,
+        hot_water_switch_id,
+        "heat",
+    )
+    off_sequence = _boiler_mode_action_sequence(
+        climate_entity_id,
+        hot_water_switch_id,
+        "off",
+    )
+    set_hvac_mode = [{
+        "choose": [
+            {
+                "conditions": "{{ hvac_mode == 'heat' }}",
+                "sequence": heat_sequence,
+            },
+            {
+                "conditions": "{{ hvac_mode == 'off' }}",
+                "sequence": off_sequence,
+            },
+        ],
+    }]
+
+    actions = {
+        "set_hvac_mode": set_hvac_mode,
+        "turn_on": heat_sequence,
+        "turn_off": off_sequence,
+    }
+    if climate_state.attributes.get("temperature") is not None:
+        minimum = (
+            f"state_attr({climate_entity_id!r}, 'min_temp') | float(7)"
+        )
+        maximum = (
+            f"state_attr({climate_entity_id!r}, 'max_temp') | float(35)"
+        )
+        actions["set_temperature"] = [{
+            "choose": [
+                {
+                    "conditions": (
+                        "{{ temperature is number and temperature >= ("
+                        + minimum
+                        + ") and temperature <= ("
+                        + maximum
+                        + ") }}"
+                    ),
+                    "sequence": [{
+                        "action": "climate.set_temperature",
+                        "target": {ATTR_ENTITY_ID: climate_entity_id},
+                        "data": {"temperature": "{{ temperature }}"},
+                    }],
+                },
+            ],
+        }]
+    return actions
+
+
 def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     entity_ids = _normalize_reference_entity_ids(entity_ids)
     if not entity_ids:
@@ -4083,13 +4218,16 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     all_time = _all_source_domains(entity_ids, TIME_SOURCE_DOMAINS)
     all_enum = _all_source_domains(entity_ids, ENUM_SOURCE_DOMAINS)
     all_location = _all_source_domains(entity_ids, LOCATION_SOURCE_DOMAINS)
+    boiler_profile = _boiler_source_profile(entity_ids, states)
     presence_or_motion_class = (
         _presence_or_motion_device_class(entity_ids, states) if all_boolean else None
     )
     safety_boolean_sources = (
         _safety_boolean_sources(entity_ids, states) if all_boolean else False
     )
-    if len(entity_ids) > 1 and all_location:
+    if boiler_profile is not None:
+        platform = "climate"
+    elif len(entity_ids) > 1 and all_location:
         platform = "device_tracker"
     elif (
         len(set(source_domains)) == 1
@@ -4112,7 +4250,12 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         platform = "sensor"
 
     first_state = states[0]
-    if platform == "binary_sensor":
+    if boiler_profile is not None:
+        climate_index, _hot_water_switch_id = boiler_profile
+        initial_value = (
+            "heat" if states[climate_index].state == "heat" else "off"
+        )
+    elif platform == "binary_sensor":
         if presence_or_motion_class:
             initial_value = (
                 "on"
@@ -4157,9 +4300,14 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             and name != CONF_ICON
             and name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
         }
+    entity_name_states = (
+        [states[boiler_profile[0]]]
+        if boiler_profile is not None and len(states) > 1
+        else states
+    )
     defaults = {
         CONF_DEVICE_NAME: _combined_device_name(hass, entity_ids),
-        CONF_ENTITY_NAME: _combined_entity_name(states),
+        CONF_ENTITY_NAME: _combined_entity_name(entity_name_states),
         CONF_PLATFORM: platform,
         CONF_INITIAL_VALUE: initial_value,
         CONF_SOURCE_ENTITIES_TEXT: "\n".join(entity_ids),
@@ -4185,7 +4333,13 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         # name. Avoid making the new form self-reference its source before the
         # user has had a chance to customize the generated ID.
         defaults[ATTR_ENTITY_ID] = generated_entity_id
-    if len(entity_ids) == 1:
+    if boiler_profile is not None:
+        climate_entity_id = entity_ids[boiler_profile[0]]
+        defaults[CONF_ICON_TEMPLATE] = (
+            f"{{{{ state_attr({climate_entity_id!r}, {CONF_ICON!r}) "
+            "| default('', true) }}"
+        )
+    elif len(entity_ids) == 1:
         defaults[CONF_ICON_TEMPLATE] = (
             f"{{{{ state_attr({entity_ids[0]!r}, {CONF_ICON!r}) "
             "| default('', true) }}"
@@ -4215,8 +4369,22 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         if len(source_units) == 1 and "" not in source_units:
             domain_options[CONF_UNIT_OF_MEASUREMENT] = next(iter(source_units))
         defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
-    elif platform == "climate" and len(states) == 1:
-        domain_options, consumed_attributes = extract_climate_options(attributes)
+    elif platform == "climate" and (
+        len(states) == 1 or boiler_profile is not None
+    ):
+        climate_index = boiler_profile[0] if boiler_profile is not None else 0
+        climate_attributes = {
+            name: _json_safe(value)
+            for name, value in dict(states[climate_index].attributes).items()
+            if name != ATTR_FRIENDLY_NAME
+            and name != CONF_ICON
+            and name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+        }
+        domain_options, consumed_attributes = extract_climate_options(
+            climate_attributes
+        )
+        if boiler_profile is not None:
+            domain_options["hvac_modes"] = ["off", "heat"]
         defaults.update(
             {
                 key: value
@@ -4233,11 +4401,12 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(
                 advanced_domain_options,
             )
-        attributes = {
-            key: value
-            for key, value in attributes.items()
-            if key not in consumed_attributes
-        }
+        if len(states) == 1:
+            attributes = {
+                key: value
+                for key, value in attributes.items()
+                if key not in consumed_attributes
+            }
     elif platform == "fan" and len(states) == 1:
         domain_options, consumed_attributes = extract_fan_options(attributes)
         defaults.update(domain_options)
@@ -4274,7 +4443,19 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             }
         )
     attribute_templates: dict[str, str] = {}
-    if platform == "binary_sensor" and presence_or_motion_class:
+    if boiler_profile is not None:
+        climate_index, hot_water_switch_id = boiler_profile
+        defaults[CONF_VALUE_TEMPLATE] = _boiler_mode_template(
+            entity_ids[climate_index]
+        )
+        defaults[CONF_COMMAND_ACTIONS_JSON] = _json_default(
+            _boiler_command_actions(
+                entity_ids[climate_index],
+                states[climate_index],
+                hot_water_switch_id,
+            )
+        )
+    elif platform == "binary_sensor" and presence_or_motion_class:
         defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(
             {
                 CONF_CLASS: presence_or_motion_class,
@@ -4354,11 +4535,23 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     if attribute_templates:
         defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] = _json_default(attribute_templates)
 
-    native_templates = (
-        {}
-        if all_location and platform == "device_tracker"
-        else _native_reference_templates(platform, entity_ids, states)
-    )
+    if boiler_profile is not None:
+        climate_index, _hot_water_switch_id = boiler_profile
+        native_templates = _native_reference_templates(
+            platform,
+            [entity_ids[climate_index]],
+            [states[climate_index]],
+        )
+        native_templates.update({
+            "hvac_modes": "{{ ['off', 'heat'] }}",
+            "hvac_mode": _boiler_mode_template(entity_ids[climate_index]),
+        })
+    else:
+        native_templates = (
+            {}
+            if all_location and platform == "device_tracker"
+            else _native_reference_templates(platform, entity_ids, states)
+        )
     if platform in DOMAIN_NATIVE_TEMPLATE_PROPERTIES and not (
         all_location and platform == "device_tracker"
     ):
@@ -4439,18 +4632,21 @@ def _reference_edit_defaults(
             continue
         if (
             reference_defaults
-            and auto_profile is not None
             and (
-                _canonical_auto_helper_value(
-                    field,
-                    current_defaults.get(
+                force_template_helper
+                or (
+                    auto_profile is not None
+                    and _canonical_auto_helper_value(
+                        field,
+                        current_defaults.get(
+                            field,
+                            [] if field in CLIMATE_MODE_LIST_FIELDS else "",
+                        ),
+                    )
+                    == auto_profile.get(
                         field,
                         [] if field in CLIMATE_MODE_LIST_FIELDS else "",
-                    ),
-                )
-                == auto_profile.get(
-                    field,
-                    [] if field in CLIMATE_MODE_LIST_FIELDS else "",
+                    )
                 )
             )
         ):
@@ -4523,6 +4719,7 @@ def _without_template_helpers(reference_defaults: Mapping) -> dict[str, Any]:
         CONF_ATTRIBUTE_TEMPLATES_JSON,
         CONF_NATIVE_TEMPLATES_JSON,
         CONF_NATIVE_VALUE_TEMPLATES,
+        CONF_COMMAND_ACTIONS_JSON,
     ):
         defaults.pop(field_name, None)
 
