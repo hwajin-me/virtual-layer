@@ -397,7 +397,11 @@ class VirtualDiagnosticSensor(VirtualSensor):
             return
         self._attr_extra_state_attributes.update({
             "source_state": source_state.state,
-            "source_attributes": dict(source_state.attributes),
+            "source_attributes": {
+                name: value
+                for name, value in source_state.attributes.items()
+                if name not in TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+            },
             "source_last_updated": source_state.last_updated.isoformat(),
             "source_last_changed": source_state.last_changed.isoformat(),
         })

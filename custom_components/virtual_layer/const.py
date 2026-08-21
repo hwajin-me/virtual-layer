@@ -2,7 +2,12 @@
 
 from collections.abc import Mapping
 
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME, CONF_ICON
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
+    ATTR_RESTORED,
+    CONF_ICON,
+)
 
 COMPONENT_DOMAIN = "virtual_layer"
 COMPONENT_SERVICES = "virtual_layer-services"
@@ -34,6 +39,20 @@ RESERVED_VIRTUAL_ATTRIBUTE_NAMES = frozenset({
     ATTR_UNIQUE_ID,
     ATTR_VIRTUAL_ATTRIBUTES,
 })
+
+# Home Assistant owns these state attributes. Camera/image access metadata is
+# short-lived and restored is an internal marker, so copying any of them into
+# user attributes or Jinja templates produces stale secrets or invalid legacy
+# templates. Dedicated native properties such as entity_picture remain valid.
+TRANSIENT_SOURCE_ATTRIBUTE_NAMES = frozenset({
+    ATTR_RESTORED,
+    "access_token",
+    "entity_picture",
+})
+
+EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES = (
+    RESERVED_VIRTUAL_ATTRIBUTE_NAMES | TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+)
 
 RESERVED_NATIVE_TEMPLATE_NAMES = frozenset({
     "device_info",

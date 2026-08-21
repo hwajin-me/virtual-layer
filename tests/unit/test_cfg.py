@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from homeassistant.const import ATTR_ENTITY_ID, CONF_PLATFORM
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_RESTORED, CONF_PLATFORM
 
 from custom_components.virtual_layer import cfg as cfg_module
 from custom_components.virtual_layer.cfg import (
@@ -138,18 +138,37 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
             CONF_MAX: float("inf"),
             CONF_ATTRIBUTES: {
                 " nested ": [1, float("-inf")],
+                ATTR_RESTORED: True,
+                "access_token": "stale-token",
+                "entity_picture": "/api/camera_proxy/camera.source",
                 10: "invalid key",
+            },
+            CONF_ATTRIBUTE_SOURCES: {
+                "battery": "sensor.source.battery_level",
+                "access_token": "camera.source.access_token",
+                "entity_picture": "camera.source.entity_picture",
             },
             CONF_ATTRIBUTE_TEMPLATES: {
                 " summary ": "{{ 1 }}",
                 "summary": "{{ 2 }}",
                 "invalid": {"not": "jinja"},
+                ATTR_RESTORED: "{{ <RestoredState> }}",
+                "access_token": "{{ <rotating-token> }}",
+                "entity_picture": "{{ <tokenized-picture> }}",
                 ATTR_ENTITY_ID: "{{ 'blocked' }}",
             },
             CONF_EVENT_HOOKS: [{
                 "trigger": "event",
                 "event_type": "virtual_layer_update",
                 "debounce": float("inf"),
+                CONF_ATTRIBUTES: {
+                    "safe": "ready",
+                    "access_token": "stale-token",
+                },
+                CONF_ATTRIBUTE_TEMPLATES: {
+                    "detail": "{{ trigger.event.event_type }}",
+                    "entity_picture": "{{ <tokenized-picture> }}",
+                },
             }],
             CONF_PULL_INTERVAL: True,
         },
@@ -161,10 +180,20 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
     assert normalized[CONF_MIN] == 0
     assert normalized[CONF_MAX] == 100
     assert normalized[CONF_ATTRIBUTES] == {"nested": [1, None]}
+    assert normalized[CONF_ATTRIBUTE_SOURCES] == {
+        "battery": {
+            ATTR_ENTITY_ID: "sensor.source",
+            CONF_ATTRIBUTE: "battery_level",
+        }
+    }
     assert normalized[CONF_ATTRIBUTE_TEMPLATES] == {"summary": "{{ 1 }}"}
     assert normalized[CONF_EVENT_HOOKS] == [{
         "trigger": "event",
         "event_type": "virtual_layer_update",
+        CONF_ATTRIBUTES: {"safe": "ready"},
+        CONF_ATTRIBUTE_TEMPLATES: {
+            "detail": "{{ trigger.event.event_type }}",
+        },
     }]
     assert normalized[CONF_PULL_INTERVAL] == 0
 

@@ -91,6 +91,7 @@ from custom_components.virtual_layer.config_flow import (
     _managed_device_choices,
     _merged_native_template,
     _native_reference_templates,
+    _native_source_helper_default,
     _native_source_template,
     _needs_domain_specific_form,
     _normalize_reference_entity_ids,
@@ -509,6 +510,25 @@ def test_all_native_jinja_fields_have_renderable_source_helpers(hass):
         for property_name, template in missing_merged_templates.items():
             Template(template, hass).async_render(parse_result=True)
 
+        null_source = f"{platform}.null_source"
+        hass.states.async_set(
+            null_source,
+            "active",
+            {property_name: None for property_name in properties},
+        )
+        null_templates = _native_reference_templates(
+            platform,
+            [null_source],
+            [hass.states.get(null_source)],
+        )
+        for property_name, template in null_templates.items():
+            rendered = Template(template, hass).async_render(parse_result=True)
+            fallback = _native_source_helper_default(platform, property_name)
+            if fallback is not None:
+                assert rendered == _plain_options(fallback), (
+                    f"{platform}.{property_name}: {template}"
+                )
+
         for property_name in properties:
             alias = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(property_name)
             if not alias or alias == property_name:
@@ -734,6 +754,9 @@ def test_reference_image_uses_source_state_for_last_updated(hass):
 
     assert Template(template, hass).async_render(parse_result=True) == timestamp
 
+    hass.states.async_set(entity_id, "unavailable", {"content_type": "image/jpeg"})
+    assert Template(template, hass).async_render(parse_result=True) is None
+
 
 @pytest.mark.parametrize(
     ("entity_id", "state"),
@@ -776,6 +799,21 @@ def test_reference_ignores_restored_and_media_access_attributes(
     ).async_render() == "ready"
     for template in defaults.get(CONF_NATIVE_VALUE_TEMPLATES, {}).values():
         Template(template, hass).ensure_valid()
+        assert "secret" not in template
+
+
+def test_single_source_native_helper_rejects_nonfinite_snapshot_fallback(hass):
+    entity_id = "number.nonfinite_source"
+    hass.states.async_set(entity_id, "10", {"native_value": float("inf")})
+
+    template = _native_reference_templates(
+        "number",
+        [entity_id],
+        [hass.states.get(entity_id)],
+    )["native_value"]
+
+    hass.states.async_set(entity_id, "10", {"native_value": None})
+    assert Template(template, hass).async_render(parse_result=True) == 0
 
 
 @pytest.mark.parametrize(
@@ -1571,12 +1609,15 @@ def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
     assert defaults["swing_modes"] == []
     native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
     assert native_templates["hvac_mode"] == "{{ states('climate.living_room') }}"
-    assert native_templates["hvac_modes"] == (
-        "{{ state_attr('climate.living_room', 'hvac_modes') }}"
-    )
-    assert native_templates["target_temperature"] == (
-        "{{ state_attr('climate.living_room', 'temperature') }}"
-    )
+    assert Template(native_templates["hvac_modes"], hass).async_render(
+        parse_result=True
+    ) == ["off", "cool", "dry", "fan_only"]
+    target_template = native_templates["target_temperature"]
+    assert Template(target_template, hass).async_render(parse_result=True) == 23.0
+    source_attributes = dict(hass.states.get("climate.living_room").attributes)
+    source_attributes["temperature"] = None
+    hass.states.async_set("climate.living_room", "cool", source_attributes)
+    assert Template(target_template, hass).async_render(parse_result=True) == 23.0
     assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {
         "vendor_attribute": "preserved",
     }
@@ -2521,9 +2562,10 @@ def test_reference_light_generates_boolean_and_brightness_templates(hass):
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["is_on"] == (
         "{{ states('light.desk') not in ['off', 'unknown', 'unavailable'] }}"
     )
-    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["brightness"] == (
-        "{{ state_attr('light.desk', 'brightness') }}"
-    )
+    brightness_template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["brightness"]
+    assert Template(brightness_template, hass).async_render(parse_result=True) == 128
+    hass.states.async_set("light.desk", "on", {"brightness": None})
+    assert Template(brightness_template, hass).async_render(parse_result=True) == 128
     assert defaults[CONF_AVAILABILITY_TEMPLATE] == (
         "{{ states('light.desk') not in ['unknown', 'unavailable'] }}"
     )
@@ -2554,19 +2596,14 @@ def test_reference_tts_generates_language_and_option_templates(hass):
     native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
 
     assert defaults[CONF_PLATFORM] == "tts"
-    assert native_templates == {
-        "supported_languages": (
-            "{{ state_attr('tts.house_voice', 'supported_languages') }}"
-        ),
-        "default_language": (
-            "{{ state_attr('tts.house_voice', 'default_language') }}"
-        ),
-        "supported_options": (
-            "{{ state_attr('tts.house_voice', 'supported_options') }}"
-        ),
-        "default_options": (
-            "{{ state_attr('tts.house_voice', 'default_options') }}"
-        ),
+    assert {
+        property_name: Template(template, hass).async_render(parse_result=True)
+        for property_name, template in native_templates.items()
+    } == {
+        "supported_languages": ["en", "ko"],
+        "default_language": "ko",
+        "supported_options": ["voice"],
+        "default_options": {"voice": "female"},
     }
 
 

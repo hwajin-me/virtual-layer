@@ -192,7 +192,7 @@ class GenericVirtualEntity(VirtualEntity, Entity):
                 domain_options.update({
                     name: value
                     for name, value in event_attributes.items()
-                    if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+                    if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
                     and name != "event_type"
                 })
         self._attr_extra_state_attributes.update(domain_options)

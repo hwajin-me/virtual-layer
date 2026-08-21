@@ -20,14 +20,21 @@ from homeassistant.components.camera import (
 from homeassistant.components.camera import (
     Camera,
     CameraEntityFeature,
+    CameraState,
+)
+from homeassistant.components.camera.const import StreamType
+from homeassistant.components.camera.webrtc import (
+    WebRTCClientConfiguration,
+    WebRTCSendMessage,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_ON
-from homeassistant.core import HomeAssistant
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from webrtc_models import RTCIceCandidateInit
 
 from . import get_entity_configs
 from .const import *
@@ -47,6 +54,10 @@ _CAMERA_STREAM_ALIAS_CHAIN: ContextVar[frozenset[int]] = ContextVar(
     "virtual_layer_camera_stream_alias_chain",
     default=frozenset(),
 )
+_CAMERA_WEBRTC_ALIAS_CHAIN: ContextVar[frozenset[int]] = ContextVar(
+    "virtual_layer_camera_webrtc_alias_chain",
+    default=frozenset(),
+)
 
 DEPENDENCIES = [COMPONENT_DOMAIN]
 
@@ -61,6 +72,29 @@ CONF_SOURCE_ENTITY = "source_entity"
 CONF_STREAM_SOURCE = "stream_source"
 
 DEFAULT_CAMERA_VALUE = "on"
+_CAMERA_ACTIVE_STATES = frozenset({
+    STATE_ON,
+    CameraState.IDLE,
+    CameraState.RECORDING,
+    CameraState.STREAMING,
+})
+_CAMERA_INACTIVE_STATES = frozenset({
+    STATE_OFF,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+})
+
+
+def _camera_state_is_on(value) -> bool:
+    """Map native camera activity states onto the camera power property."""
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in _CAMERA_ACTIVE_STATES:
+        return True
+    if normalized in _CAMERA_INACTIVE_STATES:
+        return False
+    raise ValueError(f"Unsupported camera state: {normalized!r}")
 
 
 def _camera_entity_id(value: str) -> str:
@@ -124,19 +158,33 @@ class VirtualCamera(VirtualEntity, Camera):
         self._image_path = config.get(CONF_IMAGE_PATH)
         self._source_entity = config.get(CONF_SOURCE_ENTITY)
         self._stream_source = config.get(CONF_STREAM_SOURCE)
+        # Camera.__init__ sees the WebRTC proxy methods on this class. The
+        # actual capability is source-dependent and is synchronized once the
+        # source camera is available in the entity component.
+        self._supports_native_async_webrtc = False
 
         _LOGGER.debug(f"VirtualCamera: {self.name} created")
 
     def _create_state(self, config):
         super()._create_state(config)
-        self._attr_is_on = config.get(CONF_INITIAL_VALUE).lower() == STATE_ON
+        try:
+            self._attr_is_on = _camera_state_is_on(
+                config.get(CONF_INITIAL_VALUE),
+            )
+        except ValueError:
+            self._attr_is_on = False
         self._attr_is_recording = config.get(CONF_IS_RECORDING)
         self._attr_is_streaming = config.get(CONF_IS_STREAMING)
         self._attr_motion_detection_enabled = config.get(CONF_MOTION_DETECTION)
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        configured_is_on = config.get(CONF_INITIAL_VALUE).lower() == STATE_ON
+        try:
+            configured_is_on = _camera_state_is_on(
+                config.get(CONF_INITIAL_VALUE),
+            )
+        except ValueError:
+            configured_is_on = False
         try:
             self._attr_is_on = cv.boolean(
                 state.attributes.get(CONF_IS_ON, configured_is_on)
@@ -243,6 +291,127 @@ class VirtualCamera(VirtualEntity, Camera):
                 _CAMERA_STREAM_ALIAS_CHAIN.reset(token)
         return self._stream_source
 
+    async def async_handle_async_webrtc_offer(
+        self,
+        offer_sdp: str,
+        session_id: str,
+        send_message: WebRTCSendMessage,
+    ) -> None:
+        """Proxy WebRTC signaling to an aliased source camera."""
+        source = self._source_camera()
+        if (
+            source is None
+            or self._stream_source
+            or StreamType.WEB_RTC not in self._source_stream_types(source)
+        ):
+            await super().async_handle_async_webrtc_offer(
+                offer_sdp,
+                session_id,
+                send_message,
+            )
+            return
+
+        marker = id(self)
+        active_aliases = _CAMERA_WEBRTC_ALIAS_CHAIN.get()
+        if marker in active_aliases:
+            raise HomeAssistantError("Circular virtual camera WebRTC alias")
+        token = _CAMERA_WEBRTC_ALIAS_CHAIN.set(active_aliases | {marker})
+        try:
+            await source.async_handle_async_webrtc_offer(
+                offer_sdp,
+                session_id,
+                send_message,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Unable to start virtual camera WebRTC stream from %s",
+                self._source_entity,
+            )
+            raise
+        finally:
+            _CAMERA_WEBRTC_ALIAS_CHAIN.reset(token)
+
+    async def async_on_webrtc_candidate(
+        self,
+        session_id: str,
+        candidate: RTCIceCandidateInit,
+    ) -> None:
+        """Forward a WebRTC ICE candidate to an aliased source camera."""
+        source = self._source_camera()
+        if (
+            source is None
+            or self._stream_source
+            or StreamType.WEB_RTC not in self._source_stream_types(source)
+        ):
+            await super().async_on_webrtc_candidate(session_id, candidate)
+            return
+
+        marker = id(self)
+        active_aliases = _CAMERA_WEBRTC_ALIAS_CHAIN.get()
+        if marker in active_aliases:
+            raise HomeAssistantError("Circular virtual camera WebRTC alias")
+        token = _CAMERA_WEBRTC_ALIAS_CHAIN.set(active_aliases | {marker})
+        try:
+            await source.async_on_webrtc_candidate(session_id, candidate)
+        except Exception:
+            _LOGGER.exception(
+                "Unable to send a virtual camera WebRTC candidate to %s",
+                self._source_entity,
+            )
+            raise
+        finally:
+            _CAMERA_WEBRTC_ALIAS_CHAIN.reset(token)
+
+    @callback
+    def close_webrtc_session(self, session_id: str) -> None:
+        """Close a WebRTC session on an aliased source camera."""
+        source = self._source_camera()
+        if (
+            source is None
+            or self._stream_source
+            or StreamType.WEB_RTC not in self._source_stream_types(source)
+        ):
+            super().close_webrtc_session(session_id)
+            return
+
+        marker = id(self)
+        active_aliases = _CAMERA_WEBRTC_ALIAS_CHAIN.get()
+        if marker in active_aliases:
+            return
+        token = _CAMERA_WEBRTC_ALIAS_CHAIN.set(active_aliases | {marker})
+        try:
+            source.close_webrtc_session(session_id)
+        except Exception:
+            _LOGGER.exception(
+                "Unable to close virtual camera WebRTC stream on %s",
+                self._source_entity,
+            )
+        finally:
+            _CAMERA_WEBRTC_ALIAS_CHAIN.reset(token)
+
+    @callback
+    def _async_get_webrtc_client_configuration(self) -> WebRTCClientConfiguration:
+        """Use WebRTC client settings required by the aliased camera."""
+        source = self._source_camera()
+        if (
+            source is not None
+            and not self._stream_source
+            and StreamType.WEB_RTC in self._source_stream_types(source)
+        ):
+            get_configuration = getattr(
+                source,
+                "_async_get_webrtc_client_configuration",
+                None,
+            )
+            if callable(get_configuration):
+                return get_configuration()
+        return super()._async_get_webrtc_client_configuration()
+
+    async def async_internal_added_to_hass(self) -> None:
+        """Finalize stream capabilities after source entities are available."""
+        self._sync_stream_capabilities()
+        await super().async_internal_added_to_hass()
+
     def _source_camera(self) -> Camera | None:
         """Return the configured source camera without recursing into self."""
         if not self._source_entity or self.hass is None:
@@ -255,6 +424,48 @@ class VirtualCamera(VirtualEntity, Camera):
 
         source = get_entity(self._source_entity)
         return None if source is self else source
+
+    @staticmethod
+    def _source_stream_types(source: Camera) -> frozenset[StreamType]:
+        """Return frontend stream types advertised by a source camera."""
+        try:
+            stream_types = source.camera_capabilities.frontend_stream_types
+            return frozenset(StreamType(value) for value in stream_types)
+        except (AttributeError, TypeError, ValueError):
+            pass
+
+        stream_types = set()
+        if getattr(source, "_supports_native_async_webrtc", False) is True:
+            stream_types.add(StreamType.WEB_RTC)
+        try:
+            if CameraEntityFeature.STREAM in source.supported_features:
+                stream_types.add(StreamType.HLS)
+        except (AttributeError, TypeError, ValueError):
+            pass
+        return frozenset(stream_types)
+
+    def _sync_stream_capabilities(self) -> None:
+        """Synchronize stream flags with a direct or aliased stream source."""
+        features = CameraEntityFeature.ON_OFF
+        supports_native_webrtc = False
+        source = self._source_camera()
+
+        if self._stream_source:
+            features |= CameraEntityFeature.STREAM
+        elif source is not None:
+            source_stream_types = self._source_stream_types(source)
+            if source_stream_types:
+                features |= CameraEntityFeature.STREAM
+            supports_native_webrtc = StreamType.WEB_RTC in source_stream_types
+        elif self._source_entity:
+            # Keep the alias usable while its source integration reloads. A
+            # later source/template update will refine HLS versus WebRTC.
+            features |= CameraEntityFeature.STREAM
+
+        self._attr_supported_features = features
+        self._supports_native_async_webrtc = supports_native_webrtc
+        self.__dict__.pop("supported_features", None)
+        self._invalidate_camera_capabilities_cache()
 
     async def async_turn_on(self) -> None:
         self._attr_is_on = True
@@ -311,10 +522,7 @@ class VirtualCamera(VirtualEntity, Camera):
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:
-        features = CameraEntityFeature.ON_OFF
-        if self._stream_source or self._source_entity:
-            features |= CameraEntityFeature.STREAM
-        self._attr_supported_features = features
+        self._sync_stream_capabilities()
 
     def set_state(self, value) -> None:
-        self._attr_is_on = self._template_to_bool(value)
+        self._attr_is_on = _camera_state_is_on(value)

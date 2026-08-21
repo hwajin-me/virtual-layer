@@ -42,6 +42,9 @@ from homeassistant.util import slugify
 from .const import *
 
 _LOGGER = logging.getLogger(__name__)
+_VIRTUAL_ENTITY_COMMAND_NAMES = frozenset().union(
+    *VIRTUAL_ENTITY_COMMANDS.values(),
+)
 _MISSING = object()
 MAX_LOCAL_MEDIA_BYTES = 25 * 1024 * 1024
 _COMMAND_ACTION_CHAIN: ContextVar[frozenset[tuple[int, str]]] = ContextVar(
@@ -158,16 +161,16 @@ class VirtualEntity(RestoreEntity):
             for method_name, method in base.__dict__.items():
                 methods.setdefault(method_name, method)
         for method_name, method in tuple(methods.items()):
+            command = method_name.removeprefix("async_")
             if (
                 not method_name.startswith("async_")
                 or method_name.startswith("async_virtual_")
                 or method_name in cls._COMMAND_METHOD_EXCLUSIONS
+                or command not in _VIRTUAL_ENTITY_COMMAND_NAMES
                 or not inspect.iscoroutinefunction(method)
                 or getattr(method, "_virtual_action_wrapped", False)
             ):
                 continue
-
-            command = method_name.removeprefix("async_")
 
             @wraps(method)
             async def _with_command_action(self, *args, __method=method, __command=command, **kwargs):
@@ -199,17 +202,17 @@ class VirtualEntity(RestoreEntity):
         self._virtual_attributes = {
             name: value
             for name, value in dict(config.get(CONF_ATTRIBUTES, {})).items()
-            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+            if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
         }
         self._attribute_sources = {
             name: self._normalize_attribute_source(source)
             for name, source in dict(config.get(CONF_ATTRIBUTE_SOURCES, {})).items()
-            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+            if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
         }
         self._attribute_templates = {
             name: template
             for name, template in dict(config.get(CONF_ATTRIBUTE_TEMPLATES, {})).items()
-            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+            if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
         }
         self._native_templates = {
             str(name).strip(): template
@@ -324,7 +327,7 @@ class VirtualEntity(RestoreEntity):
             name: state.attributes.get(name)
             for name in attribute_names
             if name in state.attributes
-            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+            if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
             if name not in previous_configured_names
             or name in self._configured_virtual_attribute_names
         }
@@ -382,7 +385,7 @@ class VirtualEntity(RestoreEntity):
         self._virtual_attributes.update({
             name: value
             for name, value in attributes.items()
-            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+            if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
         })
         self._update_attributes()
         self.async_schedule_update_ha_state()
@@ -390,7 +393,7 @@ class VirtualEntity(RestoreEntity):
     def clear_attributes(self, attributes):
         if attributes:
             for attribute in attributes:
-                if attribute in RESERVED_VIRTUAL_ATTRIBUTE_NAMES:
+                if attribute in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES:
                     continue
                 self._virtual_attributes.pop(attribute, None)
         else:
@@ -892,6 +895,25 @@ class VirtualEntity(RestoreEntity):
     def _apply_templates(self):
         changed = False
 
+        availability_rendered = False
+        if self._availability_template:
+            try:
+                available = self._template_to_bool(
+                    self._render_template(self._availability_template)
+                )
+                availability_rendered = True
+                if self._attr_available != available:
+                    self._attr_available = available
+                    changed = True
+            except (OverflowError, TemplateError, TypeError, ValueError) as e:
+                _LOGGER.warning(f"Unable to render availability template for {self.entity_id}: {e}")
+
+        # Preserve the last valid state/native properties while a source is
+        # unavailable. Generic attributes may still be useful for diagnostics.
+        apply_state_templates = not (
+            availability_rendered and not self._attr_available
+        )
+
         if self._icon_template:
             try:
                 rendered_icon = str(
@@ -904,18 +926,7 @@ class VirtualEntity(RestoreEntity):
             except (OverflowError, TemplateError, TypeError, ValueError) as e:
                 _LOGGER.warning(f"Unable to render icon template for {self.entity_id}: {e}")
 
-        if self._availability_template:
-            try:
-                available = self._template_to_bool(
-                    self._render_template(self._availability_template)
-                )
-                if self._attr_available != available:
-                    self._attr_available = available
-                    changed = True
-            except (OverflowError, TemplateError, TypeError, ValueError) as e:
-                _LOGGER.warning(f"Unable to render availability template for {self.entity_id}: {e}")
-
-        if self._value_template:
+        if self._value_template and apply_state_templates:
             try:
                 self.set_state(self._render_template(self._value_template))
                 changed = True
@@ -935,22 +946,29 @@ class VirtualEntity(RestoreEntity):
                 _LOGGER.warning(f"Unable to render attribute template {name} for {self.entity_id}: {e}")
 
         native_changed = False
-        for name, template in sorted(
-            self._native_templates.items(),
-            key=lambda item: self._native_template_priority(item[0]),
-        ):
-            try:
-                native_changed = self._apply_native_template_value(
-                    name,
-                    self._render_template(template, parse_result=True),
-                ) or native_changed
-            except (OverflowError, TemplateError, TypeError, ValueError, vol.Invalid) as e:
-                _LOGGER.warning(
-                    "Unable to render native template %s for %s: %s",
-                    name,
-                    self.entity_id,
-                    e,
-                )
+        if apply_state_templates:
+            for name, template in sorted(
+                self._native_templates.items(),
+                key=lambda item: self._native_template_priority(item[0]),
+            ):
+                try:
+                    native_changed = self._apply_native_template_value(
+                        name,
+                        self._render_template(template, parse_result=True),
+                    ) or native_changed
+                except (
+                    OverflowError,
+                    TemplateError,
+                    TypeError,
+                    ValueError,
+                    vol.Invalid,
+                ) as e:
+                    _LOGGER.warning(
+                        "Unable to render native template %s for %s: %s",
+                        name,
+                        self.entity_id,
+                        e,
+                    )
         if native_changed:
             self._native_templates_applied()
             changed = True
@@ -1020,7 +1038,7 @@ class VirtualEntity(RestoreEntity):
             next_attributes = {
                 name: value
                 for name, value in attributes.items()
-                if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+                if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
             }
             if next_attributes:
                 for name, value in next_attributes.items():
@@ -1031,7 +1049,7 @@ class VirtualEntity(RestoreEntity):
         attribute_templates = hook.get(CONF_ATTRIBUTE_TEMPLATES)
         if isinstance(attribute_templates, dict):
             for name, template in attribute_templates.items():
-                if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES:
+                if name in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES:
                     continue
                 try:
                     rendered = self._render_template(

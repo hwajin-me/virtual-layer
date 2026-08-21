@@ -21,7 +21,6 @@ from homeassistant import config_entries, exceptions
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
-    ATTR_RESTORED,
     CONF_ICON,
     CONF_PLATFORM,
     CONF_UNIT_OF_MEASUREMENT,
@@ -621,6 +620,8 @@ NATIVE_TEMPLATE_BOOLEAN_STATE_VALUES = {
     "is_locking": {"locking"},
     "is_open": {"open"},
     "is_opening": {"opening"},
+    "is_recording": {"recording"},
+    "is_streaming": {"streaming"},
     "is_unlocking": {"unlocking"},
 }
 NATIVE_TEMPLATE_SUPPORTED_FEATURE_MASKS = {
@@ -809,6 +810,50 @@ def _native_source_helper_default(platform: str, property_name: str) -> Any:
     return None
 
 
+def _native_source_snapshot_fallback(
+    platform: str,
+    property_name: str,
+    value: Any,
+) -> Any:
+    """Return a type-safe literal fallback from a source's current value."""
+    if value is None:
+        return None
+    if property_name in NATIVE_TEMPLATE_BOOLEAN_PROPERTIES:
+        try:
+            return cv.boolean(value)
+        except vol.Invalid:
+            return None
+    if property_name in NATIVE_TEMPLATE_BITMASK_PROPERTIES:
+        if isinstance(value, bool):
+            return None
+        try:
+            value = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return value if value >= 0 else None
+    if property_name in NATIVE_TEMPLATE_NUMERIC_PROPERTIES or (
+        platform == "number" and property_name == "native_value"
+    ):
+        if isinstance(value, bool):
+            return None
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(numeric_value):
+            return None
+    if property_name in (
+        NATIVE_TEMPLATE_LIST_PROPERTIES | NATIVE_TEMPLATE_ATOMIC_LIST_PROPERTIES
+    ) and not isinstance(value, (list, tuple, set, frozenset)):
+        return None
+    if (
+        property_name in NATIVE_TEMPLATE_MAPPING_PROPERTIES
+        and not isinstance(value, Mapping)
+    ):
+        return None
+    return _json_safe(_plain_options(value))
+
+
 _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_PLATFORM,
     CONF_INITIAL_VALUE,
@@ -855,14 +900,6 @@ _AUTO_HELPER_INDEPENDENT_TEMPLATE_FIELDS = frozenset({
     CONF_ICON_TEMPLATE,
 })
 
-_TRANSIENT_SOURCE_ATTRIBUTE_NAMES = frozenset(
-    {
-        ATTR_RESTORED,
-        "access_token",
-        "entity_picture",
-    }
-)
-
 _ATTRIBUTE_HELPER_METADATA_NAMES = frozenset(
     {
         ATTR_FRIENDLY_NAME,
@@ -872,7 +909,7 @@ _ATTRIBUTE_HELPER_METADATA_NAMES = frozenset(
         "device_class",
         "supported_features",
     }
-) | _TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+) | TRANSIENT_SOURCE_ATTRIBUTE_NAMES
 
 ACTION_ADD_ENTITY = "add_entity"
 ACTION_DELETE_ENTITY = "delete_entity"
@@ -1847,7 +1884,7 @@ def _without_transient_source_attributes(value: Mapping) -> dict[str, Any]:
     return {
         name: item
         for name, item in value.items()
-        if name not in _TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+        if name not in TRANSIENT_SOURCE_ATTRIBUTE_NAMES
     }
 
 
@@ -3665,7 +3702,36 @@ def _native_source_template(
     if attribute_name not in attributes:
         attribute_name = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(property_name, "")
     if attribute_name and attribute_name in attributes:
-        return f"{{{{ state_attr({entity_id!r}, {attribute_name!r}) }}}}"
+        expression = f"state_attr({entity_id!r}, {attribute_name!r})"
+        if use_fallback and property_name in NATIVE_TEMPLATE_DATETIME_PROPERTIES:
+            return _latest_datetime_helper_template([expression], "none")
+        source_value = attributes.get(attribute_name)
+        fallback = None
+        if (
+            source_value is not None
+            and attribute_name not in TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+        ):
+            fallback = _native_source_snapshot_fallback(
+                platform or source_platform,
+                property_name,
+                source_value,
+            )
+        if fallback is None:
+            fallback = _native_source_helper_default(
+                platform or source_platform,
+                property_name,
+            )
+        if use_fallback and fallback is not None:
+            return (
+                "{{ "
+                + expression
+                + " if "
+                + expression
+                + " is not none else "
+                + repr(_plain_options(fallback))
+                + " }}"
+            )
+        return f"{{{{ {expression} }}}}"
 
     if source_platform == "calendar" and property_name == "event":
         return (
@@ -3690,7 +3756,10 @@ def _native_source_template(
     if property_name == "source_entity":
         return f"{{{{ {entity_id!r} }}}}"
     if property_name in NATIVE_TEMPLATE_STATE_PROPERTIES:
-        return f"{{{{ states({entity_id!r}) }}}}"
+        expression = f"states({entity_id!r})"
+        if use_fallback and property_name in NATIVE_TEMPLATE_DATETIME_PROPERTIES:
+            return _latest_datetime_helper_template([expression], "none")
+        return f"{{{{ {expression} }}}}"
     if property_name == "is_on":
         return (
             f"{{{{ states({entity_id!r}) not in "
@@ -4321,7 +4390,7 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             for name, value in dict(first_state.attributes).items()
             if name != ATTR_FRIENDLY_NAME
             and name != CONF_ICON
-            and name not in _TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+            and name not in TRANSIENT_SOURCE_ATTRIBUTE_NAMES
             and name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
         }
     entity_name_states = (
@@ -4402,7 +4471,7 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             for name, value in dict(states[climate_index].attributes).items()
             if name != ATTR_FRIENDLY_NAME
             and name != CONF_ICON
-            and name not in _TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+            and name not in TRANSIENT_SOURCE_ATTRIBUTE_NAMES
             and name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
         }
         domain_options, consumed_attributes = extract_climate_options(

@@ -5,6 +5,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from aiohttp import ClientConnectionError
+from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.camera.const import StreamType
+from homeassistant.components.camera.webrtc import WebRTCClientConfiguration
 from homeassistant.components.image import ImageEntity
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -264,6 +267,98 @@ async def test_virtual_media_allows_independent_concurrent_alias_requests(hass):
         "rtsp://camera",
         "rtsp://camera",
     ]
+
+
+async def test_virtual_camera_alias_proxies_native_webrtc_signaling(hass):
+    class NativeWebRTCCamera(Camera):
+        _attr_supported_features = CameraEntityFeature.STREAM
+
+        def __init__(self):
+            super().__init__()
+            self.offers = []
+            self.candidates = []
+            self.closed_sessions = []
+
+        async def async_handle_async_webrtc_offer(
+            self,
+            offer_sdp,
+            session_id,
+            send_message,
+        ):
+            self.offers.append((offer_sdp, session_id))
+            send_message("answer")
+
+        async def async_on_webrtc_candidate(self, session_id, candidate):
+            self.candidates.append((session_id, candidate))
+
+        def close_webrtc_session(self, session_id):
+            self.closed_sessions.append(session_id)
+
+        def _async_get_webrtc_client_configuration(self):
+            return WebRTCClientConfiguration(data_channel="camera-data")
+
+    source = NativeWebRTCCamera()
+    camera_component = Mock()
+    camera_component.get_entity.return_value = source
+    hass.data["camera"] = camera_component
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "WebRTC Alias",
+        ATTR_ENTITY_ID: "camera.webrtc_alias",
+        ATTR_UNIQUE_ID: "webrtc-alias",
+        CONF_INITIAL_VALUE: "on",
+        "source_entity": "camera.native_webrtc",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._sync_stream_capabilities()
+
+    send_message = Mock()
+    candidate = Mock()
+    await entity.async_handle_async_webrtc_offer(
+        "offer-sdp",
+        "session-1",
+        send_message,
+    )
+    await entity.async_on_webrtc_candidate("session-1", candidate)
+    entity.close_webrtc_session("session-1")
+
+    assert entity.supported_features & CameraEntityFeature.STREAM
+    assert entity.camera_capabilities.frontend_stream_types == {
+        StreamType.WEB_RTC,
+    }
+    assert entity._async_get_webrtc_client_configuration().data_channel == (
+        "camera-data"
+    )
+    assert source.offers == [("offer-sdp", "session-1")]
+    assert source.candidates == [("session-1", candidate)]
+    assert source.closed_sessions == ["session-1"]
+    send_message.assert_called_once_with("answer")
+
+
+async def test_virtual_camera_alias_keeps_hls_stream_type(hass):
+    class HLSCamera(Camera):
+        _attr_supported_features = CameraEntityFeature.STREAM
+
+        async def stream_source(self):
+            return "rtsp://camera/live"
+
+    source = HLSCamera()
+    camera_component = Mock()
+    camera_component.get_entity.return_value = source
+    hass.data["camera"] = camera_component
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "HLS Alias",
+        ATTR_ENTITY_ID: "camera.hls_alias",
+        ATTR_UNIQUE_ID: "hls-alias",
+        CONF_INITIAL_VALUE: "on",
+        "source_entity": "camera.hls_source",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._sync_stream_capabilities()
+
+    assert await entity.stream_source() == "rtsp://camera/live"
+    assert entity.camera_capabilities.frontend_stream_types == {StreamType.HLS}
 
 
 async def test_virtual_image_renders_polygon_map_svg(hass):

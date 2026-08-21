@@ -793,7 +793,7 @@ def _state_only_attributes(entity):
         attributes.update({
             name: value
             for name, value in configured_attributes.items()
-            if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+            if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
         })
     attributes.update(generic_entity_options(entity))
     return attributes
@@ -814,7 +814,11 @@ def _state_only_managed_attribute_names(entity) -> set[str]:
                 name
                 for name in values
                 if isinstance(name, str)
-                and name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+                and name not in (
+                    RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+                    if field_name == CONF_NATIVE_TEMPLATES
+                    else EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
+                )
             )
     return managed
 
@@ -874,6 +878,8 @@ def _state_only_initial_state(hass, entity) -> tuple[object, dict]:
     if str(value).strip().lower() == STATE_UNAVAILABLE:
         value = entity.get(CONF_INITIAL_VALUE, "unknown")
     restored_attributes = dict(stored.state.attributes)
+    for name in TRANSIENT_SOURCE_ATTRIBUTE_NAMES:
+        restored_attributes.pop(name, None)
     previous_managed = restored_attributes.pop(ATTR_VIRTUAL_ATTRIBUTES, [])
     current_managed = _state_only_managed_attribute_names(entity)
     if isinstance(previous_managed, (list, tuple, set)):
@@ -1129,17 +1135,7 @@ def _async_apply_state_only_templates(hass, entity) -> None:
         changed = attributes.get(name, _MISSING) != configured_value or changed
         attributes[name] = configured_value
 
-    if entity.get(CONF_VALUE_TEMPLATE):
-        try:
-            value = _render_state_only_template(hass, entity, entity[CONF_VALUE_TEMPLATE])
-            changed = value != state.state or changed
-        except (OverflowError, TemplateError, TypeError, ValueError) as err:
-            _LOGGER.warning(
-                "Unable to render value template for state-only entity %s: %s",
-                entity_id,
-                err,
-            )
-
+    availability_rendered = False
     if entity.get(CONF_AVAILABILITY_TEMPLATE):
         try:
             available = _state_only_template_to_bool(
@@ -1149,11 +1145,27 @@ def _async_apply_state_only_templates(hass, entity) -> None:
                     entity[CONF_AVAILABILITY_TEMPLATE],
                 )
             )
+            availability_rendered = True
             changed = attributes.get(ATTR_AVAILABLE) != available or changed
             attributes[ATTR_AVAILABLE] = available
         except (OverflowError, TemplateError, TypeError, ValueError) as err:
             _LOGGER.warning(
                 "Unable to render availability template for state-only entity %s: %s",
+                entity_id,
+                err,
+            )
+
+    apply_state_templates = not (
+        availability_rendered and not attributes.get(ATTR_AVAILABLE, True)
+    )
+
+    if entity.get(CONF_VALUE_TEMPLATE) and apply_state_templates:
+        try:
+            value = _render_state_only_template(hass, entity, entity[CONF_VALUE_TEMPLATE])
+            changed = value != state.state or changed
+        except (OverflowError, TemplateError, TypeError, ValueError) as err:
+            _LOGGER.warning(
+                "Unable to render value template for state-only entity %s: %s",
                 entity_id,
                 err,
             )
@@ -1181,7 +1193,7 @@ def _async_apply_state_only_templates(hass, entity) -> None:
             )
 
     native_templates = entity.get(CONF_NATIVE_TEMPLATES, {})
-    if isinstance(native_templates, Mapping):
+    if apply_state_templates and isinstance(native_templates, Mapping):
         for name, template in native_templates.items():
             if not isinstance(name, str) or not name or not template:
                 continue
@@ -1215,7 +1227,7 @@ def _async_apply_state_only_templates(hass, entity) -> None:
     attribute_templates = entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
     if isinstance(attribute_templates, Mapping):
         for name, template in attribute_templates.items():
-            if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+            if name in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
                 continue
             try:
                 rendered = _render_state_only_template(
@@ -1238,7 +1250,7 @@ def _async_apply_state_only_templates(hass, entity) -> None:
     attribute_sources = entity.get(CONF_ATTRIBUTE_SOURCES, {})
     if isinstance(attribute_sources, Mapping):
         for name, source in attribute_sources.items():
-            if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+            if name in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
                 continue
             if not isinstance(source, Mapping):
                 continue
@@ -1309,7 +1321,7 @@ def _async_apply_state_only_event_hook(hass, entity, hook, event) -> None:
     configured_attributes = hook.get(CONF_ATTRIBUTES, {})
     if isinstance(configured_attributes, Mapping):
         for name, configured_value in configured_attributes.items():
-            if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+            if name in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
                 continue
             changed = attributes.get(name, _MISSING) != configured_value or changed
             attributes[name] = configured_value
@@ -1317,7 +1329,7 @@ def _async_apply_state_only_event_hook(hass, entity, hook, event) -> None:
     attribute_templates = hook.get(CONF_ATTRIBUTE_TEMPLATES, {})
     if isinstance(attribute_templates, Mapping):
         for name, template in attribute_templates.items():
-            if name in RESERVED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
+            if name in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
                 continue
             try:
                 rendered = _render_state_only_template(
@@ -1487,6 +1499,12 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
     attribute_templates = entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
     if not isinstance(attribute_templates, Mapping):
         attribute_templates = {}
+    else:
+        attribute_templates = {
+            name: template
+            for name, template in attribute_templates.items()
+            if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
+        }
     templates = [
         template
         for template in (
@@ -1778,7 +1796,7 @@ async def async_virtual_set_attributes_service(hass, call):
     attributes = {
         name: value
         for name, value in call.data[ATTR_ATTRIBUTES].items()
-        if name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+        if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
     }
     entity_ids = call.data[ATTR_ENTITY_ID]
     _assert_managed_virtual_entities(hass, entity_ids)

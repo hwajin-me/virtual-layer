@@ -172,7 +172,7 @@ def _normalize_event_hooks(value, device_name, index):
                 if (
                     not isinstance(name, str)
                     or not name.strip()
-                    or name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+                    or name.strip() in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
                     or field_name == CONF_ATTRIBUTE_TEMPLATES
                     and (not isinstance(item, str) or not item.strip())
                     or name.strip() in normalized_values
@@ -524,7 +524,7 @@ def _normalize_common_entity_config(entity, device_name, index):
             if (
                 not isinstance(name, str)
                 or not name.strip()
-                or name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+                or name.strip() in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
                 or key == CONF_ATTRIBUTE_TEMPLATES
                 and (not isinstance(item, str) or not item.strip())
                 or name.strip() in normalized_values
@@ -607,7 +607,10 @@ def _normalize_common_entity_config(entity, device_name, index):
             if (
                 not isinstance(name, str)
                 or not name.strip()
-                or (key == CONF_ATTRIBUTE_SOURCES and name.strip() in RESERVED_VIRTUAL_ATTRIBUTE_NAMES)
+                or (
+                    key == CONF_ATTRIBUTE_SOURCES
+                    and name.strip() in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
+                )
                 or normalized_source is None
             ):
                 _LOGGER.warning(

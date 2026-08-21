@@ -9,6 +9,9 @@ import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
 import pytest
 import voluptuous as vol
+from homeassistant.components.camera import Camera, CameraEntityFeature, CameraState
+from homeassistant.components.camera.const import StreamType
+from homeassistant.components.camera.webrtc import WebRTCAnswer
 from homeassistant.components.climate import ClimateEntityFeature, HVACMode
 from homeassistant.components.fan import FanEntityFeature
 from homeassistant.config_entries import SOURCE_IMPORT, SOURCE_RECONFIGURE, SOURCE_USER
@@ -24,7 +27,9 @@ from homeassistant.const import (
 from homeassistant.core import Context
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, Unauthorized
+from homeassistant.helpers.template import Template
 from homeassistant.helpers.translation import async_get_translations
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.virtual_layer import (
@@ -150,6 +155,7 @@ from custom_components.virtual_layer.const import (
     CONF_TEMPLATE_SOURCES,
     CONF_VALUE_TEMPLATE,
     CONF_VIA_DEVICE_ID,
+    TRANSIENT_SOURCE_ATTRIBUTE_NAMES,
 )
 from custom_components.virtual_layer.sensor import VirtualSensor
 
@@ -408,6 +414,97 @@ async def test_options_flow_ignores_restored_source_metadata(hass):
     assert entity[CONF_ATTRIBUTE_TEMPLATES]["vendor_status"] == (
         "{{ state_attr('sensor.radon_sensor', 'vendor_status') }}"
     )
+
+
+async def test_options_flow_camera_alias_tracks_native_camera_states(hass):
+    source_entity_id = "camera.camera1"
+    hass.states.async_set(
+        source_entity_id,
+        CameraState.RECORDING,
+        {
+            "access_token": "rotating-secret",
+            "entity_picture": "/api/camera_proxy/camera.camera1?token=secret",
+        },
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: [source_entity_id]},
+    )
+    result = await _choose_add_template_helper(hass, result)
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+
+    assert defaults[CONF_PLATFORM] == "camera"
+    assert defaults[CONF_INITIAL_VALUE] == CameraState.RECORDING
+    assert "access_token" not in json.loads(defaults[CONF_ATTRIBUTES_JSON] or "{}")
+    assert "access_token" not in json.loads(
+        defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] or "{}"
+    )
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_DEVICE_NAME: "Camera",
+            ATTR_ENTITY_ID: "camera.camera1_copy",
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+
+    stored = result["data"][ATTR_DEVICES]["Camera"][0]
+    runtime_config = {
+        key: value
+        for key, value in stored.items()
+        if key not in {CONF_PLATFORM, ATTR_ENTITY_KEY, CONF_AUTO_HELPER}
+    }
+    # Old releases copied HA-owned camera metadata into generic attribute
+    # templates. Those records must load without compiling the malformed token.
+    runtime_config.setdefault(CONF_ATTRIBUTES, {}).update({
+        ATTR_RESTORED: True,
+        "access_token": "stale-token",
+    })
+    runtime_config.setdefault(CONF_ATTRIBUTE_TEMPLATES, {}).update({
+        "access_token": "{{ <rotating-token> }}",
+        "entity_picture": "{{ <tokenized-picture> }}",
+    })
+    camera = VirtualCamera(CAMERA_SCHEMA(runtime_config), False)
+    camera.hass = hass
+    camera.async_schedule_update_ha_state = Mock()
+    camera._create_state(camera._config)
+    camera._apply_templates()
+
+    assert set(camera._virtual_attributes).isdisjoint(
+        TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+    )
+    assert set(camera._attribute_templates).isdisjoint(
+        TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+    )
+    assert camera.available is True
+    assert camera.is_on is True
+    assert camera.is_recording is True
+    assert camera.is_streaming is False
+    assert camera.state is CameraState.RECORDING
+
+    for source_state, expected_state in (
+        (CameraState.STREAMING, CameraState.STREAMING),
+        (CameraState.IDLE, CameraState.IDLE),
+        ("unavailable", CameraState.IDLE),
+        (CameraState.RECORDING, CameraState.RECORDING),
+    ):
+        hass.states.async_set(source_entity_id, source_state)
+        camera._apply_templates()
+        assert camera.available is (source_state != "unavailable")
+        assert camera.state is expected_state
 
 
 async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass):
@@ -2597,9 +2694,9 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
         "{{ states('light.kitchen_lamp') not in "
         "['off', 'unknown', 'unavailable'] }}"
     )
-    assert native_templates["brightness"] == (
-        "{{ state_attr('light.kitchen_lamp', 'brightness') }}"
-    )
+    assert Template(native_templates["brightness"], hass).async_render(
+        parse_result=True
+    ) == 128
 
 
 async def test_creation_flows_apply_the_selected_template_helper_policy(hass):
@@ -2893,15 +2990,15 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
     assert defaults[CONF_PLATFORM] == "climate"
     native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
     assert set(native_templates) == set(CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
-    assert native_templates["hvac_modes"] == (
-        "{{ state_attr('climate.bedroom', 'hvac_modes') }}"
-    )
-    assert native_templates["fan_mode"] == (
-        "{{ state_attr('climate.bedroom', 'fan_mode') }}"
-    )
-    assert native_templates["target_temperature"] == (
-        "{{ state_attr('climate.bedroom', 'temperature') }}"
-    )
+    assert Template(native_templates["hvac_modes"], hass).async_render(
+        parse_result=True
+    ) == ["off", "cool", "dry", "fan_only"]
+    assert Template(native_templates["fan_mode"], hass).async_render(
+        parse_result=True
+    ) == "auto"
+    assert Template(native_templates["target_temperature"], hass).async_render(
+        parse_result=True
+    ) == 23.0
     assert all(native_templates.values())
     assert defaults[CONF_DOMAIN_OPTIONS_JSON] == ""
     assert defaults["attributes_json"] == ""
@@ -2920,12 +3017,7 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
     assert set(entity[CONF_NATIVE_TEMPLATES]) == set(
         CLIMATE_NATIVE_TEMPLATE_PROPERTIES
     )
-    assert entity[CONF_NATIVE_TEMPLATES]["fan_modes"] == (
-        "{{ state_attr('climate.bedroom', 'fan_modes') }}"
-    )
-    assert entity[CONF_NATIVE_TEMPLATES]["target_temperature"] == (
-        "{{ state_attr('climate.bedroom', 'temperature') }}"
-    )
+    assert entity[CONF_NATIVE_TEMPLATES] == native_templates
     assert "supported_features" not in entity.get(CONF_ATTRIBUTES, {})
 
     runtime_config = {
@@ -3072,15 +3164,15 @@ async def test_options_flow_prefills_and_creates_native_dehumidifier(hass):
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_PLATFORM] == "humidifier"
     native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
-    assert native_templates["device_class"] == (
-        "{{ state_attr('humidifier.basement', 'device_class') }}"
-    )
-    assert native_templates["available_modes"] == (
-        "{{ state_attr('humidifier.basement', 'available_modes') }}"
-    )
-    assert native_templates["target_humidity"] == (
-        "{{ state_attr('humidifier.basement', 'humidity') }}"
-    )
+    assert Template(native_templates["device_class"], hass).async_render(
+        parse_result=True
+    ) == "dehumidifier"
+    assert Template(native_templates["available_modes"], hass).async_render(
+        parse_result=True
+    ) == ["auto", "sleep"]
+    assert Template(native_templates["target_humidity"], hass).async_render(
+        parse_result=True
+    ) == 50
     assert all(native_templates.values())
     assert defaults[CONF_DOMAIN_OPTIONS_JSON] == ""
 
@@ -3712,7 +3804,16 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
         "custom_components.virtual_layer.cfg.default_meta_file",
         lambda _hass: str(meta_file),
     )
-    hass.states.async_set("sensor.washer_power", "150", {"unit": "W"})
+    hass.states.async_set(
+        "sensor.washer_power",
+        "150",
+        {
+            "unit": "W",
+            ATTR_RESTORED: True,
+            "access_token": "rotating-secret",
+            "entity_picture": "/api/media?token=secret",
+        },
+    )
     hass.states.async_set("binary_sensor.washer_door", "on", {"battery": 95})
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
@@ -4643,6 +4744,53 @@ def test_state_only_invalid_templates_keep_current_values(hass):
     assert hass.states.get(entity[ATTR_ENTITY_ID]).attributes[ATTR_AVAILABLE] is True
 
 
+def test_state_only_unavailable_source_preserves_strict_native_values(
+    hass,
+    caplog,
+):
+    entity_id = "geolocation.strict_copy"
+    source_state_id = "sensor.location_state"
+    source_latitude_id = "sensor.location_latitude"
+    entity = {
+        ATTR_ENTITY_ID: entity_id,
+        CONF_VALUE_TEMPLATE: f"{{{{ states({source_state_id!r}) }}}}",
+        CONF_AVAILABILITY_TEMPLATE: (
+            f"{{{{ states({source_state_id!r}) not in "
+            f"['unknown', 'unavailable'] and states({source_latitude_id!r}) "
+            f"not in ['unknown', 'unavailable'] }}}}"
+        ),
+        CONF_NATIVE_TEMPLATES: {
+            "latitude": f"{{{{ states({source_latitude_id!r}) }}}}",
+        },
+    }
+    hass.states.async_set(source_state_id, "home")
+    hass.states.async_set(source_latitude_id, "37.5")
+    hass.states.async_set(
+        entity_id,
+        "home",
+        {ATTR_AVAILABLE: True, ATTR_LATITUDE: 37.5},
+    )
+
+    hass.states.async_set(source_state_id, "unavailable")
+    hass.states.async_set(source_latitude_id, "unavailable")
+    _async_apply_state_only_templates(hass, entity)
+
+    state = hass.states.get(entity_id)
+    assert state.state == "home"
+    assert state.attributes[ATTR_AVAILABLE] is False
+    assert state.attributes[ATTR_LATITUDE] == 37.5
+    assert "Unable to render" not in caplog.text
+
+    hass.states.async_set(source_state_id, "not_home")
+    hass.states.async_set(source_latitude_id, "38.25")
+    _async_apply_state_only_templates(hass, entity)
+
+    state = hass.states.get(entity_id)
+    assert state.state == "not_home"
+    assert state.attributes[ATTR_AVAILABLE] is True
+    assert state.attributes[ATTR_LATITUDE] == 38.25
+
+
 async def test_state_only_reload_falls_back_from_unavailable_state(
     hass,
     tmp_path,
@@ -4789,7 +4937,13 @@ async def test_state_only_reload_removes_attributes_deleted_from_configuration(
     hass.states.async_set(
         state.entity_id,
         "changed",
-        {**state.attributes, "runtime_attribute": "preserved"},
+        {
+            **state.attributes,
+            "runtime_attribute": "preserved",
+            ATTR_RESTORED: True,
+            "access_token": "stale-token",
+            "entity_picture": "/api/media?token=stale",
+        },
     )
 
     next_entity = dict(entity)
@@ -4812,6 +4966,9 @@ async def test_state_only_reload_removes_attributes_deleted_from_configuration(
     assert "removed_attribute" not in restored.attributes
     assert "removed_native" not in restored.attributes
     assert restored.attributes["runtime_attribute"] == "preserved"
+    assert set(restored.attributes).isdisjoint(
+        TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+    )
     assert restored.attributes[ATTR_VIRTUAL_ATTRIBUTES] == []
 
 
@@ -6080,6 +6237,74 @@ async def test_virtual_camera_alias_proxies_source_image_and_stream(hass):
     assert await entity.stream_source() == "rtsp://source/live"
     source.async_camera_image.assert_awaited_once_with(width=640, height=360)
     source.stream_source.assert_awaited_once_with()
+
+
+async def test_virtual_camera_alias_proxies_home_assistant_webrtc_websocket(
+    hass,
+    hass_ws_client,
+):
+    class NativeWebRTCCamera(Camera):
+        _attr_name = "Native WebRTC Source"
+        _attr_supported_features = CameraEntityFeature.STREAM
+
+        def __init__(self):
+            super().__init__()
+            self.entity_id = "camera.native_webrtc_source"
+            self.offers = []
+
+        async def async_handle_async_webrtc_offer(
+            self,
+            offer_sdp,
+            session_id,
+            send_message,
+        ):
+            self.offers.append((offer_sdp, session_id))
+            send_message(WebRTCAnswer("answer-sdp"))
+
+        async def async_on_webrtc_candidate(self, session_id, candidate):
+            return
+
+    assert await async_setup_component(hass, "camera", {})
+    component = hass.data["camera"]
+    source = NativeWebRTCCamera()
+    await component.async_add_entities([source])
+
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "WebRTC Alias",
+        ATTR_ENTITY_ID: "camera.webrtc_alias",
+        CONF_INITIAL_VALUE: "on",
+        CAMERA_SOURCE_ENTITY: source.entity_id,
+    }), False)
+    await component.async_add_entities([entity])
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({
+        "type": "camera/capabilities",
+        "entity_id": entity.entity_id,
+    })
+    capabilities = await client.receive_json()
+    assert capabilities["success"] is True
+    assert capabilities["result"]["frontend_stream_types"] == [
+        StreamType.WEB_RTC,
+    ]
+
+    await client.send_json_auto_id({
+        "type": "camera/webrtc/offer",
+        "entity_id": entity.entity_id,
+        "offer": "offer-sdp",
+    })
+    assert (await client.receive_json())["success"] is True
+    session_event = await client.receive_json()
+    answer_event = await client.receive_json()
+
+    assert session_event["event"]["type"] == "session"
+    assert answer_event["event"] == {
+        "type": "answer",
+        "answer": "answer-sdp",
+    }
+    assert source.offers == [
+        ("offer-sdp", session_event["event"]["session_id"]),
+    ]
 
 
 async def test_virtual_camera_alias_does_not_proxy_itself(hass):

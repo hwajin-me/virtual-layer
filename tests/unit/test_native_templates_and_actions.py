@@ -37,11 +37,13 @@ from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClima
 from custom_components.virtual_layer.const import (
     ATTR_UNIQUE_ID,
     CONF_ATTRIBUTE_TEMPLATES,
+    CONF_AVAILABILITY_TEMPLATE,
     CONF_COMMAND_ACTIONS,
     CONF_INITIAL_VALUE,
     CONF_NAME,
     CONF_NATIVE_TEMPLATES,
     CONF_PERSISTENT,
+    CONF_VALUE_TEMPLATE,
     VIRTUAL_ENTITY_COMMANDS,
 )
 from custom_components.virtual_layer.cover import COVER_SCHEMA, VirtualCover
@@ -845,6 +847,55 @@ def _render_native_templates(entity, hass):
     entity.async_schedule_update_ha_state = Mock()
     entity.async_write_ha_state = Mock()
     entity._apply_templates()
+
+
+def test_unavailable_source_preserves_strict_native_values_until_recovery(
+    hass,
+    caplog,
+):
+    source_entity_id = "number.strict_source"
+    hass.states.async_set(source_entity_id, "25")
+    number = VirtualNumber(
+        NUMBER_SCHEMA(
+            _base(
+                "number.strict_copy",
+                "10",
+                min=0,
+                max=100,
+                **{
+                    CONF_AVAILABILITY_TEMPLATE: (
+                        f"{{{{ states({source_entity_id!r}) not in "
+                        f"['unknown', 'unavailable'] }}}}"
+                    ),
+                    CONF_VALUE_TEMPLATE: f"{{{{ states({source_entity_id!r}) }}}}",
+                    CONF_NATIVE_TEMPLATES: {
+                        "native_value": f"{{{{ states({source_entity_id!r}) }}}}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    number.hass = hass
+    number.async_schedule_update_ha_state = Mock()
+    number.async_write_ha_state = Mock()
+    number._create_state(number._config)
+
+    number._apply_templates()
+    assert number.available is True
+    assert number.native_value == 25
+
+    caplog.clear()
+    hass.states.async_set(source_entity_id, "unavailable")
+    number._apply_templates()
+    assert number.available is False
+    assert number.native_value == 25
+    assert "Unable to render" not in caplog.text
+
+    hass.states.async_set(source_entity_id, "40")
+    number._apply_templates()
+    assert number.available is True
+    assert number.native_value == 40
 
 
 @pytest.mark.asyncio
