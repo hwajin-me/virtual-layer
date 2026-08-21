@@ -10,6 +10,7 @@ import voluptuous as vol
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
+    ATTR_RESTORED,
     CONF_ICON,
     CONF_NAME,
     CONF_PLATFORM,
@@ -735,6 +736,49 @@ def test_reference_image_uses_source_state_for_last_updated(hass):
 
 
 @pytest.mark.parametrize(
+    ("entity_id", "state"),
+    [
+        ("sensor.radon", "unknown"),
+        ("camera.front_door", "on"),
+        ("image.vacuum_map", "2026-08-21T10:15:00+00:00"),
+    ],
+)
+def test_reference_ignores_restored_and_media_access_attributes(
+    hass,
+    entity_id,
+    state,
+):
+    hass.states.async_set(
+        entity_id,
+        state,
+        {
+            ATTR_RESTORED: "{{ <RestoredState> }}",
+            "access_token": "{{ <rotating-token> }}",
+            "entity_picture": "/api/media?token=secret",
+            "vendor_status": "ready",
+        },
+    )
+
+    defaults = _reference_entity_defaults(hass, [entity_id])
+    attributes = json.loads(defaults[CONF_ATTRIBUTES_JSON])
+    attribute_templates = json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+
+    assert set(attributes).isdisjoint(
+        {ATTR_RESTORED, "access_token", "entity_picture"}
+    )
+    assert set(attribute_templates).isdisjoint(
+        {ATTR_RESTORED, "access_token", "entity_picture"}
+    )
+    assert attributes["vendor_status"] == "ready"
+    assert Template(
+        attribute_templates["vendor_status"],
+        hass,
+    ).async_render() == "ready"
+    for template in defaults.get(CONF_NATIVE_VALUE_TEMPLATES, {}).values():
+        Template(template, hass).ensure_valid()
+
+
+@pytest.mark.parametrize(
     ("platform", "property_name", "expected"),
     [
         ("climate", "target_temperature", None),
@@ -1264,6 +1308,29 @@ def test_build_entity_config_normalizes_attribute_names_and_rejects_bad_template
 
     assert entity[CONF_ATTRIBUTES] == {"summary": "ready"}
     assert entity[CONF_ATTRIBUTE_TEMPLATES] == {
+        "detail": '{{ states("sensor.detail") }}',
+    }
+
+    _, cleaned = _build_entity_config(
+        _entity_input(
+            {
+                CONF_ATTRIBUTES_JSON: (
+                    '{"restored": true, "vendor": "kept"}'
+                ),
+                CONF_ATTRIBUTE_SOURCES_JSON: (
+                    '{"access_token": "camera.source.access_token", '
+                    '"battery": "sensor.source.battery_level"}'
+                ),
+                CONF_ATTRIBUTE_TEMPLATES_JSON: (
+                    '{"entity_picture": "{{ <legacy-picture> }}", '
+                    '"detail": "{{ states(\\"sensor.detail\\") }}"}'
+                ),
+            }
+        )
+    )
+    assert cleaned[CONF_ATTRIBUTES] == {"vendor": "kept"}
+    assert set(cleaned[CONF_ATTRIBUTE_SOURCES]) == {"battery"}
+    assert cleaned[CONF_ATTRIBUTE_TEMPLATES] == {
         "detail": '{{ states("sensor.detail") }}',
     }
 
@@ -4082,7 +4149,24 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
                     CONF_VALUE_TEMPLATE: "{{ trigger.data.value }}",
                 }
             ],
-            CONF_ATTRIBUTES: {"source": "simulation"},
+            CONF_ATTRIBUTES: {
+                "source": "simulation",
+                ATTR_RESTORED: "legacy",
+            },
+            CONF_ATTRIBUTE_SOURCES: {
+                "battery": {
+                    ATTR_ENTITY_ID: "sensor.washer_power",
+                    CONF_ATTRIBUTE: "battery_level",
+                },
+                "access_token": {
+                    ATTR_ENTITY_ID: "camera.legacy",
+                    CONF_ATTRIBUTE: "access_token",
+                },
+            },
+            CONF_ATTRIBUTE_TEMPLATES: {
+                "detail": "{{ power }}",
+                "entity_picture": "{{ <legacy-picture> }}",
+            },
         },
         {
             ATTR_DEVICE_ATTRIBUTES: {
@@ -4131,6 +4215,15 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
         }
     ]
     assert defaults[CONF_ATTRIBUTES_JSON] == '{"source": "simulation"}'
+    assert json.loads(defaults[CONF_ATTRIBUTE_SOURCES_JSON]) == {
+        "battery": {
+            CONF_ATTRIBUTE: "battery_level",
+            ATTR_ENTITY_ID: "sensor.washer_power",
+        },
+    }
+    assert json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
+        "detail": "{{ power }}",
+    }
 
 
 def test_entity_key_is_json_selection_key():

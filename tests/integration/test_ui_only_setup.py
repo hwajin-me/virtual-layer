@@ -16,6 +16,7 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_LATITUDE,
     ATTR_LONGITUDE,
+    ATTR_RESTORED,
     CONF_ICON,
     CONF_NAME,
     CONF_PLATFORM,
@@ -346,6 +347,67 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
     assert sensor.native_value == "14.0"
     assert sensor.options is None
     assert sensor.suggested_display_precision is None
+
+
+async def test_options_flow_ignores_restored_source_metadata(hass):
+    hass.states.async_set(
+        "sensor.radon_sensor",
+        "unknown",
+        {
+            ATTR_RESTORED: "{{ <RestoredState> }}",
+            "vendor_status": "warming_up",
+        },
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["sensor.radon_sensor"]},
+    )
+    result = await _choose_add_template_helper(hass, result)
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+
+    assert ATTR_RESTORED not in json.loads(defaults[CONF_ATTRIBUTES_JSON])
+    assert ATTR_RESTORED not in json.loads(
+        defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]
+    )
+
+    # A flow opened before the fix can still submit the old generated fields.
+    # They are Home Assistant-owned metadata and should be repaired, not block
+    # the complete entity form with invalid_template.
+    stale_templates = json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+    stale_templates.update({
+        ATTR_RESTORED: "{{ <RestoredState> }}",
+        "access_token": "{{ <rotating-token> }}",
+        "entity_picture": "{{ <tokenized-picture> }}",
+    })
+    defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] = json.dumps(stale_templates)
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_DEVICE_NAME: "Radon Sensor",
+            ATTR_ENTITY_ID: "sensor.virtual_radon_sensor",
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entity = result["data"][ATTR_DEVICES]["Radon Sensor"][0]
+    assert ATTR_RESTORED not in entity.get(CONF_ATTRIBUTES, {})
+    assert ATTR_RESTORED not in entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
+    assert entity[CONF_ATTRIBUTE_TEMPLATES]["vendor_status"] == (
+        "{{ state_attr('sensor.radon_sensor', 'vendor_status') }}"
+    )
 
 
 async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass):

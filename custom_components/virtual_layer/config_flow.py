@@ -21,6 +21,7 @@ from homeassistant import config_entries, exceptions
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
+    ATTR_RESTORED,
     CONF_ICON,
     CONF_PLATFORM,
     CONF_UNIT_OF_MEASUREMENT,
@@ -854,6 +855,14 @@ _AUTO_HELPER_INDEPENDENT_TEMPLATE_FIELDS = frozenset({
     CONF_ICON_TEMPLATE,
 })
 
+_TRANSIENT_SOURCE_ATTRIBUTE_NAMES = frozenset(
+    {
+        ATTR_RESTORED,
+        "access_token",
+        "entity_picture",
+    }
+)
+
 _ATTRIBUTE_HELPER_METADATA_NAMES = frozenset(
     {
         ATTR_FRIENDLY_NAME,
@@ -863,7 +872,7 @@ _ATTRIBUTE_HELPER_METADATA_NAMES = frozenset(
         "device_class",
         "supported_features",
     }
-)
+) | _TRANSIENT_SOURCE_ATTRIBUTE_NAMES
 
 ACTION_ADD_ENTITY = "add_entity"
 ACTION_DELETE_ENTITY = "delete_entity"
@@ -1833,6 +1842,15 @@ def _normalize_attribute_mapping(
     return normalized
 
 
+def _without_transient_source_attributes(value: Mapping) -> dict[str, Any]:
+    """Drop Home Assistant-owned source metadata from editable attributes."""
+    return {
+        name: item
+        for name, item in value.items()
+        if name not in _TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+    }
+
+
 def _parse_command_actions(value: str, platform: str | None = None) -> dict[str, Any]:
     """Parse and validate command-to-HA-action mappings."""
     parsed = _parse_json_object(value, CONF_COMMAND_ACTIONS_JSON)
@@ -2307,12 +2325,14 @@ def _build_entity_config(
         _text_default(user_input.get(CONF_ATTRIBUTES_JSON)), CONF_ATTRIBUTES_JSON
     )
     attributes = _normalize_attribute_mapping(attributes, CONF_ATTRIBUTES_JSON)
+    attributes = _without_transient_source_attributes(attributes)
     if attributes:
         entity[CONF_ATTRIBUTES] = attributes
 
     attribute_sources = _parse_attribute_sources(
         _text_default(user_input.get(CONF_ATTRIBUTE_SOURCES_JSON)),
     )
+    attribute_sources = _without_transient_source_attributes(attribute_sources)
     if attribute_sources:
         entity[CONF_ATTRIBUTE_SOURCES] = attribute_sources
 
@@ -2324,6 +2344,9 @@ def _build_entity_config(
         attribute_templates,
         CONF_ATTRIBUTE_TEMPLATES_JSON,
         templates=True,
+    )
+    attribute_templates = _without_transient_source_attributes(
+        attribute_templates
     )
     if attribute_templates:
         entity[CONF_ATTRIBUTE_TEMPLATES] = attribute_templates
@@ -4298,6 +4321,7 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             for name, value in dict(first_state.attributes).items()
             if name != ATTR_FRIENDLY_NAME
             and name != CONF_ICON
+            and name not in _TRANSIENT_SOURCE_ATTRIBUTE_NAMES
             and name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
         }
     entity_name_states = (
@@ -4378,6 +4402,7 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             for name, value in dict(states[climate_index].attributes).items()
             if name != ATTR_FRIENDLY_NAME
             and name != CONF_ICON
+            and name not in _TRANSIENT_SOURCE_ATTRIBUTE_NAMES
             and name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
         }
         domain_options, consumed_attributes = extract_climate_options(
@@ -5057,6 +5082,18 @@ def _entity_form_defaults(
     options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     entity = _plain_options(entity)
+    for field_name in (
+        CONF_ATTRIBUTES,
+        CONF_ATTRIBUTE_SOURCES,
+        CONF_ATTRIBUTE_TEMPLATES,
+    ):
+        field_value = entity.get(field_name)
+        if isinstance(field_value, Mapping):
+            cleaned = _without_transient_source_attributes(field_value)
+            if cleaned:
+                entity[field_name] = cleaned
+            else:
+                entity.pop(field_name, None)
     if entity.get(CONF_PLATFORM) == "climate":
         entity = migrate_legacy_climate_attributes(entity)
     elif entity.get(CONF_PLATFORM) == "fan":
