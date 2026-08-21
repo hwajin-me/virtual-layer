@@ -315,28 +315,34 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             except ValueError as err:
                 raise ValueError(f"Invalid sensor state class: {value}") from err
         elif name == "options":
-            if not isinstance(value, (list, tuple, set)):
+            if value is None:
+                pass
+            elif not isinstance(value, (list, tuple, set)):
                 raise ValueError("options must render a list")
-            value = [str(item).strip() for item in value if str(item).strip()]
-            if len(set(value)) != len(value):
-                raise ValueError("options contains duplicate values")
+            else:
+                value = [str(item).strip() for item in value if str(item).strip()]
+                if len(set(value)) != len(value):
+                    raise ValueError("options contains duplicate values")
         elif name == "native_unit_of_measurement":
             value = None if value is None or value == "" else str(value)
         elif name == "suggested_display_precision":
-            if isinstance(value, bool):
+            if value is None or value == "":
+                value = None
+            elif isinstance(value, bool):
                 raise ValueError(
                     "suggested_display_precision must be a non-negative integer"
                 )
-            try:
-                value = int(value)
-            except (TypeError, ValueError, OverflowError) as err:
-                raise ValueError(
-                    "suggested_display_precision must be a non-negative integer"
-                ) from err
-            if value < 0:
-                raise ValueError(
-                    "suggested_display_precision must be a non-negative integer"
-                )
+            else:
+                try:
+                    value = int(value)
+                except (TypeError, ValueError, OverflowError) as err:
+                    raise ValueError(
+                        "suggested_display_precision must be a non-negative integer"
+                    ) from err
+                if value < 0:
+                    raise ValueError(
+                        "suggested_display_precision must be a non-negative integer"
+                    )
         elif name == "suggested_unit_of_measurement":
             value = None if value is None or value == "" else str(value)
         elif name == "last_reset":

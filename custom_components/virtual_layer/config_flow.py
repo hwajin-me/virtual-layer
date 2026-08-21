@@ -274,6 +274,10 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
         "native_value": 0,
         "mode": "auto",
     },
+    "sensor": {
+        "options": None,
+        "suggested_display_precision": None,
+    },
     "siren": {"support_volume": True, "support_duration": True},
     "text": {
         "native_min": 0,
