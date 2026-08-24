@@ -276,6 +276,34 @@ VIRTUAL_ENTITY_COMMANDS = {
     }),
 }
 
+# Most virtual command names match Home Assistant service names. These are the
+# small set where the entity method contract and service API use different
+# names. They are shared by config-flow helper generation and the runtime
+# fallback used by existing entries without generated command actions.
+VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES = {
+    ("media_player", "mute_volume"): "volume_mute",
+    ("media_player", "set_repeat"): "repeat_set",
+    ("media_player", "set_shuffle"): "shuffle_set",
+    ("media_player", "set_volume_level"): "volume_set",
+    ("number", "set_native_value"): "set_value",
+    ("water_heater", "turn_away_mode_off"): "set_away_mode",
+    ("water_heater", "turn_away_mode_on"): "set_away_mode",
+}
+VIRTUAL_ENTITY_PROXY_DATA_RENAMES = {
+    ("date", "set_value"): {"value": "date"},
+    ("datetime", "set_value"): {"value": "datetime"},
+    ("media_player", "mute_volume"): {"mute": "is_volume_muted"},
+    ("media_player", "set_volume_level"): {"volume": "volume_level"},
+    ("time", "set_value"): {"value": "time"},
+}
+VIRTUAL_ENTITY_PROXY_FIXED_DATA = {
+    ("water_heater", "turn_away_mode_off"): {"away_mode": False},
+    ("water_heater", "turn_away_mode_on"): {"away_mode": True},
+}
+VIRTUAL_ENTITY_NON_SERVICE_COMMANDS = frozenset({
+    ("update", "release_notes"),
+})
+
 
 def default_meta_file(hass) -> str:
     return hass.config.path(".storage/virtual_layer.meta.json")

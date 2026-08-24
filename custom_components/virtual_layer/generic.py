@@ -427,6 +427,19 @@ def _safe_bool(value, default: bool = False) -> bool:
         return default
 
 
+def _supported_feature_mask(value, feature_type, field_name="supported_features"):
+    """Return a validated Home Assistant feature bitmask."""
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError) as err:
+        raise ValueError(f"{field_name} must be a non-negative integer") from err
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    return feature_type(parsed)
+
+
 class _NativeGenericMixin:
     """Common config and attributes for native building-block entities."""
 
@@ -753,12 +766,16 @@ class VirtualSiren(_NativeGenericMixin, VirtualEntity, SirenEntity):
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
+        self._configured_supported_features = None
         self._attr_available_tones = _string_list(config.get("available_tones"))
         self._support_volume = _safe_bool(config.get("support_volume", True), True)
         self._support_duration = _safe_bool(config.get("support_duration", True), True)
         self._refresh_supported_features()
 
     def _refresh_supported_features(self) -> None:
+        if self._configured_supported_features is not None:
+            self._attr_supported_features = self._configured_supported_features
+            return
         features = SirenEntityFeature.TURN_ON | SirenEntityFeature.TURN_OFF
         if self._attr_available_tones:
             features |= SirenEntityFeature.TONES
@@ -800,6 +817,11 @@ class VirtualSiren(_NativeGenericMixin, VirtualEntity, SirenEntity):
         self.async_write_ha_state()
 
     def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "supported_features":
+            value = _supported_feature_mask(value, SirenEntityFeature)
+            changed = self._configured_supported_features != value
+            self._configured_supported_features = value
+            return changed
         if name == "available_tones":
             value = _template_string_list(value, name)
         elif name in {"support_volume", "support_duration"}:
@@ -975,11 +997,18 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
+        self._configured_supported_features = None
         self._attr_source_list = _string_list(config.get("source_list"))
         self._attr_source = config.get("source")
         self._attr_volume_level = self._bounded_volume(config.get("volume_level", 0.5))
         self._attr_is_volume_muted = _safe_bool(config.get("is_volume_muted", False))
-        self._attr_supported_features = (
+        self._refresh_supported_features()
+
+    def _refresh_supported_features(self) -> None:
+        if self._configured_supported_features is not None:
+            self._attr_supported_features = self._configured_supported_features
+            return
+        features = (
             MediaPlayerEntityFeature.TURN_ON
             | MediaPlayerEntityFeature.TURN_OFF
             | MediaPlayerEntityFeature.PLAY
@@ -989,7 +1018,8 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             | MediaPlayerEntityFeature.VOLUME_MUTE
         )
         if self._attr_source_list:
-            self._attr_supported_features |= MediaPlayerEntityFeature.SELECT_SOURCE
+            features |= MediaPlayerEntityFeature.SELECT_SOURCE
+        self._attr_supported_features = features
 
     @staticmethod
     def _bounded_volume(volume, default: float = 0.5) -> float:
@@ -1104,6 +1134,11 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         self.async_write_ha_state()
 
     def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "supported_features":
+            value = _supported_feature_mask(value, MediaPlayerEntityFeature)
+            changed = self._configured_supported_features != value
+            self._configured_supported_features = value
+            return changed
         if name in {"source_list", "sound_mode_list", "group_members"}:
             value = _template_string_list(value, name)
         elif name == "source":
@@ -1174,6 +1209,9 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         sound_modes = getattr(self, "_attr_sound_mode_list", None) or []
         if sound_modes and getattr(self, "_attr_sound_mode", None) not in sound_modes:
             self._attr_sound_mode = None
+        if self._configured_supported_features is not None:
+            self._attr_supported_features = self._configured_supported_features
+            return
         features = (
             MediaPlayerEntityFeature.TURN_ON
             | MediaPlayerEntityFeature.TURN_OFF
@@ -1222,6 +1260,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
+        self._configured_supported_features = None
         self._attr_min_temp = _safe_float(config.get("min_temp", 35), 35)
         self._attr_max_temp = _safe_float(config.get("max_temp", 85), 85)
         if self._attr_min_temp > self._attr_max_temp:
@@ -1266,6 +1305,9 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
         self._refresh_supported_features()
 
     def _refresh_supported_features(self) -> None:
+        if self._configured_supported_features is not None:
+            self._attr_supported_features = self._configured_supported_features
+            return
         self._attr_supported_features = (
             WaterHeaterEntityFeature.TARGET_TEMPERATURE
             | WaterHeaterEntityFeature.OPERATION_MODE
@@ -1390,6 +1432,11 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             "modes": "operation_list",
         }
         name = aliases.get(name, name)
+        if name == "supported_features":
+            value = _supported_feature_mask(value, WaterHeaterEntityFeature)
+            changed = self._configured_supported_features != value
+            self._configured_supported_features = value
+            return changed
         if name == "operation_list":
             value = _template_string_list(value, name)
             if STATE_OFF not in value:
@@ -1499,6 +1546,7 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
+        self._configured_supported_features = None
         initial = config.get(CONF_INITIAL_VALUE)
         self._attr_installed_version = str(config.get("installed_version", initial))
         self._attr_latest_version = str(
@@ -1528,6 +1576,9 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
         self._refresh_supported_features()
 
     def _refresh_supported_features(self) -> None:
+        if self._configured_supported_features is not None:
+            self._attr_supported_features = self._configured_supported_features
+            return
         self._attr_supported_features = UpdateEntityFeature.INSTALL
         if self._versions:
             self._attr_supported_features |= UpdateEntityFeature.SPECIFIC_VERSION
@@ -1576,6 +1627,11 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
         return self._release_notes
 
     def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "supported_features":
+            value = _supported_feature_mask(value, UpdateEntityFeature)
+            changed = self._configured_supported_features != value
+            self._configured_supported_features = value
+            return changed
         if name == "versions":
             value = _template_string_list(value, name)
             changed = self._versions != value

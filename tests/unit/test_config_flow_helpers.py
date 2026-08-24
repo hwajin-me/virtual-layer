@@ -1621,6 +1621,21 @@ def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
     assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {
         "vendor_attribute": "preserved",
     }
+    command_actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    assert set(command_actions) == {
+        "set_fan_mode",
+        "set_hvac_mode",
+        "set_preset_mode",
+        "set_temperature",
+        "turn_off",
+        "turn_on",
+    }
+    assert command_actions["set_fan_mode"] == [{
+        "action": "climate.set_fan_mode",
+        "data": "{{ command_data }}",
+        "target": {ATTR_ENTITY_ID: "climate.living_room"},
+    }]
+    assert "set_swing_mode" not in command_actions
 
     _, entity = _build_entity_config(_entity_input(defaults))
     assert entity["fan_modes"] == ["medium", "high", "turbo", "auto"]
@@ -1988,6 +2003,34 @@ def test_reference_fan_promotes_native_speed_preset_and_motion_options(hass):
     assert defaults["direction"] is True
     assert defaults["current_direction"] == "reverse"
     assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "kept"}
+    command_actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    assert set(command_actions) == {
+        "oscillate",
+        "set_direction",
+        "set_percentage",
+        "set_preset_mode",
+    }
+    assert command_actions["set_percentage"] == [{
+        "action": "fan.set_percentage",
+        "data": "{{ command_data }}",
+        "target": {ATTR_ENTITY_ID: "fan.bedroom"},
+    }]
+
+
+def test_camera_motion_actions_do_not_require_on_off_support(hass):
+    hass.states.async_set(
+        "camera.motion_only",
+        "idle",
+        {"supported_features": 0, "motion_detection": True},
+    )
+
+    defaults = _reference_entity_defaults(hass, ["camera.motion_only"])
+    command_actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+
+    assert "enable_motion_detection" in command_actions
+    assert "disable_motion_detection" in command_actions
+    assert "turn_on" not in command_actions
+    assert "turn_off" not in command_actions
 
 
 def test_fan_edit_form_migrates_legacy_native_attributes():

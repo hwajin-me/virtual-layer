@@ -18,6 +18,19 @@ import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
 from homeassistant import config_entries, exceptions
+from homeassistant.components.camera import CameraEntityFeature
+from homeassistant.components.climate import ClimateEntityFeature
+from homeassistant.components.cover import CoverEntityFeature
+from homeassistant.components.fan import FanEntityFeature
+from homeassistant.components.humidifier import HumidifierEntityFeature
+from homeassistant.components.lawn_mower import LawnMowerEntityFeature
+from homeassistant.components.lock import LockEntityFeature
+from homeassistant.components.media_player import MediaPlayerEntityFeature
+from homeassistant.components.siren import SirenEntityFeature
+from homeassistant.components.update import UpdateEntityFeature
+from homeassistant.components.vacuum import VacuumEntityFeature
+from homeassistant.components.valve import ValveEntityFeature
+from homeassistant.components.water_heater import WaterHeaterEntityFeature
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
@@ -223,7 +236,7 @@ DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES = {
 DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
     **DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES,
     "calendar": {"event": None},
-    "camera": {"frame_interval": 1},
+    "camera": {"frame_interval": 1, "supported_features": 1},
     "climate": {
         **DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES["climate"],
         "hvac_action": None,
@@ -266,6 +279,7 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
         "volume_step": 0.05,
         "shuffle": None,
         "repeat": None,
+        "supported_features": 20877,
     },
     "number": {
         "native_min_value": 0,
@@ -278,7 +292,11 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
         "options": None,
         "suggested_display_precision": None,
     },
-    "siren": {"support_volume": True, "support_duration": True},
+    "siren": {
+        "support_volume": True,
+        "support_duration": True,
+        "supported_features": 27,
+    },
     "text": {
         "native_min": 0,
         "native_max": 255,
@@ -291,6 +309,7 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
         "in_progress": None,
         "update_percentage": None,
         "support_backup": True,
+        "supported_features": 9,
     },
     "vacuum": {
         "activity": "docked",
@@ -311,6 +330,7 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
         "temperature_unit": "°C",
         "is_away_mode_on": None,
         "precision": 1,
+        "supported_features": 11,
     },
 }
 DOMAIN_NATIVE_TEMPLATE_PROPERTIES = {
@@ -354,6 +374,7 @@ DOMAIN_NATIVE_TEMPLATE_PROPERTIES = {
         "is_recording",
         "is_streaming",
         "motion_detection_enabled",
+        "supported_features",
     ),
     "climate": CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
     "conversation": (
@@ -425,6 +446,7 @@ DOMAIN_NATIVE_TEMPLATE_PROPERTIES = {
     "media_player": (
         "media_state",
         "device_class",
+        "supported_features",
         "source_list",
         "source",
         "sound_mode_list",
@@ -476,7 +498,13 @@ DOMAIN_NATIVE_TEMPLATE_PROPERTIES = {
         "suggested_unit_of_measurement",
         "last_reset",
     ),
-    "siren": ("is_on", "available_tones", "support_volume", "support_duration"),
+    "siren": (
+        "is_on",
+        "available_tones",
+        "support_volume",
+        "support_duration",
+        "supported_features",
+    ),
     "stt": (
         "supported_languages",
         "supported_formats",
@@ -509,6 +537,7 @@ DOMAIN_NATIVE_TEMPLATE_PROPERTIES = {
         "release_notes",
         "release_summary",
         "release_url",
+        "supported_features",
     ),
     "vacuum": (
         "activity",
@@ -539,6 +568,7 @@ DOMAIN_NATIVE_TEMPLATE_PROPERTIES = {
         "temperature_unit",
         "is_away_mode_on",
         "precision",
+        "supported_features",
     ),
     "weather": (
         "condition",
@@ -4288,6 +4318,160 @@ def _boiler_command_actions(
     return actions
 
 
+_SOURCE_COMMAND_FEATURES = {
+    ("camera", "turn_off"): CameraEntityFeature.ON_OFF,
+    ("camera", "turn_on"): CameraEntityFeature.ON_OFF,
+    ("climate", "set_fan_mode"): ClimateEntityFeature.FAN_MODE,
+    ("climate", "set_humidity"): ClimateEntityFeature.TARGET_HUMIDITY,
+    ("climate", "set_preset_mode"): ClimateEntityFeature.PRESET_MODE,
+    ("climate", "set_swing_horizontal_mode"): (
+        ClimateEntityFeature.SWING_HORIZONTAL_MODE
+    ),
+    ("climate", "set_swing_mode"): ClimateEntityFeature.SWING_MODE,
+    ("climate", "set_temperature"): (
+        ClimateEntityFeature.TARGET_TEMPERATURE
+        | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+    ),
+    ("climate", "turn_off"): ClimateEntityFeature.TURN_OFF,
+    ("climate", "turn_on"): ClimateEntityFeature.TURN_ON,
+    ("cover", "close_cover"): CoverEntityFeature.CLOSE,
+    ("cover", "close_cover_tilt"): CoverEntityFeature.CLOSE_TILT,
+    ("cover", "open_cover"): CoverEntityFeature.OPEN,
+    ("cover", "open_cover_tilt"): CoverEntityFeature.OPEN_TILT,
+    ("cover", "set_cover_position"): CoverEntityFeature.SET_POSITION,
+    ("cover", "set_cover_tilt_position"): CoverEntityFeature.SET_TILT_POSITION,
+    ("cover", "stop_cover"): CoverEntityFeature.STOP,
+    ("cover", "stop_cover_tilt"): CoverEntityFeature.STOP_TILT,
+    ("fan", "oscillate"): FanEntityFeature.OSCILLATE,
+    ("fan", "set_direction"): FanEntityFeature.DIRECTION,
+    ("fan", "set_percentage"): FanEntityFeature.SET_SPEED,
+    ("fan", "set_preset_mode"): FanEntityFeature.PRESET_MODE,
+    ("fan", "turn_off"): FanEntityFeature.TURN_OFF,
+    ("fan", "turn_on"): FanEntityFeature.TURN_ON,
+    ("humidifier", "set_mode"): HumidifierEntityFeature.MODES,
+    ("lawn_mower", "dock"): LawnMowerEntityFeature.DOCK,
+    ("lawn_mower", "pause"): LawnMowerEntityFeature.PAUSE,
+    ("lawn_mower", "start_mowing"): LawnMowerEntityFeature.START_MOWING,
+    ("lock", "open"): LockEntityFeature.OPEN,
+    ("media_player", "media_pause"): MediaPlayerEntityFeature.PAUSE,
+    ("media_player", "media_play"): MediaPlayerEntityFeature.PLAY,
+    ("media_player", "media_stop"): MediaPlayerEntityFeature.STOP,
+    ("media_player", "mute_volume"): MediaPlayerEntityFeature.VOLUME_MUTE,
+    ("media_player", "select_source"): MediaPlayerEntityFeature.SELECT_SOURCE,
+    ("media_player", "select_sound_mode"): (
+        MediaPlayerEntityFeature.SELECT_SOUND_MODE
+    ),
+    ("media_player", "set_repeat"): MediaPlayerEntityFeature.REPEAT_SET,
+    ("media_player", "set_shuffle"): MediaPlayerEntityFeature.SHUFFLE_SET,
+    ("media_player", "set_volume_level"): MediaPlayerEntityFeature.VOLUME_SET,
+    ("media_player", "turn_off"): MediaPlayerEntityFeature.TURN_OFF,
+    ("media_player", "turn_on"): MediaPlayerEntityFeature.TURN_ON,
+    ("siren", "turn_off"): SirenEntityFeature.TURN_OFF,
+    ("siren", "turn_on"): SirenEntityFeature.TURN_ON,
+    ("update", "install"): UpdateEntityFeature.INSTALL,
+    ("vacuum", "clean_spot"): VacuumEntityFeature.CLEAN_SPOT,
+    ("vacuum", "locate"): VacuumEntityFeature.LOCATE,
+    ("vacuum", "pause"): VacuumEntityFeature.PAUSE,
+    ("vacuum", "return_to_base"): VacuumEntityFeature.RETURN_HOME,
+    ("vacuum", "send_command"): VacuumEntityFeature.SEND_COMMAND,
+    ("vacuum", "set_fan_speed"): VacuumEntityFeature.FAN_SPEED,
+    ("vacuum", "start"): VacuumEntityFeature.START,
+    ("vacuum", "stop"): VacuumEntityFeature.STOP,
+    ("valve", "close_valve"): ValveEntityFeature.CLOSE,
+    ("valve", "open_valve"): ValveEntityFeature.OPEN,
+    ("valve", "set_valve_position"): ValveEntityFeature.SET_POSITION,
+    ("valve", "stop_valve"): ValveEntityFeature.STOP,
+    ("water_heater", "set_operation_mode"): (
+        WaterHeaterEntityFeature.OPERATION_MODE
+    ),
+    ("water_heater", "set_temperature"): (
+        WaterHeaterEntityFeature.TARGET_TEMPERATURE
+    ),
+    ("water_heater", "turn_away_mode_off"): WaterHeaterEntityFeature.AWAY_MODE,
+    ("water_heater", "turn_away_mode_on"): WaterHeaterEntityFeature.AWAY_MODE,
+    ("water_heater", "turn_off"): WaterHeaterEntityFeature.ON_OFF,
+    ("water_heater", "turn_on"): WaterHeaterEntityFeature.ON_OFF,
+}
+
+_SOURCE_COMMAND_CAPABILITY_ATTRIBUTES = {
+    ("climate", "set_fan_mode"): ("fan_modes",),
+    ("climate", "set_preset_mode"): ("preset_modes",),
+    ("climate", "set_swing_horizontal_mode"): ("swing_horizontal_modes",),
+    ("climate", "set_swing_mode"): ("swing_modes",),
+    ("fan", "set_preset_mode"): ("preset_modes",),
+    ("humidifier", "set_mode"): ("available_modes", "modes"),
+    ("media_player", "select_sound_mode"): ("sound_mode_list",),
+    ("media_player", "select_source"): ("source_list",),
+    ("vacuum", "set_fan_speed"): ("fan_speed_list",),
+    ("water_heater", "set_operation_mode"): ("operation_list",),
+}
+
+
+def _source_supports_command(
+    state,
+    required_features,
+    capability_attributes: tuple[str, ...] = (),
+) -> bool:
+    """Return whether a source state advertises a required command feature."""
+    raw_features = state.attributes.get("supported_features", 0)
+    if isinstance(raw_features, bool):
+        return False
+    try:
+        supported_features = int(raw_features)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if not supported_features & int(required_features):
+        return False
+    if not capability_attributes:
+        return True
+    return any(
+        bool(state.attributes.get(attribute))
+        for attribute in capability_attributes
+    )
+
+
+def _source_command_actions(
+    platform: str,
+    entity_ids: list[str],
+    states: list,
+) -> dict[str, Any]:
+    """Build editable pass-through actions for same-domain source entities."""
+    actions = {}
+    for command in sorted(VIRTUAL_ENTITY_COMMANDS.get(platform, ())):
+        key = (platform, command)
+        if key in VIRTUAL_ENTITY_NON_SERVICE_COMMANDS:
+            continue
+        required_features = _SOURCE_COMMAND_FEATURES.get(key)
+        capability_attributes = _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES.get(key, ())
+        source_entities = list(dict.fromkeys(
+            entity_id
+            for entity_id, state in zip(entity_ids, states, strict=True)
+            if entity_id.startswith(f"{platform}.")
+            and (
+                required_features is None
+                or _source_supports_command(
+                    state,
+                    required_features,
+                    capability_attributes,
+                )
+            )
+        ))
+        if not source_entities:
+            continue
+        target_entity_id: str | list[str]
+        if len(source_entities) == 1:
+            target_entity_id = source_entities[0]
+        else:
+            target_entity_id = source_entities
+        service = VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES.get(key, command)
+        actions[command] = [{
+            "action": f"{platform}.{service}",
+            "target": {ATTR_ENTITY_ID: target_entity_id},
+            "data": "{{ command_data }}",
+        }]
+    return actions
+
+
 def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     entity_ids = _normalize_reference_entity_ids(entity_ids)
     if not entity_ids:
@@ -4537,6 +4721,11 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             }
         )
     attribute_templates: dict[str, str] = {}
+    source_command_actions = _source_command_actions(platform, entity_ids, states)
+    if source_command_actions:
+        defaults[CONF_COMMAND_ACTIONS_JSON] = _json_default(
+            source_command_actions,
+        )
     if boiler_profile is not None:
         climate_index, hot_water_switch_id = boiler_profile
         defaults[CONF_VALUE_TEMPLATE] = _boiler_mode_template(

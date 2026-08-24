@@ -75,18 +75,23 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
         super().__init__(config, PLATFORM_DOMAIN, old_style)
 
         self._attr_current_cover_tilt_position = None
+        self._configured_supported_features = None
         self._refresh_supported_features()
 
         _LOGGER.debug(f"VirtualCover: {self.name} created")
 
     def _refresh_supported_features(self) -> None:
         """Expose tilt controls only when a value or action supports them."""
-        self._attr_supported_features = CoverEntityFeature(
+        default_features = CoverEntityFeature(
             CoverEntityFeature.OPEN |
             CoverEntityFeature.CLOSE |
             CoverEntityFeature.STOP |
             CoverEntityFeature.SET_POSITION
         )
+        if self._configured_supported_features is not None:
+            self._attr_supported_features = self._configured_supported_features
+            return
+        self._attr_supported_features = default_features
         if self._attr_current_cover_tilt_position is not None or any(
             command in self._command_actions
             for command in (
@@ -171,6 +176,20 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
         self.async_write_ha_state()
 
     def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "supported_features":
+            if isinstance(value, bool):
+                raise ValueError("supported_features must be a non-negative integer")
+            try:
+                value = CoverEntityFeature(int(value))
+            except (TypeError, ValueError, OverflowError) as err:
+                raise ValueError(
+                    "supported_features must be a non-negative integer"
+                ) from err
+            if int(value) < 0:
+                raise ValueError("supported_features must be a non-negative integer")
+            changed = self._configured_supported_features != value
+            self._configured_supported_features = value
+            return changed
         if name == "current_cover_tilt_position":
             if value is None or value == "":
                 return super()._apply_native_template_value(name, None)

@@ -128,6 +128,8 @@ class VirtualImage(VirtualEntity, ImageEntity):
         self._attr_image_last_updated: datetime | None = None
         self._image_digest: bytes | None = None
         self._image_refresh_pending = False
+        self._tracked_source_image: str | None = None
+        self._source_image_remove_listener: Callable[[], None] | None = None
         self._polygon_zones: list[dict[str, Any]] = []
         if self._image_url:
             self._attr_image_url = self._image_url
@@ -184,8 +186,6 @@ class VirtualImage(VirtualEntity, ImageEntity):
         """Track image and polygon location sources for cache invalidation."""
         await super().async_added_to_hass()
         source_entities = set(self._source_entities)
-        if self._source_entity:
-            source_entities.add(self._source_entity)
         source_entities.discard(self.entity_id)
         if source_entities:
             self._refresh_remove_listeners.append(async_track_state_change_event(
@@ -193,10 +193,43 @@ class VirtualImage(VirtualEntity, ImageEntity):
                 source_entities,
                 self._async_image_source_changed,
             ))
+        self._sync_source_image_listener()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Remove the independently managed aliased-image listener."""
+        if self._source_image_remove_listener is not None:
+            self._source_image_remove_listener()
+            self._source_image_remove_listener = None
+        self._tracked_source_image = None
+        await super().async_will_remove_from_hass()
+
+    @callback
+    def _sync_source_image_listener(self) -> None:
+        """Follow a Jinja-selected image source as its entity ID changes."""
+        source_entity = self._source_entity
+        if source_entity == self.entity_id or source_entity in self._source_entities:
+            source_entity = None
+        if source_entity == self._tracked_source_image:
+            return
+
+        if self._source_image_remove_listener is not None:
+            self._source_image_remove_listener()
+            self._source_image_remove_listener = None
+        self._tracked_source_image = source_entity
+        if source_entity:
+            self._source_image_remove_listener = async_track_state_change_event(
+                self.hass,
+                [source_entity],
+                self._async_image_source_changed,
+            )
 
     @callback
     def _async_image_source_changed(self, _event) -> None:
         """Invalidate the image URL when an aliased or mapped source changes."""
+        # ImageEntity caches downloaded URL content indefinitely.  A source
+        # state change is the integration's signal that the bytes behind the
+        # same URL may have changed, so the inherited cache must be cleared.
+        self._cached_image = None
         self._image_refresh_pending = True
         self._attr_image_last_updated = dt_util.utcnow()
         self._update_attributes()
@@ -417,12 +450,18 @@ class VirtualImage(VirtualEntity, ImageEntity):
             attribute = backing_fields[name]
             changed = getattr(self, attribute) != value
             setattr(self, attribute, value)
+            if changed:
+                self._cached_image = None
+                self._image_digest = None
             return changed
         if name == CONF_IMAGE_URL:
             value = None if value is None or value == "" else cv.url(str(value))
             changed = self._image_url != value
             self._image_url = value
             self._attr_image_url = value
+            if changed:
+                self._cached_image = None
+                self._image_digest = None
             return changed
         if name == CONF_CONTENT_TYPE:
             value = str(value).strip()
@@ -440,6 +479,10 @@ class VirtualImage(VirtualEntity, ImageEntity):
                 raise ValueError("image_last_updated must be a datetime")
             value = parsed if parsed.tzinfo else dt_util.as_local(parsed)
         return super()._apply_native_template_value(name, value)
+
+    def _native_templates_applied(self) -> None:
+        """Retarget source invalidation after a dynamic alias changes."""
+        self._sync_source_image_listener()
 
     def set_state(self, value) -> None:
         """Keep generic/template state updates harmless for image entities."""

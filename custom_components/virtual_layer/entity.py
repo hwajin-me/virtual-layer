@@ -25,6 +25,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import Context, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import (
     TrackTemplate,
@@ -195,6 +196,7 @@ class VirtualEntity(RestoreEntity):
             config.get(ATTR_ENTITY_ID) or config.get(CONF_NAME),
         )
         self._config = config
+        self._platform_domain = domain
         self._configured_icon = config.get(CONF_ICON)
         self._attr_icon = self._configured_icon
         self._icon_template = config.get(CONF_ICON_TEMPLATE)
@@ -792,7 +794,15 @@ class VirtualEntity(RestoreEntity):
         action_spec = self._command_action_spec(command)
         action_key = (id(self), command)
         active_actions = _COMMAND_ACTION_CHAIN.get()
-        if action_spec is None or action_key in active_actions:
+        if action_key in active_actions:
+            return True
+        command_data = self._command_service_data(command, method, args, kwargs)
+        if action_spec is None:
+            token = _COMMAND_ACTION_CHAIN.set(active_actions | {action_key})
+            try:
+                await self._async_proxy_source_command(command, command_data)
+            finally:
+                _COMMAND_ACTION_CHAIN.reset(token)
             return True
         sequence, optimistic = action_spec
         if not sequence:
@@ -823,6 +833,7 @@ class VirtualEntity(RestoreEntity):
                 variables[name] = value
         variables.update({
             "command": command,
+            "command_data": command_data,
             "entity_id": self.entity_id,
             "this": self.hass.states.get(self.entity_id),
         })
@@ -835,6 +846,83 @@ class VirtualEntity(RestoreEntity):
         finally:
             _COMMAND_ACTION_CHAIN.reset(token)
         return optimistic
+
+    def _command_service_data(self, command, method, args, kwargs) -> dict:
+        """Build Home Assistant service data from native command arguments."""
+        signature = inspect.signature(method)
+        bound = signature.bind_partial(self, *args, **kwargs)
+        data = {}
+        for name, value in bound.arguments.items():
+            if name == "self":
+                continue
+            if signature.parameters[name].kind is inspect.Parameter.VAR_KEYWORD:
+                data.update(value)
+            else:
+                data[name] = value
+        data = {name: value for name, value in data.items() if value is not None}
+
+        key = (self._platform_domain, command)
+        for old_name, new_name in VIRTUAL_ENTITY_PROXY_DATA_RENAMES.get(
+            key,
+            {},
+        ).items():
+            if old_name in data:
+                data[new_name] = data.pop(old_name)
+        data.update(VIRTUAL_ENTITY_PROXY_FIXED_DATA.get(key, {}))
+        return data
+
+    async def _async_proxy_source_command(
+        self,
+        command: str,
+        command_data: dict,
+    ) -> None:
+        """Proxy an unconfigured native command to same-domain source entities."""
+        domain = self._platform_domain
+        key = (domain, command)
+        if (
+            command not in VIRTUAL_ENTITY_COMMANDS.get(domain, ())
+            or key in VIRTUAL_ENTITY_NON_SERVICE_COMMANDS
+        ):
+            return
+
+        source_entities = list(dict.fromkeys(
+            entity_id
+            for entity_id in self._source_entities
+            if isinstance(entity_id, str)
+            and entity_id.startswith(f"{domain}.")
+            and entity_id != self.entity_id
+        ))
+        if not source_entities:
+            return
+
+        service = VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES.get(key, command)
+        if not self.hass.services.has_service(domain, service):
+            _LOGGER.error(
+                "Cannot proxy %s.%s for %s: Home Assistant service is unavailable",
+                domain,
+                service,
+                self.entity_id,
+            )
+            raise HomeAssistantError(f"Service {domain}.{service} is unavailable")
+
+        service_data = dict(command_data)
+        service_data[ATTR_ENTITY_ID] = source_entities
+        try:
+            await self.hass.services.async_call(
+                domain,
+                service,
+                service_data,
+                blocking=True,
+                context=self._context or Context(),
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Unable to proxy %s.%s from %s to source entities",
+                domain,
+                service,
+                self.entity_id,
+            )
+            raise
 
     def _hook_template_variables(self, hook, event):
         trigger = str(hook.get("trigger", "state")).lower()

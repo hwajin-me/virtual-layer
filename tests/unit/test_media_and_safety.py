@@ -1,7 +1,7 @@
 """Regression tests for non-mergeable media and safety sensor helpers."""
 
 import asyncio
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from aiohttp import ClientConnectionError
@@ -359,6 +359,65 @@ async def test_virtual_camera_alias_keeps_hls_stream_type(hass):
 
     assert await entity.stream_source() == "rtsp://camera/live"
     assert entity.camera_capabilities.frontend_stream_types == {StreamType.HLS}
+    assert CameraEntityFeature.ON_OFF in entity.supported_features
+
+
+def test_virtual_camera_explicit_features_override_inferred_stream(hass):
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Disabled Stream Alias",
+        ATTR_ENTITY_ID: "camera.disabled_stream_alias",
+        ATTR_UNIQUE_ID: "disabled-stream-alias",
+        CONF_INITIAL_VALUE: "on",
+        "source_entity": "camera.missing_source",
+        "stream_source": "rtsp://example.test/live",
+    }), False)
+    entity.hass = hass
+
+    assert entity._apply_native_template_value("supported_features", 0)
+    entity._sync_stream_capabilities()
+
+    assert entity.supported_features == CameraEntityFeature(0)
+    assert entity.camera_capabilities.frontend_stream_types == set()
+
+
+async def test_virtual_camera_refreshes_capabilities_when_source_reloads(hass):
+    class HLSCamera(Camera):
+        _attr_supported_features = CameraEntityFeature.STREAM
+
+    class NativeWebRTCCamera(HLSCamera):
+        _supports_native_async_webrtc = True
+
+    source = HLSCamera()
+    camera_component = Mock()
+    camera_component.get_entity.side_effect = lambda _entity_id: source
+    hass.data["camera"] = camera_component
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Reloading Alias",
+        ATTR_ENTITY_ID: "camera.reloading_alias",
+        ATTR_UNIQUE_ID: "reloading-alias",
+        CONF_INITIAL_VALUE: "on",
+        "source_entity": "camera.reloading_source",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    entity.async_refresh_providers = AsyncMock()
+    entity._camera_internal_added = True
+
+    with patch(
+        "custom_components.virtual_layer.camera.async_track_state_change_event",
+    ) as track_state_change:
+        entity._sync_source_camera_listener()
+        source = NativeWebRTCCamera()
+        source._supports_native_async_webrtc = True
+        track_state_change.call_args.args[2](None)
+        await hass.async_block_till_done()
+
+    assert entity.camera_capabilities.frontend_stream_types == {
+        StreamType.WEB_RTC,
+    }
+    entity.async_write_ha_state.assert_called_once_with()
+    entity.async_refresh_providers.assert_awaited_once_with()
 
 
 async def test_virtual_image_renders_polygon_map_svg(hass):
@@ -530,6 +589,63 @@ async def test_virtual_image_source_change_invalidates_once_before_next_fetch(ha
     assert entity.image_last_updated == invalidated_at
     assert entity.async_write_ha_state.call_count == 1
     entity.async_schedule_update_ha_state.assert_called_once()
+
+
+async def test_virtual_image_url_change_invalidates_download_cache(hass):
+    entity = VirtualImage(IMAGE_SCHEMA({
+        CONF_NAME: "Changing URL Image",
+        ATTR_ENTITY_ID: "image.changing_url",
+        ATTR_UNIQUE_ID: "changing-url",
+        CONF_INITIAL_VALUE: "unknown",
+        "image_url": "https://example.test/one.jpg",
+    }), hass, False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    entity._async_load_image_from_url = AsyncMock(side_effect=[
+        Mock(content=b"one", content_type="image/jpeg"),
+        Mock(content=b"two", content_type="image/jpeg"),
+    ])
+
+    assert await entity.async_image() == b"one"
+    assert await entity.async_image() == b"one"
+    assert entity._async_load_image_from_url.await_count == 1
+
+    assert entity._apply_native_template_value(
+        "image_url",
+        "https://example.test/two.jpg",
+    )
+    assert await entity.async_image() == b"two"
+    assert entity._async_load_image_from_url.await_count == 2
+
+
+def test_virtual_image_retargets_dynamic_source_listener(hass):
+    entity = VirtualImage(IMAGE_SCHEMA({
+        CONF_NAME: "Dynamic Image Alias",
+        ATTR_ENTITY_ID: "image.dynamic_alias",
+        ATTR_UNIQUE_ID: "dynamic-alias",
+        CONF_INITIAL_VALUE: "unknown",
+        "source_entity": "image.first",
+    }), hass, False)
+    entity.hass = hass
+    first_remove = Mock()
+    second_remove = Mock()
+
+    with patch(
+        "custom_components.virtual_layer.image.async_track_state_change_event",
+        side_effect=[first_remove, second_remove],
+    ) as track_state_change:
+        entity._sync_source_image_listener()
+        assert entity._apply_native_template_value(
+            "source_entity",
+            "image.second",
+        )
+        entity._native_templates_applied()
+
+    assert track_state_change.call_args_list[0].args[1] == ["image.first"]
+    assert track_state_change.call_args_list[1].args[1] == ["image.second"]
+    first_remove.assert_called_once_with()
+    second_remove.assert_not_called()
 
 
 async def test_virtual_image_source_transport_error_returns_no_image(hass):

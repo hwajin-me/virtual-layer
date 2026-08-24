@@ -33,6 +33,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from webrtc_models import RTCIceCandidateInit
 
@@ -151,6 +152,7 @@ class VirtualCamera(VirtualEntity, Camera):
 
         self._attr_brand = config.get(CONF_BRAND)
         self._attr_model = config.get(CONF_MODEL)
+        self._configured_supported_features = None
         self._attr_supported_features = CameraEntityFeature.ON_OFF
         if config.get(CONF_STREAM_SOURCE) or config.get(CONF_SOURCE_ENTITY):
             self._attr_supported_features |= CameraEntityFeature.STREAM
@@ -162,6 +164,9 @@ class VirtualCamera(VirtualEntity, Camera):
         # actual capability is source-dependent and is synchronized once the
         # source camera is available in the entity component.
         self._supports_native_async_webrtc = False
+        self._camera_internal_added = False
+        self._tracked_source_camera: str | None = None
+        self._source_camera_remove_listener: Callable[[], None] | None = None
 
         _LOGGER.debug(f"VirtualCamera: {self.name} created")
 
@@ -411,6 +416,58 @@ class VirtualCamera(VirtualEntity, Camera):
         """Finalize stream capabilities after source entities are available."""
         self._sync_stream_capabilities()
         await super().async_internal_added_to_hass()
+        self._camera_internal_added = True
+
+    async def async_added_to_hass(self) -> None:
+        """Track source replacement and capability changes."""
+        await super().async_added_to_hass()
+        self._sync_source_camera_listener()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Remove the independently managed source-camera listener."""
+        if self._source_camera_remove_listener is not None:
+            self._source_camera_remove_listener()
+            self._source_camera_remove_listener = None
+        self._tracked_source_camera = None
+        self._camera_internal_added = False
+        await super().async_will_remove_from_hass()
+
+    @callback
+    def _sync_source_camera_listener(self) -> None:
+        """Follow a changing camera alias without retaining stale listeners."""
+        source_entity = self._source_entity
+        if source_entity == self.entity_id:
+            source_entity = None
+        if source_entity == self._tracked_source_camera:
+            return
+
+        if self._source_camera_remove_listener is not None:
+            self._source_camera_remove_listener()
+            self._source_camera_remove_listener = None
+        self._tracked_source_camera = source_entity
+        if source_entity:
+            self._source_camera_remove_listener = async_track_state_change_event(
+                self.hass,
+                [source_entity],
+                self._async_source_camera_changed,
+            )
+
+    @callback
+    def _async_source_camera_changed(self, _event) -> None:
+        """Refresh HLS/WebRTC capabilities after a source reload or update."""
+        old_stream_support = bool(
+            self.supported_features & CameraEntityFeature.STREAM
+        )
+        old_native_webrtc = self._supports_native_async_webrtc
+        self._sync_stream_capabilities()
+        self.async_write_ha_state()
+        if (
+            self._camera_internal_added
+            and old_stream_support
+            == bool(self.supported_features & CameraEntityFeature.STREAM)
+            and old_native_webrtc != self._supports_native_async_webrtc
+        ):
+            self.hass.async_create_task(self.async_refresh_providers())
 
     def _source_camera(self) -> Camera | None:
         """Return the configured source camera without recursing into self."""
@@ -450,17 +507,34 @@ class VirtualCamera(VirtualEntity, Camera):
         supports_native_webrtc = False
         source = self._source_camera()
 
-        if self._stream_source:
-            features |= CameraEntityFeature.STREAM
-        elif source is not None:
-            source_stream_types = self._source_stream_types(source)
-            if source_stream_types:
+        if self._configured_supported_features is not None:
+            features = self._configured_supported_features
+            if (
+                CameraEntityFeature.STREAM in features
+                and source is not None
+                and not self._stream_source
+            ):
+                supports_native_webrtc = (
+                    StreamType.WEB_RTC in self._source_stream_types(source)
+                )
+        else:
+            if source is not None:
+                try:
+                    features |= CameraEntityFeature(source.supported_features)
+                except (TypeError, ValueError, OverflowError):
+                    pass
+
+            if self._stream_source:
                 features |= CameraEntityFeature.STREAM
-            supports_native_webrtc = StreamType.WEB_RTC in source_stream_types
-        elif self._source_entity:
-            # Keep the alias usable while its source integration reloads. A
-            # later source/template update will refine HLS versus WebRTC.
-            features |= CameraEntityFeature.STREAM
+            elif source is not None:
+                source_stream_types = self._source_stream_types(source)
+                if source_stream_types:
+                    features |= CameraEntityFeature.STREAM
+                supports_native_webrtc = StreamType.WEB_RTC in source_stream_types
+            elif self._source_entity:
+                # Keep the alias usable while its source integration reloads.
+                # A later source update will refine HLS versus WebRTC.
+                features |= CameraEntityFeature.STREAM
 
         self._attr_supported_features = features
         self._supports_native_async_webrtc = supports_native_webrtc
@@ -497,6 +571,21 @@ class VirtualCamera(VirtualEntity, Camera):
             changed = getattr(self, attribute) != value
             setattr(self, attribute, value)
             return changed
+        if name == "supported_features":
+            if isinstance(value, bool):
+                raise ValueError("supported_features must be a non-negative integer")
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError, OverflowError) as err:
+                raise ValueError(
+                    "supported_features must be a non-negative integer"
+                ) from err
+            if parsed < 0:
+                raise ValueError("supported_features must be a non-negative integer")
+            value = CameraEntityFeature(parsed)
+            changed = self._configured_supported_features != value
+            self._configured_supported_features = value
+            return changed
         if name in {
             CONF_IS_RECORDING,
             CONF_IS_STREAMING,
@@ -522,7 +611,19 @@ class VirtualCamera(VirtualEntity, Camera):
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:
+        old_stream_support = bool(
+            self.supported_features & CameraEntityFeature.STREAM
+        )
+        old_native_webrtc = self._supports_native_async_webrtc
         self._sync_stream_capabilities()
+        self._sync_source_camera_listener()
+        if (
+            self._camera_internal_added
+            and old_stream_support
+            == bool(self.supported_features & CameraEntityFeature.STREAM)
+            and old_native_webrtc != self._supports_native_async_webrtc
+        ):
+            self.hass.async_create_task(self.async_refresh_providers())
 
     def set_state(self, value) -> None:
         self._attr_is_on = _camera_state_is_on(value)

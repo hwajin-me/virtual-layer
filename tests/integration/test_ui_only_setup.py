@@ -2659,6 +2659,19 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     assert result["data"][ATTR_DEVICES]["Kitchen"][0].pop("auto_helper")
     saved = result["data"][ATTR_DEVICES]["Kitchen"][0]
     native_templates = saved.pop(CONF_NATIVE_TEMPLATES)
+    command_actions = saved.pop(CONF_COMMAND_ACTIONS)
+    assert command_actions == {
+        "turn_off": [{
+            "action": "light.turn_off",
+            "data": "{{ command_data }}",
+            "target": {ATTR_ENTITY_ID: "light.kitchen_lamp"},
+        }],
+        "turn_on": [{
+            "action": "light.turn_on",
+            "data": "{{ command_data }}",
+            "target": {ATTR_ENTITY_ID: "light.kitchen_lamp"},
+        }],
+    }
     assert result["data"][ATTR_DEVICES]["Kitchen"] == [{
             CONF_PLATFORM: "light",
             CONF_NAME: "Kitchen Lamp",

@@ -1,13 +1,14 @@
 """Tests for native property templates and command actions."""
 
 import asyncio
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
 from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 import voluptuous as vol
+from homeassistant.components.camera import CameraEntityFeature
 from homeassistant.components.climate import ClimateEntityFeature, HVACMode
 from homeassistant.components.climate.const import HVACAction
 from homeassistant.components.cover import CoverEntityFeature
@@ -43,6 +44,7 @@ from custom_components.virtual_layer.const import (
     CONF_NAME,
     CONF_NATIVE_TEMPLATES,
     CONF_PERSISTENT,
+    CONF_SOURCE_ENTITIES,
     CONF_VALUE_TEMPLATE,
     VIRTUAL_ENTITY_COMMANDS,
 )
@@ -58,11 +60,14 @@ from custom_components.virtual_layer.generic import (
 )
 from custom_components.virtual_layer.generic import (
     GenericVirtualEntity,
+    VirtualDate,
+    VirtualDateTime,
     VirtualMediaPlayer,
     VirtualRemote,
     VirtualSelect,
     VirtualSiren,
     VirtualText,
+    VirtualTime,
     VirtualUpdate,
     VirtualWaterHeater,
 )
@@ -841,12 +846,356 @@ async def test_command_action_flattens_kwargs_for_climate_templates(hass):
     assert entity.target_temperature == 24
 
 
+async def _exercise_source_proxy(hass, domain, entity, commands):
+    calls = []
+
+    def _register(service):
+        async def _capture(call):
+            calls.append((service, dict(call.data)))
+
+        hass.services.async_register(domain, service, _capture)
+
+    for service, _, _ in commands:
+        _register(service)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    for _, command, _ in commands:
+        await command(entity)
+
+    assert calls == [
+        (
+            service,
+            {**data, ATTR_ENTITY_ID: [f"{domain}.source"]},
+        )
+        for service, _, data in commands
+    ]
+    assert entity.async_write_ha_state.call_count == len(commands)
+
+
+async def test_climate_commands_proxy_to_source_entity(hass):
+    entity = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.proxy",
+                "off",
+                hvac_modes=["off", "cool"],
+                fan_modes=["auto", "turbo"],
+                preset_modes=["none", "sleep"],
+                swing_modes=["off", "vertical"],
+                min_temp=10,
+                max_temp=30,
+                **{CONF_SOURCE_ENTITIES: ["climate.source"]},
+            )
+        ),
+        False,
+    )
+    await _exercise_source_proxy(hass, "climate", entity, [
+        (
+            "set_hvac_mode",
+            lambda item: item.async_set_hvac_mode(HVACMode.COOL),
+            {"hvac_mode": HVACMode.COOL},
+        ),
+        (
+            "set_temperature",
+            lambda item: item.async_set_temperature(temperature=23),
+            {"temperature": 23},
+        ),
+        (
+            "set_fan_mode",
+            lambda item: item.async_set_fan_mode("turbo"),
+            {"fan_mode": "turbo"},
+        ),
+        (
+            "set_preset_mode",
+            lambda item: item.async_set_preset_mode("sleep"),
+            {"preset_mode": "sleep"},
+        ),
+        (
+            "set_swing_mode",
+            lambda item: item.async_set_swing_mode("vertical"),
+            {"swing_mode": "vertical"},
+        ),
+    ])
+
+
+async def test_fan_and_humidifier_commands_proxy_to_source_entities(hass):
+    fan = VirtualFan(
+        FAN_SCHEMA(
+            _base(
+                "fan.proxy",
+                "off",
+                speed_count=5,
+                modes=["auto", "sleep"],
+                oscillate=True,
+                direction=True,
+                **{CONF_SOURCE_ENTITIES: ["fan.source"]},
+            )
+        ),
+        False,
+    )
+    await _exercise_source_proxy(hass, "fan", fan, [
+        (
+            "set_percentage",
+            lambda item: item.async_set_percentage(60),
+            {"percentage": 60},
+        ),
+        (
+            "set_preset_mode",
+            lambda item: item.async_set_preset_mode("sleep"),
+            {"preset_mode": "sleep"},
+        ),
+        (
+            "set_direction",
+            lambda item: item.async_set_direction("reverse"),
+            {"direction": "reverse"},
+        ),
+        (
+            "oscillate",
+            lambda item: item.async_oscillate(True),
+            {"oscillating": True},
+        ),
+    ])
+
+    humidifier = VirtualHumidifier(
+        HUMIDIFIER_SCHEMA(
+            _base(
+                "humidifier.proxy",
+                "off",
+                min_humidity=20,
+                max_humidity=80,
+                modes=["auto", "sleep"],
+                **{CONF_SOURCE_ENTITIES: ["humidifier.source"]},
+            )
+        ),
+        False,
+    )
+    await _exercise_source_proxy(hass, "humidifier", humidifier, [
+        (
+            "set_humidity",
+            lambda item: item.async_set_humidity(55),
+            {"humidity": 55},
+        ),
+        (
+            "set_mode",
+            lambda item: item.async_set_mode("sleep"),
+            {"mode": "sleep"},
+        ),
+    ])
+
+
+async def test_unconfigured_native_command_proxies_to_all_same_domain_sources(hass):
+    calls = []
+
+    async def _capture(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("fan", "set_percentage", _capture)
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            _base(
+                "fan.proxy",
+                "off",
+                speed_count=5,
+                **{
+                    CONF_SOURCE_ENTITIES: [
+                        "fan.first",
+                        "sensor.unrelated",
+                        "fan.second",
+                        "fan.first",
+                    ]
+                },
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    await entity.async_set_percentage(40)
+
+    assert calls == [{
+        "percentage": 40,
+        ATTR_ENTITY_ID: ["fan.first", "fan.second"],
+    }]
+
+
+async def test_generated_command_action_forwards_complete_command_data(hass):
+    calls = []
+
+    async def _capture(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("fan", "set_percentage", _capture)
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            _base(
+                "fan.generated_action",
+                "off",
+                speed_count=5,
+                **{
+                    CONF_COMMAND_ACTIONS: {
+                        "set_percentage": [{
+                            "action": "fan.set_percentage",
+                            "data": "{{ command_data }}",
+                            "target": {ATTR_ENTITY_ID: "fan.source"},
+                        }],
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    await entity.async_set_percentage(75)
+
+    assert calls == [{"percentage": 75, ATTR_ENTITY_ID: ["fan.source"]}]
+
+
+@pytest.mark.parametrize(
+    ("domain", "entity_class", "initial_value", "value", "service_field"),
+    [
+        ("date", VirtualDate, "2026-08-24", date(2026, 8, 25), "date"),
+        ("time", VirtualTime, "10:00:00", time(11, 30), "time"),
+        (
+            "datetime",
+            VirtualDateTime,
+            "2026-08-24T10:00:00+09:00",
+            datetime.fromisoformat("2026-08-25T11:30:00+09:00"),
+            "datetime",
+        ),
+    ],
+)
+async def test_temporal_commands_use_home_assistant_service_field_names(
+    hass,
+    domain,
+    entity_class,
+    initial_value,
+    value,
+    service_field,
+):
+    calls = []
+
+    async def _capture(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register(domain, "set_value", _capture)
+    entity = entity_class(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                f"{domain}.proxy",
+                initial_value,
+                **{CONF_SOURCE_ENTITIES: [f"{domain}.source"]},
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    await entity.async_set_value(value)
+
+    assert calls == [{
+        service_field: value,
+        ATTR_ENTITY_ID: [f"{domain}.source"],
+    }]
+
+
 def _render_native_templates(entity, hass):
     entity.hass = hass
     entity._create_state(entity._config)
     entity.async_schedule_update_ha_state = Mock()
     entity.async_write_ha_state = Mock()
     entity._apply_templates()
+
+
+@pytest.mark.parametrize(
+    ("factory", "entity_id", "initial_value", "feature"),
+    [
+        (
+            lambda config: VirtualCamera(CAMERA_SCHEMA(config), False),
+            "camera.feature_copy",
+            "on",
+            CameraEntityFeature.STREAM,
+        ),
+        (
+            lambda config: VirtualCover(COVER_SCHEMA(config), False),
+            "cover.feature_copy",
+            "open",
+            CoverEntityFeature.OPEN,
+        ),
+        (
+            lambda config: VirtualMediaPlayer(GENERIC_ENTITY_SCHEMA(config), False),
+            "media_player.feature_copy",
+            "idle",
+            MediaPlayerEntityFeature.TURN_ON,
+        ),
+        (
+            lambda config: VirtualSiren(GENERIC_ENTITY_SCHEMA(config), False),
+            "siren.feature_copy",
+            "off",
+            SirenEntityFeature.TURN_OFF,
+        ),
+        (
+            lambda config: VirtualUpdate(GENERIC_ENTITY_SCHEMA(config), False),
+            "update.feature_copy",
+            "1.0.0",
+            UpdateEntityFeature.RELEASE_NOTES,
+        ),
+        (
+            lambda config: VirtualWaterHeater(GENERIC_ENTITY_SCHEMA(config), False),
+            "water_heater.feature_copy",
+            "off",
+            WaterHeaterEntityFeature.OPERATION_MODE,
+        ),
+    ],
+)
+def test_supported_feature_templates_are_authoritative(
+    hass,
+    factory,
+    entity_id,
+    initial_value,
+    feature,
+):
+    entity = factory(
+        _base(
+            entity_id,
+            initial_value,
+            **{
+                CONF_NATIVE_TEMPLATES: {
+                    "supported_features": f"{{{{ {int(feature)} }}}}",
+                }
+            },
+        )
+    )
+
+    _render_native_templates(entity, hass)
+
+    assert entity.supported_features == feature
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: VirtualCover(
+            COVER_SCHEMA(_base("cover.invalid_features", "open")),
+            False,
+        ),
+        lambda: VirtualMediaPlayer(
+            GENERIC_ENTITY_SCHEMA(_base("media_player.invalid_features", "idle")),
+            False,
+        ),
+    ],
+)
+def test_supported_feature_templates_reject_boolean_values(factory):
+    with pytest.raises(ValueError, match="non-negative integer"):
+        factory()._apply_native_template_value("supported_features", True)
 
 
 def test_unavailable_source_preserves_strict_native_values_until_recovery(
