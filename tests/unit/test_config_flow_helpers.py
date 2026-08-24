@@ -7,6 +7,9 @@ from types import MappingProxyType
 
 import pytest
 import voluptuous as vol
+from homeassistant.components.camera import CameraEntityFeature
+from homeassistant.components.climate.const import HVACAction
+from homeassistant.components.vacuum import VacuumActivity
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
@@ -87,6 +90,7 @@ from custom_components.virtual_layer.config_flow import (
     _helper_update_schema,
     _helper_usage_schema,
     _json_default,
+    _literal_template,
     _log_unhandled_flow_errors,
     _managed_device_choices,
     _merged_native_template,
@@ -1200,6 +1204,66 @@ def test_plain_options_isolates_recursive_and_excessively_deep_values():
         depth += 1
     assert value is None
     assert 0 < depth <= 101
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (HVACAction.HEATING, "heating"),
+        (VacuumActivity.CLEANING, "cleaning"),
+        (CameraEntityFeature.STREAM, int(CameraEntityFeature.STREAM)),
+    ],
+)
+def test_native_literal_templates_normalize_home_assistant_enums(
+    hass,
+    value,
+    expected,
+):
+    template = _literal_template(value)
+
+    assert "<" not in template
+    assert _plain_options(value) == expected
+    assert Template(template, hass).async_render(parse_result=True) == expected
+
+
+def test_climate_source_helper_serializes_enum_snapshot_fallback(hass):
+    hass.states.async_set(
+        "climate.boiler",
+        "heat",
+        {"hvac_action": HVACAction.HEATING},
+    )
+    template = _native_source_template(
+        "climate.boiler",
+        hass.states.get("climate.boiler"),
+        "hvac_action",
+        "climate",
+    )
+
+    assert "<HVACAction" not in template
+    hass.states.async_set("climate.boiler", "heat", {"hvac_action": None})
+    assert Template(template, hass).async_render(parse_result=True) == "heating"
+
+
+def test_native_template_parser_repairs_legacy_enum_repr(hass):
+    templates = _parse_native_templates(json.dumps({
+        "hvac_action": "{{ <HVACAction.HEATING: 'heating'> }}",
+        "supported_features": (
+            "{{ <CameraEntityFeature.ON_OFF|STREAM: 3> }}"
+        ),
+        "vendor_label": (
+            "{{ \"<HVACAction.HEATING: 'heating'>\" }}"
+        ),
+    }))
+
+    assert templates["hvac_action"] == "{{ 'heating' }}"
+    assert templates["supported_features"] == "{{ 3 }}"
+    assert templates["vendor_label"] == (
+        "{{ \"<HVACAction.HEATING: 'heating'>\" }}"
+    )
+    assert Template(
+        templates["hvac_action"],
+        hass,
+    ).async_render(parse_result=True) == "heating"
 
 
 def test_json_default_sanitizes_values_that_cannot_be_saved_by_home_assistant():

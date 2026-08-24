@@ -157,6 +157,9 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
                 "entity_picture": "{{ <tokenized-picture> }}",
                 ATTR_ENTITY_ID: "{{ 'blocked' }}",
             },
+            CONF_NATIVE_TEMPLATES: {
+                " hvac_action ": "{{ <HVACAction.HEATING: 'heating'> }}",
+            },
             CONF_EVENT_HOOKS: [{
                 "trigger": "event",
                 "event_type": "virtual_layer_update",
@@ -187,6 +190,9 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
         }
     }
     assert normalized[CONF_ATTRIBUTE_TEMPLATES] == {"summary": "{{ 1 }}"}
+    assert normalized[CONF_NATIVE_TEMPLATES] == {
+        "hvac_action": "{{ 'heating' }}",
+    }
     assert normalized[CONF_EVENT_HOOKS] == [{
         "trigger": "event",
         "event_type": "virtual_layer_update",

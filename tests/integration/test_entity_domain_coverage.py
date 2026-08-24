@@ -447,6 +447,30 @@ async def test_native_building_block_services_update_virtual_entities(
             CONF_NAME: "Native Mower",
             CONF_INITIAL_VALUE: "docked",
         },
+        {
+            CONF_PLATFORM: "climate",
+            CONF_NAME: "Native Climate",
+            CONF_INITIAL_VALUE: "off",
+            "hvac_modes": ["off", "heat"],
+            "fan_modes": ["auto", "turbo"],
+            "preset_modes": ["none", "sleep"],
+            "swing_modes": ["off", "vertical"],
+            "min_temp": 10,
+            "max_temp": 30,
+            "target_temperature": 20,
+        },
+        {
+            CONF_PLATFORM: "vacuum",
+            CONF_NAME: "Native Vacuum",
+            CONF_INITIAL_VALUE: "docked",
+            "fan_speed_list": ["quiet", "turbo"],
+            "fan_speed": "quiet",
+        },
+        {
+            CONF_PLATFORM: "camera",
+            CONF_NAME: "Native Camera",
+            CONF_INITIAL_VALUE: "on",
+        },
     ]
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
@@ -489,9 +513,53 @@ async def test_native_building_block_services_update_virtual_entities(
         {ATTR_ENTITY_ID: "lawn_mower.native_mower"},
         blocking=True,
     )
+    for service, data in (
+        ("set_hvac_mode", {"hvac_mode": "heat"}),
+        ("set_temperature", {"temperature": 24}),
+        ("set_fan_mode", {"fan_mode": "turbo"}),
+        ("set_preset_mode", {"preset_mode": "sleep"}),
+        ("set_swing_mode", {"swing_mode": "vertical"}),
+    ):
+        await hass.services.async_call(
+            "climate",
+            service,
+            {ATTR_ENTITY_ID: "climate.native_climate", **data},
+            blocking=True,
+        )
+    await hass.services.async_call(
+        "vacuum",
+        "start",
+        {ATTR_ENTITY_ID: "vacuum.native_vacuum"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "vacuum",
+        "set_fan_speed",
+        {
+            ATTR_ENTITY_ID: "vacuum.native_vacuum",
+            "fan_speed": "turbo",
+        },
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "camera",
+        "turn_off",
+        {ATTR_ENTITY_ID: "camera.native_camera"},
+        blocking=True,
+    )
 
     assert hass.states.get("select.native_select").state == "boost"
     assert hass.states.get("text.native_text").state == "updated"
     assert hass.states.get("button.native_button").state != "unknown"
     assert hass.states.get("siren.native_siren").state == "on"
     assert hass.states.get("lawn_mower.native_mower").state == "mowing"
+    climate = hass.states.get("climate.native_climate")
+    assert climate.state == "heat"
+    assert climate.attributes["temperature"] == 24
+    assert climate.attributes["fan_mode"] == "turbo"
+    assert climate.attributes["preset_mode"] == "sleep"
+    assert climate.attributes["swing_mode"] == "vertical"
+    vacuum = hass.states.get("vacuum.native_vacuum")
+    assert vacuum.state == "cleaning"
+    assert vacuum.attributes["fan_speed"] == "turbo"
+    assert hass.states.get("camera.native_camera").state == "idle"

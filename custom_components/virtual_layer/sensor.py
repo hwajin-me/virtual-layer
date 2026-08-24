@@ -24,8 +24,6 @@ from homeassistant.const import (
     ATTR_DEVICE_CLASS,
     ATTR_ENTITY_ID,
     ATTR_UNIT_OF_MEASUREMENT,
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_PARTS_PER_MILLION,
     CONF_ICON,
     CONF_UNIT_OF_MEASUREMENT,
     LIGHT_LUX,
@@ -58,6 +56,19 @@ from . import (
 from .const import *
 from .const import generic_entity_options
 from .entity import VirtualEntity, virtual_schema
+
+try:
+    from homeassistant.const import UnitOfDensity, UnitOfRatio
+except ImportError:  # Home Assistant before 2026.8
+    from homeassistant.const import (
+        CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        CONCENTRATION_PARTS_PER_MILLION,
+    )
+else:
+    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER = (
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER
+    )
+    CONCENTRATION_PARTS_PER_MILLION = UnitOfRatio.PARTS_PER_MILLION
 
 _LOGGER = logging.getLogger(__name__)
 

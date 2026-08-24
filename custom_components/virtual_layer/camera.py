@@ -463,9 +463,11 @@ class VirtualCamera(VirtualEntity, Camera):
         self.async_write_ha_state()
         if (
             self._camera_internal_added
-            and old_stream_support
-            == bool(self.supported_features & CameraEntityFeature.STREAM)
-            and old_native_webrtc != self._supports_native_async_webrtc
+            and (
+                old_stream_support
+                != bool(self.supported_features & CameraEntityFeature.STREAM)
+                or old_native_webrtc != self._supports_native_async_webrtc
+            )
         ):
             self.hass.async_create_task(self.async_refresh_providers())
 
@@ -619,9 +621,11 @@ class VirtualCamera(VirtualEntity, Camera):
         self._sync_source_camera_listener()
         if (
             self._camera_internal_added
-            and old_stream_support
-            == bool(self.supported_features & CameraEntityFeature.STREAM)
-            and old_native_webrtc != self._supports_native_async_webrtc
+            and (
+                old_stream_support
+                != bool(self.supported_features & CameraEntityFeature.STREAM)
+                or old_native_webrtc != self._supports_native_async_webrtc
+            )
         ):
             self.hass.async_create_task(self.async_refresh_providers())
 

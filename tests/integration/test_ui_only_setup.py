@@ -776,6 +776,58 @@ async def test_vacuum_edit_hides_json_and_preserves_native_templates(hass):
     assert saved[CONF_NATIVE_TEMPLATES] == native_templates
 
 
+async def test_climate_edit_repairs_legacy_enum_repr_native_template(hass):
+    device_name = "Legacy Climate"
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                device_name: [{
+                    CONF_PLATFORM: "climate",
+                    CONF_NAME: "Boiler",
+                    CONF_INITIAL_VALUE: "heat",
+                    CONF_INITIAL_AVAILABILITY: True,
+                    CONF_PERSISTENT: True,
+                    CONF_NATIVE_TEMPLATES: {
+                        "hvac_action": (
+                            "{{ <HVACAction.HEATING: 'heating'> }}"
+                        ),
+                    },
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key(device_name, 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {},
+    )
+
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_action"] == (
+        "{{ 'heating' }}"
+    )
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    saved = result["data"][ATTR_DEVICES][device_name][0]
+    assert saved[CONF_NATIVE_TEMPLATES]["hvac_action"] == "{{ 'heating' }}"
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
 def test_common_service_schemas_reject_non_finite_values(value):
     with pytest.raises(vol.Invalid):

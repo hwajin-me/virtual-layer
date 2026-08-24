@@ -447,6 +447,28 @@ def test_climate_native_templates_render_lists_enums_and_numbers(hass):
     assert ClimateEntityFeature.PRESET_MODE in entity.supported_features
 
 
+def test_climate_repairs_legacy_enum_repr_native_template(hass):
+    entity = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.legacy_enum",
+                "heat",
+                hvac_modes=["off", "heat"],
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "hvac_action": "{{ <HVACAction.HEATING: 'heating'> }}",
+                    }
+                },
+            )
+        ),
+        False,
+    )
+
+    _render_native_templates(entity, hass)
+
+    assert entity.hvac_action == HVACAction.HEATING
+
+
 def test_fan_native_templates_control_capabilities_and_values(hass):
     hass.states.async_set("sensor.fan_speed", "42")
     entity = VirtualFan(
@@ -981,6 +1003,62 @@ async def test_fan_and_humidifier_commands_proxy_to_source_entities(hass):
             "set_mode",
             lambda item: item.async_set_mode("sleep"),
             {"mode": "sleep"},
+        ),
+    ])
+
+
+async def test_vacuum_and_camera_commands_proxy_to_source_entities(hass):
+    vacuum = VirtualVacuum(
+        VACUUM_SCHEMA(
+            _base(
+                "vacuum.proxy",
+                "docked",
+                fan_speed_list=["quiet", "turbo"],
+                **{CONF_SOURCE_ENTITIES: ["vacuum.source"]},
+            )
+        ),
+        False,
+    )
+    await _exercise_source_proxy(hass, "vacuum", vacuum, [
+        ("start", lambda item: item.async_start(), {}),
+        (
+            "set_fan_speed",
+            lambda item: item.async_set_fan_speed("turbo"),
+            {"fan_speed": "turbo"},
+        ),
+        (
+            "send_command",
+            lambda item: item.async_send_command(
+                "clean_room",
+                params={"room": 1},
+            ),
+            {"command": "clean_room", "params": {"room": 1}},
+        ),
+        ("return_to_base", lambda item: item.async_return_to_base(), {}),
+    ])
+
+    camera = VirtualCamera(
+        CAMERA_SCHEMA(
+            _base(
+                "camera.proxy",
+                "on",
+                **{CONF_SOURCE_ENTITIES: ["camera.source"]},
+            )
+        ),
+        False,
+    )
+    await _exercise_source_proxy(hass, "camera", camera, [
+        ("turn_off", lambda item: item.async_turn_off(), {}),
+        ("turn_on", lambda item: item.async_turn_on(), {}),
+        (
+            "enable_motion_detection",
+            lambda item: item.async_enable_motion_detection(),
+            {},
+        ),
+        (
+            "disable_motion_detection",
+            lambda item: item.async_disable_motion_detection(),
+            {},
         ),
     ])
 

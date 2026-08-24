@@ -295,11 +295,12 @@ Run the lightweight repository checks:
 git diff --check
 ```
 
-Run the official Home Assistant Container matrix for platform, registry,
-service, reload, or cross-domain changes:
+Run the official Home Assistant Container compatibility smoke for platform API
+changes. Config-entry, registry, service, reload, and all-domain behavior remain
+covered by `tests/integration`:
 
 ```sh
-tests/docker/run_all_domains.sh
+tests/docker/run_compatibility_smoke.sh
 ```
 
 The Docker test intentionally uses the official Home Assistant image through

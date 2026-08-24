@@ -27,7 +27,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.util import slugify
 
 from .const import *
-from .entity import virtual_schema
+from .entity import repair_legacy_enum_template, virtual_schema
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -547,7 +547,9 @@ def _normalize_common_entity_config(entity, device_name, index):
                 or name.strip() in normalized_templates
             ):
                 continue
-            normalized_templates[name.strip()] = template
+            normalized_templates[name.strip()] = repair_legacy_enum_template(
+                template
+            )
         entity[CONF_NATIVE_TEMPLATES] = normalized_templates
 
     command_actions = entity.get(CONF_COMMAND_ACTIONS)

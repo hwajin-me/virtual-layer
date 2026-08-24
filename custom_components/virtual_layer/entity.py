@@ -7,6 +7,7 @@ This class adds persistence to an entity.
 import inspect
 import logging
 import math
+import re
 from contextvars import ContextVar
 from datetime import timedelta
 from enum import Enum
@@ -48,10 +49,43 @@ _VIRTUAL_ENTITY_COMMAND_NAMES = frozenset().union(
 )
 _MISSING = object()
 MAX_LOCAL_MEDIA_BYTES = 25 * 1024 * 1024
+_LEGACY_ENUM_TEMPLATE_RE = re.compile(
+    r"<[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\|[A-Za-z_][A-Za-z0-9_]*)*)+:\s*"
+    r"((?:'(?:\\.|[^'\\])*')|(?:\"(?:\\.|[^\"\\])*\")|-?\d+(?:\.\d+)?)>"
+)
 _COMMAND_ACTION_CHAIN: ContextVar[frozenset[tuple[int, str]]] = ContextVar(
     "virtual_layer_command_action_chain",
     default=frozenset(),
 )
+
+
+def repair_legacy_enum_template(template: str) -> str:
+    """Repair enum repr literals emitted by older native helper generation."""
+    if not isinstance(template, str) or "<" not in template:
+        return template
+
+    def _replace(match: re.Match[str]) -> str:
+        prefix = template[: match.start()]
+        expression_start = max(prefix.rfind("{{"), prefix.rfind("{%"))
+        expression_end = max(prefix.rfind("}}"), prefix.rfind("%}"))
+        if expression_start <= expression_end:
+            return match.group(0)
+
+        quote = None
+        escaped = False
+        for character in template[expression_start + 2 : match.start()]:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif quote is None and character in {"'", '"'}:
+                quote = character
+            elif character == quote:
+                quote = None
+        return match.group(0) if quote is not None else match.group(1)
+
+    return _LEGACY_ENUM_TEMPLATE_RE.sub(_replace, template)
 
 def nonnegative_int(value) -> int:
     """Coerce a non-negative integer without accepting booleans as numbers."""
@@ -217,9 +251,9 @@ class VirtualEntity(RestoreEntity):
             if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
         }
         self._native_templates = {
-            str(name).strip(): template
+            str(name).strip(): repair_legacy_enum_template(template)
             for name, template in dict(config.get(CONF_NATIVE_TEMPLATES, {})).items()
-            if self._valid_native_template_name(name)
+            if self._valid_native_template_name(name) and isinstance(template, str)
         }
         self._command_actions = dict(config.get(CONF_COMMAND_ACTIONS, {}))
         self._command_scripts = {}

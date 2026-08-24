@@ -3,6 +3,7 @@
 from importlib import import_module
 
 import pytest
+import voluptuous as vol
 from homeassistant.const import ATTR_ENTITY_ID
 
 from custom_components.virtual_layer.const import (
@@ -120,3 +121,14 @@ def test_climate_native_templates_override_stale_static_fallbacks():
             "max_temp": "{{ 25 }}",
         },
     })
+
+
+@pytest.mark.parametrize("supported_features", [-1, ["start", -1]])
+def test_vacuum_schema_rejects_negative_feature_bitmasks(supported_features):
+    from custom_components.virtual_layer.vacuum import VACUUM_SCHEMA
+
+    with pytest.raises(vol.Invalid):
+        VACUUM_SCHEMA({
+            CONF_NAME: "Invalid feature vacuum",
+            "supported_features": supported_features,
+        })

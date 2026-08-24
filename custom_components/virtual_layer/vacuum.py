@@ -52,6 +52,11 @@ DEFAULT_SUPPORTED_FEATURES = (
     | VacuumEntityFeature.CLEAN_SPOT
     | VacuumEntityFeature.SEND_COMMAND
 )
+_LEGACY_BATTERY_FEATURE = getattr(
+    VacuumEntityFeature,
+    "BATTERY",
+    VacuumEntityFeature(0),
+)
 
 
 def _as_activity(value: Any) -> VacuumActivity | None:
@@ -73,6 +78,8 @@ def _as_supported_features(value: Any) -> VacuumEntityFeature:
     if isinstance(value, bool):
         raise vol.Invalid("supported_features must be a bitmask or feature names")
     if isinstance(value, int):
+        if value < 0:
+            raise vol.Invalid("supported_features must be non-negative")
         return VacuumEntityFeature(value)
 
     values = value.split(",") if isinstance(value, str) else value
@@ -84,6 +91,8 @@ def _as_supported_features(value: Any) -> VacuumEntityFeature:
         if isinstance(item, bool):
             raise vol.Invalid("vacuum feature names cannot be boolean")
         if isinstance(item, int):
+            if item < 0:
+                raise vol.Invalid("vacuum feature bitmasks must be non-negative")
             features |= VacuumEntityFeature(item)
             continue
         name = str(item).strip().upper().replace(" ", "_").replace("-", "_")
@@ -207,7 +216,7 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
             features |= VacuumEntityFeature.FAN_SPEED
         # HA removes the legacy vacuum battery feature in 2026.8. A linked
         # battery sensor is generated from this configuration instead.
-        features &= ~VacuumEntityFeature.BATTERY
+        features &= ~_LEGACY_BATTERY_FEATURE
         self._attr_supported_features = features
 
     @property

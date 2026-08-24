@@ -420,6 +420,31 @@ async def test_virtual_camera_refreshes_capabilities_when_source_reloads(hass):
     entity.async_refresh_providers.assert_awaited_once_with()
 
 
+async def test_virtual_camera_refreshes_providers_when_stream_template_changes(hass):
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Dynamic Stream",
+        ATTR_ENTITY_ID: "camera.dynamic_stream",
+        ATTR_UNIQUE_ID: "dynamic-stream",
+        CONF_INITIAL_VALUE: "on",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_refresh_providers = AsyncMock()
+    entity._camera_internal_added = True
+
+    assert not entity.supported_features & CameraEntityFeature.STREAM
+    assert entity._apply_native_template_value(
+        "stream_source",
+        "rtsp://camera/live",
+    )
+    entity._native_templates_applied()
+    await hass.async_block_till_done()
+
+    assert entity.supported_features & CameraEntityFeature.STREAM
+    assert entity.camera_capabilities.frontend_stream_types == {StreamType.HLS}
+    entity.async_refresh_providers.assert_awaited_once_with()
+
+
 async def test_virtual_image_renders_polygon_map_svg(hass):
     hass.states.async_set(
         "device_tracker.family_polygon",

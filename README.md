@@ -521,16 +521,14 @@ docker compose -f tests/docker/docker-compose.yml up -d
 docker compose -f tests/docker/docker-compose.yml logs -f homeassistant
 ```
 
-Run the isolated automated smoke test against the official stable Home
-Assistant container. It creates every supported entity domain on one virtual
-device, calls native and common control services, verifies the resulting state
-and attributes, and reloads persistent entities. The matrix also covers motion,
-presence, leak, smoke, gas, electrical and utility sensors, washer/dryer data,
-dehumidifiers, climate ranges, covers, and valves. It fails on missing entities,
-registry/device mismatches, integration errors, or deprecation warnings:
+Run a compatibility smoke test against the official stable Home Assistant
+container. It checks climate, robot vacuum, and camera imports, schemas,
+features, and legacy native-template recovery without a custom Docker image.
+The complete config-entry, registry, service, reload, and all-domain behavior
+matrix runs under `tests/integration`:
 
 ```sh
-tests/docker/run_all_domains.sh
+tests/docker/run_compatibility_smoke.sh
 ```
 
 Open `http://localhost:8123`, finish Home Assistant onboarding if needed, then

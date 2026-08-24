@@ -299,7 +299,12 @@ async def test_virtual_vacuum_exposes_state_and_native_commands():
     assert entity.state == VacuumActivity.DOCKED
     assert VacuumEntityFeature.START in entity.supported_features
     assert VacuumEntityFeature.FAN_SPEED in entity.supported_features
-    assert VacuumEntityFeature.BATTERY not in entity.supported_features
+    legacy_battery = getattr(
+        VacuumEntityFeature,
+        "BATTERY",
+        VacuumEntityFeature(0),
+    )
+    assert not entity.supported_features & legacy_battery
     entity._update_attributes()
     assert entity.extra_state_attributes["battery_level"] == 82
 

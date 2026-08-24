@@ -9,6 +9,7 @@ import logging
 import math
 import re
 from collections.abc import Collection, Mapping
+from enum import Enum
 from functools import wraps
 from importlib import import_module
 from typing import Any
@@ -60,7 +61,12 @@ from .climate_options import (
     migrate_legacy_climate_attributes,
 )
 from .const import *
-from .entity import VirtualEntity, nonnegative_int, positive_tick
+from .entity import (
+    VirtualEntity,
+    nonnegative_int,
+    positive_tick,
+    repair_legacy_enum_template,
+)
 from .fan_options import (
     FAN_FORM_FIELDS,
     FAN_MODE_LIST_FIELD,
@@ -1331,7 +1337,7 @@ def _flatten_entity_form_sections(user_input: Mapping | None) -> dict[str, Any]:
 
 def _literal_template(value: Any) -> str:
     """Render a static native value as an editable Jinja literal."""
-    return "{{ " + repr(_plain_options(value)) + " }}"
+    return "{{ " + repr(_json_safe(_plain_options(value))) + " }}"
 
 
 def _native_template_defaults(
@@ -1881,7 +1887,7 @@ def _parse_native_templates(value: str) -> dict[str, str]:
         normalized_name = name.strip()
         if normalized_name in templates:
             raise InvalidJson(CONF_NATIVE_TEMPLATES_JSON)
-        templates[normalized_name] = template
+        templates[normalized_name] = repair_legacy_enum_template(template)
     return templates
 
 
@@ -2431,7 +2437,7 @@ def _build_entity_config(
             continue
         if not isinstance(template_value, str):
             raise InvalidJson(CONF_NATIVE_TEMPLATES_JSON)
-        template_value = template_value.strip()
+        template_value = repair_legacy_enum_template(template_value).strip()
         if template_value:
             native_templates[property_name] = template_value
     if native_templates:
@@ -2777,6 +2783,8 @@ def _plain_options(value, _seen=None, _depth=0):
         return None
     if _seen is None:
         _seen = set()
+    if isinstance(value, Enum):
+        return _plain_options(value.value, _seen, _depth + 1)
     if isinstance(value, Mapping):
         identity = id(value)
         if identity in _seen:
@@ -5082,7 +5090,7 @@ def _native_template_mapping(value: Any) -> dict[str, str]:
     if not isinstance(value, Mapping):
         return {}
     return {
-        str(property_name): template
+        str(property_name): repair_legacy_enum_template(template)
         for property_name, template in _plain_options(value).items()
         if isinstance(template, str)
     }
@@ -5362,9 +5370,9 @@ def _entity_form_defaults(
     platform = entity.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
     if platform not in VIRTUAL_ENTITY_DOMAINS:
         platform = DEFAULT_ENTITY_DOMAIN
-    stored_native_templates = entity.get(CONF_NATIVE_TEMPLATES)
-    if not isinstance(stored_native_templates, Mapping):
-        stored_native_templates = {}
+    stored_native_templates = _native_template_mapping(
+        entity.get(CONF_NATIVE_TEMPLATES)
+    )
     managed_native_properties = set(
         DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
     )
