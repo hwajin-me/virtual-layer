@@ -3892,6 +3892,7 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
                         ATTR_ENTITY_ID: "sensor.virtual_washer",
                         CONF_INITIAL_VALUE: "idle",
                         CONF_INITIAL_AVAILABILITY: True,
+                        CONF_AVAILABILITY_TEMPLATE: "{{ false }}",
                         CONF_PERSISTENT: False,
                         CONF_SOURCE_ENTITIES: [
                             "sensor.washer_power",
@@ -3913,6 +3914,10 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
     assert info is not None
     assert debug_power is not None
     assert debug_door is not None
+    assert hass.states.get("sensor.virtual_washer").state == "unavailable"
+    assert info.state == "configured"
+    assert info.attributes["available"] is True
+    assert "source_state" not in info.attributes
     assert info.attributes["virtual_entity_id"] == "sensor.virtual_washer"
     assert info.attributes["configured_source_entities"] == [
         "sensor.washer_power",

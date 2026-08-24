@@ -1163,25 +1163,16 @@ class BlendedCfg:
                 f"sensor.{object_id}_{suffix}",
                 diagnostic_unique_id,
             )
-            sensor_entities.append({
+            diagnostic_entity = {
                 CONF_NAME: diagnostic_name,
                 ATTR_ENTITY_ID: diagnostic_entity_id,
                 ATTR_UNIQUE_ID: diagnostic_unique_id,
                 ATTR_DEVICE_ID: device_id,
-                CONF_INITIAL_VALUE: "unknown",
+                CONF_INITIAL_VALUE: "configured" if suffix == "info" else "unknown",
                 CONF_INITIAL_AVAILABILITY: True,
                 CONF_PERSISTENT: False,
-                CONF_SOURCE_ENTITIES: [source_entity_id],
-                CONF_TEMPLATE_SOURCES: {
-                    "source": {
-                        ATTR_ENTITY_ID: source_entity_id,
-                        CONF_ATTRIBUTE: "state",
-                    },
-                },
-                CONF_VALUE_TEMPLATE: "{{ source }}",
                 CONF_ATTRIBUTES: attributes,
                 CONF_ICON: icon,
-                CONF_DIAGNOSTIC_SOURCE_ENTITY: source_entity_id,
                 **_entity_device_info({
                     key: entity[key]
                     for key in (
@@ -1197,7 +1188,20 @@ class BlendedCfg:
                     )
                     if key in entity
                 }),
-            })
+            }
+            if suffix != "info":
+                diagnostic_entity.update({
+                    CONF_SOURCE_ENTITIES: [source_entity_id],
+                    CONF_TEMPLATE_SOURCES: {
+                        "source": {
+                            ATTR_ENTITY_ID: source_entity_id,
+                            CONF_ATTRIBUTE: "state",
+                        },
+                    },
+                    CONF_VALUE_TEMPLATE: "{{ source }}",
+                    CONF_DIAGNOSTIC_SOURCE_ENTITY: source_entity_id,
+                })
+            sensor_entities.append(diagnostic_entity)
 
     async def async_load(self):
         meta_data = await _load_meta_data(self._hass, self._group_name)
