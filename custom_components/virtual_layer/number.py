@@ -49,7 +49,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, number_float, virtual_schema
+from .entity import VirtualEntity, nearest_step_value, number_float, virtual_schema
 
 try:
     from homeassistant.const import UnitOfDensity, UnitOfRatio
@@ -250,9 +250,11 @@ class VirtualNumber(VirtualEntity, NumberEntity):
                 native_value = self.native_min_value
         if not math.isfinite(native_value):
             native_value = self.native_min_value
-        return max(
+        return nearest_step_value(
+            native_value,
             self.native_min_value,
-            min(self.native_max_value, native_value),
+            self.native_max_value,
+            self.native_step,
         )
 
     def _update_attributes(self):

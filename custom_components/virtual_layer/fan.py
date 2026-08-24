@@ -148,6 +148,10 @@ class VirtualFan(VirtualEntity, FanEntity):
         self._configured_percentage = self._safe_percentage(
             config.get(CONF_PERCENTAGE)
         )
+        if self._configured_percentage is not None:
+            self._configured_percentage = self._nearest_percentage(
+                self._configured_percentage
+            )
         self._configured_preset_mode = config.get(CONF_PRESET_MODE)
         self._attr_supported_features = FanEntityFeature(0)
         self._refresh_supported_features()
@@ -209,6 +213,8 @@ class VirtualFan(VirtualEntity, FanEntity):
         restored_percentage = self._safe_percentage(
             state.attributes.get(ATTR_PERCENTAGE)
         )
+        if restored_percentage is not None:
+            restored_percentage = self._nearest_percentage(restored_percentage)
         preset_mode = state.attributes.get(ATTR_PRESET_MODE)
         restored_preset_mode = (
             preset_mode if preset_mode in self._attr_preset_modes else None
@@ -248,6 +254,25 @@ class VirtualFan(VirtualEntity, FanEntity):
         if not math.isfinite(parsed) or not 0 <= parsed <= 100:
             return None
         return round(parsed)
+
+    def _nearest_percentage(self, percentage: int) -> int:
+        """Snap a percentage to the nearest non-zero speed advertised to HA."""
+        if percentage == 0 or self._attr_speed_count <= 0:
+            return percentage
+        speed_index = math.floor(
+            ((percentage * self._attr_speed_count) / 100) + 0.5
+        )
+        speed_index = max(1, min(self._attr_speed_count, speed_index))
+        return round((speed_index * 100) / self._attr_speed_count)
+
+    def _command_service_data(self, command, method, args, kwargs) -> dict:
+        """Expose fixed percentages to generated and customized command actions."""
+        data = super()._command_service_data(command, method, args, kwargs)
+        if command in {"set_percentage", "turn_on"} and "percentage" in data:
+            percentage = self._safe_percentage(data["percentage"])
+            if percentage is not None:
+                data["percentage"] = self._nearest_percentage(percentage)
+        return data
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -289,7 +314,7 @@ class VirtualFan(VirtualEntity, FanEntity):
                 parsed_percentage = self._safe_percentage(value)
                 if parsed_percentage is None:
                     raise ValueError("percentage must be between 0 and 100")
-                value = parsed_percentage
+                value = self._nearest_percentage(parsed_percentage)
         elif name == "speed_count":
             if value is None:
                 value = 0
@@ -329,7 +354,7 @@ class VirtualFan(VirtualEntity, FanEntity):
         percentage = int(percentage)
         if not 0 <= percentage <= 100:
             raise ValueError("Fan percentage must be between 0 and 100")
-        self._attr_percentage = percentage
+        self._attr_percentage = self._nearest_percentage(percentage)
         self._attr_preset_mode = None
         self._update_attributes()
         self.async_write_ha_state()

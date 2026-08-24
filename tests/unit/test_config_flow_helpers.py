@@ -54,6 +54,7 @@ from custom_components.virtual_layer.config_flow import (
     DOMAIN_NATIVE_TEMPLATE_PROPERTIES,
     FAN_NATIVE_TEMPLATE_PROPERTIES,
     HUMIDIFIER_NATIVE_TEMPLATE_PROPERTIES,
+    NATIVE_TEMPLATE_ATTRIBUTE_ALIASES,
     NATIVE_TEMPLATE_BITMASK_PROPERTIES,
     NATIVE_TEMPLATE_BOOLEAN_PROPERTIES,
     NATIVE_TEMPLATE_DATETIME_PROPERTIES,
@@ -62,7 +63,6 @@ from custom_components.virtual_layer.config_flow import (
     NATIVE_TEMPLATE_MAXIMUM_PROPERTIES,
     NATIVE_TEMPLATE_MINIMUM_PROPERTIES,
     NATIVE_TEMPLATE_NUMERIC_PROPERTIES,
-    NATIVE_TEMPLATE_ATTRIBUTE_ALIASES,
     DeviceNameAlreadyUsed,
     InvalidDomainOptions,
     InvalidEntityId,
@@ -116,6 +116,7 @@ from custom_components.virtual_layer.config_flow import (
     _select_entity_schema,
     _set_auto_helper_profile,
     _setup_schema,
+    _source_command_data_template,
     _stored_entity_ids,
     _validate_platform_entity,
     _without_template_helpers,
@@ -2074,11 +2075,65 @@ def test_reference_fan_promotes_native_speed_preset_and_motion_options(hass):
         "set_percentage",
         "set_preset_mode",
     }
-    assert command_actions["set_percentage"] == [{
-        "action": "fan.set_percentage",
-        "data": "{{ command_data }}",
-        "target": {ATTR_ENTITY_ID: "fan.bedroom"},
-    }]
+    percentage_action = command_actions["set_percentage"][0]
+    assert percentage_action["action"] == "fan.set_percentage"
+    assert percentage_action["target"] == {ATTR_ENTITY_ID: "fan.bedroom"}
+    assert "percentage_step" in percentage_action["data"]
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [(0, 0), (1, 20), (29, 20), (30, 40), (91, 100)],
+)
+def test_fan_source_command_fixer_rounds_to_nearest_speed_step(
+    hass,
+    requested,
+    expected,
+):
+    hass.states.async_set("fan.matter", "on", {"percentage_step": 20})
+    helper = _source_command_data_template(
+        "fan",
+        "set_percentage",
+        "fan.matter",
+    )
+
+    assert Template(helper, hass).async_render(
+        variables={"command_data": {"percentage": requested}},
+        parse_result=True,
+    ) == {"percentage": expected}
+
+
+def test_numeric_source_command_fixer_clamps_and_rounds_to_advertised_grid(hass):
+    hass.states.async_set(
+        "number.matter",
+        "10",
+        {"min": 10, "max": 20, "step": 2.5},
+    )
+    helper = _source_command_data_template(
+        "number",
+        "set_native_value",
+        "number.matter",
+    )
+
+    assert Template(helper, hass).async_render(
+        variables={"command_data": {"value": 14, "vendor": "kept"}},
+        parse_result=True,
+    ) == {"value": 15.0, "vendor": "kept"}
+
+
+def test_fan_turn_on_source_fixer_preserves_optional_percentage(hass):
+    hass.states.async_set("fan.matter", "off", {"percentage_step": 20})
+    helper = _source_command_data_template("fan", "turn_on", "fan.matter")
+    template = Template(helper, hass)
+
+    assert template.async_render(
+        variables={"command_data": {}},
+        parse_result=True,
+    ) == {}
+    assert template.async_render(
+        variables={"command_data": {"percentage": 51}},
+        parse_result=True,
+    ) == {"percentage": 60}
 
 
 def test_camera_motion_actions_do_not_require_on_off_support(hass):

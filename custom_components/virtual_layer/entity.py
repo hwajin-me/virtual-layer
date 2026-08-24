@@ -60,6 +60,22 @@ _COMMAND_ACTION_CHAIN: ContextVar[frozenset[tuple[int, str]]] = ContextVar(
 )
 
 
+def nearest_step_value(
+    value: float,
+    minimum: float,
+    maximum: float,
+    step: float | None,
+) -> float:
+    """Clamp a finite numeric value and snap it to the nearest advertised step."""
+    bounded = max(minimum, min(maximum, value))
+    if step is None or not math.isfinite(step) or step <= 0:
+        return bounded
+    step_index = math.floor(((bounded - minimum) / step) + 0.5)
+    snapped = max(minimum, min(maximum, minimum + (step_index * step)))
+    # Avoid exposing floating-point artifacts such as 0.30000000000000004.
+    return round(snapped, 12)
+
+
 def repair_legacy_enum_template(template: str) -> str:
     """Repair enum repr literals emitted by older native helper generation."""
     if not isinstance(template, str) or "<" not in template:
@@ -865,6 +881,10 @@ class VirtualEntity(RestoreEntity):
                 variables.update(value)
             else:
                 variables[name] = value
+        # Domain fixers may normalize native arguments (for example a Matter
+        # percentage to a fan's discrete speed steps). Keep direct argument
+        # variables and command_data aligned for editable action templates.
+        variables.update(command_data)
         variables.update({
             "command": command,
             "command_data": command_data,

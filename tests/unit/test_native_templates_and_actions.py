@@ -322,6 +322,90 @@ async def test_numeric_services_reject_boolean_values():
         await heater.async_set_temperature(temperature=float("nan"))
 
 
+async def test_numeric_commands_snap_mismatched_values_to_advertised_steps():
+    fan = VirtualFan(
+        FAN_SCHEMA(_base("fan.step_fixer", "off", speed_count=5)),
+        False,
+    )
+    number = VirtualNumber(
+        NUMBER_SCHEMA(
+            _base(
+                "number.step_fixer",
+                "10",
+                min=10,
+                max=20,
+                step=2.5,
+            )
+        ),
+        False,
+    )
+    climate = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.step_fixer",
+                "off",
+                hvac_modes=["off", "heat"],
+                min_temp=10,
+                max_temp=30,
+                target_temperature_step=2,
+                min_humidity=30,
+                max_humidity=90,
+                target_humidity_step=10,
+            )
+        ),
+        False,
+    )
+    humidifier = VirtualHumidifier(
+        HUMIDIFIER_SCHEMA(
+            _base(
+                "humidifier.step_fixer",
+                "off",
+                min_humidity=30,
+                max_humidity=90,
+                target_humidity_step=10,
+            )
+        ),
+        False,
+    )
+    media = VirtualMediaPlayer(
+        GENERIC_ENTITY_SCHEMA(_base("media_player.step_fixer", "idle")),
+        False,
+    )
+    media._attr_volume_step = 0.2
+    heater = VirtualWaterHeater(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "water_heater.step_fixer",
+                "off",
+                min_temp=35,
+                max_temp=85,
+                target_temperature_step=5,
+            )
+        ),
+        False,
+    )
+    for entity in (fan, number, climate, humidifier, media, heater):
+        entity._create_state(entity._config)
+        entity.async_write_ha_state = Mock()
+        entity.async_schedule_update_ha_state = Mock()
+
+    await fan.async_set_percentage(30)
+    await number.async_set_native_value(14)
+    await climate.async_set_temperature(temperature=15)
+    await climate.async_set_humidity(55)
+    await humidifier.async_set_humidity(54)
+    await media.async_set_volume_level(0.31)
+    await heater.async_set_temperature(temperature=43)
+
+    assert fan.percentage == 40
+    assert number.native_value == 15
+    assert climate.target_temperature == 16
+    assert climate.target_humidity == 60
+    assert humidifier.target_humidity == 50
+    assert media.volume_level == 0.4
+    assert heater.target_temperature == 45
+
+
 async def test_light_turn_on_rolls_back_all_values_when_validation_fails():
     light = VirtualLight(
         LIGHT_SCHEMA(
@@ -500,7 +584,7 @@ def test_fan_native_templates_control_capabilities_and_values(hass):
 
     assert entity.is_on is True
     assert entity.speed_count == 5
-    assert entity.percentage == 42
+    assert entity.percentage == 40
     assert entity.preset_modes == ["quiet", "boost"]
     assert entity.preset_mode == "boost"
     assert entity.current_direction == "reverse"
@@ -713,7 +797,7 @@ async def test_command_action_receives_native_arguments_and_can_disable_optimism
 
     await entity.async_set_percentage(73)
 
-    assert calls == [{"requested": 73}]
+    assert calls == [{"requested": 67}]
     assert entity.percentage == 0
     entity.async_write_ha_state.assert_not_called()
 
@@ -743,7 +827,7 @@ async def test_command_action_defaults_to_optimistic_native_update(hass):
 
     await entity.async_set_percentage(35)
 
-    assert entity.percentage == 35
+    assert entity.percentage == 33
     entity.async_write_ha_state.assert_called_once()
 
 
@@ -792,7 +876,7 @@ async def test_command_actions_run_for_independent_concurrent_commands(hass):
     release.set()
     await asyncio.gather(*tasks)
 
-    assert sorted(calls) == [25, 75]
+    assert sorted(calls) == [33, 67]
     assert entity.percentage == 0
 
 
@@ -828,7 +912,7 @@ async def test_command_action_chain_still_prevents_recursive_reentry(hass):
     await entity.async_set_percentage(30)
 
     assert calls == 1
-    assert entity.percentage == 30
+    assert entity.percentage == 33
 
 
 async def test_command_action_flattens_kwargs_for_climate_templates(hass):
@@ -1132,7 +1216,7 @@ async def test_generated_command_action_forwards_complete_command_data(hass):
 
     await entity.async_set_percentage(75)
 
-    assert calls == [{"percentage": 75, ATTR_ENTITY_ID: ["fan.source"]}]
+    assert calls == [{"percentage": 80, ATTR_ENTITY_ID: ["fan.source"]}]
 
 
 @pytest.mark.parametrize(

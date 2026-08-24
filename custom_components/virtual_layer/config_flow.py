@@ -4414,6 +4414,78 @@ _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES = {
     ("water_heater", "set_operation_mode"): ("operation_list",),
 }
 
+_SOURCE_STEPPED_COMMANDS = {
+    ("climate", "set_humidity"): (
+        "humidity", "min_humidity", "max_humidity", "target_humidity_step",
+        0, 100, 1,
+    ),
+    ("climate", "set_temperature"): (
+        "temperature", "min_temp", "max_temp", "target_temp_step",
+        7, 35, 0.1,
+    ),
+    ("humidifier", "set_humidity"): (
+        "humidity", "min_humidity", "max_humidity", "target_humidity_step",
+        0, 100, 1,
+    ),
+    ("media_player", "set_volume_level"): (
+        "volume_level", None, None, "volume_step", 0, 1, 0.05,
+    ),
+    ("number", "set_native_value"): (
+        "value", "min", "max", "step", 0, 100, 1,
+    ),
+    ("water_heater", "set_temperature"): (
+        "temperature", "min_temp", "max_temp", "target_temp_step",
+        7, 35, 1,
+    ),
+}
+
+
+def _source_command_data_template(
+    platform: str,
+    command: str,
+    entity_id: str,
+) -> str | None:
+    """Return a dynamic payload fixer for a source's advertised value grid."""
+    if platform == "fan" and command in {"set_percentage", "turn_on"}:
+        step = f"state_attr({entity_id!r}, 'percentage_step') | float(1)"
+        return (
+            "{% set requested = command_data.get('percentage') %}"
+            "{% set step = " + step + " %}"
+            "{% if requested is number and step > 0 and requested > 0 %}"
+            "{% set fixed = [100, (((requested / step) + 0.5) | int) * step] | min %}"
+            "{% set fixed = [step, fixed] | max %}"
+            "{{ dict(command_data, percentage=(fixed | round(0) | int)) }}"
+            "{% else %}{{ command_data }}{% endif %}"
+        )
+
+    spec = _SOURCE_STEPPED_COMMANDS.get((platform, command))
+    if spec is None:
+        return None
+    field, min_attr, max_attr, step_attr, default_min, default_max, default_step = spec
+    minimum = (
+        f"state_attr({entity_id!r}, {min_attr!r}) | float({default_min!r})"
+        if min_attr
+        else repr(default_min)
+    )
+    maximum = (
+        f"state_attr({entity_id!r}, {max_attr!r}) | float({default_max!r})"
+        if max_attr
+        else repr(default_max)
+    )
+    step = f"state_attr({entity_id!r}, {step_attr!r}) | float({default_step!r})"
+    return (
+        f"{{% set requested = command_data.get({field!r}) %}}"
+        f"{{% set minimum = {minimum} %}}"
+        f"{{% set maximum = {maximum} %}}"
+        f"{{% set step = {step} %}}"
+        "{% if requested is number and step > 0 and maximum >= minimum %}"
+        "{% set bounded = [minimum, [maximum, requested] | min] | max %}"
+        "{% set fixed = minimum + (((((bounded - minimum) / step) + 0.5) | int) * step) %}"
+        "{% set fixed = [minimum, [maximum, fixed] | min] | max %}"
+        f"{{{{ dict(command_data, {field}=fixed) }}}}"
+        "{% else %}{{ command_data }}{% endif %}"
+    )
+
 
 def _source_supports_command(
     state,
@@ -4466,12 +4538,26 @@ def _source_command_actions(
         ))
         if not source_entities:
             continue
+        service = VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES.get(key, command)
+        fixed_data = {
+            entity_id: _source_command_data_template(platform, command, entity_id)
+            for entity_id in source_entities
+        }
+        if any(fixed_data.values()):
+            actions[command] = [
+                {
+                    "action": f"{platform}.{service}",
+                    "target": {ATTR_ENTITY_ID: entity_id},
+                    "data": fixed_data[entity_id] or "{{ command_data }}",
+                }
+                for entity_id in source_entities
+            ]
+            continue
         target_entity_id: str | list[str]
         if len(source_entities) == 1:
             target_entity_id = source_entities[0]
         else:
             target_entity_id = source_entities
-        service = VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES.get(key, command)
         actions[command] = [{
             "action": f"{platform}.{service}",
             "target": {ATTR_ENTITY_ID: target_entity_id},

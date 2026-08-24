@@ -52,7 +52,7 @@ from homeassistant.util import dt as dt_util
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, virtual_schema
+from .entity import VirtualEntity, nearest_step_value, virtual_schema
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1099,7 +1099,12 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
     async def async_set_volume_level(self, volume: float) -> None:
         if isinstance(volume, bool) or not 0 <= volume <= 1:
             raise ValueError("Media player volume must be between 0 and 1")
-        self._attr_volume_level = float(volume)
+        self._attr_volume_level = nearest_step_value(
+            float(volume),
+            0,
+            1,
+            self.volume_step,
+        )
         self.async_write_ha_state()
 
     async def async_mute_volume(self, mute: bool) -> None:
@@ -1397,7 +1402,12 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             raise ValueError("Water heater temperature must be a finite number")
         if not self._attr_min_temp <= temperature <= self._attr_max_temp:
             raise ValueError("Water heater temperature is outside its configured range")
-        self._attr_target_temperature = temperature
+        self._attr_target_temperature = nearest_step_value(
+            temperature,
+            self._attr_min_temp,
+            self._attr_max_temp,
+            self._attr_target_temperature_step,
+        )
         self.async_write_ha_state()
 
     async def async_set_operation_mode(self, operation_mode: str) -> None:

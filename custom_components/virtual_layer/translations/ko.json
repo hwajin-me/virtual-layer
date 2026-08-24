@@ -118,7 +118,7 @@
               "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
               "attribute_templates_json": "값이 Jinja 템플릿인 JSON 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
               "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
-              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다.",
+              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다.",
               "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
             }
           },
@@ -748,7 +748,7 @@
               "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
               "attribute_templates_json": "값이 Jinja 템플릿인 JSON 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
               "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
-              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다.",
+              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다.",
               "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
             }
           },
@@ -1292,7 +1292,7 @@
               "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
               "attribute_templates_json": "값이 Jinja 템플릿인 JSON 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
               "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
-              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다.",
+              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다.",
               "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
             }
           },

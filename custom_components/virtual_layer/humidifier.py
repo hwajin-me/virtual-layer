@@ -30,7 +30,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, number_float, virtual_schema
+from .entity import VirtualEntity, nearest_step_value, number_float, virtual_schema
 from .humidifier_options import migrate_legacy_humidifier_attributes
 
 _LOGGER = logging.getLogger(__name__)
@@ -364,7 +364,12 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             raise ValueError(
                 "Humidity must be within the configured minimum and maximum"
             )
-        self._attr_target_humidity = humidity
+        self._attr_target_humidity = nearest_step_value(
+            humidity,
+            self._attr_min_humidity,
+            self._attr_max_humidity,
+            self._attr_target_humidity_step,
+        )
         self.async_write_ha_state()
 
     async def async_set_mode(self, mode: str) -> None:

@@ -35,7 +35,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import get_entity_configs
 from .climate_options import migrate_legacy_climate_attributes
 from .const import *
-from .entity import VirtualEntity, number_float, virtual_schema
+from .entity import VirtualEntity, nearest_step_value, number_float, virtual_schema
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -751,7 +751,12 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             raise ValueError(
                 "Temperature must be within the configured minimum and maximum"
             )
-        return temperature
+        return nearest_step_value(
+            temperature,
+            self._attr_min_temp,
+            self._attr_max_temp,
+            self._attr_target_temperature_step,
+        )
 
     @staticmethod
     def _validate_choice(value: str, values: list[str], label: str) -> str:
@@ -829,7 +834,12 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             raise ValueError(
                 "Humidity must be within the configured minimum and maximum"
             )
-        self._attr_target_humidity = humidity
+        self._attr_target_humidity = nearest_step_value(
+            humidity,
+            self._attr_min_humidity,
+            self._attr_max_humidity,
+            self._attr_target_humidity_step,
+        )
         self._refresh_supported_features()
         self.async_write_ha_state()
 
