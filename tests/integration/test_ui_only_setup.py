@@ -171,6 +171,13 @@ async def _choose_add_template_helper(hass, result, *, enabled=True):
     )
 
 
+def _first_stored_entity(result):
+    """Return the sole Device's first entity without relying on its display name."""
+    devices = result["data"][ATTR_DEVICES]
+    assert len(devices) == 1
+    return next(iter(devices.values()))[0]
+
+
 async def test_options_flow_persists_native_templates_and_command_actions(hass):
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
@@ -239,7 +246,7 @@ async def test_options_flow_persists_native_templates_and_command_actions(hass):
         )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Linked HVAC"][0]
+    entity = _first_stored_entity(result)
     assert set(entity[CONF_NATIVE_TEMPLATES]) == set(CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
     assert {
         name: entity[CONF_NATIVE_TEMPLATES][name]
@@ -306,7 +313,7 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Energy Monitor"][0]
+    entity = _first_stored_entity(result)
     runtime_config = {
         key: value
         for key, value in entity.items()
@@ -408,7 +415,7 @@ async def test_options_flow_ignores_restored_source_metadata(hass):
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Radon Sensor"][0]
+    entity = _first_stored_entity(result)
     assert ATTR_RESTORED not in entity.get(CONF_ATTRIBUTES, {})
     assert ATTR_RESTORED not in entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
     assert entity[CONF_ATTRIBUTE_TEMPLATES]["vendor_status"] == (
@@ -461,7 +468,7 @@ async def test_options_flow_camera_alias_tracks_native_camera_states(hass):
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
 
-    stored = result["data"][ATTR_DEVICES]["Camera"][0]
+    stored = _first_stored_entity(result)
     runtime_config = {
         key: value
         for key, value in stored.items()
@@ -582,7 +589,7 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    stored = result["data"][ATTR_DEVICES]["Boiler"][0]
+    stored = _first_stored_entity(result)
     runtime_config = {
         key: value
         for key, value in stored.items()
@@ -1419,8 +1426,8 @@ async def test_options_flow_manages_shared_device_metadata_without_editing_entit
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert "Laundry" not in result["data"][ATTR_DEVICES]
-    assert len(result["data"][ATTR_DEVICES]["Laundry Room"]) == 2
-    assert result["data"][ATTR_DEVICE_ATTRIBUTES]["Laundry Room"] == {
+    assert len(result["data"][ATTR_DEVICES]["laundry-new"]) == 2
+    assert result["data"][ATTR_DEVICE_ATTRIBUTES]["laundry-new"] == {
         ATTR_DEVICE_ID: "laundry-new",
         CONF_NAME: "Laundry Room",
         CONF_MANUFACTURER: "Acme",
@@ -1428,7 +1435,7 @@ async def test_options_flow_manages_shared_device_metadata_without_editing_entit
     }
 
 
-async def test_options_flow_rejects_device_name_collision_with_different_id(hass):
+async def test_options_flow_allows_device_name_collision_with_different_id(hass):
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "ui"},
@@ -1463,9 +1470,13 @@ async def test_options_flow_rejects_device_name_collision_with_different_id(hass
         },
     )
 
-    assert result["type"] == FlowResultType.FORM
-    assert result["step_id"] == "edit_device"
-    assert result["errors"] == {CONF_DEVICE_NAME: "device_name_used"}
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert set(result["data"][ATTR_DEVICES]) == {"HVAC", "different-id"}
+    assert result["data"][ATTR_DEVICE_ATTRIBUTES]["HVAC"][ATTR_DEVICE_ID] == "hvac-1"
+    assert result["data"][ATTR_DEVICE_ATTRIBUTES]["different-id"] == {
+        ATTR_DEVICE_ID: "different-id",
+        CONF_NAME: "HVAC",
+    }
 
 
 async def test_options_flow_can_delete_multiple_entities(hass):
@@ -1705,12 +1716,13 @@ async def test_options_flow_can_edit_existing_entity(hass):
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert result["data"][ATTR_DEVICES]["Laundry"][0].pop(ATTR_ENTITY_KEY)
+    stored_entities = result["data"][ATTR_DEVICES]["laundry-updated"]
+    assert stored_entities[0].pop(ATTR_ENTITY_KEY)
     assert isinstance(
-        result["data"][ATTR_DEVICES]["Laundry"][0].pop("auto_helper"),
+        stored_entities[0].pop("auto_helper"),
         dict,
     )
-    assert result["data"][ATTR_DEVICES]["Laundry"] == [
+    assert stored_entities == [
         {
             CONF_PLATFORM: "sensor",
             CONF_NAME: "Washer Status",
@@ -1723,7 +1735,7 @@ async def test_options_flow_can_edit_existing_entity(hass):
             CONF_VALUE_TEMPLATE: "{{ states('sensor.washer_power') }}",
         },
     ]
-    assert result["data"][ATTR_DEVICE_ATTRIBUTES]["Laundry"] == {
+    assert result["data"][ATTR_DEVICE_ATTRIBUTES]["laundry-updated"] == {
         ATTR_DEVICE_ID: "laundry-updated",
         CONF_NAME: "Laundry",
         CONF_MANUFACTURER: "Acme",
@@ -1782,7 +1794,7 @@ async def test_options_flow_aligns_entity_id_when_domain_is_edited(hass):
         )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Virtual"][0]
+    entity = _first_stored_entity(result)
     assert entity[CONF_PLATFORM] == "binary_sensor"
     assert entity[ATTR_ENTITY_ID] == "binary_sensor.virtual_mode"
     assert entity[CONF_VALUE_TEMPLATE] == "{{ 'on' }}"
@@ -1896,7 +1908,7 @@ async def test_options_flow_refreshes_generated_helper_when_sources_change(
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Doors"][0]
+    entity = _first_stored_entity(result)
     assert entity.get(CONF_SOURCE_ENTITIES, []) == new_sources
     assert entity.get(CONF_VALUE_TEMPLATE, "") == expected_helper.get(
         CONF_VALUE_TEMPLATE,
@@ -1998,7 +2010,7 @@ async def test_options_flow_recovers_stale_helper_after_partial_source_update(
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Doors"][0]
+    entity = _first_stored_entity(result)
     assert entity[CONF_SOURCE_ENTITIES] == new_sources
     assert {
         source[ATTR_ENTITY_ID]
@@ -2091,7 +2103,7 @@ async def test_options_flow_recovers_sorted_legacy_boolean_or_helper(hass):
         defaults,
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Doors"][0]
+    entity = _first_stored_entity(result)
     assert entity[CONF_SOURCE_ENTITIES] == new_sources
     assert entity[CONF_VALUE_TEMPLATE] == new_defaults[CONF_VALUE_TEMPLATE]
     assert {
@@ -2252,7 +2264,7 @@ async def test_options_flow_handles_custom_template_when_sources_change(
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Doors"][0]
+    entity = _first_stored_entity(result)
     assert entity[CONF_SOURCE_ENTITIES] == new_sources
     assert entity[CONF_VALUE_TEMPLATE] == expected_template
     assert ("door_5" in entity[CONF_TEMPLATE_SOURCES]) is preserves_custom
@@ -2340,7 +2352,7 @@ async def test_edit_form_source_change_requires_helper_policy(hass):
         edited,
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Doors"][0]
+    entity = _first_stored_entity(result)
     assert entity[CONF_SOURCE_ENTITIES] == new_sources
     assert entity[CONF_VALUE_TEMPLATE] == generated[CONF_VALUE_TEMPLATE]
     assert entity[CONF_AUTO_HELPER][CONF_VALUE_TEMPLATE] == generated[
@@ -2602,7 +2614,7 @@ async def test_options_flow_refreshes_entity_id_when_source_domain_changes(hass)
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Combined"][0]
+    entity = _first_stored_entity(result)
     assert entity[CONF_PLATFORM] == "binary_sensor"
     assert entity[ATTR_ENTITY_ID] == "binary_sensor.combined_state"
     assert entity[CONF_SOURCE_ENTITIES] == ["binary_sensor.new_door"]
@@ -2707,9 +2719,9 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert result["data"][ATTR_DEVICES]["Kitchen"][0].pop(ATTR_ENTITY_KEY)
-    assert result["data"][ATTR_DEVICES]["Kitchen"][0].pop("auto_helper")
-    saved = result["data"][ATTR_DEVICES]["Kitchen"][0]
+    saved = _first_stored_entity(result)
+    assert saved.pop(ATTR_ENTITY_KEY)
+    assert saved.pop("auto_helper")
     native_templates = saved.pop(CONF_NATIVE_TEMPLATES)
     command_actions = saved.pop(CONF_COMMAND_ACTIONS)
     assert command_actions == {
@@ -2724,7 +2736,7 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
             "target": {ATTR_ENTITY_ID: "light.kitchen_lamp"},
         }],
     }
-    assert result["data"][ATTR_DEVICES]["Kitchen"] == [{
+    assert next(iter(result["data"][ATTR_DEVICES].values())) == [{
             CONF_PLATFORM: "light",
             CONF_NAME: "Kitchen Lamp",
             ATTR_ENTITY_ID: "light.virtual_kitchen_lamp",
@@ -2842,7 +2854,7 @@ async def test_creation_flows_apply_the_selected_template_helper_policy(hass):
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    saved = result["data"][ATTR_DEVICES]["Room"][0]
+    saved = _first_stored_entity(result)
     assert saved[CONF_SOURCE_ENTITIES] == ["sensor.room_temperature"]
     assert CONF_VALUE_TEMPLATE not in saved
     assert CONF_AVAILABILITY_TEMPLATE not in saved
@@ -2882,7 +2894,7 @@ async def test_options_flow_copy_existing_entity_avoids_source_entity_id(hass):
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert result["data"][ATTR_DEVICES]["Kitchen"][0][ATTR_ENTITY_ID] == (
+    assert _first_stored_entity(result)[ATTR_ENTITY_ID] == (
         "sensor.kitchen_lamp_copy"
     )
 
@@ -2931,7 +2943,7 @@ async def test_options_flow_refreshes_untouched_helpers_when_add_sources_change(
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
 
-    saved = result["data"][ATTR_DEVICES]["Doors"][0]
+    saved = _first_stored_entity(result)
     assert saved[CONF_SOURCE_ENTITIES] == new_sources
     assert {
         source[ATTR_ENTITY_ID]
@@ -3008,7 +3020,7 @@ async def test_helper_update_failure_keeps_edit_form_available(hass, monkeypatch
         defaults,
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    saved = result["data"][ATTR_DEVICES]["Doors"][0]
+    saved = _first_stored_entity(result)
     assert saved[CONF_SOURCE_ENTITIES] == [new_source]
     assert saved[CONF_VALUE_TEMPLATE] == "{{ door_old }}"
 
@@ -3078,7 +3090,7 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Bedroom"][0]
+    entity = _first_stored_entity(result)
     assert set(entity[CONF_NATIVE_TEMPLATES]) == set(
         CLIMATE_NATIVE_TEMPLATE_PROPERTIES
     )
@@ -3168,7 +3180,7 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Air Ventilator"][0]
+    entity = _first_stored_entity(result)
     assert CONF_ATTRIBUTE_TEMPLATES not in entity
     assert entity["speed_count"] == 5
 
@@ -3251,7 +3263,7 @@ async def test_options_flow_prefills_and_creates_native_dehumidifier(hass):
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Basement"][0]
+    entity = _first_stored_entity(result)
     assert entity[CONF_NATIVE_TEMPLATES] == native_templates
     assert "supported_features" not in entity.get(CONF_ATTRIBUTES, {})
 
@@ -3326,7 +3338,7 @@ async def test_options_flow_can_edit_all_climate_modes(hass):
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Bedroom"][0]
+    entity = _first_stored_entity(result)
     assert entity[CONF_INITIAL_VALUE] == "heat"
     saved_templates = entity[CONF_NATIVE_TEMPLATES]
     assert saved_templates["hvac_modes"] == "{{ ['off', 'heat', 'cool'] }}"
@@ -3381,7 +3393,7 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    entity = result["data"][ATTR_DEVICES]["Security"][0]
+    entity = _first_stored_entity(result)
     entity.pop(ATTR_ENTITY_KEY)
     entity.pop("auto_helper")
     assert entity == {
@@ -4372,6 +4384,42 @@ async def test_setup_entry_removes_stale_device_after_device_id_change(hass, tmp
     assert device_registry.async_get_device(
         identifiers={(COMPONENT_DOMAIN, "laundry-new")},
     ) is not None
+
+
+async def test_setup_entry_registers_same_name_devices_separately_by_id(
+    hass, tmp_path, monkeypatch
+):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {"washer-1": [], "washer-2": []},
+            ATTR_DEVICE_ATTRIBUTES: {
+                "washer-1": {ATTR_DEVICE_ID: "washer-1", CONF_NAME: "Washer"},
+                "washer-2": {ATTR_DEVICE_ID: "washer-2", CONF_NAME: "Washer"},
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+
+    device_registry = dr.async_get(hass)
+    first = device_registry.async_get_device(
+        identifiers={(COMPONENT_DOMAIN, "washer-1")},
+    )
+    second = device_registry.async_get_device(
+        identifiers={(COMPONENT_DOMAIN, "washer-2")},
+    )
+    assert first is not None
+    assert second is not None
+    assert first.id != second.id
+    assert first.name == second.name == "Washer"
 
 
 async def test_setup_entry_syncs_and_restores_device_registry_metadata(hass, tmp_path, monkeypatch):

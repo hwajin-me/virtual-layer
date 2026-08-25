@@ -5,7 +5,6 @@
       "import_not_supported": "File-based configuration is not supported. Add virtual entities from the integration UI."
     },
     "error": {
-      "device_name_used": "That Device name belongs to a different Device ID. Choose another name or use the existing Device.",
       "group_name_used": "That device name is already in use, try another.",
       "invalid_json": "Enter a valid JSON object.",
       "invalid_template": "Fix the Jinja template syntax. In JSON fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
@@ -57,7 +56,7 @@
           "availability_template": "Availability template"
         },
         "data_description": {
-          "device_name": "Entities with the same device name are attached to one Home Assistant device.",
+          "device_name": "Display name only. Different Devices may use the same name; Device ID determines grouping.",
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "icon_template": "Optional Jinja template that returns an icon name. It can use template source variables and this.",
@@ -87,7 +86,7 @@
               "device_via_device_id": "Via device"
             },
             "data_description": {
-              "device_id": "Stable identifier used in the Home Assistant device registry. Leave empty to use the device name.",
+              "device_id": "The sole stable identifier used for Device grouping and the Home Assistant device registry. Leave empty to generate one.",
               "device_manufacturer": "Optional manufacturer shown in the Home Assistant device registry.",
               "device_model": "Optional model shown in the Home Assistant device registry.",
               "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
@@ -576,7 +575,6 @@
   },
   "options": {
     "error": {
-      "device_name_used": "That Device name belongs to a different Device ID. Choose another name or use the existing Device.",
       "invalid_json": "Enter a valid JSON object.",
       "invalid_template": "Fix the Jinja template syntax. In JSON fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
       "invalid_entity_id": "Enter valid entity IDs.",
@@ -636,7 +634,7 @@
           "device_via_device_id": "Via device"
         },
         "data_description": {
-          "device_name": "Renaming to an existing Device combines their virtual entities.",
+          "device_name": "Editable display name. Different Devices may use the same name.",
           "device_id": "Stable identifier used in the Home Assistant device registry. A matching ID combines the device groups.",
           "device_manufacturer": "Optional manufacturer shown in the Home Assistant device registry.",
           "device_model": "Optional model shown in the Home Assistant device registry.",
@@ -687,7 +685,7 @@
           "availability_template": "Availability template"
         },
         "data_description": {
-          "device_name": "Changing this moves the entity to another virtual device.",
+          "device_name": "Editable display name. Device ID determines which virtual Device contains the entity.",
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "icon_template": "Optional Jinja template that returns an icon name. It can use template source variables and this.",
@@ -717,7 +715,7 @@
               "device_via_device_id": "Via device"
             },
             "data_description": {
-              "device_id": "Stable identifier used in the Home Assistant device registry. Leave empty to use the device name.",
+              "device_id": "The sole stable identifier used for Device grouping and the Home Assistant device registry. Leave empty to generate one.",
               "device_manufacturer": "Optional manufacturer shown in the Home Assistant device registry.",
               "device_model": "Optional model shown in the Home Assistant device registry.",
               "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
@@ -1231,7 +1229,7 @@
           "availability_template": "Availability template"
         },
         "data_description": {
-          "device_name": "Entities with the same device name are attached to one Home Assistant device.",
+          "device_name": "Display name only. Different Devices may use the same name; Device ID determines grouping.",
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "icon_template": "Optional Jinja template that returns an icon name. It can use template source variables and this.",
@@ -1261,7 +1259,7 @@
               "device_via_device_id": "Via device"
             },
             "data_description": {
-              "device_id": "Stable identifier used in the Home Assistant device registry. Leave empty to use the device name.",
+              "device_id": "The sole stable identifier used for Device grouping and the Home Assistant device registry. Leave empty to generate one.",
               "device_manufacturer": "Optional manufacturer shown in the Home Assistant device registry.",
               "device_model": "Optional model shown in the Home Assistant device registry.",
               "device_sw_version": "Optional software version shown in the Home Assistant device registry.",

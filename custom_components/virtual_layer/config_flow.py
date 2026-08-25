@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import re
+import uuid
 from collections.abc import Collection, Mapping
 from enum import Enum
 from functools import wraps
@@ -2748,9 +2749,9 @@ def _build_device_config(
     user_input: dict[str, Any], device_name: str
 ) -> dict[str, Any]:
     """Build Home Assistant device metadata from the UI form."""
-    device_id = _text_default(user_input.get(CONF_DEVICE_ID)).strip() or device_name
-    if not device_id:
-        raise MissingDeviceName
+    device_id = _text_default(user_input.get(CONF_DEVICE_ID)).strip() or str(
+        uuid.uuid4()
+    )
 
     device = {
         ATTR_DEVICE_ID: device_id,
@@ -2902,7 +2903,7 @@ def _entity_list_or_empty(entities) -> list:
 
 def _set_device_attributes(
     options: dict[str, Any],
-    device_name: str,
+    device_key: str,
     device_config: dict[str, Any] | None,
 ) -> None:
     if device_config is None:
@@ -2910,12 +2911,17 @@ def _set_device_attributes(
     if not isinstance(options.get(ATTR_DEVICE_ATTRIBUTES), Mapping):
         options[ATTR_DEVICE_ATTRIBUTES] = {}
     device_attributes = options.setdefault(ATTR_DEVICE_ATTRIBUTES, {})
-    device_attributes[device_name] = _plain_options(device_config)
+    device_attributes[device_key] = _plain_options(device_config)
 
 
-def _get_device_attributes(options: dict[str, Any], device_name: str) -> dict[str, Any]:
+def _get_device_attributes(options: dict[str, Any], device_key: str) -> dict[str, Any]:
     device_attributes = _options_device_attributes(options)
-    return _mapping_or_empty(device_attributes.get(device_name))
+    return _mapping_or_empty(device_attributes.get(device_key))
+
+
+def _device_display_name(device_key: str, device: Mapping[str, Any]) -> str:
+    """Return the editable display name without using it as Device identity."""
+    return _text_default(device.get(CONF_NAME), _make_device_name(device_key))
 
 
 def _existing_device_options(hass, options: dict[str, Any]) -> list[dict[str, str]]:
@@ -2930,12 +2936,13 @@ def _existing_device_options(hass, options: dict[str, Any]) -> list[dict[str, st
             ),
         }
     ]
-    for device_name in _options_devices(options):
-        device = _get_device_attributes(options, device_name)
-        device_id = device.get(ATTR_DEVICE_ID, device_name)
+    for device_key in _options_devices(options):
+        device = _get_device_attributes(options, device_key)
+        device_id = device.get(ATTR_DEVICE_ID, device_key)
+        device_name = _device_display_name(device_key, device)
         device_options.append(
             {
-                "value": device_name,
+                "value": device_key,
                 "label": f"{device_name} ({device_id})",
             }
         )
@@ -2945,11 +2952,12 @@ def _existing_device_options(hass, options: dict[str, Any]) -> list[dict[str, st
 def _managed_device_choices(options: dict[str, Any]) -> dict[str, str]:
     """Return Devices with entity counts for the standalone management screen."""
     choices = {}
-    for device_name, entities in _options_devices(options).items():
-        device = _get_device_attributes(options, device_name)
-        device_id = device.get(ATTR_DEVICE_ID, device_name)
+    for device_key, entities in _options_devices(options).items():
+        device = _get_device_attributes(options, device_key)
+        device_id = device.get(ATTR_DEVICE_ID, device_key)
+        device_name = _device_display_name(device_key, device)
         entity_count = len(_entity_list_or_empty(entities))
-        choices[device_name] = f"{device_name} ({device_id}, {entity_count} entities)"
+        choices[device_key] = f"{device_name} ({device_id}, {entity_count} entities)"
     return choices
 
 
@@ -2984,7 +2992,7 @@ def _with_existing_device_defaults(
     device = _get_device_attributes(options, device_name)
 
     updated_defaults = dict(defaults)
-    updated_defaults[CONF_DEVICE_NAME] = device_name
+    updated_defaults[CONF_DEVICE_NAME] = _device_display_name(device_name, device)
     updated_defaults[CONF_DEVICE_ID] = _text_default(
         device.get(ATTR_DEVICE_ID),
         device_name,
@@ -3003,43 +3011,47 @@ def _with_existing_device_defaults(
     return updated_defaults
 
 
-def _canonical_device_name(
+def _existing_device_key_for_id(
     options: dict[str, Any],
-    device_name: str,
     device_config: dict[str, Any] | None,
-) -> str:
-    """Use an existing Device group when its stable ID already exists."""
+) -> str | None:
+    """Return the persisted key for an existing stable Device ID."""
     if not device_config:
-        return device_name
+        return None
     device_id = device_config.get(ATTR_DEVICE_ID)
     if not isinstance(device_id, str) or not device_id:
-        return device_name
+        return None
     for existing_device_name in _options_devices(options):
         existing_device = _get_device_attributes(options, existing_device_name)
         if existing_device.get(ATTR_DEVICE_ID, existing_device_name) == device_id:
             return existing_device_name
-    return device_name
+    return None
 
 
-def _device_name_has_identity_conflict(
+def _new_device_key(
     options: dict[str, Any],
     device_name: str,
     device_config: dict[str, Any] | None,
-    allowed_device_name: str | None = None,
-) -> bool:
-    """Return whether a name collision would overwrite another Device ID."""
-    devices = _options_devices(options)
-    if (
-        not device_config
-        or device_name == allowed_device_name
-        or device_name not in devices
-        or not isinstance(devices.get(device_name), list)
-    ):
-        return False
-    requested_device_id = device_config.get(ATTR_DEVICE_ID)
-    existing_device = _get_device_attributes(options, device_name)
-    existing_device_id = existing_device.get(ATTR_DEVICE_ID, device_name)
-    return requested_device_id != existing_device_id
+    allowed_key: str | None = None,
+) -> str:
+    """Use stable Device ID as the persisted key for newly written Devices."""
+    if device_config:
+        device_id = device_config.get(ATTR_DEVICE_ID)
+        if isinstance(device_id, str) and device_id:
+            devices = _options_devices(options)
+            if device_id == allowed_key or device_id not in devices:
+                return device_id
+            # A malformed legacy group can already occupy the literal ID key
+            # while declaring a different ID in its metadata. Keep both
+            # recoverable without making the display name an identity fallback.
+            base_key = json.dumps([ATTR_DEVICE_ID, device_id], separators=(",", ":"))
+            candidate = base_key
+            suffix = 2
+            while candidate in devices:
+                candidate = f"{base_key}:{suffix}"
+                suffix += 1
+            return candidate
+    return device_name
 
 
 def _append_ui_entity(
@@ -3049,27 +3061,22 @@ def _append_ui_entity(
     device_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     next_options = _plain_options(options or {})
-    if _device_name_has_identity_conflict(
+    existing_device_key = _existing_device_key_for_id(
         next_options,
-        device_name,
-        device_config,
-    ):
-        raise DeviceNameAlreadyUsed
-    canonical_device_name = _canonical_device_name(
-        next_options,
-        device_name,
         device_config,
     )
-    reusing_existing_device = canonical_device_name != device_name
-    device_name = canonical_device_name
+    reusing_existing_device = existing_device_key is not None
+    device_key = existing_device_key or _new_device_key(
+        next_options, device_name, device_config
+    )
     if not isinstance(next_options.get(ATTR_DEVICES), Mapping):
         next_options[ATTR_DEVICES] = {}
     devices = next_options.setdefault(ATTR_DEVICES, {})
-    if not isinstance(devices.get(device_name), list):
-        devices[device_name] = []
-    devices[device_name].append(_ensure_entity_key(entity))
+    if not isinstance(devices.get(device_key), list):
+        devices[device_key] = []
+    devices[device_key].append(_ensure_entity_key(entity))
     if not reusing_existing_device:
-        _set_device_attributes(next_options, device_name, device_config)
+        _set_device_attributes(next_options, device_key, device_config)
     return next_options
 
 
@@ -3082,20 +3089,14 @@ def _replace_ui_entity(
     device_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     next_options = _plain_options(options or {})
-    if _device_name_has_identity_conflict(
+    existing_device_key = _existing_device_key_for_id(
         next_options,
-        new_device_name,
-        device_config,
-        old_device_name,
-    ):
-        raise DeviceNameAlreadyUsed
-    canonical_device_name = _canonical_device_name(
-        next_options,
-        new_device_name,
         device_config,
     )
-    reusing_existing_device = canonical_device_name != new_device_name
-    new_device_name = canonical_device_name
+    reusing_existing_device = existing_device_key is not None
+    new_device_key = existing_device_key or _new_device_key(
+        next_options, new_device_name, device_config, old_device_name
+    )
     if not isinstance(next_options.get(ATTR_DEVICES), Mapping):
         next_options[ATTR_DEVICES] = {}
     devices = next_options.setdefault(ATTR_DEVICES, {})
@@ -3103,7 +3104,7 @@ def _replace_ui_entity(
     if old_index < 0 or old_index >= len(old_entities):
         raise InvalidEntitySelection
 
-    if old_device_name == new_device_name:
+    if old_device_name == new_device_key:
         old_entity = old_entities[old_index]
         if not isinstance(old_entity, Mapping):
             raise InvalidEntitySelection
@@ -3111,7 +3112,7 @@ def _replace_ui_entity(
         old_entities[old_index] = _ensure_entity_key(entity, old_entity_key)
         devices[old_device_name] = old_entities
         if not reusing_existing_device:
-            _set_device_attributes(next_options, new_device_name, device_config)
+            _set_device_attributes(next_options, new_device_key, device_config)
         return next_options
 
     old_entity = old_entities.pop(old_index)
@@ -3124,13 +3125,13 @@ def _replace_ui_entity(
         device_attributes = _options_device_attributes(next_options)
         device_attributes.pop(old_device_name, None)
         next_options[ATTR_DEVICE_ATTRIBUTES] = device_attributes
-    if not isinstance(devices.get(new_device_name), list):
-        devices[new_device_name] = []
-    devices[new_device_name].append(
+    if not isinstance(devices.get(new_device_key), list):
+        devices[new_device_key] = []
+    devices[new_device_key].append(
         _ensure_entity_key(entity, old_entity.get(ATTR_ENTITY_KEY))
     )
     if not reusing_existing_device:
-        _set_device_attributes(next_options, new_device_name, device_config)
+        _set_device_attributes(next_options, new_device_key, device_config)
     return next_options
 
 
@@ -3152,17 +3153,11 @@ def _replace_ui_device(
     new_device_name = _make_device_name(new_device_name).strip()
     if not new_device_name:
         raise MissingDeviceName
-    if _device_name_has_identity_conflict(
-        next_options,
-        new_device_name,
-        device_config,
-        old_device_name,
-    ):
-        raise DeviceNameAlreadyUsed
-
     # A matching stable ID represents the same physical Device even when the
     # requested display name is new. Do not overwrite its existing metadata.
-    target_device_name = new_device_name
+    target_device_name = _new_device_key(
+        next_options, new_device_name, device_config, old_device_name
+    )
     new_device_id = device_config.get(ATTR_DEVICE_ID)
     if isinstance(new_device_id, str) and new_device_id:
         for existing_name in devices:
@@ -3279,11 +3274,13 @@ def _entity_choices(
 
     choices = {}
     for device_name, entities in devices.items():
+        device = _get_device_attributes(options, device_name)
+        display_name = _device_display_name(device_name, device)
         for index, entity in enumerate(_entity_list_or_empty(entities)):
             if not isinstance(entity, Mapping):
                 if include_invalid:
                     choices[_entity_key(device_name, index)] = (
-                        f"{device_name} / #{index + 1} (!)"
+                        f"{display_name} / #{index + 1} (!)"
                     )
                 continue
             platform = entity.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
@@ -3298,7 +3295,7 @@ def _entity_choices(
                     and stable_key_counts.get(entity_key) == 1
                 ),
             )] = (
-                f"{device_name} / {name} ({platform})"
+                f"{display_name} / {name} ({platform})"
             )
     return choices
 
@@ -5475,7 +5472,7 @@ def _entity_form_defaults(
         if property_name not in managed_native_properties
     }
     defaults = {
-        CONF_DEVICE_NAME: device_name,
+        CONF_DEVICE_NAME: _device_display_name(device_name, device),
         CONF_DEVICE_ID: _text_default(device.get(ATTR_DEVICE_ID), device_name),
         CONF_DEVICE_MANUFACTURER: _text_default(device.get(CONF_MANUFACTURER)),
         CONF_DEVICE_MODEL: _text_default(device.get(CONF_MODEL)),
@@ -5914,8 +5911,6 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 errors[ATTR_ENTITY_ID] = "entity_id_used"
             except InvalidDomainOptions:
                 errors[_domain_options_error_field(user_input)] = "invalid_domain_options"
-            except DeviceNameAlreadyUsed:
-                errors[CONF_DEVICE_NAME] = "device_name_used"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -6022,8 +6017,6 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 return self.async_create_entry(data=options)
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
-            except DeviceNameAlreadyUsed:
-                errors[CONF_DEVICE_NAME] = "device_name_used"
             except InvalidEntitySelection:
                 errors["base"] = "device_not_found"
 
@@ -6180,8 +6173,6 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 errors[ATTR_ENTITY_ID] = "entity_id_used"
             except InvalidDomainOptions:
                 errors[_domain_options_error_field(user_input)] = "invalid_domain_options"
-            except DeviceNameAlreadyUsed:
-                errors[CONF_DEVICE_NAME] = "device_name_used"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -6527,8 +6518,6 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 errors[ATTR_ENTITY_ID] = "entity_id_used"
             except InvalidDomainOptions:
                 errors[_domain_options_error_field(user_input)] = "invalid_domain_options"
-            except DeviceNameAlreadyUsed:
-                errors[CONF_DEVICE_NAME] = "device_name_used"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -6570,10 +6559,6 @@ class GroupNameAlreadyUsed(exceptions.HomeAssistantError):
 
 class MissingGroupName(exceptions.HomeAssistantError):
     """Error indicating an empty Device group name."""
-
-
-class DeviceNameAlreadyUsed(exceptions.HomeAssistantError):
-    """Error indicating a Device name belongs to another stable ID."""
 
 
 class MissingDeviceName(exceptions.HomeAssistantError):

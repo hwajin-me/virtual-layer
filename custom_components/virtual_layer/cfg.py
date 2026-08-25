@@ -380,9 +380,9 @@ def _make_name(name):
     return name
 
 
-def _device_config_for_key(device_name, device_attributes):
-    device = copy.deepcopy(_as_dict(device_attributes, "device attributes").get(device_name, {}))
-    device = _as_dict(device, f"device attributes for {device_name}")
+def _device_config_for_key(device_key, device_attributes):
+    device = copy.deepcopy(_as_dict(device_attributes, "device attributes").get(device_key, {}))
+    device = _as_dict(device, f"device attributes for {device_key}")
     device = _sanitize_stored_value(device)
     for key in (
         ATTR_DEVICE_ID,
@@ -401,14 +401,14 @@ def _device_config_for_key(device_name, device_attributes):
             isinstance(value, bool)
             or not isinstance(value, (str, int, float))
         ):
-            _LOGGER.warning("Ignoring invalid %s for device %s", key, device_name)
+            _LOGGER.warning("Ignoring invalid %s for device %s", key, device_key)
             device.pop(key, None)
         elif value is not None:
             device[key] = str(value)
     if not device.get(ATTR_DEVICE_ID):
-        device[ATTR_DEVICE_ID] = device_name
+        device[ATTR_DEVICE_ID] = device_key
     if not device.get(CONF_NAME):
-        device[CONF_NAME] = _make_name(device_name)
+        device[CONF_NAME] = _make_name(device_key)
     return device
 
 
@@ -1221,16 +1221,17 @@ class BlendedCfg:
         )
 
         # Let's fix up the devices/entities
-        for device_name, entities in devices.items():
+        for device_key, entities in devices.items():
             if not isinstance(entities, list):
                 _LOGGER.warning(
                     "Skipping invalid entity list for device %s: expected list",
-                    device_name,
+                    device_key,
                 )
                 changed = True
                 continue
-            device_config = _device_config_for_key(device_name, device_attributes)
+            device_config = _device_config_for_key(device_key, device_attributes)
             device_id = device_config[ATTR_DEVICE_ID]
+            device_name = device_config[CONF_NAME]
 
             # Create device. One per all entities.
             self._devices.append(device_config)

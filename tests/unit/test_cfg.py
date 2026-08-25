@@ -418,6 +418,45 @@ async def test_blended_cfg_preserves_identity_when_entity_is_renamed(hass, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_blended_cfg_keeps_same_name_devices_separate_by_id(
+    hass, tmp_path, monkeypatch
+):
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    meta_file.write_text(json.dumps({ATTR_VERSION: 1, ATTR_DEVICES: {}}))
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+
+    cfg = BlendedCfg(
+        hass,
+        {ATTR_GROUP_NAME: "ui"},
+        {
+            ATTR_DEVICES: {
+                "washer-1": [{CONF_PLATFORM: "sensor", CONF_NAME: "Power"}],
+                "washer-2": [{CONF_PLATFORM: "sensor", CONF_NAME: "Energy"}],
+            },
+            ATTR_DEVICE_ATTRIBUTES: {
+                "washer-1": {ATTR_DEVICE_ID: "washer-1", CONF_NAME: "Washer"},
+                "washer-2": {ATTR_DEVICE_ID: "washer-2", CONF_NAME: "Washer"},
+            },
+        },
+    )
+
+    await cfg.async_load()
+
+    assert [device[ATTR_DEVICE_ID] for device in cfg.devices] == [
+        "washer-1",
+        "washer-2",
+    ]
+    assert [device[CONF_NAME] for device in cfg.devices] == ["Washer", "Washer"]
+    assert {entity[ATTR_DEVICE_ID] for entity in cfg.entities["sensor"]} == {
+        "washer-1",
+        "washer-2",
+    }
+
+
+@pytest.mark.asyncio
 async def test_delete_meta_data_is_idempotent(hass, tmp_path, monkeypatch):
     meta_file = tmp_path / "virtual_layer.meta.json"
     meta_file.write_text(json.dumps({ATTR_VERSION: 1, ATTR_DEVICES: {}}))

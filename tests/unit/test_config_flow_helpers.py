@@ -63,7 +63,6 @@ from custom_components.virtual_layer.config_flow import (
     NATIVE_TEMPLATE_MAXIMUM_PROPERTIES,
     NATIVE_TEMPLATE_MINIMUM_PROPERTIES,
     NATIVE_TEMPLATE_NUMERIC_PROPERTIES,
-    DeviceNameAlreadyUsed,
     InvalidDomainOptions,
     InvalidEntityId,
     InvalidEntityReference,
@@ -2999,11 +2998,13 @@ def test_build_device_config_supports_device_registry_metadata():
     }
 
 
-def test_build_device_config_defaults_device_id_to_device_name():
-    assert _build_device_config(_entity_input(), "Laundry") == {
-        ATTR_DEVICE_ID: "Laundry",
-        CONF_NAME: "Laundry",
-    }
+def test_build_device_config_generates_device_id_independently_from_name():
+    first = _build_device_config(_entity_input(), "Laundry")
+    second = _build_device_config(_entity_input(), "Laundry")
+
+    assert first[CONF_NAME] == second[CONF_NAME] == "Laundry"
+    assert first[ATTR_DEVICE_ID] != "Laundry"
+    assert first[ATTR_DEVICE_ID] != second[ATTR_DEVICE_ID]
 
 
 def test_build_entity_config_requires_entity_id_domain_to_match_platform():
@@ -3752,7 +3753,7 @@ def test_append_ui_entity_stores_device_attributes():
     )
 
     assert next_options[ATTR_DEVICE_ATTRIBUTES] == {
-        "Laundry": {
+        "laundry-1": {
             ATTR_DEVICE_ID: "laundry-1",
             CONF_NAME: "Laundry Device",
             CONF_MANUFACTURER: "Acme",
@@ -3858,12 +3859,12 @@ def test_append_ui_entity_recovers_from_invalid_target_list_and_device_attribute
         {ATTR_DEVICE_ID: "laundry-1", CONF_NAME: "Laundry"},
     )
 
-    assert next_options[ATTR_DEVICES]["Laundry"][0].pop(ATTR_ENTITY_KEY)
-    assert next_options[ATTR_DEVICES]["Laundry"] == [
+    assert next_options[ATTR_DEVICES]["laundry-1"][0].pop(ATTR_ENTITY_KEY)
+    assert next_options[ATTR_DEVICES]["laundry-1"] == [
         {CONF_PLATFORM: "sensor", CONF_NAME: "Washer Phase"},
     ]
     assert next_options[ATTR_DEVICE_ATTRIBUTES] == {
-        "Laundry": {ATTR_DEVICE_ID: "laundry-1", CONF_NAME: "Laundry"},
+        "laundry-1": {ATTR_DEVICE_ID: "laundry-1", CONF_NAME: "Laundry"},
     }
 
 
@@ -3945,8 +3946,8 @@ def test_replace_ui_device_renames_group_and_updates_shared_metadata():
     )
 
     assert "Laundry" not in next_options[ATTR_DEVICES]
-    assert len(next_options[ATTR_DEVICES]["Laundry Room"]) == 2
-    assert next_options[ATTR_DEVICE_ATTRIBUTES]["Laundry Room"] == {
+    assert len(next_options[ATTR_DEVICES]["laundry-new"]) == 2
+    assert next_options[ATTR_DEVICE_ATTRIBUTES]["laundry-new"] == {
         ATTR_DEVICE_ID: "laundry-new",
         CONF_NAME: "Laundry Room",
         CONF_MANUFACTURER: "Acme",
@@ -4071,7 +4072,7 @@ def test_replace_ui_entity_updates_device_attributes():
     )
 
     assert original[ATTR_DEVICE_ATTRIBUTES]["Laundry"][ATTR_DEVICE_ID] == "old-laundry"
-    assert next_options[ATTR_DEVICE_ATTRIBUTES]["Laundry"] == {
+    assert next_options[ATTR_DEVICE_ATTRIBUTES]["new-laundry"] == {
         ATTR_DEVICE_ID: "new-laundry",
         CONF_NAME: "Laundry",
         CONF_MODEL: "Washer 9000",
@@ -4156,7 +4157,7 @@ def test_replace_ui_entity_moves_device_attributes():
     )
 
     assert "Laundry" not in next_options[ATTR_DEVICE_ATTRIBUTES]
-    assert next_options[ATTR_DEVICE_ATTRIBUTES]["HVAC"] == {
+    assert next_options[ATTR_DEVICE_ATTRIBUTES]["hvac-1"] == {
         ATTR_DEVICE_ID: "hvac-1",
         CONF_NAME: "HVAC",
         CONF_MODEL: "Thermostat",
@@ -4180,16 +4181,16 @@ def test_replace_ui_entity_recovers_from_invalid_device_attributes_and_target_li
     )
 
     assert "Laundry" not in next_options[ATTR_DEVICES]
-    assert next_options[ATTR_DEVICES]["HVAC"][0].pop(ATTR_ENTITY_KEY)
-    assert next_options[ATTR_DEVICES]["HVAC"] == [
+    assert next_options[ATTR_DEVICES]["hvac-1"][0].pop(ATTR_ENTITY_KEY)
+    assert next_options[ATTR_DEVICES]["hvac-1"] == [
         {CONF_PLATFORM: "climate", CONF_NAME: "Thermostat"},
     ]
     assert next_options[ATTR_DEVICE_ATTRIBUTES] == {
-        "HVAC": {ATTR_DEVICE_ID: "hvac-1", CONF_NAME: "HVAC"},
+        "hvac-1": {ATTR_DEVICE_ID: "hvac-1", CONF_NAME: "HVAC"},
     }
 
 
-def test_replace_ui_entity_rejects_existing_device_name_with_different_id():
+def test_replace_ui_entity_allows_existing_device_name_with_different_id():
     original = {
         ATTR_DEVICES: {
             "Laundry": [{CONF_PLATFORM: "sensor", CONF_NAME: "Washer"}],
@@ -4201,20 +4202,21 @@ def test_replace_ui_entity_rejects_existing_device_name_with_different_id():
         },
     }
 
-    with pytest.raises(DeviceNameAlreadyUsed):
-        _replace_ui_entity(
-            original,
-            "Laundry",
-            0,
-            "HVAC",
-            {CONF_PLATFORM: "sensor", CONF_NAME: "Washer"},
-            {ATTR_DEVICE_ID: "different-id", CONF_NAME: "HVAC"},
-        )
+    next_options = _replace_ui_entity(
+        original,
+        "Laundry",
+        0,
+        "HVAC",
+        {CONF_PLATFORM: "sensor", CONF_NAME: "Washer"},
+        {ATTR_DEVICE_ID: "different-id", CONF_NAME: "HVAC"},
+    )
 
     assert original[ATTR_DEVICE_ATTRIBUTES]["HVAC"][ATTR_DEVICE_ID] == "hvac-1"
+    assert set(next_options[ATTR_DEVICES]) == {"HVAC", "different-id"}
+    assert next_options[ATTR_DEVICE_ATTRIBUTES]["different-id"][CONF_NAME] == "HVAC"
 
 
-def test_replace_ui_device_rejects_name_collision_with_different_id():
+def test_replace_ui_device_allows_name_collision_with_different_id():
     original = {
         ATTR_DEVICES: {
             "Laundry": [{CONF_PLATFORM: "sensor", CONF_NAME: "Washer"}],
@@ -4226,13 +4228,19 @@ def test_replace_ui_device_rejects_name_collision_with_different_id():
         },
     }
 
-    with pytest.raises(DeviceNameAlreadyUsed):
-        _replace_ui_device(
-            original,
-            "Laundry",
-            "HVAC",
-            {ATTR_DEVICE_ID: "different-id", CONF_NAME: "HVAC"},
-        )
+    next_options = _replace_ui_device(
+        original,
+        "Laundry",
+        "HVAC",
+        {ATTR_DEVICE_ID: "different-id", CONF_NAME: "HVAC"},
+    )
+
+    assert set(next_options[ATTR_DEVICES]) == {"HVAC", "different-id"}
+    assert next_options[ATTR_DEVICE_ATTRIBUTES]["HVAC"][ATTR_DEVICE_ID] == "hvac-1"
+    assert next_options[ATTR_DEVICE_ATTRIBUTES]["different-id"] == {
+        ATTR_DEVICE_ID: "different-id",
+        CONF_NAME: "HVAC",
+    }
 
 
 def test_delete_ui_entities_removes_multiple_entities_and_empty_device_metadata():

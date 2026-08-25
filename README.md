@@ -91,8 +91,9 @@ Virtual Layer uses `Device` in the UI. Older internal/service fields may still
 use `group_name` for backward compatibility, but the user-facing concept is a
 device.
 
-Entities with the same device name are attached to the same Home Assistant
-device. When creating or editing an entity, the UI also lets you set device
+Device ID is the sole identity used to group entities into a Home Assistant
+device. Device names are display metadata, so different devices may use the
+same name. When creating or editing an entity, the UI also lets you set device
 registry metadata:
 
 - device ID
@@ -102,7 +103,7 @@ registry metadata:
 - hardware version
 - serial number
 
-If no device ID is provided, the device name is used.
+If no device ID is provided, Virtual Layer generates a stable ID.
 
 ## Entities
 
