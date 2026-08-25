@@ -3214,6 +3214,79 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
     assert fan.supported_features == FanEntityFeature(57)
 
 
+async def test_options_flow_combines_xiaomi_fan_and_speed_number(hass):
+    fan_entity_id = "fan.air_purifier_purifier_1"
+    number_entity_id = "number.air_purifier_favorite_level"
+    hass.states.async_set(
+        fan_entity_id,
+        "on",
+        {
+            "friendly_name": "Air Purifier",
+            "percentage": 35,
+            "percentage_step": 1,
+            "preset_mode": "Manual",
+            "preset_modes": ["Favorite", "Manual", "Auto", "Silent"],
+            "supported_features": 57,
+        },
+    )
+    hass.states.async_set(
+        number_entity_id,
+        "72",
+        {"min": 0, "max": 100, "step": 1, "mode": "slider"},
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: [fan_entity_id, number_entity_id]},
+    )
+    result = await _choose_add_template_helper(hass, result)
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+
+    assert defaults[CONF_PLATFORM] == "fan"
+    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == ""
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_DEVICE_NAME: "Air Purifier",
+            ATTR_ENTITY_ID: "fan.air_purifier_virtual",
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entity = _first_stored_entity(result)
+    assert CONF_ATTRIBUTE_TEMPLATES not in entity
+    percentage_template = entity[CONF_NATIVE_TEMPLATES]["percentage"]
+    assert Template(percentage_template, hass).async_render(parse_result=True) == 72
+
+    hass.states.async_set(
+        fan_entity_id,
+        "on",
+        {
+            "percentage": 35,
+            "percentage_step": 1,
+            "preset_mode": "Silent",
+            "preset_modes": ["Favorite", "Manual", "Auto", "Silent"],
+            "supported_features": 57,
+        },
+    )
+    hass.states.async_set(number_entity_id, "unavailable")
+    assert Template(percentage_template, hass).async_render(parse_result=True) == 35
+    assert Template(
+        entity[CONF_AVAILABILITY_TEMPLATE], hass
+    ).async_render(parse_result=True) is True
+
+
 async def test_options_flow_prefills_and_creates_native_dehumidifier(hass):
     hass.states.async_set(
         "humidifier.basement",

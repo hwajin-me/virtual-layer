@@ -4227,6 +4227,70 @@ def _boiler_source_profile(
     return None
 
 
+def _xiaomi_fan_number_profile(
+    entity_ids: list[str],
+    states: list,
+) -> tuple[int, int] | None:
+    """Return source indexes for a Xiaomi-style fan plus speed number."""
+    if len(entity_ids) != 2:
+        return None
+    fan_indexes = [
+        index
+        for index, entity_id in enumerate(entity_ids)
+        if entity_id.startswith("fan.")
+    ]
+    number_indexes = [
+        index
+        for index, entity_id in enumerate(entity_ids)
+        if entity_id.startswith("number.")
+    ]
+    if len(fan_indexes) != 1 or len(number_indexes) != 1:
+        return None
+    fan_state = states[fan_indexes[0]]
+    modes = fan_state.attributes.get("preset_modes", [])
+    if not isinstance(modes, (list, tuple, set, frozenset)):
+        modes = []
+    advertised_modes = {
+        str(mode).strip().lower()
+        for mode in [*modes, fan_state.attributes.get("preset_mode")]
+        if mode is not None
+    }
+    if not advertised_modes.intersection({"favorite", "manual"}):
+        return None
+    return fan_indexes[0], number_indexes[0]
+
+
+def _xiaomi_fan_percentage_template(
+    fan_entity_id: str,
+    number_entity_id: str,
+) -> str:
+    """Use Xiaomi's separate speed number in Favorite and Manual modes."""
+    return (
+        "{% set mode = state_attr(" + repr(fan_entity_id)
+        + ", 'preset_mode') | string | lower %}"
+        "{% set number_speed = states(" + repr(number_entity_id)
+        + ") | float(none) %}"
+        "{{ number_speed if mode in ['favorite', 'manual'] "
+        "and number_speed is not none else state_attr("
+        + repr(fan_entity_id) + ", 'percentage') }}"
+    )
+
+
+def _xiaomi_fan_availability_template(
+    fan_entity_id: str,
+    number_entity_id: str,
+) -> str:
+    """Require the separate speed number only while its value is selected."""
+    return (
+        "{% set mode = state_attr(" + repr(fan_entity_id)
+        + ", 'preset_mode') | string | lower %}"
+        "{{ states(" + repr(fan_entity_id)
+        + ") not in ['unknown', 'unavailable'] and "
+        "(mode not in ['favorite', 'manual'] or states("
+        + repr(number_entity_id) + ") not in ['unknown', 'unavailable']) }}"
+    )
+
+
 def _boiler_mode_template(climate_entity_id: str) -> str:
     """Map a boiler source to the two virtual HVAC modes."""
     return (
@@ -4586,6 +4650,7 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     all_enum = _all_source_domains(entity_ids, ENUM_SOURCE_DOMAINS)
     all_location = _all_source_domains(entity_ids, LOCATION_SOURCE_DOMAINS)
     boiler_profile = _boiler_source_profile(entity_ids, states)
+    fan_number_profile = _xiaomi_fan_number_profile(entity_ids, states)
     presence_or_motion_class = (
         _presence_or_motion_device_class(entity_ids, states) if all_boolean else None
     )
@@ -4594,6 +4659,8 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     )
     if boiler_profile is not None:
         platform = "climate"
+    elif fan_number_profile is not None:
+        platform = "fan"
     elif len(entity_ids) > 1 and all_location:
         platform = "device_tracker"
     elif (
@@ -4622,6 +4689,8 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         initial_value = (
             "heat" if states[climate_index].state == "heat" else "off"
         )
+    elif fan_number_profile is not None:
+        initial_value = states[fan_number_profile[0]].state
     elif platform == "binary_sensor":
         if presence_or_motion_class:
             initial_value = (
@@ -4671,6 +4740,8 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
     entity_name_states = (
         [states[boiler_profile[0]]]
         if boiler_profile is not None and len(states) > 1
+        else [states[fan_number_profile[0]]]
+        if fan_number_profile is not None
         else states
     )
     defaults = {
@@ -4688,6 +4759,12 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             + " }}"
         ),
     }
+    if fan_number_profile is not None:
+        fan_index, number_index = fan_number_profile
+        defaults[CONF_AVAILABILITY_TEMPLATE] = _xiaomi_fan_availability_template(
+            entity_ids[fan_index],
+            entity_ids[number_index],
+        )
     generated_entity_id = _default_virtual_entity_id_for_sources(
         platform,
         defaults[CONF_ENTITY_NAME],
@@ -4705,6 +4782,12 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         climate_entity_id = entity_ids[boiler_profile[0]]
         defaults[CONF_ICON_TEMPLATE] = (
             f"{{{{ state_attr({climate_entity_id!r}, {CONF_ICON!r}) "
+            "| default('', true) }}"
+        )
+    elif fan_number_profile is not None:
+        fan_entity_id = entity_ids[fan_number_profile[0]]
+        defaults[CONF_ICON_TEMPLATE] = (
+            f"{{{{ state_attr({fan_entity_id!r}, {CONF_ICON!r}) "
             "| default('', true) }}"
         )
     elif len(entity_ids) == 1:
@@ -4776,8 +4859,23 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
                 for key, value in attributes.items()
                 if key not in consumed_attributes
             }
-    elif platform == "fan" and len(states) == 1:
-        domain_options, consumed_attributes = extract_fan_options(attributes)
+    elif platform == "fan" and (
+        len(states) == 1 or fan_number_profile is not None
+    ):
+        fan_state = (
+            states[fan_number_profile[0]]
+            if fan_number_profile is not None
+            else states[0]
+        )
+        fan_attributes = {
+            name: _json_safe(value)
+            for name, value in dict(fan_state.attributes).items()
+            if name != ATTR_FRIENDLY_NAME
+            and name != CONF_ICON
+            and name not in TRANSIENT_SOURCE_ATTRIBUTE_NAMES
+            and name not in RESERVED_VIRTUAL_ATTRIBUTE_NAMES
+        }
+        domain_options, consumed_attributes = extract_fan_options(fan_attributes)
         defaults.update(domain_options)
         attributes = {
             key: value
@@ -4854,6 +4952,10 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             }
         )
         defaults[CONF_VALUE_TEMPLATE] = ""
+    elif fan_number_profile is not None:
+        defaults[CONF_VALUE_TEMPLATE] = (
+            f"{{{{ {variable_names[fan_number_profile[0]]} }}}}"
+        )
     elif len(entity_ids) == 1:
         defaults[CONF_VALUE_TEMPLATE] = f"{{{{ {variable_names[0]} }}}}"
     elif all_boolean:
@@ -4900,10 +5002,16 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             }
         )
 
+    attribute_source_ids = entity_ids
+    attribute_source_states = states
+    if fan_number_profile is not None:
+        fan_index, _number_index = fan_number_profile
+        attribute_source_ids = [entity_ids[fan_index]]
+        attribute_source_states = [states[fan_index]]
     for attribute_name, template in _attribute_reference_templates(
         platform,
-        entity_ids,
-        states,
+        attribute_source_ids,
+        attribute_source_states,
     ).items():
         attribute_templates.setdefault(attribute_name, template)
     if attribute_templates:
@@ -4920,6 +5028,17 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
             "hvac_modes": "{{ ['off', 'heat'] }}",
             "hvac_mode": _boiler_mode_template(entity_ids[climate_index]),
         })
+    elif fan_number_profile is not None:
+        fan_index, number_index = fan_number_profile
+        native_templates = _native_reference_templates(
+            platform,
+            [entity_ids[fan_index]],
+            [states[fan_index]],
+        )
+        native_templates["percentage"] = _xiaomi_fan_percentage_template(
+            entity_ids[fan_index],
+            entity_ids[number_index],
+        )
     else:
         native_templates = (
             {}

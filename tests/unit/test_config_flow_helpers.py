@@ -1010,6 +1010,58 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     assert all(templates.values())
 
 
+def test_xiaomi_fan_uses_number_speed_only_for_favorite_and_manual_modes(hass):
+    fan_entity_id = "fan.air_purifier_purifier_1"
+    number_entity_id = "number.air_purifier_favorite_level"
+    hass.states.async_set(
+        fan_entity_id,
+        "on",
+        {
+            "friendly_name": "Air Purifier",
+            "percentage": 35,
+            "percentage_step": 1,
+            "preset_mode": "Favorite",
+            "preset_modes": ["Favorite", "Manual", "Auto", "Silent"],
+            "supported_features": 57,
+        },
+    )
+    hass.states.async_set(
+        number_entity_id,
+        "72",
+        {"min": 0, "max": 100, "step": 1, "mode": "slider"},
+    )
+
+    defaults = _reference_entity_defaults(
+        hass,
+        [fan_entity_id, number_entity_id],
+    )
+
+    assert defaults[CONF_PLATFORM] == "fan"
+    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "") == ""
+    percentage_template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["percentage"]
+    Template(percentage_template, hass).ensure_valid()
+    assert Template(percentage_template, hass).async_render(parse_result=True) == 72
+
+    hass.states.async_set(
+        fan_entity_id,
+        "on",
+        {
+            "percentage": 35,
+            "percentage_step": 1,
+            "preset_mode": "Auto",
+            "preset_modes": ["Favorite", "Manual", "Auto", "Silent"],
+            "supported_features": 57,
+        },
+    )
+    assert Template(percentage_template, hass).async_render(parse_result=True) == 35
+
+    actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    assert actions["set_percentage"][0]["target"] == {
+        ATTR_ENTITY_ID: fan_entity_id,
+    }
+
+
 def test_build_entity_config_supports_composite_templates_and_attributes():
     device_name, entity = _build_entity_config(
         _entity_input(
