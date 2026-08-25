@@ -557,7 +557,7 @@
           "target_device_name": "Virtual Device"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: heat disables the hot-water switch, while off turns the climate off and enables the switch. Camera and image sources can be aliased one at a time, not merged.",
+          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: the hot-water switch remains on in both modes, heat uses the climate heat mode, and virtual off uses the climate fan-only mode. Camera and image sources can be aliased one at a time, not merged.",
           "target_device_name": "Choose an existing Virtual Device to keep its entities together, or create a new Device."
         }
       },
@@ -1186,7 +1186,7 @@
           "target_device_name": "Virtual Device"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to keep the current virtual entity values. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: heat disables the hot-water switch, while off turns the climate off and enables the switch. Camera and image sources can be aliased one at a time, not merged.",
+          "reference_entity_id": "Leave empty to keep the current virtual entity values. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: the hot-water switch remains on in both modes, heat uses the climate heat mode, and virtual off uses the climate fan-only mode. Camera and image sources can be aliased one at a time, not merged.",
           "target_device_name": "Choose the Device that should contain this entity."
         }
       },
@@ -1730,7 +1730,7 @@
           "target_device_name": "Virtual Device"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: heat disables the hot-water switch, while off turns the climate off and enables the switch. Camera and image sources can be aliased one at a time, not merged.",
+          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: the hot-water switch remains on in both modes, heat uses the climate heat mode, and virtual off uses the climate fan-only mode. Camera and image sources can be aliased one at a time, not merged.",
           "target_device_name": "Choose an existing Virtual Device to keep its entities together, or create a new Device."
         }
       }

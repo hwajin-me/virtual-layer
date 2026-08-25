@@ -569,13 +569,24 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
     generated_actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
     assert generated_actions["turn_off"] == [
         {
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+        },
+        {
             "action": "climate.set_hvac_mode",
-            "data": {"hvac_mode": "off"},
+            "data": {"hvac_mode": "fan_only"},
             "target": {ATTR_ENTITY_ID: "climate.boiler"},
         },
+    ]
+    assert generated_actions["turn_on"] == [
         {
             "action": "switch.turn_on",
             "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+        },
+        {
+            "action": "climate.set_hvac_mode",
+            "data": {"hvac_mode": "heat"},
+            "target": {ATTR_ENTITY_ID: "climate.boiler"},
         },
     ]
 
@@ -621,15 +632,15 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
 
     await boiler.async_set_hvac_mode(HVACMode.OFF)
     assert [(domain, service) for domain, service, _data in calls] == [
-        ("climate", "set_hvac_mode"),
         ("switch", "turn_on"),
+        ("climate", "set_hvac_mode"),
     ]
-    assert calls[0][2]["hvac_mode"] == "off"
+    assert calls[1][2]["hvac_mode"] == "fan_only"
 
     calls.clear()
     await boiler.async_set_hvac_mode(HVACMode.HEAT)
     assert [(domain, service) for domain, service, _data in calls] == [
-        ("switch", "turn_off"),
+        ("switch", "turn_on"),
         ("climate", "set_hvac_mode"),
     ]
     assert calls[1][2]["hvac_mode"] == "heat"

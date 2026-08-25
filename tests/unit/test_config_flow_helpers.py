@@ -3382,22 +3382,63 @@ def test_auto_helper_refreshes_generated_climate_modes_but_preserves_custom_mode
 
 
 def test_auto_helper_refreshes_generated_boiler_actions_but_preserves_custom_actions():
+    old_generated_actions = {
+        "turn_on": [
+            {
+                "action": "switch.turn_off",
+                "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+            },
+            {
+                "action": "climate.set_hvac_mode",
+                "data": {"hvac_mode": "heat"},
+                "target": {ATTR_ENTITY_ID: "climate.boiler"},
+            },
+        ],
+        "turn_off": [
+            {
+                "action": "climate.set_hvac_mode",
+                "data": {"hvac_mode": "off"},
+                "target": {ATTR_ENTITY_ID: "climate.boiler"},
+            },
+            {
+                "action": "switch.turn_on",
+                "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+            },
+        ],
+    }
+    current_generated_actions = {
+        "turn_on": [
+            {
+                "action": "switch.turn_on",
+                "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+            },
+            {
+                "action": "climate.set_hvac_mode",
+                "data": {"hvac_mode": "heat"},
+                "target": {ATTR_ENTITY_ID: "climate.boiler"},
+            },
+        ],
+        "turn_off": [
+            {
+                "action": "switch.turn_on",
+                "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+            },
+            {
+                "action": "climate.set_hvac_mode",
+                "data": {"hvac_mode": "fan_only"},
+                "target": {ATTR_ENTITY_ID: "climate.boiler"},
+            },
+        ],
+    }
     generated = {
         CONF_PLATFORM: "climate",
-        CONF_SOURCE_ENTITIES_TEXT: "climate.boiler",
-        CONF_COMMAND_ACTIONS_JSON: json.dumps({
-            "turn_off": [{"action": "climate.turn_off"}],
-        }),
+        CONF_SOURCE_ENTITIES_TEXT: "climate.boiler\nswitch.hot_water",
+        CONF_COMMAND_ACTIONS_JSON: json.dumps(old_generated_actions),
     }
     reference = {
         CONF_PLATFORM: "climate",
         CONF_SOURCE_ENTITIES_TEXT: "climate.boiler\nswitch.hot_water",
-        CONF_COMMAND_ACTIONS_JSON: json.dumps({
-            "turn_off": [
-                {"action": "climate.turn_off"},
-                {"action": "switch.turn_on"},
-            ],
-        }),
+        CONF_COMMAND_ACTIONS_JSON: json.dumps(current_generated_actions),
     }
 
     refreshed = _reference_edit_defaults(

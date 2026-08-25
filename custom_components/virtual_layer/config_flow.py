@@ -4243,21 +4243,21 @@ def _boiler_mode_action_sequence(
 ) -> list[dict[str, Any]]:
     """Build the source actions for one boiler HVAC mode."""
     sequence = []
-    if hvac_mode == "heat" and hot_water_switch_id:
-        sequence.append({
-            "action": "switch.turn_off",
-            "target": {ATTR_ENTITY_ID: hot_water_switch_id},
-        })
-    sequence.append({
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: climate_entity_id},
-        "data": {"hvac_mode": hvac_mode},
-    })
-    if hvac_mode == "off" and hot_water_switch_id:
+    if hot_water_switch_id:
         sequence.append({
             "action": "switch.turn_on",
             "target": {ATTR_ENTITY_ID: hot_water_switch_id},
         })
+    source_hvac_mode = (
+        "fan_only"
+        if hvac_mode == "off" and hot_water_switch_id
+        else hvac_mode
+    )
+    sequence.append({
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: climate_entity_id},
+        "data": {"hvac_mode": source_hvac_mode},
+    })
     return sequence
 
 
