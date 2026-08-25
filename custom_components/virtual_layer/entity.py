@@ -346,17 +346,26 @@ class VirtualEntity(RestoreEntity):
 
     def _restore_state(self, state, config):
         _LOGGER.debug("VirtualEntity %s: restoring state", self.unique_id)
-        restored_availability = state.attributes.get(
-            ATTR_AVAILABLE,
-            config.get(CONF_INITIAL_AVAILABILITY, DEFAULT_AVAILABILITY),
-        )
-        try:
-            self._attr_available = cv.boolean(restored_availability)
-        except vol.Invalid:
+        if self._availability_template:
+            # Availability templates are authoritative. Do not briefly expose
+            # a stale restored ``available=false`` before the current source
+            # state is rendered during async_added_to_hass.
             self._attr_available = config.get(
                 CONF_INITIAL_AVAILABILITY,
                 DEFAULT_AVAILABILITY,
             )
+        else:
+            restored_availability = state.attributes.get(
+                ATTR_AVAILABLE,
+                config.get(CONF_INITIAL_AVAILABILITY, DEFAULT_AVAILABILITY),
+            )
+            try:
+                self._attr_available = cv.boolean(restored_availability)
+            except vol.Invalid:
+                self._attr_available = config.get(
+                    CONF_INITIAL_AVAILABILITY,
+                    DEFAULT_AVAILABILITY,
+                )
         attribute_names = state.attributes.get(
             ATTR_VIRTUAL_ATTRIBUTES,
             list(self._virtual_attributes.keys()),

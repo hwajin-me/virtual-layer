@@ -43,6 +43,7 @@ from custom_components.virtual_layer.const import (
     ATTR_UNIQUE_ID,
     ATTR_VIRTUAL_ATTRIBUTES,
     CONF_ATTRIBUTES,
+    CONF_AVAILABILITY_TEMPLATE,
     CONF_INITIAL_VALUE,
     CONF_NAME,
 )
@@ -1485,6 +1486,37 @@ def test_regular_entity_restore_normalizes_availability(restored, expected):
     )
 
     assert sensor.available is expected
+
+
+def test_fan_restore_does_not_reuse_stale_availability_when_template_exists(hass):
+    source_entity_id = "fan.xiaomi_air_purifier"
+    config = _config(
+        FAN_SCHEMA,
+        "fan",
+        "off",
+        **{
+            CONF_AVAILABILITY_TEMPLATE: (
+                f"{{{{ states({source_entity_id!r}) not in "
+                "['unknown', 'unavailable'] }}"
+            ),
+        },
+    )
+    fan = VirtualFan(config, False)
+    fan.hass = hass
+    fan.async_schedule_update_ha_state = Mock()
+    hass.states.async_set(source_entity_id, "on")
+
+    fan._restore_state(
+        SimpleNamespace(
+            state="unavailable",
+            attributes={"available": False, "percentage": 0},
+        ),
+        config,
+    )
+
+    assert fan.available is True
+    fan._apply_templates()
+    assert fan.available is True
 
 
 def test_native_generic_entities_restore_runtime_service_attributes():
