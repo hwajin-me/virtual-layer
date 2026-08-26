@@ -276,6 +276,18 @@ VIRTUAL_ENTITY_COMMANDS = {
     }),
 }
 
+# A deliberately small compatibility contract for power-only aliases. These
+# domains share turn_on/turn_off semantics even when their richer service data
+# is not interchangeable (for example, fan percentage versus light brightness).
+CROSS_DOMAIN_POWER_SOURCE_DOMAINS = frozenset({
+    "fan",
+    "humidifier",
+    "input_boolean",
+    "light",
+    "switch",
+})
+CROSS_DOMAIN_POWER_TARGET_DOMAINS = frozenset({"fan", "light", "switch"})
+
 # Most virtual command names match Home Assistant service names. These are the
 # small set where the entity method contract and service API use different
 # names. They are shared by config-flow helper generation and the runtime

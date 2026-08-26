@@ -616,6 +616,90 @@ async def test_edit_type_step_preserves_legacy_custom_target_domain(hass):
     )
 
 
+async def test_edit_automatic_repairs_legacy_switch_backed_fan_actions(hass):
+    hass.states.async_set("switch.legacy_fan_power", "off")
+    runtime_calls = []
+
+    async def _capture_legacy_turn_on(call):
+        runtime_calls.append(dict(call.data))
+
+    hass.services.async_register("switch", "turn_on", _capture_legacy_turn_on)
+    legacy_fan = VirtualFan(
+        FAN_SCHEMA({
+            CONF_NAME: "Legacy Fan",
+            ATTR_ENTITY_ID: "fan.legacy_fan_runtime",
+            ATTR_UNIQUE_ID: "legacy-fan-runtime",
+            CONF_INITIAL_VALUE: "off",
+            CONF_SOURCE_ENTITIES: ["switch.legacy_fan_power"],
+        }),
+        False,
+    )
+    legacy_fan.hass = hass
+    legacy_fan._create_state(legacy_fan._config)
+    legacy_fan.async_write_ha_state = Mock()
+
+    await legacy_fan.async_turn_on(percentage=75)
+
+    assert runtime_calls == [{
+        ATTR_ENTITY_ID: ["switch.legacy_fan_power"],
+    }]
+
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Legacy Fan": [{
+                    CONF_PLATFORM: "fan",
+                    CONF_NAME: "Legacy Fan",
+                    ATTR_ENTITY_ID: "fan.legacy_fan",
+                    CONF_INITIAL_VALUE: "off",
+                    CONF_SOURCE_ENTITIES: ["switch.legacy_fan_power"],
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Legacy Fan", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["switch.legacy_fan_power"]},
+    )
+    assert result["step_id"] == "edit_entity_type"
+    assert result["data_schema"]({})[CONF_TARGET_ENTITY_TYPE] == "fan"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_TARGET_ENTITY_TYPE: "fan"},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
+
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    assert actions["turn_on"] == [{
+        "action": "switch.turn_on",
+        "target": {ATTR_ENTITY_ID: "switch.legacy_fan_power"},
+    }]
+    assert actions["turn_off"] == [{
+        "action": "switch.turn_off",
+        "target": {ATTR_ENTITY_ID: "switch.legacy_fan_power"},
+    }]
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["is_on"] == (
+        "{{ states('switch.legacy_fan_power') not in "
+        "['off', 'unknown', 'unavailable'] }}"
+    )
+
+
 async def test_options_flow_ignores_restored_source_metadata(hass):
     hass.states.async_set(
         "sensor.radon_sensor",
@@ -4320,6 +4404,7 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
                     {
                         CONF_PLATFORM: "sensor",
                         CONF_NAME: "Washer Summary",
+                        ATTR_ENTITY_KEY: "washer-summary",
                         ATTR_ENTITY_ID: "sensor.virtual_washer",
                         CONF_INITIAL_VALUE: "idle",
                         CONF_INITIAL_AVAILABILITY: True,
@@ -4427,6 +4512,56 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
     assert entity_registry.async_get(
         "sensor.virtual_washer_debug1"
     ).original_name == "Washer Summary - Source 1: Washer Power"
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ENTITY_KEY: json.dumps(
+                ["key", "washer-summary"],
+                separators=(",", ":"),
+            ),
+        },
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_REFERENCE_ENTITY_ID: [
+                "sensor.washer_power",
+                "binary_sensor.washer_door",
+            ],
+        },
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_KEEP},
+    )
+    reconfigured = _flatten_entity_form_sections(result["data_schema"]({}))
+    reconfigured[CONF_ENTITY_NAME] = "Reconfigured Washer"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        reconfigured,
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    assert entity_registry.async_get(
+        "sensor.virtual_washer"
+    ).original_name == "Reconfigured Washer"
+    assert entity_registry.async_get(
+        "sensor.virtual_washer_info"
+    ).original_name == "Reconfigured Washer - Configuration"
+    assert entity_registry.async_get(
+        "sensor.virtual_washer_debug1"
+    ).original_name == "Reconfigured Washer - Source 1: Washer Power"
+    customized_debug = entity_registry.async_get("sensor.virtual_washer_debug2")
+    assert customized_debug.original_name == (
+        "Reconfigured Washer - Source 2: Washer Door"
+    )
+    assert customized_debug.name == "My Door Diagnostics"
 
 
 async def test_diagnostic_registry_defaults_are_migrated_without_overwriting_user_customization(hass):

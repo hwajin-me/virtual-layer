@@ -955,24 +955,45 @@ class VirtualEntity(RestoreEntity):
             and entity_id.startswith(f"{domain}.")
             and entity_id != self.entity_id
         ))
+        service_domain = domain
+        cross_domain_power_proxy = False
+        if (
+            not source_entities
+            and command in {"turn_off", "turn_on"}
+            and domain in CROSS_DOMAIN_POWER_TARGET_DOMAINS
+        ):
+            cross_domain_sources = list(dict.fromkeys(
+                entity_id
+                for entity_id in self._source_entities
+                if isinstance(entity_id, str)
+                and entity_id != self.entity_id
+                and entity_id.split(".", 1)[0]
+                in CROSS_DOMAIN_POWER_SOURCE_DOMAINS
+            ))
+            if len(cross_domain_sources) == 1:
+                source_entities = cross_domain_sources
+                service_domain = source_entities[0].split(".", 1)[0]
+                cross_domain_power_proxy = True
         if not source_entities:
             return
 
         service = VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES.get(key, command)
-        if not self.hass.services.has_service(domain, service):
+        if not self.hass.services.has_service(service_domain, service):
             _LOGGER.error(
                 "Cannot proxy %s.%s for %s: Home Assistant service is unavailable",
-                domain,
+                service_domain,
                 service,
                 self.entity_id,
             )
-            raise HomeAssistantError(f"Service {domain}.{service} is unavailable")
+            raise HomeAssistantError(
+                f"Service {service_domain}.{service} is unavailable"
+            )
 
-        service_data = dict(command_data)
+        service_data = {} if cross_domain_power_proxy else dict(command_data)
         service_data[ATTR_ENTITY_ID] = source_entities
         try:
             await self.hass.services.async_call(
-                domain,
+                service_domain,
                 service,
                 service_data,
                 blocking=True,
@@ -981,7 +1002,7 @@ class VirtualEntity(RestoreEntity):
         except Exception:
             _LOGGER.exception(
                 "Unable to proxy %s.%s from %s to source entities",
-                domain,
+                service_domain,
                 service,
                 self.entity_id,
             )

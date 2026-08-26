@@ -1120,14 +1120,6 @@ def _helper_usage_schema() -> vol.Schema:
     )
 
 
-_POWER_SOURCE_DOMAINS = frozenset({
-    "fan",
-    "humidifier",
-    "input_boolean",
-    "light",
-    "switch",
-})
-_POWER_TARGET_DOMAINS = frozenset({"fan", "light", "switch"})
 _SINGLE_SOURCE_TARGET_DOMAINS = {
     "fan": ("fan", "switch", "light"),
     "humidifier": ("humidifier", "switch", "fan"),
@@ -4645,8 +4637,8 @@ def _source_command_actions(
         source_platform = source_entity_id.split(".", 1)[0]
         if (
             source_platform != platform
-            and source_platform in _POWER_SOURCE_DOMAINS
-            and platform in _POWER_TARGET_DOMAINS
+            and source_platform in CROSS_DOMAIN_POWER_SOURCE_DOMAINS
+            and platform in CROSS_DOMAIN_POWER_TARGET_DOMAINS
         ):
             for command in ("turn_off", "turn_on"):
                 if command not in VIRTUAL_ENTITY_COMMANDS.get(platform, ()):
@@ -6210,6 +6202,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._edit_target_platform: str | None = None
         self._edit_source_entities: list[str] | None = None
         self._edit_helper_update_mode: str | None = None
+        self._edit_cross_domain_conversion = False
         self._edit_platform_changed = False
         self._edit_sources_changed = False
 
@@ -6605,6 +6598,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 )
                 self._edit_source_entities = selected_sources
                 self._edit_target_platform = None
+                self._edit_cross_domain_conversion = False
                 self._edit_platform_changed = False
                 self._edit_sources_changed = selected_sources != _stored_entity_ids(
                     entity.get(CONF_SOURCE_ENTITIES),
@@ -6655,6 +6649,9 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     (current_platform,),
                 )
                 self._edit_target_platform = target_platform
+                self._edit_cross_domain_conversion = (
+                    target_platform != inferred_platform
+                )
                 self._edit_platform_changed = target_platform != original_platform
                 self._edit_sources_changed = (
                     self._edit_sources_changed or self._edit_platform_changed
@@ -6689,7 +6686,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 self._edit_auto_helper_profile = None
         else:
             auto_helper_profile = self._edit_auto_helper_profile
-            if auto_helper_profile is None and self._edit_platform_changed:
+            if auto_helper_profile is None and (
+                self._edit_platform_changed
+                or self._edit_cross_domain_conversion
+            ):
                 # A type change needs compatible empty/missing fields even for
                 # legacy entries without a saved helper baseline. An empty
                 # baseline fills only absent fields and preserves nonempty
@@ -6830,7 +6830,12 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                         user_input,
                         _virtual_entity_id(current_entity),
                     )
+                    inferred_reference_defaults: dict[str, Any] = {}
                     try:
+                        inferred_reference_defaults = _reference_entity_defaults(
+                            self.hass,
+                            submitted_sources,
+                        )
                         if (
                             len(submitted_sources) == 1
                             and target_platform in VIRTUAL_ENTITY_DOMAINS
@@ -6842,10 +6847,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                                 (target_platform,),
                             )
                         else:
-                            self._reference_defaults = _reference_entity_defaults(
-                                self.hass,
-                                submitted_sources,
-                            )
+                            self._reference_defaults = inferred_reference_defaults
                     except InvalidEntityReference:
                         # Valid future or unloaded entities cannot prefill a
                         # helper yet, but users can still keep current Jinja.
@@ -6859,6 +6861,12 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                         target_platform
                         if target_platform in VIRTUAL_ENTITY_DOMAINS
                         else None
+                    )
+                    self._edit_cross_domain_conversion = (
+                        len(submitted_sources) == 1
+                        and self._edit_target_platform is not None
+                        and self._edit_target_platform
+                        != inferred_reference_defaults.get(CONF_PLATFORM)
                     )
                     self._edit_platform_changed = (
                         self._edit_target_platform is not None
