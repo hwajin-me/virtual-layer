@@ -9,6 +9,7 @@
       "invalid_json": "올바른 JSON 객체를 입력하세요.",
       "invalid_template": "Jinja 템플릿 문법을 수정하세요. JSON 필드는 각 키의 템플릿 값을 확인하세요. 실패한 키는 Home Assistant 로그에 기록됩니다.",
       "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
+      "source_unavailable": "선택한 원본 엔티티를 더 이상 사용할 수 없습니다. 이전 단계로 돌아가 다시 선택하세요.",
       "helper_update_failed": "자동 helper 업데이트에 실패했습니다. 현재 값을 유지했으니 아래 템플릿을 확인하고 수정하세요.",
       "entity_id_used": "이미 사용 중인 엔티티 ID입니다. 고유한 엔티티 ID를 입력하세요.",
       "invalid_domain_options": "선택한 엔티티 도메인에 맞는 옵션을 입력하세요.",
@@ -561,6 +562,16 @@
           "target_device_name": "기존 가상 장치를 선택하면 해당 장치의 엔티티로 함께 묶입니다. 새 장치를 만들 수도 있습니다."
         }
       },
+      "entity_type": {
+        "title": "가상 엔티티 타입 선택",
+        "description": "단일 원본 엔티티로 만들 가상 엔티티 타입을 선택하세요. helper 생성을 지원하는 원본-대상 조합만 표시됩니다.",
+        "data": {
+          "target_entity_type": "변경하고자 하는 엔티티 타입"
+        },
+        "data_description": {
+          "target_entity_type": "선택한 타입에 맞춰 상태, 네이티브 속성 및 지원 명령 helper를 생성합니다. 예를 들어 Switch 원본으로 가상 Fan을 만들 수 있습니다."
+        }
+      },
       "entity_helper": {
         "title": "템플릿 자동 생성 선택",
         "description": "선택한 원본 엔티티를 바탕으로 새 가상 엔티티의 Jinja 템플릿을 자동으로 채울지 선택하세요. 다음 화면에서 엔티티의 모든 설정과 템플릿을 확인하고 원하는 값으로 수정할 수 있습니다.",
@@ -578,6 +589,7 @@
       "invalid_json": "올바른 JSON 객체를 입력하세요.",
       "invalid_template": "Jinja 템플릿 문법을 수정하세요. JSON 필드는 각 키의 템플릿 값을 확인하세요. 실패한 키는 Home Assistant 로그에 기록됩니다.",
       "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
+      "source_unavailable": "선택한 원본 엔티티를 더 이상 사용할 수 없습니다. 이전 단계로 돌아가 다시 선택하세요.",
       "helper_update_failed": "자동 helper 업데이트에 실패했습니다. 현재 값을 유지했으니 아래 템플릿을 확인하고 수정하세요.",
       "entity_id_used": "이미 사용 중인 엔티티 ID입니다. 고유한 엔티티 ID를 입력하세요.",
       "invalid_domain_options": "선택한 엔티티 도메인에 맞는 옵션을 입력하세요.",
@@ -1190,6 +1202,16 @@
           "target_device_name": "이 엔티티를 포함할 가상 장치를 선택하세요."
         }
       },
+      "edit_entity_type": {
+        "title": "가상 엔티티 타입 선택",
+        "description": "단일 원본 엔티티가 제공할 가상 엔티티 타입을 선택하세요. 지원되는 helper 변환과 기존 레거시 설정을 암묵적으로 바꾸지 않기 위한 현재 custom 타입이 표시됩니다.",
+        "data": {
+          "target_entity_type": "변경하고자 하는 엔티티 타입"
+        },
+        "data_description": {
+          "target_entity_type": "타입을 변경하면 다음 단계에서 선택하는 helper 정책에 따라 호환되는 상태, 네이티브 속성 및 명령 helper를 다시 생성합니다."
+        }
+      },
       "edit_entity_helper": {
         "title": "Template Helper 사용 방식 선택",
         "description": "이번 수정에서 template helper를 사용할지 선택하세요. 자동 판별은 custom하지 않은 필드에만 helper를 적용하고, 현재 상태 유지는 helper를 사용하지 않으며, 강제 적용은 helper 대상 필드를 모두 교체합니다. 다음 화면에서 entity, ID, value, template을 모두 수정할 수 있습니다.",
@@ -1732,6 +1754,16 @@
         "data_description": {
           "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 모션/재실은 과반 감지와 지연 해제, 누수/연기/가스/물 같은 안전 센서는 OR, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다. 난방 전용 climate는 heat/off로 단순화됩니다. climate 하나와 switch 하나를 함께 선택하면 보일러 helper가 생성됩니다. 온수 switch는 heat/off 모두 항상 켜고, heat는 climate의 heat 모드, 가상 off는 climate의 fan_only 모드를 사용합니다. Camera와 Image 소스는 하나씩 별칭으로만 연결할 수 있고 병합하지 않습니다.",
           "target_device_name": "기존 가상 장치를 선택하면 해당 장치의 엔티티로 함께 묶입니다. 새 장치를 만들 수도 있습니다."
+        }
+      },
+      "entity_type": {
+        "title": "가상 엔티티 타입 선택",
+        "description": "단일 원본 엔티티로 만들 가상 엔티티 타입을 선택하세요. helper 생성을 지원하는 원본-대상 조합만 표시됩니다.",
+        "data": {
+          "target_entity_type": "변경하고자 하는 엔티티 타입"
+        },
+        "data_description": {
+          "target_entity_type": "선택한 타입에 맞춰 상태, 네이티브 속성 및 지원 명령 helper를 생성합니다. 예를 들어 Switch 원본으로 가상 Fan을 만들 수 있습니다."
         }
       }
     }

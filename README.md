@@ -38,6 +38,8 @@ and manage them from `Settings > Devices & services > Virtual Layer`.
 - Delete a complete virtual Device, including malformed legacy groups
 - Set entity name and entity ID from the UI
 - Create a virtual entity from one or more existing Home Assistant entities
+- Convert one supported single source to a different virtual entity type, such
+  as a real switch exposed as a virtual fan
 - Auto-generate useful helper templates when multiple source entities are
   selected
 - Optional Home Assistant Jinja templates for custom state, availability, and
@@ -71,6 +73,7 @@ During setup you can:
 - enter the initial device name
 - optionally add the first entity immediately
 - select existing source entities to prefill a new virtual entity
+- choose a compatible target entity type when exactly one source is selected
 - customize the generated entity name, entity ID, domain, initial state, device
   metadata, and templates
 

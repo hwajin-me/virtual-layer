@@ -15,6 +15,7 @@ from custom_components.virtual_layer.config_flow import (
     _delete_entities_schema,
     _device_schema,
     _entity_schema,
+    _entity_type_schema,
     _helper_update_schema,
     _helper_usage_schema,
     _options_schema,
@@ -220,6 +221,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
             include_entity_toggle=False,
         ),
         "entity_source": _reference_entity_schema(),
+        "entity_type": _entity_type_schema("switch.source", "switch"),
         "entity_helper": _helper_usage_schema(),
         "entity": _entity_schema(),
     }
@@ -231,6 +233,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
         "delete_entities": _delete_entities_schema(entity_options),
         "delete_device": _select_device_schema(entity_options),
         "edit_entity": _entity_schema(),
+        "edit_entity_type": _entity_type_schema("switch.source", "switch"),
         "edit_entity_helper": _helper_update_schema(),
         "entity_helper": _helper_usage_schema(),
         "edit_entity_source": _reference_entity_schema(
@@ -242,6 +245,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
         "entity_source": _reference_entity_schema(
             device_options=[{"value": "Laundry", "label": "Laundry"}],
         ),
+        "entity_type": _entity_type_schema("switch.source", "switch"),
     }
 
     for step_id, schema in config_steps.items():

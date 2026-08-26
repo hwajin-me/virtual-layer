@@ -114,6 +114,7 @@ CONF_ENTITY_KEY = "entity_key"
 CONF_ENTITY_KEYS = "entity_keys"
 CONF_MANAGED_DEVICE_NAME = "managed_device_name"
 CONF_REFERENCE_ENTITY_ID = "reference_entity_id"
+CONF_TARGET_ENTITY_TYPE = "target_entity_type"
 CONF_HELPER_UPDATE_MODE = "helper_update_mode"
 CONF_USE_TEMPLATE_HELPER = "use_template_helper"
 CONF_SOURCE_ENTITIES_TEXT = "source_entities_text"
@@ -1117,6 +1118,67 @@ def _helper_usage_schema() -> vol.Schema:
             ): selector.BooleanSelector(),
         }
     )
+
+
+_POWER_SOURCE_DOMAINS = frozenset({
+    "fan",
+    "humidifier",
+    "input_boolean",
+    "light",
+    "switch",
+})
+_POWER_TARGET_DOMAINS = frozenset({"fan", "light", "switch"})
+_SINGLE_SOURCE_TARGET_DOMAINS = {
+    "fan": ("fan", "switch", "light"),
+    "humidifier": ("humidifier", "switch", "fan"),
+    "input_boolean": ("binary_sensor", "switch", "fan", "light"),
+    "light": ("light", "switch", "fan"),
+    "switch": ("switch", "fan", "light"),
+}
+
+
+def _single_source_target_domains(
+    source_entity_id: str,
+    inferred_platform: str,
+    preserved_platform: str | None = None,
+) -> tuple[str, ...]:
+    """Return the deliberately small set of supported single-source conversions."""
+    source_domain = source_entity_id.split(".", 1)[0]
+    configured = _SINGLE_SOURCE_TARGET_DOMAINS.get(source_domain, ())
+    preserved = (
+        (preserved_platform,)
+        if preserved_platform in VIRTUAL_ENTITY_DOMAINS
+        else ()
+    )
+    return tuple(dict.fromkeys((inferred_platform, *configured, *preserved)))
+
+
+def _entity_type_schema(
+    source_entity_id: str,
+    inferred_platform: str,
+    default_platform: str | None = None,
+) -> vol.Schema:
+    """Choose a compatible target domain for one source entity."""
+    platforms = _single_source_target_domains(
+        source_entity_id,
+        inferred_platform,
+        default_platform,
+    )
+    selected = default_platform if default_platform in platforms else inferred_platform
+    options = [
+        {"value": platform, "label": platform.replace("_", " ").title()}
+        for platform in platforms
+    ]
+    return vol.Schema({
+        vol.Required(CONF_TARGET_ENTITY_TYPE, default=selected): (
+            selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=options,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        ),
+    })
 
 
 BOOLEAN_SOURCE_DOMAINS = {
@@ -4576,8 +4638,24 @@ def _source_command_actions(
     entity_ids: list[str],
     states: list,
 ) -> dict[str, Any]:
-    """Build editable pass-through actions for same-domain source entities."""
+    """Build editable pass-through actions for compatible source entities."""
     actions = {}
+    if len(entity_ids) == 1:
+        source_entity_id = entity_ids[0]
+        source_platform = source_entity_id.split(".", 1)[0]
+        if (
+            source_platform != platform
+            and source_platform in _POWER_SOURCE_DOMAINS
+            and platform in _POWER_TARGET_DOMAINS
+        ):
+            for command in ("turn_off", "turn_on"):
+                if command not in VIRTUAL_ENTITY_COMMANDS.get(platform, ()):
+                    continue
+                actions[command] = [{
+                    "action": f"{source_platform}.{command}",
+                    "target": {ATTR_ENTITY_ID: source_entity_id},
+                }]
+            return actions
     for command in sorted(VIRTUAL_ENTITY_COMMANDS.get(platform, ())):
         key = (platform, command)
         if key in VIRTUAL_ENTITY_NON_SERVICE_COMMANDS:
@@ -4627,7 +4705,12 @@ def _source_command_actions(
     return actions
 
 
-def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
+def _reference_entity_defaults(
+    hass,
+    entity_ids,
+    target_platform: str | None = None,
+    additional_target_platforms: Collection[str] = (),
+) -> dict[str, Any]:
     entity_ids = _normalize_reference_entity_ids(entity_ids)
     if not entity_ids:
         return {}
@@ -4682,6 +4765,19 @@ def _reference_entity_defaults(hass, entity_ids) -> dict[str, Any]:
         platform = "select"
     else:
         platform = "sensor"
+
+    if target_platform is not None:
+        allowed_target_platforms = set(
+            _single_source_target_domains(entity_ids[0], platform)
+        ) if len(entity_ids) == 1 else set()
+        allowed_target_platforms.update(
+            candidate
+            for candidate in additional_target_platforms
+            if candidate in VIRTUAL_ENTITY_DOMAINS
+        )
+        if target_platform not in allowed_target_platforms:
+            raise vol.Invalid("unsupported target entity type")
+        platform = target_platform
 
     first_state = states[0]
     if boiler_profile is not None:
@@ -5171,7 +5267,12 @@ def _refresh_add_reference_defaults(
     reference_sources = _stored_entity_ids(
         reference_defaults.get(CONF_SOURCE_ENTITIES_TEXT),
     )
-    if submitted_sources == reference_sources:
+    submitted_platform = user_input.get(CONF_PLATFORM)
+    reference_platform = reference_defaults.get(CONF_PLATFORM)
+    if submitted_sources == reference_sources and (
+        len(submitted_sources) != 1
+        or submitted_platform == reference_platform
+    ):
         return user_input, reference_defaults
 
     _validate_mergeable_source_entities(
@@ -5179,10 +5280,18 @@ def _refresh_add_reference_defaults(
         CONF_SOURCE_ENTITIES_TEXT,
     )
     try:
-        refreshed_reference_defaults = _reference_entity_defaults(
-            hass,
-            submitted_sources,
-        )
+        if len(submitted_sources) == 1 and submitted_platform in VIRTUAL_ENTITY_DOMAINS:
+            refreshed_reference_defaults = _reference_entity_defaults(
+                hass,
+                submitted_sources,
+                submitted_platform,
+                (submitted_platform,),
+            )
+        else:
+            refreshed_reference_defaults = _reference_entity_defaults(
+                hass,
+                submitted_sources,
+            )
     except InvalidEntityReference:
         # A syntactically valid future/unloaded source can still be saved, but
         # cannot provide state or attributes for helper generation yet.
@@ -5802,6 +5911,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         self._pending_title: str | None = None
         self._entity_defaults: dict[str, Any] | None = None
         self._reference_defaults: dict[str, Any] = {}
+        self._source_entities: list[str] = []
         self._add_use_template_helper = True
 
     @staticmethod
@@ -5904,11 +6014,16 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         errors = _flow_errors(self, "entity_source")
         if user_input is not None:
             try:
-                self._reference_defaults = _reference_entity_defaults(
-                    self.hass,
+                self._source_entities = _normalize_reference_entity_ids(
                     user_input.get(CONF_REFERENCE_ENTITY_ID),
                 )
+                self._reference_defaults = _reference_entity_defaults(
+                    self.hass,
+                    self._source_entities,
+                )
                 if self._reference_defaults:
+                    if len(self._source_entities) == 1:
+                        return await self.async_step_entity_type()
                     return await self.async_step_entity_helper()
                 self._entity_defaults = {}
                 return await self.async_step_entity()
@@ -5932,6 +6047,33 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         return self.async_show_form(
             step_id="entity_source",
             data_schema=_reference_entity_schema(),
+            errors=errors,
+        )
+
+    async def async_step_entity_type(self, user_input=None):
+        """Choose the virtual entity domain for a single source."""
+        if len(self._source_entities) != 1 or not self._reference_defaults:
+            return await self.async_step_entity_source()
+
+        errors = _flow_errors(self, "entity_type")
+        inferred_platform = self._reference_defaults[CONF_PLATFORM]
+        if user_input is not None:
+            try:
+                self._reference_defaults = _reference_entity_defaults(
+                    self.hass,
+                    self._source_entities,
+                    user_input[CONF_TARGET_ENTITY_TYPE],
+                )
+                return await self.async_step_entity_helper()
+            except InvalidEntityReference:
+                errors["base"] = "source_unavailable"
+
+        return self.async_show_form(
+            step_id="entity_type",
+            data_schema=_entity_type_schema(
+                self._source_entities[0],
+                inferred_platform,
+            ),
             errors=errors,
         )
 
@@ -6059,12 +6201,16 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._entity_defaults: dict[str, Any] | None = None
         self._reference_defaults: dict[str, Any] = {}
         self._add_target_device_name: str | None = None
+        self._add_source_entities: list[str] = []
         self._add_use_template_helper = True
         self._edit_auto_helper_profile: dict[str, Any] | None = None
         self._edit_current_defaults: dict[str, Any] | None = None
+        self._edit_original_platform: str | None = None
         self._edit_target_device_name: str | None = None
+        self._edit_target_platform: str | None = None
         self._edit_source_entities: list[str] | None = None
         self._edit_helper_update_mode: str | None = None
+        self._edit_platform_changed = False
         self._edit_sources_changed = False
 
     async def async_step_init(self, user_input=None):
@@ -6154,14 +6300,19 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         errors = _flow_errors(self, "entity_source")
         if user_input is not None:
             try:
+                self._add_source_entities = _normalize_reference_entity_ids(
+                    user_input.get(CONF_REFERENCE_ENTITY_ID),
+                )
                 self._reference_defaults = _reference_entity_defaults(
                     self.hass,
-                    user_input.get(CONF_REFERENCE_ENTITY_ID),
+                    self._add_source_entities,
                 )
                 self._add_target_device_name = user_input.get(
                     CONF_TARGET_DEVICE_NAME,
                 )
                 if self._reference_defaults:
+                    if len(self._add_source_entities) == 1:
+                        return await self.async_step_entity_type()
                     return await self.async_step_entity_helper()
                 self._entity_defaults = _with_existing_device_defaults(
                     {},
@@ -6192,6 +6343,33 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 device_options=_existing_device_options(
                     self.hass, self.config_entry.options
                 ),
+            ),
+            errors=errors,
+        )
+
+    async def async_step_entity_type(self, user_input=None):
+        """Choose the virtual entity domain for a single source."""
+        if len(self._add_source_entities) != 1 or not self._reference_defaults:
+            return await self.async_step_entity_source()
+
+        errors = _flow_errors(self, "entity_type")
+        inferred_platform = self._reference_defaults[CONF_PLATFORM]
+        if user_input is not None:
+            try:
+                self._reference_defaults = _reference_entity_defaults(
+                    self.hass,
+                    self._add_source_entities,
+                    user_input[CONF_TARGET_ENTITY_TYPE],
+                )
+                return await self.async_step_entity_helper()
+            except InvalidEntityReference:
+                errors["base"] = "source_unavailable"
+
+        return self.async_show_form(
+            step_id="entity_type",
+            data_schema=_entity_type_schema(
+                self._add_source_entities[0],
+                inferred_platform,
             ),
             errors=errors,
         )
@@ -6421,13 +6599,18 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     selected_sources,
                 )
                 self._edit_current_defaults = current_defaults
+                self._edit_original_platform = current_defaults.get(CONF_PLATFORM)
                 self._edit_target_device_name = user_input.get(
                     CONF_TARGET_DEVICE_NAME,
                 )
                 self._edit_source_entities = selected_sources
+                self._edit_target_platform = None
+                self._edit_platform_changed = False
                 self._edit_sources_changed = selected_sources != _stored_entity_ids(
                     entity.get(CONF_SOURCE_ENTITIES),
                 )
+                if len(selected_sources) == 1:
+                    return await self.async_step_edit_entity_type()
                 if self._edit_sources_changed or selected_sources:
                     return await self.async_step_edit_entity_helper()
 
@@ -6448,6 +6631,48 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             errors=errors,
         )
 
+    async def async_step_edit_entity_type(self, user_input=None):
+        """Choose the virtual entity domain for one edited source."""
+        if (
+            self._edit_current_defaults is None
+            or self._edit_source_entities is None
+            or len(self._edit_source_entities) != 1
+            or not self._reference_defaults
+        ):
+            return await self.async_step_edit_entity_source()
+
+        errors = _flow_errors(self, "edit_entity_type")
+        inferred_platform = self._reference_defaults[CONF_PLATFORM]
+        current_platform = self._edit_current_defaults.get(CONF_PLATFORM)
+        original_platform = self._edit_original_platform or current_platform
+        if user_input is not None:
+            target_platform = user_input[CONF_TARGET_ENTITY_TYPE]
+            try:
+                self._reference_defaults = _reference_entity_defaults(
+                    self.hass,
+                    self._edit_source_entities,
+                    target_platform,
+                    (current_platform,),
+                )
+                self._edit_target_platform = target_platform
+                self._edit_platform_changed = target_platform != original_platform
+                self._edit_sources_changed = (
+                    self._edit_sources_changed or self._edit_platform_changed
+                )
+                return await self.async_step_edit_entity_helper()
+            except InvalidEntityReference:
+                errors["base"] = "source_unavailable"
+
+        return self.async_show_form(
+            step_id="edit_entity_type",
+            data_schema=_entity_type_schema(
+                self._edit_source_entities[0],
+                inferred_platform,
+                self._edit_target_platform or current_platform,
+            ),
+            errors=errors,
+        )
+
     def _prepare_edit_entity_defaults(self, *, helper_update_mode: str) -> None:
         """Apply the selected helper policy to the pending source change."""
         if self._edit_current_defaults is None or self._edit_source_entities is None:
@@ -6460,11 +6685,20 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 None,
                 source_entities_text="\n".join(self._edit_source_entities),
             )
+            if self._edit_platform_changed:
+                self._edit_auto_helper_profile = None
         else:
+            auto_helper_profile = self._edit_auto_helper_profile
+            if auto_helper_profile is None and self._edit_platform_changed:
+                # A type change needs compatible empty/missing fields even for
+                # legacy entries without a saved helper baseline. An empty
+                # baseline fills only absent fields and preserves nonempty
+                # templates or actions the user previously customized.
+                auto_helper_profile = _auto_helper_profile({})
             self._entity_defaults = _reference_edit_defaults(
                 self._edit_current_defaults,
                 self._reference_defaults,
-                self._edit_auto_helper_profile,
+                auto_helper_profile,
                 force_template_helper=(helper_update_mode == HELPER_UPDATE_FORCE),
                 source_entities_text=(
                     "\n".join(self._edit_source_entities)
@@ -6476,6 +6710,12 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 self._edit_auto_helper_profile = _auto_helper_profile(
                     self._reference_defaults,
                 )
+        target_platform = self._reference_defaults.get(CONF_PLATFORM)
+        if target_platform in VIRTUAL_ENTITY_DOMAINS:
+            self._entity_defaults[CONF_PLATFORM] = target_platform
+            self._entity_defaults = _align_form_entity_id_domain(
+                self._entity_defaults,
+            )
         self._entity_defaults = _with_existing_device_defaults(
             self._entity_defaults,
             self.config_entry.options,
@@ -6508,11 +6748,19 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     self._edit_source_entities
                 )
                 self._edit_helper_update_mode = HELPER_UPDATE_KEEP
+                if self._edit_platform_changed:
+                    self._edit_auto_helper_profile = None
                 self._entity_defaults = _with_existing_device_defaults(
                     fallback_defaults,
                     self.config_entry.options,
                     self._edit_target_device_name,
                 )
+                target_platform = self._reference_defaults.get(CONF_PLATFORM)
+                if target_platform in VIRTUAL_ENTITY_DOMAINS:
+                    self._entity_defaults[CONF_PLATFORM] = target_platform
+                    self._entity_defaults = _align_form_entity_id_domain(
+                        self._entity_defaults,
+                    )
                 errors = _flow_errors(self, "edit_entity", {
                     "base": "helper_update_failed",
                 })
@@ -6561,7 +6809,15 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 submitted_sources = _parse_source_entities(
                     user_input.get(CONF_SOURCE_ENTITIES_TEXT, ""),
                 )
-                if submitted_sources != self._edit_source_entities:
+                sources_changed = submitted_sources != self._edit_source_entities
+                target_platform = user_input.get(CONF_PLATFORM)
+                target_platform_changed = (
+                    len(submitted_sources) == 1
+                    and bool(self._reference_defaults)
+                    and target_platform in VIRTUAL_ENTITY_DOMAINS
+                    and target_platform != self._reference_defaults.get(CONF_PLATFORM)
+                )
+                if sources_changed or target_platform_changed:
                     _validate_mergeable_source_entities(
                         submitted_sources,
                         CONF_SOURCE_ENTITIES_TEXT,
@@ -6575,10 +6831,21 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                         _virtual_entity_id(current_entity),
                     )
                     try:
-                        self._reference_defaults = _reference_entity_defaults(
-                            self.hass,
-                            submitted_sources,
-                        )
+                        if (
+                            len(submitted_sources) == 1
+                            and target_platform in VIRTUAL_ENTITY_DOMAINS
+                        ):
+                            self._reference_defaults = _reference_entity_defaults(
+                                self.hass,
+                                submitted_sources,
+                                target_platform,
+                                (target_platform,),
+                            )
+                        else:
+                            self._reference_defaults = _reference_entity_defaults(
+                                self.hass,
+                                submitted_sources,
+                            )
                     except InvalidEntityReference:
                         # Valid future or unloaded entities cannot prefill a
                         # helper yet, but users can still keep current Jinja.
@@ -6588,7 +6855,22 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     # source-step Device choice would discard metadata edits.
                     self._edit_target_device_name = None
                     self._edit_source_entities = submitted_sources
+                    self._edit_target_platform = (
+                        target_platform
+                        if target_platform in VIRTUAL_ENTITY_DOMAINS
+                        else None
+                    )
+                    self._edit_platform_changed = (
+                        self._edit_target_platform is not None
+                        and self._edit_target_platform != self._edit_original_platform
+                    )
                     self._edit_sources_changed = True
+                    if (
+                        sources_changed
+                        and len(submitted_sources) == 1
+                        and self._reference_defaults
+                    ):
+                        return await self.async_step_edit_entity_type()
                     return await self.async_step_edit_entity_helper()
 
                 device_name, entity = await _async_build_entity_config(

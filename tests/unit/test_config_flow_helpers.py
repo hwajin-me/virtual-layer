@@ -51,6 +51,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_REFERENCE_ENTITY_ID,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
+    CONF_TARGET_ENTITY_TYPE,
     DOMAIN_NATIVE_TEMPLATE_PROPERTIES,
     FAN_NATIVE_TEMPLATE_PROPERTIES,
     HUMIDIFIER_NATIVE_TEMPLATE_PROPERTIES,
@@ -83,6 +84,7 @@ from custom_components.virtual_layer.config_flow import (
     _entity_key,
     _entity_key_from_stable_key,
     _entity_schema,
+    _entity_type_schema,
     _find_entity_by_selection_key,
     _flatten_entity_form_sections,
     _flow_errors,
@@ -109,6 +111,7 @@ from custom_components.virtual_layer.config_flow import (
     _reference_edit_defaults,
     _reference_entity_defaults,
     _reference_entity_schema,
+    _refresh_add_reference_defaults,
     _replace_ui_device,
     _replace_ui_entity,
     _select_device_schema,
@@ -116,6 +119,7 @@ from custom_components.virtual_layer.config_flow import (
     _set_auto_helper_profile,
     _setup_schema,
     _source_command_data_template,
+    _source_command_actions,
     _stored_entity_ids,
     _validate_platform_entity,
     _without_template_helpers,
@@ -352,6 +356,7 @@ def test_all_config_flow_forms_are_frontend_serializable():
         )),
         ("helper_update", _helper_update_schema()),
         ("helper_usage", _helper_usage_schema()),
+        ("entity_type", _entity_type_schema("switch.source", "switch")),
         ("device", _device_schema()),
         ("select_device", _select_device_schema(options)),
         ("select_entity", _select_entity_schema(options)),
@@ -360,6 +365,157 @@ def test_all_config_flow_forms_are_frontend_serializable():
 
     for name, schema in schemas:
         assert convert(schema, custom_serializer=cv.custom_serializer), name
+
+
+def test_single_switch_source_can_target_fan_with_power_command_helpers(hass):
+    hass.states.async_set("switch.source", "on", {"friendly_name": "Desk Fan"})
+
+    defaults = _reference_entity_defaults(
+        hass,
+        ["switch.source"],
+        "fan",
+    )
+
+    assert defaults[CONF_PLATFORM] == "fan"
+    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_VALUE_TEMPLATE]
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["is_on"] == (
+        "{{ states('switch.source') not in ['off', 'unknown', 'unavailable'] }}"
+    )
+    assert json.loads(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
+        "turn_off": [{
+            "action": "switch.turn_off",
+            "target": {ATTR_ENTITY_ID: "switch.source"},
+        }],
+        "turn_on": [{
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: "switch.source"},
+        }],
+    }
+
+    type_schema = _entity_type_schema("switch.source", "switch")
+    assert type_schema({})[CONF_TARGET_ENTITY_TYPE] == "switch"
+
+
+def test_cross_domain_command_helper_is_limited_to_supported_power_commands(hass):
+    hass.states.async_set("switch.source", "off")
+    state = hass.states.get("switch.source")
+    assert state is not None
+
+    assert set(_source_command_actions("fan", ["switch.source"], [state])) == {
+        "turn_off",
+        "turn_on",
+    }
+
+
+def test_edit_type_schema_preserves_an_existing_nonconversion_domain(hass):
+    hass.states.async_set("switch.source", "off")
+
+    type_schema = _entity_type_schema(
+        "switch.source",
+        "switch",
+        "sensor",
+    )
+    assert type_schema({})[CONF_TARGET_ENTITY_TYPE] == "sensor"
+    defaults = _reference_entity_defaults(
+        hass,
+        ["switch.source"],
+        "sensor",
+        ("sensor",),
+    )
+
+    assert defaults[CONF_PLATFORM] == "sensor"
+    assert defaults[CONF_VALUE_TEMPLATE] == "{{ source }}"
+
+
+def test_add_source_refresh_preserves_selected_compatible_target_type(hass):
+    hass.states.async_set("switch.old_power", "off")
+    hass.states.async_set("switch.new_power", "on")
+    original = _reference_entity_defaults(
+        hass,
+        ["switch.old_power"],
+        "fan",
+    )
+    submitted = {
+        **original,
+        CONF_SOURCE_ENTITIES_TEXT: "switch.new_power",
+    }
+
+    refreshed, reference = _refresh_add_reference_defaults(
+        hass,
+        submitted,
+        original,
+    )
+
+    assert refreshed[CONF_PLATFORM] == "fan"
+    assert reference[CONF_PLATFORM] == "fan"
+    assert refreshed[CONF_VALUE_TEMPLATE] == "{{ new_power }}"
+    assert "switch.new_power" in refreshed[CONF_TEMPLATE_SOURCES_JSON]
+    assert "switch.new_power" in refreshed[CONF_COMMAND_ACTIONS_JSON]
+    assert "switch.old_power" not in refreshed[CONF_COMMAND_ACTIONS_JSON]
+
+
+def test_add_form_target_type_change_refreshes_single_source_helpers(hass):
+    hass.states.async_set("switch.power", "on")
+    original = _reference_entity_defaults(hass, ["switch.power"], "fan")
+    submitted = {**original, CONF_PLATFORM: "light"}
+
+    refreshed, reference = _refresh_add_reference_defaults(
+        hass,
+        submitted,
+        original,
+    )
+
+    assert refreshed[CONF_PLATFORM] == "light"
+    assert reference[CONF_PLATFORM] == "light"
+    assert set(refreshed[CONF_NATIVE_VALUE_TEMPLATES]) == set(
+        DOMAIN_NATIVE_TEMPLATE_PROPERTIES["light"]
+    )
+    assert "switch.turn_on" in refreshed[CONF_COMMAND_ACTIONS_JSON]
+
+
+@pytest.mark.parametrize(
+    ("source_platform", "target_platform"),
+    [
+        ("fan", "switch"),
+        ("fan", "light"),
+        ("humidifier", "switch"),
+        ("humidifier", "fan"),
+        ("input_boolean", "switch"),
+        ("input_boolean", "fan"),
+        ("input_boolean", "light"),
+        ("light", "switch"),
+        ("light", "fan"),
+        ("switch", "fan"),
+        ("switch", "light"),
+    ],
+)
+def test_all_supported_cross_domain_power_helpers_are_valid(
+    hass,
+    source_platform,
+    target_platform,
+):
+    source_entity_id = f"{source_platform}.power_source"
+    hass.states.async_set(source_entity_id, "on")
+
+    defaults = _reference_entity_defaults(
+        hass,
+        [source_entity_id],
+        target_platform,
+    )
+    form_values = _entity_schema(defaults)({})
+    _, entity = _build_entity_config(form_values)
+
+    assert entity[CONF_PLATFORM] == target_platform
+    for template_value in entity.get(CONF_NATIVE_TEMPLATES, {}).values():
+        Template(template_value, hass).ensure_valid()
+    command_actions = entity[CONF_COMMAND_ACTIONS]
+    assert set(command_actions) == {"turn_off", "turn_on"}
+    for command, actions in command_actions.items():
+        assert actions == [{
+            "action": f"{source_platform}.{command}",
+            "target": {ATTR_ENTITY_ID: source_entity_id},
+        }]
 
 
 def test_native_value_template_sections_match_domain_properties():

@@ -170,6 +170,7 @@ _STATE_ONLY_TEMPLATE_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_state_only_template_l
 _STATE_ONLY_RESTORE_PROXIES_DATA = f"{COMPONENT_DOMAIN}_state_only_restore_proxies"
 _ENTITY_ID_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_entity_id_guard_listeners"
 _DEVICE_METADATA_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_device_metadata_guard_listeners"
+_GENERATED_NAME_SUFFIX = "_virtual_layer_generated_name_suffix"
 
 _STATE_ONLY_LIST_NATIVE_PROPERTIES = frozenset({
     "supported_languages",
@@ -326,6 +327,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
     previous_group_name = _runtime_group_name_for_entry(hass, entry)
 
+    # Remember which registry entries predate this setup. Newly configured
+    # entities should start with their Device's current area explicitly set so
+    # Home Assistant does not enable "Use device area" for them by default.
+    entity_registry = er.async_get(hass)
+    existing_entity_unique_ids = {
+        entity_entry.unique_id
+        for entity_entry in er.async_entries_for_config_entry(
+            entity_registry,
+            entry.entry_id,
+        )
+    }
+
     # Get the config.
     _LOGGER.debug("creating new cfg")
     vcfg = BlendedCfg(hass, entry.data, entry.options, entry)
@@ -336,8 +349,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for device in vcfg.devices:
         _LOGGER.debug("Creating virtual Device %s", device.get(ATTR_DEVICE_ID))
         await _async_get_or_create_virtual_device_in_registry(hass, entry, device)
+    _async_sync_active_entity_registry_entries(
+        hass,
+        entry,
+        vcfg.entities,
+        existing_entity_unique_ids=existing_entity_unique_ids,
+    )
     _async_remove_orphaned_diagnostic_registry_entries(hass, entry, vcfg.entities)
-    _async_sync_active_entity_registry_entries(hass, entry, vcfg.entities)
 
     # Delete orphaned devices.
     active_device_ids = {
@@ -453,9 +471,38 @@ def _async_remove_entry_registry_entries(hass: HomeAssistant, entry: ConfigEntry
 
 
 @callback
+def _async_update_generated_entity_name(
+    hass,
+    entity_registry,
+    entity_id,
+    generated_entity,
+    name,
+) -> None:
+    """Update a generated entity's runtime and registry-owned default name."""
+    if isinstance(generated_entity, dict):
+        generated_entity[CONF_NAME] = name
+    domain = entity_id.split(".", 1)[0]
+    entity_component = hass.data.get(domain)
+    loaded_entity = (
+        entity_component.get_entity(entity_id)
+        if entity_component is not None
+        and callable(getattr(entity_component, "get_entity", None))
+        else None
+    )
+    if loaded_entity is not None:
+        loaded_entity._attr_name = name
+        loaded_entity.async_write_ha_state()
+        return
+    registry_entry = entity_registry.async_get(entity_id)
+    if registry_entry is not None and registry_entry.original_name != name:
+        entity_registry.async_update_entity(entity_id, original_name=name)
+
+
+@callback
 def _async_remove_orphaned_diagnostic_registry_entries(hass, entry, entities) -> None:
     """Synchronize diagnostic registry defaults and remove obsolete diagnostics."""
     platform_entity_groups = entities.values() if isinstance(entities, Mapping) else []
+    platform_entity_items = entities.items() if isinstance(entities, Mapping) else []
     active_generated_entities = {
         entity[ATTR_UNIQUE_ID]: entity
         for platform_entities in platform_entity_groups
@@ -464,6 +511,15 @@ def _async_remove_orphaned_diagnostic_registry_entries(hass, entry, entities) ->
         if isinstance(entity, Mapping)
         and isinstance(entity.get(ATTR_UNIQUE_ID), str)
         and DIAGNOSTIC_UNIQUE_ID_MARKER in entity[ATTR_UNIQUE_ID]
+    }
+    active_primary_entities = {
+        entity[ATTR_UNIQUE_ID]: (domain, entity)
+        for domain, platform_entities in platform_entity_items
+        if isinstance(platform_entities, list)
+        for entity in platform_entities
+        if isinstance(entity, Mapping)
+        and isinstance(entity.get(ATTR_UNIQUE_ID), str)
+        and DIAGNOSTIC_UNIQUE_ID_MARKER not in entity[ATTR_UNIQUE_ID]
     }
     entity_registry = er.async_get(hass)
     for entity_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
@@ -476,8 +532,47 @@ def _async_remove_orphaned_diagnostic_registry_entries(hass, entry, entities) ->
 
         updates = {}
         generated_name = generated_entity.get(CONF_NAME)
-        if isinstance(generated_name, str) and entity_entry.original_name != generated_name:
-            updates["original_name"] = generated_name
+        parent_unique_id = entity_entry.unique_id.split(
+            DIAGNOSTIC_UNIQUE_ID_MARKER,
+            1,
+        )[0]
+        parent_data = active_primary_entities.get(parent_unique_id)
+        parent_domain, parent_entity = parent_data if parent_data else (None, None)
+        parent_registry_id = entity_registry.async_get_entity_id(
+            parent_domain,
+            COMPONENT_DOMAIN,
+            parent_unique_id,
+        ) if parent_domain is not None else None
+        parent_registry_entry = (
+            entity_registry.async_get(parent_registry_id)
+            if parent_registry_id is not None
+            else None
+        )
+        configured_parent_name = (
+            parent_entity.get(CONF_NAME)
+            if isinstance(parent_entity, Mapping)
+            else None
+        )
+        if (
+            parent_registry_entry is not None
+            and isinstance(configured_parent_name, str)
+            and isinstance(generated_name, str)
+            and generated_name.startswith(configured_parent_name)
+        ):
+            if isinstance(generated_entity, dict):
+                generated_entity[_GENERATED_NAME_SUFFIX] = generated_name[
+                    len(configured_parent_name):
+                ]
+            parent_name = parent_registry_entry.name or configured_parent_name
+            generated_name = f"{parent_name}{generated_name[len(configured_parent_name):]}"
+        if isinstance(generated_name, str):
+            _async_update_generated_entity_name(
+                hass,
+                entity_registry,
+                entity_entry.entity_id,
+                generated_entity,
+                generated_name,
+            )
         generated_icon = generated_entity.get(CONF_ICON)
         if isinstance(generated_icon, str) and entity_entry.original_icon != generated_icon:
             updates["original_icon"] = generated_icon
@@ -486,7 +581,13 @@ def _async_remove_orphaned_diagnostic_registry_entries(hass, entry, entities) ->
 
 
 @callback
-def _async_sync_active_entity_registry_entries(hass, entry, entities) -> None:
+def _async_sync_active_entity_registry_entries(
+    hass,
+    entry,
+    entities,
+    *,
+    existing_entity_unique_ids=frozenset(),
+) -> None:
     """Keep registry metadata aligned with the current virtual configuration."""
     if not isinstance(entities, Mapping):
         return
@@ -527,8 +628,15 @@ def _async_sync_active_entity_registry_entries(hass, entry, entities) -> None:
                 device_entry = device_registry.async_get_device(
                     identifiers={(COMPONENT_DOMAIN, virtual_device_id)},
                 )
-                if device_entry is not None and entity_entry.device_id != device_entry.id:
-                    updates["device_id"] = device_entry.id
+                if device_entry is not None:
+                    if entity_entry.device_id != device_entry.id:
+                        updates["device_id"] = device_entry.id
+                    if (
+                        unique_id not in existing_entity_unique_ids
+                        and entity_entry.area_id is None
+                        and device_entry.area_id is not None
+                    ):
+                        updates["area_id"] = device_entry.area_id
 
             original_name = entity.get(CONF_NAME)
             if isinstance(original_name, str) and entity_entry.original_name != original_name:
@@ -565,7 +673,7 @@ def _async_remove_entity_id_guard(hass, entry_id) -> None:
 
 @callback
 def _async_setup_entity_id_guard(hass, entry, entities) -> None:
-    """Keep configured Virtual Layer entity IDs fixed after registry renames."""
+    """Keep configured IDs fixed and cascade primary display-name changes."""
     _async_remove_entity_id_guard(hass, entry.entry_id)
     if not isinstance(entities, Mapping):
         return
@@ -578,6 +686,37 @@ def _async_setup_entity_id_guard(hass, entry, entities) -> None:
         and isinstance(entity.get(ATTR_UNIQUE_ID), str)
         and isinstance(entity.get(ATTR_ENTITY_ID), str)
     }
+    configured_entities = {
+        entity[ATTR_UNIQUE_ID]: (domain, entity)
+        for domain, platform_entities in entities.items()
+        if isinstance(platform_entities, list)
+        for entity in platform_entities
+        if isinstance(entity, Mapping)
+        and isinstance(entity.get(ATTR_UNIQUE_ID), str)
+    }
+    generated_entities_by_parent = {}
+    for unique_id, (domain, entity) in configured_entities.items():
+        if DIAGNOSTIC_UNIQUE_ID_MARKER not in unique_id:
+            continue
+        parent_unique_id = unique_id.split(DIAGNOSTIC_UNIQUE_ID_MARKER, 1)[0]
+        parent_data = configured_entities.get(parent_unique_id)
+        configured_name = parent_data[1].get(CONF_NAME) if parent_data else None
+        generated_name = entity.get(CONF_NAME)
+        name_suffix = entity.get(_GENERATED_NAME_SUFFIX)
+        if (
+            not isinstance(configured_name, str)
+            or not isinstance(generated_name, str)
+            or (
+                not isinstance(name_suffix, str)
+                and not generated_name.startswith(configured_name)
+            )
+        ):
+            continue
+        if not isinstance(name_suffix, str):
+            name_suffix = generated_name[len(configured_name):]
+        generated_entities_by_parent.setdefault(parent_unique_id, []).append(
+            (domain, entity, name_suffix)
+        )
     if not desired_entity_ids:
         return
 
@@ -617,14 +756,54 @@ def _async_setup_entity_id_guard(hass, entry, entities) -> None:
 
     @callback
     def _async_handle_registry_update(event) -> None:
+        if event.data.get("action") != "update":
+            return
+        current_entity_id = event.data[ATTR_ENTITY_ID]
+        if "old_entity_id" in event.data:
+            hass.async_create_task(
+                _async_restore_configured_entity_id(current_entity_id)
+            )
+        if "name" not in event.data.get("changes", {}):
+            return
+        primary_entry = entity_registry.async_get(current_entity_id)
         if (
-            event.data.get("action") != "update"
-            or "old_entity_id" not in event.data
+            primary_entry is None
+            or primary_entry.config_entry_id != entry.entry_id
+            or primary_entry.unique_id not in generated_entities_by_parent
         ):
             return
-        hass.async_create_task(
-            _async_restore_configured_entity_id(event.data[ATTR_ENTITY_ID])
-        )
+        _primary_domain, primary_config = configured_entities[primary_entry.unique_id]
+        configured_name = primary_config.get(CONF_NAME)
+        if not isinstance(configured_name, str):
+            return
+        primary_name = primary_entry.name or configured_name
+        for generated_domain, generated_entity, name_suffix in generated_entities_by_parent[
+            primary_entry.unique_id
+        ]:
+            generated_unique_id = generated_entity.get(ATTR_UNIQUE_ID)
+            if not isinstance(generated_unique_id, str):
+                continue
+            generated_entity_id = entity_registry.async_get_entity_id(
+                generated_domain,
+                COMPONENT_DOMAIN,
+                generated_unique_id,
+            )
+            generated_entry = (
+                entity_registry.async_get(generated_entity_id)
+                if generated_entity_id is not None
+                else None
+            )
+            if generated_entry is None or generated_entry.config_entry_id != entry.entry_id:
+                continue
+            cascaded_name = f"{primary_name}{name_suffix}"
+            if generated_entry.original_name != cascaded_name:
+                _async_update_generated_entity_name(
+                    hass,
+                    entity_registry,
+                    generated_entity_id,
+                    generated_entity,
+                    cascaded_name,
+                )
 
     listeners = hass.data.setdefault(_ENTITY_ID_GUARD_LISTENERS_DATA, {})
     remove_listener = hass.bus.async_listen(

@@ -101,6 +101,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_REFERENCE_ENTITY_ID,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TARGET_DEVICE_NAME,
+    CONF_TARGET_ENTITY_TYPE,
     CONF_TEMPLATE_SOURCES_JSON,
     CONF_USE_TEMPLATE_HELPER,
     DOMAIN_NATIVE_TEMPLATE_PROPERTIES,
@@ -162,7 +163,22 @@ from custom_components.virtual_layer.sensor import VirtualSensor
 pytestmark = pytest.mark.integration
 
 
-async def _choose_add_template_helper(hass, result, *, enabled=True):
+async def _choose_add_template_helper(
+    hass,
+    result,
+    *,
+    enabled=True,
+    target_entity_type=None,
+):
+    if result["step_id"] == "entity_type":
+        defaults = result["data_schema"]({})
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_TARGET_ENTITY_TYPE: target_entity_type
+                or defaults[CONF_TARGET_ENTITY_TYPE],
+            },
+        )
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "entity_helper"
     return await hass.config_entries.options.async_configure(
@@ -360,6 +376,244 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
     assert sensor.native_value == "14.0"
     assert sensor.options is None
     assert sensor.suggested_display_precision is None
+
+
+async def test_options_flow_converts_single_switch_source_to_fan(hass):
+    hass.states.async_set(
+        "switch.desk_fan_power",
+        "on",
+        {"friendly_name": "Desk Fan Power"},
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["switch.desk_fan_power"]},
+    )
+
+    assert result["step_id"] == "entity_type"
+    type_options = result["data_schema"].schema
+    target_selector = next(
+        validator
+        for marker, validator in type_options.items()
+        if marker.schema == CONF_TARGET_ENTITY_TYPE
+    )
+    assert {
+        option["value"] for option in target_selector.config["options"]
+    } == {"switch", "fan", "light"}
+
+    result = await _choose_add_template_helper(
+        hass,
+        result,
+        target_entity_type="fan",
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+
+    assert defaults[CONF_PLATFORM] == "fan"
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["is_on"] == (
+        "{{ states('switch.desk_fan_power') not in "
+        "['off', 'unknown', 'unavailable'] }}"
+    )
+    assert json.loads(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
+        "turn_off": [{
+            "action": "switch.turn_off",
+            "target": {ATTR_ENTITY_ID: "switch.desk_fan_power"},
+        }],
+        "turn_on": [{
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: "switch.desk_fan_power"},
+        }],
+    }
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    stored = _first_stored_entity(result)
+    runtime_config = {
+        key: value
+        for key, value in stored.items()
+        if key not in {CONF_PLATFORM, ATTR_ENTITY_KEY, CONF_AUTO_HELPER}
+    }
+    calls = []
+
+    async def _capture_turn_on(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("switch", "turn_on", _capture_turn_on)
+    fan = VirtualFan(FAN_SCHEMA(runtime_config), False)
+    fan.hass = hass
+    fan._create_state(fan._config)
+    fan.async_write_ha_state = Mock()
+
+    await fan.async_turn_on()
+
+    assert calls == [{ATTR_ENTITY_ID: ["switch.desk_fan_power"]}]
+
+
+async def test_entity_type_step_recovers_when_source_disappears(hass):
+    hass.states.async_set("switch.temporary_source", "on")
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["switch.temporary_source"]},
+    )
+    assert result["step_id"] == "entity_type"
+
+    hass.states.async_remove("switch.temporary_source")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_TARGET_ENTITY_TYPE: "fan"},
+    )
+
+    assert result["step_id"] == "entity_type"
+    assert result["errors"] == {"base": "source_unavailable"}
+
+
+async def test_options_flow_edit_changes_single_switch_backed_entity_to_fan(hass):
+    hass.states.async_set("switch.desk_power", "off")
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Desk": [{
+                    CONF_PLATFORM: "switch",
+                    CONF_NAME: "Desk Power",
+                    ATTR_ENTITY_ID: "switch.desk_power_virtual",
+                    CONF_INITIAL_VALUE: "off",
+                    CONF_SOURCE_ENTITIES: ["switch.desk_power"],
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Desk", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["switch.desk_power"]},
+    )
+
+    assert result["step_id"] == "edit_entity_type"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_TARGET_ENTITY_TYPE: "fan"},
+    )
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
+
+    assert result["step_id"] == "edit_entity"
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert defaults[CONF_PLATFORM] == "fan"
+    assert defaults[ATTR_ENTITY_ID] == "fan.desk_power_virtual"
+    assert json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])["turn_on"] == [{
+        "action": "switch.turn_on",
+        "target": {ATTR_ENTITY_ID: "switch.desk_power"},
+    }]
+
+    defaults[CONF_PLATFORM] = "light"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+    assert result["step_id"] == "edit_entity"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        _flatten_entity_form_sections(result["data_schema"]({})),
+    )
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
+    )
+    changed_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert changed_defaults[CONF_PLATFORM] == "light"
+    assert changed_defaults[ATTR_ENTITY_ID] == "light.desk_power_virtual"
+    assert set(changed_defaults[CONF_NATIVE_VALUE_TEMPLATES]) == set(
+        DOMAIN_NATIVE_TEMPLATE_PROPERTIES["light"]
+    )
+
+
+async def test_edit_type_step_preserves_legacy_custom_target_domain(hass):
+    hass.states.async_set("switch.legacy_source", "on")
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Legacy": [{
+                    CONF_PLATFORM: "sensor",
+                    CONF_NAME: "Legacy State",
+                    ATTR_ENTITY_ID: "sensor.legacy_state",
+                    CONF_INITIAL_VALUE: "on",
+                    CONF_SOURCE_ENTITIES: ["switch.legacy_source"],
+                    CONF_VALUE_TEMPLATE: "{{ states('switch.legacy_source') }}",
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key("Legacy", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["switch.legacy_source"]},
+    )
+
+    assert result["step_id"] == "edit_entity_type"
+    assert result["data_schema"]({})[CONF_TARGET_ENTITY_TYPE] == "sensor"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_TARGET_ENTITY_TYPE: "sensor"},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_KEEP},
+    )
+
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert defaults[CONF_PLATFORM] == "sensor"
+    assert defaults[ATTR_ENTITY_ID] == "sensor.legacy_state"
+    assert defaults[CONF_VALUE_TEMPLATE] == (
+        "{{ states('switch.legacy_source') }}"
+    )
 
 
 async def test_options_flow_ignores_restored_source_metadata(hass):
@@ -1716,6 +1970,11 @@ async def test_options_flow_can_edit_existing_entity(hass):
     )
 
     assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "edit_entity_type"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_TARGET_ENTITY_TYPE: "sensor"},
+    )
     assert result["step_id"] == "edit_entity_helper"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -2545,6 +2804,11 @@ async def test_options_flow_refreshes_untouched_native_jinja_and_keeps_custom_fi
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: ["climate.new_unit"]},
     )
+    assert result["step_id"] == "edit_entity_type"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_TARGET_ENTITY_TYPE: "climate"},
+    )
     assert result["step_id"] == "edit_entity_helper"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -2608,6 +2872,11 @@ async def test_options_flow_refreshes_entity_id_when_source_domain_changes(hass)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: ["binary_sensor.new_door"]},
+    )
+    assert result["step_id"] == "edit_entity_type"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_TARGET_ENTITY_TYPE: "binary_sensor"},
     )
     assert result["step_id"] == "edit_entity_helper"
     result = await hass.config_entries.options.async_configure(
@@ -2802,6 +3071,11 @@ async def test_creation_flows_apply_the_selected_template_helper_policy(hass):
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: ["sensor.source_temperature"]},
     )
+    assert result["step_id"] == "entity_type"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_TARGET_ENTITY_TYPE: "sensor"},
+    )
     assert result["step_id"] == "entity_helper"
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -2837,8 +3111,7 @@ async def test_creation_flows_apply_the_selected_template_helper_policy(hass):
         {CONF_REFERENCE_ENTITY_ID: ["sensor.room_temperature"]},
     )
 
-    assert result["step_id"] == "entity_helper"
-    assert result["data_schema"]({})[CONF_USE_TEMPLATE_HELPER] is True
+    assert result["step_id"] == "entity_type"
     result = await _choose_add_template_helper(hass, result, enabled=False)
 
     assert result["step_id"] == "entity"
@@ -3011,6 +3284,11 @@ async def test_helper_update_failure_keeps_edit_form_available(hass, monkeypatch
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: [new_source]},
+    )
+    assert result["step_id"] == "edit_entity_type"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_TARGET_ENTITY_TYPE: "binary_sensor"},
     )
 
     with caplog.at_level("ERROR"):
@@ -3637,6 +3915,63 @@ async def test_setup_entry_groups_multiple_virtual_entities_on_one_device(hass, 
     assert (COMPONENT_DOMAIN, "refrigerator-door-1") in device_entry.identifiers
 
 
+async def test_new_entities_default_to_an_explicit_device_area(
+    hass, tmp_path, monkeypatch
+):
+    """New entities disable Device-area inheritance without changing old entries."""
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    kitchen = ar.async_get(hass).async_create("Kitchen")
+    office = ar.async_get(hass).async_create("Office")
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "areas"},
+        options={
+            ATTR_DEVICES: {
+                "Washer": [
+                    {
+                        CONF_PLATFORM: "sensor",
+                        CONF_NAME: "Washer Phase",
+                        ATTR_ENTITY_ID: "sensor.washer_phase",
+                        CONF_INITIAL_VALUE: "washing",
+                        CONF_INITIAL_AVAILABILITY: True,
+                        CONF_PERSISTENT: False,
+                    },
+                ],
+            },
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Washer": {
+                    ATTR_DEVICE_ID: "washer-1",
+                    CONF_NAME: "Washer",
+                    CONF_SUGGESTED_AREA: "Kitchen",
+                },
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+    await hass.async_block_till_done()
+
+    entity_registry = er.async_get(hass)
+    primary = entity_registry.async_get("sensor.washer_phase")
+    info = entity_registry.async_get("sensor.washer_phase_info")
+    assert primary.area_id == kitchen.id
+    assert info.area_id == kitchen.id
+
+    entity_registry.async_update_entity(primary.entity_id, area_id=office.id)
+    entity_registry.async_update_entity(info.entity_id, area_id=None)
+    assert await async_unload_entry(hass, entry) is True
+    assert await async_setup_entry(hass, entry) is True
+    await hass.async_block_till_done()
+
+    assert entity_registry.async_get("sensor.washer_phase").area_id == office.id
+    assert entity_registry.async_get("sensor.washer_phase_info").area_id is None
+
+
 async def test_setup_entry_restores_stale_virtual_entity_registry_metadata(
     hass,
     tmp_path,
@@ -4052,6 +4387,46 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
     primary_entry = entity_registry.async_get("sensor.virtual_washer")
     assert entity_registry.async_get("sensor.virtual_washer_info").device_id == primary_entry.device_id
     assert entity_registry.async_get("sensor.virtual_washer_debug1").device_id == primary_entry.device_id
+
+    entity_registry.async_update_entity(
+        "sensor.virtual_washer_debug2",
+        name="My Door Diagnostics",
+    )
+    entity_registry.async_update_entity(
+        "sensor.virtual_washer",
+        name="Laundry Status",
+    )
+    await hass.async_block_till_done()
+
+    assert entity_registry.async_get(
+        "sensor.virtual_washer_info"
+    ).original_name == "Laundry Status - Configuration"
+    assert entity_registry.async_get(
+        "sensor.virtual_washer_debug1"
+    ).original_name == "Laundry Status - Source 1: Washer Power"
+    customized_debug = entity_registry.async_get("sensor.virtual_washer_debug2")
+    assert customized_debug.original_name == "Laundry Status - Source 2: Washer Door"
+    assert customized_debug.name == "My Door Diagnostics"
+
+    assert await hass.config_entries.async_unload(entry.entry_id) is True
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+    await hass.async_block_till_done()
+
+    assert entity_registry.async_get(
+        "sensor.virtual_washer_info"
+    ).original_name == "Laundry Status - Configuration"
+    assert entity_registry.async_get(
+        "sensor.virtual_washer_debug1"
+    ).original_name == "Laundry Status - Source 1: Washer Power"
+
+    entity_registry.async_update_entity("sensor.virtual_washer", name=None)
+    await hass.async_block_till_done()
+    assert entity_registry.async_get(
+        "sensor.virtual_washer_info"
+    ).original_name == "Washer Summary - Configuration"
+    assert entity_registry.async_get(
+        "sensor.virtual_washer_debug1"
+    ).original_name == "Washer Summary - Source 1: Washer Power"
 
 
 async def test_diagnostic_registry_defaults_are_migrated_without_overwriting_user_customization(hass):

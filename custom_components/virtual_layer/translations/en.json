@@ -9,6 +9,7 @@
       "invalid_json": "Enter a valid JSON object.",
       "invalid_template": "Fix the Jinja template syntax. In JSON fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
       "invalid_entity_id": "Enter valid entity IDs.",
+      "source_unavailable": "The selected source entity is no longer available. Go back and select it again.",
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
       "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
       "invalid_domain_options": "Enter valid options for the selected entity domain.",
@@ -561,6 +562,16 @@
           "target_device_name": "Choose an existing Virtual Device to keep its entities together, or create a new Device."
         }
       },
+      "entity_type": {
+        "title": "Choose Virtual Entity Type",
+        "description": "Choose the type of virtual entity to create from this single source. Only source-to-target combinations with generated helper support are shown.",
+        "data": {
+          "target_entity_type": "Target entity type"
+        },
+        "data_description": {
+          "target_entity_type": "The generated state, native-property, and supported command helpers will use this entity type. For example, a Switch source can drive a virtual Fan."
+        }
+      },
       "entity_helper": {
         "title": "Choose Template Generation",
         "description": "Choose whether to prefill the new virtual entity with Jinja templates generated from the selected source entities. You can review and customize all entity details and templates on the next screen.",
@@ -578,6 +589,7 @@
       "invalid_json": "Enter a valid JSON object.",
       "invalid_template": "Fix the Jinja template syntax. In JSON fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
       "invalid_entity_id": "Enter valid entity IDs.",
+      "source_unavailable": "The selected source entity is no longer available. Go back and select it again.",
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
       "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
       "invalid_domain_options": "Enter valid options for the selected entity domain.",
@@ -1190,6 +1202,16 @@
           "target_device_name": "Choose the Device that should contain this entity."
         }
       },
+      "edit_entity_type": {
+        "title": "Choose Virtual Entity Type",
+        "description": "Choose the type of virtual entity backed by this single source. Supported helper conversions are shown, and an existing custom type remains available so legacy configuration is not changed implicitly.",
+        "data": {
+          "target_entity_type": "Target entity type"
+        },
+        "data_description": {
+          "target_entity_type": "Changing the type regenerates compatible state, native-property, and command helpers according to the helper policy selected next."
+        }
+      },
       "edit_entity_helper": {
         "title": "Choose Template Helper Usage",
         "description": "Choose whether to use the template helper for this edit. Automatic uses helpers only for fields that were not customized, Keep current does not apply helpers, and Force replaces all helper-capable fields. The next screen keeps every entity, ID, value, and template field editable.",
@@ -1732,6 +1754,16 @@
         "data_description": {
           "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: the hot-water switch remains on in both modes, heat uses the climate heat mode, and virtual off uses the climate fan-only mode. Camera and image sources can be aliased one at a time, not merged.",
           "target_device_name": "Choose an existing Virtual Device to keep its entities together, or create a new Device."
+        }
+      },
+      "entity_type": {
+        "title": "Choose Virtual Entity Type",
+        "description": "Choose the type of virtual entity to create from this single source. Only source-to-target combinations with generated helper support are shown.",
+        "data": {
+          "target_entity_type": "Target entity type"
+        },
+        "data_description": {
+          "target_entity_type": "The generated state, native-property, and supported command helpers will use this entity type. For example, a Switch source can drive a virtual Fan."
         }
       }
     }
