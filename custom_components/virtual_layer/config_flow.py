@@ -28,8 +28,6 @@ from homeassistant.components.humidifier import HumidifierEntityFeature
 from homeassistant.components.lawn_mower import LawnMowerEntityFeature
 from homeassistant.components.lock import LockEntityFeature
 from homeassistant.components.media_player import MediaPlayerEntityFeature
-from homeassistant.components.number import NumberDeviceClass, NumberMode
-from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.components.siren import SirenEntityFeature
 from homeassistant.components.update import UpdateEntityFeature
 from homeassistant.components.vacuum import VacuumEntityFeature
@@ -1054,30 +1052,6 @@ POLYGON_DISTANCE_SELECTOR = selector.NumberSelector(
 
 def _native_property_selector(platform: str, property_name: str):
     """Return a useful editor while keeping native values template-backed."""
-    options: list[str] | None = None
-    if platform == "sensor" and property_name == "device_class":
-        options = [item.value for item in SensorDeviceClass]
-    elif platform == "sensor" and property_name == "state_class":
-        options = [item.value for item in SensorStateClass]
-    elif platform == "number" and property_name == "device_class":
-        options = [item.value for item in NumberDeviceClass]
-    elif platform == "number" and property_name == "mode":
-        options = [item.value for item in NumberMode]
-    if options is not None:
-        return selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=options,
-                custom_value=True,
-                mode=selector.SelectSelectorMode.DROPDOWN,
-                sort=True,
-            )
-        )
-    if property_name in {
-        "native_unit_of_measurement",
-        "suggested_unit_of_measurement",
-        "unit_of_measurement",
-    }:
-        return selector.TextSelector(selector.TextSelectorConfig())
     return TEMPLATE_SELECTOR
 
 
