@@ -18,7 +18,7 @@ from homeassistant.components.humidifier import (
     HumidifierDeviceClass,
     HumidifierEntityFeature,
 )
-from homeassistant.components.light import ColorMode, LightEntityFeature
+from homeassistant.components.light import ATTR_FLASH, ColorMode, LightEntityFeature
 from homeassistant.components.media_player import (
     MediaPlayerEntityFeature,
     MediaPlayerState,
@@ -76,7 +76,11 @@ from custom_components.virtual_layer.humidifier import (
     VirtualHumidifier,
 )
 from custom_components.virtual_layer.image import IMAGE_SCHEMA, VirtualImage
-from custom_components.virtual_layer.light import LIGHT_SCHEMA, VirtualLight
+from custom_components.virtual_layer.light import (
+    CONF_MATTER_LIGHT_TYPE,
+    LIGHT_SCHEMA,
+    VirtualLight,
+)
 from custom_components.virtual_layer.lock import LOCK_SCHEMA, VirtualLock
 from custom_components.virtual_layer.number import NUMBER_SCHEMA, VirtualNumber
 from custom_components.virtual_layer.sensor import SENSOR_SCHEMA, VirtualSensor
@@ -119,6 +123,56 @@ def test_command_contracts_match_wrapped_platform_methods():
         }
 
         assert wrapped_commands == expected_commands, domain
+
+
+@pytest.mark.parametrize(
+    ("matter_type", "expected_modes"),
+    [
+        ("on_off", {ColorMode.ONOFF}),
+        ("dimmable", {ColorMode.BRIGHTNESS}),
+        ("color_temperature", {ColorMode.COLOR_TEMP}),
+        (
+            "extended_color",
+            {ColorMode.HS, ColorMode.XY, ColorMode.COLOR_TEMP},
+        ),
+    ],
+)
+def test_matter_light_types_have_fixed_standard_capabilities(
+    matter_type, expected_modes
+):
+    light = VirtualLight(
+        LIGHT_SCHEMA(
+            _base(
+                f"light.matter_{matter_type}",
+                "off",
+                **{CONF_MATTER_LIGHT_TYPE: matter_type},
+            )
+        ),
+        False,
+    )
+
+    assert light.supported_color_modes == expected_modes
+    assert LightEntityFeature.EFFECT not in light.supported_features
+    assert LightEntityFeature.FLASH not in light.supported_features
+
+
+@pytest.mark.asyncio
+async def test_matter_light_rejects_nonstandard_effect_and_flash_calls():
+    light = VirtualLight(
+        LIGHT_SCHEMA(
+            _base(
+                "light.matter_strict",
+                "off",
+                **{CONF_MATTER_LIGHT_TYPE: "extended_color"},
+            )
+        ),
+        False,
+    )
+
+    with pytest.raises(ValueError, match="effects or flash"):
+        await light.async_turn_on(effect="rainbow")
+    with pytest.raises(ValueError, match="flash"):
+        await light.async_turn_off(**{ATTR_FLASH: "short"})
 
 
 @pytest.mark.parametrize(
@@ -1595,9 +1649,9 @@ async def test_persistent_entities_restore_against_templated_capabilities(hass):
     assert select.current_option == "turbo"
     assert number.native_max_value == 200
     assert number.native_value == 150
-    assert light.effect_list == ["none", "rainbow"]
-    assert light.effect == "rainbow"
-    assert LightEntityFeature.EFFECT in light.supported_features
+    assert light.effect_list is None
+    assert light.effect is None
+    assert LightEntityFeature.EFFECT not in light.supported_features
     assert remote.activity_list == ["TV", "Music"]
     assert remote.current_activity == "Music"
     assert media.source_list == ["TV", "Radio"]
@@ -1960,14 +2014,13 @@ def test_light_number_and_vacuum_templates_use_native_types(hass):
             _base(
                 "light.dynamic",
                 "on",
+                matter_light_type="extended_color",
                 **{
                     CONF_NATIVE_TEMPLATES: {
-                        "supported_color_modes": "{{ ['rgb', 'color_temp'] }}",
-                        "color_mode": "{{ 'rgb' }}",
+                        "supported_color_modes": "{{ ['hs', 'color_temp'] }}",
+                        "color_mode": "{{ 'hs' }}",
                         "brightness": "{{ 128 }}",
-                        "rgb_color": "{{ [12, 34, 56] }}",
-                        "effect_list": "{{ ['rainbow', 'none'] }}",
-                        "effect": "{{ 'rainbow' }}",
+                        "hs_color": "{{ [120, 50] }}",
                     }
                 },
             )
@@ -2015,12 +2068,12 @@ def test_light_number_and_vacuum_templates_use_native_types(hass):
     for entity in (light, number, vacuum):
         _render_native_templates(entity, hass)
 
-    assert light.supported_color_modes == {ColorMode.RGB, ColorMode.COLOR_TEMP}
-    assert light.color_mode == ColorMode.RGB
+    assert light.supported_color_modes == {ColorMode.HS, ColorMode.COLOR_TEMP}
+    assert light.color_mode == ColorMode.HS
     assert light.brightness == 128
-    assert light.rgb_color == (12, 34, 56)
-    assert light.effect == "rainbow"
-    assert LightEntityFeature.EFFECT in light.supported_features
+    assert light.hs_color == (120, 50)
+    assert light.effect is None
+    assert LightEntityFeature.EFFECT not in light.supported_features
     assert number.native_min_value == 10
     assert number.native_max_value == 20
     assert number.native_step == 0.5
@@ -2038,14 +2091,7 @@ def test_light_number_and_vacuum_templates_use_native_types(hass):
     ("mode", "service_key", "service_value", "expected"),
     [
         ("xy", "xy_color", [0.25, 0.75], (0.25, 0.75)),
-        ("rgb", "rgb_color", [10, 20, 30], (10, 20, 30)),
-        ("rgbw", "rgbw_color", [10, 20, 30, 40], (10, 20, 30, 40)),
-        (
-            "rgbww",
-            "rgbww_color",
-            [10, 20, 30, 40, 50],
-            (10, 20, 30, 40, 50),
-        ),
+        ("hs", "hs_color", [120, 75], (120, 75)),
     ],
 )
 async def test_light_color_modes_update_and_restore_native_colors(
@@ -2059,6 +2105,7 @@ async def test_light_color_modes_update_and_restore_native_colors(
         _base(
             f"light.{mode}",
             "on",
+            matter_light_type="extended_color",
             **{
                 CONF_NATIVE_TEMPLATES: {
                     "supported_color_modes": "{{ [" + repr(mode) + "] }}",

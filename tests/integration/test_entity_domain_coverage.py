@@ -53,7 +53,7 @@ _NATIVE_TEMPLATE_SAMPLES = {
     "available_tones": ["alarm"],
     "camera_entity": "camera.helper_source",
     "code_format": "number",
-    "color_mode": "rgb",
+    "color_mode": "hs",
     "color_temp_kelvin": 4000,
     "content_type": "image/png",
     "current_activity": "TV",
@@ -114,7 +114,7 @@ _NATIVE_TEMPLATE_SAMPLES = {
     "source_list": ["TV", "Radio"],
     "state_class": "measurement",
     "stream_source": "rtsp://example.test/live",
-    "supported_color_modes": ["rgb", "color_temp"],
+    "supported_color_modes": ["hs", "color_temp"],
     "supported_formats": ["wav"],
     "supported_languages": ["en", "ko"],
     "supported_options": ["voice"],
@@ -240,6 +240,8 @@ def _raw_ui_entity(domain: str) -> dict:
         CONF_INITIAL_AVAILABILITY: True,
         CONF_PERSISTENT: False,
     }
+    if domain == "light":
+        entity["matter_light_type"] = "extended_color"
     native_templates = _native_template_samples(domain)
     if native_templates:
         entity[CONF_NATIVE_TEMPLATES] = native_templates

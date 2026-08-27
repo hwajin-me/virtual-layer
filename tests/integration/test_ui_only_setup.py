@@ -3103,6 +3103,7 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     }
     assert next(iter(result["data"][ATTR_DEVICES].values())) == [{
             CONF_PLATFORM: "light",
+            "matter_light_type": "dimmable",
             CONF_NAME: "Kitchen Lamp",
             ATTR_ENTITY_ID: "light.virtual_kitchen_lamp",
             CONF_INITIAL_VALUE: "on",

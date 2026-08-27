@@ -124,7 +124,7 @@
           },
           "domain_settings": {
             "name": "Domain settings",
-            "description": "Location and polygon controls used by domains that require additional structured settings.",
+            "description": "Structured settings for the selected entity domain, including Matter light capabilities and polygon controls.",
             "data": {
               "polygon_geojson_json": "Polygon GeoJSON",
               "polygon_files_text": "Polygon files or URLs",
@@ -132,7 +132,8 @@
               "polygon_strategy": "Tracker selection strategy",
               "polygon_distance_meters": "Tracker grouping distance",
               "polygon_tracker_rules_json": "Tracker rules JSON",
-              "polygon_away_state": "Outside-zone state"
+              "polygon_away_state": "Outside-zone state",
+              "matter_light_type": "Matter light device type"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -141,12 +142,13 @@
               "polygon_strategy": "Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions.",
               "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
               "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
-              "polygon_away_state": "State used when the selected GPS position is outside every polygon."
+              "polygon_away_state": "State used when the selected GPS position is outside every polygon.",
+              "matter_light_type": "Select the Matter lighting contract. It strictly limits the entity to on/off, dimming, color temperature, or extended HS/XY color capabilities. Effects and flash are never exposed."
             }
           },
           "native_value_templates": {
-            "name": "Native value Jinja templates",
-            "description": "Jinja templates for native values supported by the selected domain. Copying a source entity fills every detectable property automatically. On later source changes, edited values are preserved and untouched helper values are regenerated. Every field receives a generated helper or a safe domain default.",
+            "name": "Entity details and native values",
+            "description": "Configure native Home Assistant details such as type/device class, unit (including ISO currency codes), state class, and domain values. Common details use dropdown or text inputs and still accept Jinja for dynamic values. Manual values are preserved when sources change.",
             "data": {
               "hvac_modes": "HVAC modes",
               "fan_modes": "Fan modes",
@@ -194,8 +196,6 @@
               "current_operation": "Current Operation",
               "current_option": "Current Option",
               "current_valve_position": "Current Valve Position",
-              "effect": "Effect",
-              "effect_list": "Effect List",
               "fan_speed": "Fan Speed",
               "fan_speed_list": "Fan Speed List",
               "gps": "GPS",
@@ -319,9 +319,6 @@
               "precision": "Precision",
               "repeat": "Repeat mode",
               "reports_position": "Reports position",
-              "rgb_color": "RGB color",
-              "rgbw_color": "RGBW color",
-              "rgbww_color": "RGBWW color",
               "shuffle": "Shuffle",
               "sound_mode": "Sound mode",
               "sound_mode_list": "Available sound modes",
@@ -394,8 +391,6 @@
               "current_operation": "Jinja template for current operation. Return a value compatible with Home Assistant.",
               "current_option": "Jinja template for current option. Return a value compatible with Home Assistant.",
               "current_valve_position": "Jinja template for current valve position. Return a number compatible with Home Assistant.",
-              "effect": "Jinja template for effect. Return a value compatible with Home Assistant.",
-              "effect_list": "Jinja template for effect list. Return a list compatible with Home Assistant.",
               "fan_speed": "Jinja template for fan speed. Return a value compatible with Home Assistant.",
               "fan_speed_list": "Jinja template for fan speed list. Return a list compatible with Home Assistant.",
               "gps": "Jinja template for gps. Return a list compatible with Home Assistant.",
@@ -519,9 +514,6 @@
               "precision": "Jinja template for the precision native property.",
               "repeat": "Jinja template for the repeat mode native property.",
               "reports_position": "Jinja template for the reports position native property.",
-              "rgb_color": "Jinja template for the rgb color native property.",
-              "rgbw_color": "Jinja template for the rgbw color native property.",
-              "rgbww_color": "Jinja template for the rgbww color native property.",
               "shuffle": "Jinja template for the shuffle native property.",
               "sound_mode": "Jinja template for the sound mode native property.",
               "sound_mode_list": "Jinja template for the available sound modes native property.",
@@ -764,7 +756,7 @@
           },
           "domain_settings": {
             "name": "Domain settings",
-            "description": "Location and polygon controls used by domains that require additional structured settings.",
+            "description": "Structured settings for the selected entity domain, including Matter light capabilities and polygon controls.",
             "data": {
               "polygon_geojson_json": "Polygon GeoJSON",
               "polygon_files_text": "Polygon files or URLs",
@@ -772,7 +764,8 @@
               "polygon_strategy": "Tracker selection strategy",
               "polygon_distance_meters": "Tracker grouping distance",
               "polygon_tracker_rules_json": "Tracker rules JSON",
-              "polygon_away_state": "Outside-zone state"
+              "polygon_away_state": "Outside-zone state",
+              "matter_light_type": "Matter light device type"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -781,12 +774,13 @@
               "polygon_strategy": "Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions.",
               "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
               "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
-              "polygon_away_state": "State used when the selected GPS position is outside every polygon."
+              "polygon_away_state": "State used when the selected GPS position is outside every polygon.",
+              "matter_light_type": "Select the Matter lighting contract. It strictly limits the entity to on/off, dimming, color temperature, or extended HS/XY color capabilities. Effects and flash are never exposed."
             }
           },
           "native_value_templates": {
-            "name": "Native value Jinja templates",
-            "description": "Jinja templates for native values supported by the selected domain. Copying a source entity fills every detectable property automatically. On later source changes, edited values are preserved and untouched helper values are regenerated. Every field receives a generated helper or a safe domain default.",
+            "name": "Entity details and native values",
+            "description": "Configure native Home Assistant details such as type/device class, unit (including ISO currency codes), state class, and domain values. Common details use dropdown or text inputs and still accept Jinja for dynamic values. Manual values are preserved when sources change.",
             "data": {
               "hvac_modes": "HVAC modes",
               "fan_modes": "Fan modes",
@@ -834,8 +828,6 @@
               "current_operation": "Current Operation",
               "current_option": "Current Option",
               "current_valve_position": "Current Valve Position",
-              "effect": "Effect",
-              "effect_list": "Effect List",
               "fan_speed": "Fan Speed",
               "fan_speed_list": "Fan Speed List",
               "gps": "GPS",
@@ -959,9 +951,6 @@
               "precision": "Precision",
               "repeat": "Repeat mode",
               "reports_position": "Reports position",
-              "rgb_color": "RGB color",
-              "rgbw_color": "RGBW color",
-              "rgbww_color": "RGBWW color",
               "shuffle": "Shuffle",
               "sound_mode": "Sound mode",
               "sound_mode_list": "Available sound modes",
@@ -1034,8 +1023,6 @@
               "current_operation": "Jinja template for current operation. Return a value compatible with Home Assistant.",
               "current_option": "Jinja template for current option. Return a value compatible with Home Assistant.",
               "current_valve_position": "Jinja template for current valve position. Return a number compatible with Home Assistant.",
-              "effect": "Jinja template for effect. Return a value compatible with Home Assistant.",
-              "effect_list": "Jinja template for effect list. Return a list compatible with Home Assistant.",
               "fan_speed": "Jinja template for fan speed. Return a value compatible with Home Assistant.",
               "fan_speed_list": "Jinja template for fan speed list. Return a list compatible with Home Assistant.",
               "gps": "Jinja template for gps. Return a list compatible with Home Assistant.",
@@ -1159,9 +1146,6 @@
               "precision": "Jinja template for the precision native property.",
               "repeat": "Jinja template for the repeat mode native property.",
               "reports_position": "Jinja template for the reports position native property.",
-              "rgb_color": "Jinja template for the rgb color native property.",
-              "rgbw_color": "Jinja template for the rgbw color native property.",
-              "rgbww_color": "Jinja template for the rgbww color native property.",
               "shuffle": "Jinja template for the shuffle native property.",
               "sound_mode": "Jinja template for the sound mode native property.",
               "sound_mode_list": "Jinja template for the available sound modes native property.",
@@ -1318,7 +1302,7 @@
           },
           "domain_settings": {
             "name": "Domain settings",
-            "description": "Location and polygon controls used by domains that require additional structured settings.",
+            "description": "Structured settings for the selected entity domain, including Matter light capabilities and polygon controls.",
             "data": {
               "polygon_geojson_json": "Polygon GeoJSON",
               "polygon_files_text": "Polygon files or URLs",
@@ -1326,7 +1310,8 @@
               "polygon_strategy": "Tracker selection strategy",
               "polygon_distance_meters": "Tracker grouping distance",
               "polygon_tracker_rules_json": "Tracker rules JSON",
-              "polygon_away_state": "Outside-zone state"
+              "polygon_away_state": "Outside-zone state",
+              "matter_light_type": "Matter light device type"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -1335,12 +1320,13 @@
               "polygon_strategy": "Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions.",
               "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
               "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
-              "polygon_away_state": "State used when the selected GPS position is outside every polygon."
+              "polygon_away_state": "State used when the selected GPS position is outside every polygon.",
+              "matter_light_type": "Select the Matter lighting contract. It strictly limits the entity to on/off, dimming, color temperature, or extended HS/XY color capabilities. Effects and flash are never exposed."
             }
           },
           "native_value_templates": {
-            "name": "Native value Jinja templates",
-            "description": "Jinja templates for native values supported by the selected domain. Copying a source entity fills every detectable property automatically. On later source changes, edited values are preserved and untouched helper values are regenerated. Every field receives a generated helper or a safe domain default.",
+            "name": "Entity details and native values",
+            "description": "Configure native Home Assistant details such as type/device class, unit (including ISO currency codes), state class, and domain values. Common details use dropdown or text inputs and still accept Jinja for dynamic values. Manual values are preserved when sources change.",
             "data": {
               "hvac_modes": "HVAC modes",
               "fan_modes": "Fan modes",
@@ -1388,8 +1374,6 @@
               "current_operation": "Current Operation",
               "current_option": "Current Option",
               "current_valve_position": "Current Valve Position",
-              "effect": "Effect",
-              "effect_list": "Effect List",
               "fan_speed": "Fan Speed",
               "fan_speed_list": "Fan Speed List",
               "gps": "GPS",
@@ -1513,9 +1497,6 @@
               "precision": "Precision",
               "repeat": "Repeat mode",
               "reports_position": "Reports position",
-              "rgb_color": "RGB color",
-              "rgbw_color": "RGBW color",
-              "rgbww_color": "RGBWW color",
               "shuffle": "Shuffle",
               "sound_mode": "Sound mode",
               "sound_mode_list": "Available sound modes",
@@ -1588,8 +1569,6 @@
               "current_operation": "Jinja template for current operation. Return a value compatible with Home Assistant.",
               "current_option": "Jinja template for current option. Return a value compatible with Home Assistant.",
               "current_valve_position": "Jinja template for current valve position. Return a number compatible with Home Assistant.",
-              "effect": "Jinja template for effect. Return a value compatible with Home Assistant.",
-              "effect_list": "Jinja template for effect list. Return a list compatible with Home Assistant.",
               "fan_speed": "Jinja template for fan speed. Return a value compatible with Home Assistant.",
               "fan_speed_list": "Jinja template for fan speed list. Return a list compatible with Home Assistant.",
               "gps": "Jinja template for gps. Return a list compatible with Home Assistant.",
@@ -1713,9 +1692,6 @@
               "precision": "Jinja template for the precision native property.",
               "repeat": "Jinja template for the repeat mode native property.",
               "reports_position": "Jinja template for the reports position native property.",
-              "rgb_color": "Jinja template for the rgb color native property.",
-              "rgbw_color": "Jinja template for the rgbw color native property.",
-              "rgbww_color": "Jinja template for the rgbww color native property.",
               "shuffle": "Jinja template for the shuffle native property.",
               "sound_mode": "Jinja template for the sound mode native property.",
               "sound_mode_list": "Jinja template for the available sound modes native property.",
@@ -1785,6 +1761,14 @@
         "priority": "Priority",
         "latest": "Latest update",
         "median": "Median position"
+      }
+    },
+    "matter_light_type": {
+      "options": {
+        "on_off": "On/Off Light",
+        "dimmable": "Dimmable Light",
+        "color_temperature": "Color Temperature Light",
+        "extended_color": "Extended Color Light"
       }
     },
     "helper_update_mode": {

@@ -10,11 +10,13 @@ docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
   --entrypoint python \
   homeassistant - <<'PY'
 from homeassistant.components.camera import CameraEntityFeature
+from homeassistant.components.light import ColorMode, LightEntityFeature
 from homeassistant.const import __version__ as HA_VERSION
 
 from custom_components.virtual_layer import number, sensor
 from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
 from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClimate
+from custom_components.virtual_layer.light import LIGHT_SCHEMA, VirtualLight
 from custom_components.virtual_layer.vacuum import VACUUM_SCHEMA, VirtualVacuum
 
 
@@ -48,10 +50,27 @@ camera = VirtualCamera(
     }),
     False,
 )
+light = VirtualLight(
+    LIGHT_SCHEMA({
+        "name": "Docker Matter Light",
+        "entity_id": "light.docker_matter_light",
+        "initial_value": "off",
+        "matter_light_type": "extended_color",
+        "support_effect": True,
+    }),
+    False,
+)
 
 assert climate._native_templates["hvac_action"] == "{{ 'heating' }}"
 assert int(vacuum.supported_features) >= 0
 assert CameraEntityFeature.STREAM in camera.supported_features
+assert light.supported_color_modes == {
+    ColorMode.HS,
+    ColorMode.XY,
+    ColorMode.COLOR_TEMP,
+}
+assert LightEntityFeature.EFFECT not in light.supported_features
+assert LightEntityFeature.FLASH not in light.supported_features
 assert sensor.CONCENTRATION_PARTS_PER_MILLION == (
     number.CONCENTRATION_PARTS_PER_MILLION
 )

@@ -46,6 +46,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_DOMAIN_SETTINGS,
     CONF_ENTITY_NAME,
     CONF_EVENT_HOOKS_JSON,
+    CONF_MATTER_LIGHT_TYPE,
     CONF_NATIVE_TEMPLATES_JSON,
     CONF_NATIVE_VALUE_TEMPLATES,
     CONF_REFERENCE_ENTITY_ID,
@@ -549,10 +550,79 @@ def test_native_value_template_sections_match_domain_properties():
 
         assert set(template_validators) == set(expected_properties), platform
         assert CONF_NATIVE_TEMPLATES_JSON not in validators, platform
-        assert all(
-            isinstance(validator, selector.TemplateSelector)
-            for validator in template_validators.values()
-        ), platform
+        for property_name, validator in template_validators.items():
+            if property_name in {
+                "native_unit_of_measurement",
+                "suggested_unit_of_measurement",
+                "unit_of_measurement",
+            }:
+                assert isinstance(validator, selector.TextSelector), platform
+            elif (platform, property_name) in {
+                ("sensor", "device_class"),
+                ("sensor", "state_class"),
+                ("number", "device_class"),
+                ("number", "mode"),
+            }:
+                assert isinstance(validator, selector.SelectSelector), platform
+            else:
+                assert isinstance(validator, selector.TemplateSelector), platform
+
+
+def test_sensor_details_offer_device_class_state_class_unit_and_icon():
+    schema = _entity_schema({CONF_PLATFORM: "sensor"})
+    outer = {marker.schema: validator for marker, validator in schema.schema.items()}
+    assert outer[CONF_NATIVE_VALUE_TEMPLATES].options["collapsed"] is False
+    native = _section_validators(schema, CONF_NATIVE_VALUE_TEMPLATES)
+
+    assert isinstance(native["device_class"], selector.SelectSelector)
+    assert "monetary" in native["device_class"].config["options"]
+    assert isinstance(native["state_class"], selector.SelectSelector)
+    assert isinstance(native["native_unit_of_measurement"], selector.TextSelector)
+
+    _device_name, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_ICON: "mdi:cash",
+                CONF_NATIVE_VALUE_TEMPLATES: {
+                    "device_class": "monetary",
+                    "state_class": "total_increasing",
+                    "native_unit_of_measurement": "KRW",
+                },
+            }
+        )
+    )
+
+    assert entity[CONF_ICON] == "mdi:cash"
+    assert entity[CONF_NATIVE_TEMPLATES] == {
+        "device_class": "monetary",
+        "state_class": "total_increasing",
+        "native_unit_of_measurement": "KRW",
+    }
+
+
+def test_light_form_persists_matter_device_type():
+    schema = _entity_schema({CONF_PLATFORM: "light"})
+    outer = {marker.schema: validator for marker, validator in schema.schema.items()}
+    assert outer[CONF_DOMAIN_SETTINGS].options["collapsed"] is False
+    domain = _section_validators(schema, CONF_DOMAIN_SETTINGS)
+    assert domain[CONF_MATTER_LIGHT_TYPE].config["options"] == [
+        "on_off",
+        "dimmable",
+        "color_temperature",
+        "extended_color",
+    ]
+
+    _device_name, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "light",
+                CONF_INITIAL_VALUE: "on",
+                CONF_MATTER_LIGHT_TYPE: "extended_color",
+                CONF_NATIVE_VALUE_TEMPLATES: {},
+            }
+        )
+    )
+    assert entity[CONF_MATTER_LIGHT_TYPE] == "extended_color"
 
 
 def _native_helper_sample(platform: str, property_name: str, index: int):

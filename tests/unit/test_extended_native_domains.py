@@ -1831,7 +1831,7 @@ def test_fan_light_and_vacuum_reject_malformed_restored_attributes():
     assert fan.preset_mode is None
     assert light.hs_color == (120, 50)
     assert light.brightness == 255
-    assert light.effect == "none"
+    assert light.effect is None
     assert vacuum._battery_level == 50
     assert vacuum.fan_speed == "normal"
 

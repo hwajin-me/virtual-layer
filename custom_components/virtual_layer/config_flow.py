@@ -28,6 +28,8 @@ from homeassistant.components.humidifier import HumidifierEntityFeature
 from homeassistant.components.lawn_mower import LawnMowerEntityFeature
 from homeassistant.components.lock import LockEntityFeature
 from homeassistant.components.media_player import MediaPlayerEntityFeature
+from homeassistant.components.number import NumberDeviceClass, NumberMode
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.components.siren import SirenEntityFeature
 from homeassistant.components.update import UpdateEntityFeature
 from homeassistant.components.vacuum import VacuumEntityFeature
@@ -96,6 +98,7 @@ CONF_NATIVE_VALUE_TEMPLATES = "native_value_templates"
 CONF_DEVICE_DETAILS = "device_details"
 CONF_ADVANCED_SETTINGS = "advanced_settings"
 CONF_DOMAIN_SETTINGS = "domain_settings"
+CONF_MATTER_LIGHT_TYPE = "matter_light_type"
 CONF_COMMAND_ACTIONS_JSON = "command_actions_json"
 CONF_DEVICE_NAME = "device_name"
 CONF_DEVICE_ID = "device_id"
@@ -431,14 +434,9 @@ DOMAIN_NATIVE_TEMPLATE_PROPERTIES = {
         "brightness",
         "hs_color",
         "xy_color",
-        "rgb_color",
-        "rgbw_color",
-        "rgbww_color",
         "color_temp_kelvin",
         "min_color_temp_kelvin",
         "max_color_temp_kelvin",
-        "effect_list",
-        "effect",
     ),
     "lock": (
         "support_open",
@@ -989,6 +987,7 @@ CLIMATE_ACTION_VALUES = (
 TEMPERATURE_UNIT_VALUES = ("°C", "°F", "K")
 HUMIDIFIER_ACTION_VALUES = ("off", "humidifying", "drying", "idle")
 HUMIDIFIER_CLASS_VALUES = ("humidifier", "dehumidifier")
+MATTER_LIGHT_TYPES = ("on_off", "dimmable", "color_temperature", "extended_color")
 
 _DOMAIN_OPTION_RESERVED_KEYS = {
     ATTR_ENTITY_ID,
@@ -1051,6 +1050,35 @@ POLYGON_DISTANCE_SELECTOR = selector.NumberSelector(
         mode=selector.NumberSelectorMode.BOX,
     ),
 )
+
+
+def _native_property_selector(platform: str, property_name: str):
+    """Return a useful editor while keeping native values template-backed."""
+    options: list[str] | None = None
+    if platform == "sensor" and property_name == "device_class":
+        options = [item.value for item in SensorDeviceClass]
+    elif platform == "sensor" and property_name == "state_class":
+        options = [item.value for item in SensorStateClass]
+    elif platform == "number" and property_name == "device_class":
+        options = [item.value for item in NumberDeviceClass]
+    elif platform == "number" and property_name == "mode":
+        options = [item.value for item in NumberMode]
+    if options is not None:
+        return selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=options,
+                custom_value=True,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                sort=True,
+            )
+        )
+    if property_name in {
+        "native_unit_of_measurement",
+        "suggested_unit_of_measurement",
+        "unit_of_measurement",
+    }:
+        return selector.TextSelector(selector.TextSelectorConfig())
+    return TEMPLATE_SELECTOR
 
 
 def _reference_entity_schema(
@@ -1647,10 +1675,23 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         domain_schema[person_marker] = selector.EntitySelector(
             selector.EntitySelectorConfig(domain="person"),
         )
+    elif platform == "light":
+        domain_schema[
+            vol.Required(
+                CONF_MATTER_LIGHT_TYPE,
+                default=defaults.get(CONF_MATTER_LIGHT_TYPE, "dimmable"),
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(MATTER_LIGHT_TYPES),
+                translation_key="matter_light_type",
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
     if domain_schema:
         schema[vol.Optional(CONF_DOMAIN_SETTINGS, default=dict)] = section(
             vol.Schema(domain_schema),
-            {"collapsed": True},
+            {"collapsed": platform != "light"},
         )
     native_template_properties = DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
     if native_template_properties:
@@ -1662,10 +1703,12 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 property_name,
                 default=default if isinstance(default, str) else "",
             )
-            template_schema[marker] = TEMPLATE_SELECTOR
+            template_schema[marker] = _native_property_selector(
+                platform, property_name
+            )
         schema[vol.Optional(CONF_NATIVE_VALUE_TEMPLATES, default=dict)] = section(
             vol.Schema(template_schema),
-            {"collapsed": True},
+            {"collapsed": platform not in {"binary_sensor", "number", "sensor"}},
         )
     return vol.Schema(schema, extra=vol.ALLOW_EXTRA)
 
@@ -1682,6 +1725,8 @@ def _needs_domain_specific_form(user_input) -> bool:
         return True
     if platform == "device_tracker":
         return CONF_POLYGON_STRATEGY_INPUT not in user_input
+    if platform == "light":
+        return CONF_MATTER_LIGHT_TYPE not in user_input
     return False
 
 
@@ -2532,7 +2577,13 @@ def _build_entity_config(
     domain_options = _parse_domain_options(
         _text_default(user_input.get(CONF_DOMAIN_OPTIONS_JSON)),
     )
-    if platform == "climate":
+    if platform == "light":
+        domain_options.pop(CONF_MATTER_LIGHT_TYPE, None)
+        matter_light_type = user_input.get(CONF_MATTER_LIGHT_TYPE, "dimmable")
+        if matter_light_type not in MATTER_LIGHT_TYPES:
+            raise InvalidDomainOptions
+        domain_options[CONF_MATTER_LIGHT_TYPE] = matter_light_type
+    elif platform == "climate":
         for field_name in CLIMATE_MODE_LIST_FIELDS:
             if field_name in user_input:
                 if not isinstance(user_input[field_name], list):
@@ -2699,7 +2750,7 @@ def _build_entity_config(
 
 def _domain_options_error_field(user_input: Mapping) -> str:
     """Return a visible error location for the selected domain's inputs."""
-    if user_input.get(CONF_PLATFORM) in {"climate", "fan", "humidifier"}:
+    if user_input.get(CONF_PLATFORM) in {"climate", "fan", "humidifier", "light"}:
         return "base"
     return CONF_DOMAIN_OPTIONS_JSON
 
@@ -4974,6 +5025,21 @@ def _reference_entity_defaults(
             + " }}"
         ),
     }
+    if platform == "light":
+        source_modes = set(first_state.attributes.get("supported_color_modes", []))
+        defaults[CONF_MATTER_LIGHT_TYPE] = (
+            "extended_color"
+            if source_modes & {"hs", "xy"}
+            else "color_temperature"
+            if "color_temp" in source_modes
+            else "dimmable"
+            if (
+                "brightness" in source_modes
+                or source_modes - {"onoff"}
+                or "brightness" in first_state.attributes
+            )
+            else "on_off"
+        )
     if fan_number_profile is not None:
         fan_index, number_index = fan_number_profile
         defaults[CONF_AVAILABILITY_TEMPLATE] = _xiaomi_fan_availability_template(
@@ -5974,6 +6040,11 @@ def _entity_form_defaults(
             for key, value in domain_options.items()
             if key not in HUMIDIFIER_FORM_FIELDS
         }
+    elif platform == "light":
+        defaults[CONF_MATTER_LIGHT_TYPE] = domain_options.pop(
+            CONF_MATTER_LIGHT_TYPE,
+            "dimmable",
+        )
     defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
     return defaults
 

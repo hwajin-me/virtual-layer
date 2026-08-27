@@ -124,7 +124,7 @@
           },
           "domain_settings": {
             "name": "도메인 설정",
-            "description": "추가 구조화 설정이 필요한 도메인의 위치 및 폴리곤 제어 값을 설정합니다.",
+            "description": "Matter 조명 기능과 폴리곤 제어를 포함한 선택 도메인의 구조화된 설정입니다.",
             "data": {
               "polygon_geojson_json": "Polygon GeoJSON",
               "polygon_files_text": "Polygon 파일 또는 URL",
@@ -132,7 +132,8 @@
               "polygon_strategy": "Tracker 위치 선정 방식",
               "polygon_distance_meters": "Tracker 그룹 거리",
               "polygon_tracker_rules_json": "Tracker 규칙 JSON",
-              "polygon_away_state": "영역 밖 상태"
+              "polygon_away_state": "영역 밖 상태",
+              "matter_light_type": "Matter 조명 장치 유형"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -141,12 +142,13 @@
               "polygon_strategy": "다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다.",
               "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
               "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
-              "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다."
+              "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다.",
+              "matter_light_type": "Matter 조명 계약을 선택합니다. 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상 기능으로 엄격히 제한하며 효과와 깜빡임은 노출하지 않습니다."
             }
           },
           "native_value_templates": {
-            "name": "네이티브 값 Jinja 템플릿",
-            "description": "선택한 도메인의 네이티브 값에 적용할 Jinja 템플릿입니다. 소스 엔티티를 복사하면 확인 가능한 모든 속성을 자동으로 채웁니다. 이후 소스 변경 시 직접 수정한 값은 보존하고 수정하지 않은 helper 값만 다시 생성합니다. 각 필드에는 자동 생성 helper 또는 안전한 도메인 기본값이 설정됩니다.",
+            "name": "엔티티 상세 및 네이티브 값",
+            "description": "타입/device class, 단위(ISO 화폐 코드 포함), state class와 도메인 값을 설정합니다. 자주 쓰는 상세 값은 선택 또는 텍스트 입력으로 제공하며 동적 값에는 Jinja도 사용할 수 있습니다. 소스 변경 시 직접 수정한 값은 보존됩니다.",
             "data": {
               "hvac_modes": "HVAC 모드 목록",
               "fan_modes": "팬 모드 목록",
@@ -194,8 +196,6 @@
               "current_operation": "현재 운전 모드",
               "current_option": "현재 옵션",
               "current_valve_position": "현재 밸브 위치",
-              "effect": "효과",
-              "effect_list": "효과 목록",
               "fan_speed": "흡입 세기",
               "fan_speed_list": "흡입 세기 목록",
               "gps": "GPS 좌표",
@@ -319,9 +319,6 @@
               "precision": "정밀도",
               "repeat": "반복 모드",
               "reports_position": "위치 보고 여부",
-              "rgb_color": "RGB 색상",
-              "rgbw_color": "RGBW 색상",
-              "rgbww_color": "RGBWW 색상",
               "shuffle": "셔플",
               "sound_mode": "사운드 모드",
               "sound_mode_list": "사용 가능한 사운드 모드",
@@ -394,8 +391,6 @@
               "current_operation": "현재 운전 모드에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "current_option": "현재 옵션에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "current_valve_position": "현재 밸브 위치에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
-              "effect": "효과에 사용할 값을 반환하는 Jinja 템플릿입니다.",
-              "effect_list": "효과 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "fan_speed": "흡입 세기에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "fan_speed_list": "흡입 세기 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "gps": "GPS 좌표에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
@@ -519,9 +514,6 @@
               "precision": "정밀도 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "repeat": "반복 모드 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "reports_position": "위치 보고 여부 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
-              "rgb_color": "RGB 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
-              "rgbw_color": "RGBW 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
-              "rgbww_color": "RGBWW 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "shuffle": "셔플 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "sound_mode": "사운드 모드 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "sound_mode_list": "사용 가능한 사운드 모드 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
@@ -764,7 +756,7 @@
           },
           "domain_settings": {
             "name": "도메인 설정",
-            "description": "추가 구조화 설정이 필요한 도메인의 위치 및 폴리곤 제어 값을 설정합니다.",
+            "description": "Matter 조명 기능과 폴리곤 제어를 포함한 선택 도메인의 구조화된 설정입니다.",
             "data": {
               "polygon_geojson_json": "Polygon GeoJSON",
               "polygon_files_text": "Polygon 파일 또는 URL",
@@ -772,7 +764,8 @@
               "polygon_strategy": "Tracker 위치 선정 방식",
               "polygon_distance_meters": "Tracker 그룹 거리",
               "polygon_tracker_rules_json": "Tracker 규칙 JSON",
-              "polygon_away_state": "영역 밖 상태"
+              "polygon_away_state": "영역 밖 상태",
+              "matter_light_type": "Matter 조명 장치 유형"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -781,12 +774,13 @@
               "polygon_strategy": "다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다.",
               "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
               "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
-              "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다."
+              "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다.",
+              "matter_light_type": "Matter 조명 계약을 선택합니다. 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상 기능으로 엄격히 제한하며 효과와 깜빡임은 노출하지 않습니다."
             }
           },
           "native_value_templates": {
-            "name": "네이티브 값 Jinja 템플릿",
-            "description": "선택한 도메인의 네이티브 값에 적용할 Jinja 템플릿입니다. 소스 엔티티를 복사하면 확인 가능한 모든 속성을 자동으로 채웁니다. 이후 소스 변경 시 직접 수정한 값은 보존하고 수정하지 않은 helper 값만 다시 생성합니다. 각 필드에는 자동 생성 helper 또는 안전한 도메인 기본값이 설정됩니다.",
+            "name": "엔티티 상세 및 네이티브 값",
+            "description": "타입/device class, 단위(ISO 화폐 코드 포함), state class와 도메인 값을 설정합니다. 자주 쓰는 상세 값은 선택 또는 텍스트 입력으로 제공하며 동적 값에는 Jinja도 사용할 수 있습니다. 소스 변경 시 직접 수정한 값은 보존됩니다.",
             "data": {
               "hvac_modes": "HVAC 모드 목록",
               "fan_modes": "팬 모드 목록",
@@ -834,8 +828,6 @@
               "current_operation": "현재 운전 모드",
               "current_option": "현재 옵션",
               "current_valve_position": "현재 밸브 위치",
-              "effect": "효과",
-              "effect_list": "효과 목록",
               "fan_speed": "흡입 세기",
               "fan_speed_list": "흡입 세기 목록",
               "gps": "GPS 좌표",
@@ -959,9 +951,6 @@
               "precision": "정밀도",
               "repeat": "반복 모드",
               "reports_position": "위치 보고 여부",
-              "rgb_color": "RGB 색상",
-              "rgbw_color": "RGBW 색상",
-              "rgbww_color": "RGBWW 색상",
               "shuffle": "셔플",
               "sound_mode": "사운드 모드",
               "sound_mode_list": "사용 가능한 사운드 모드",
@@ -1034,8 +1023,6 @@
               "current_operation": "현재 운전 모드에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "current_option": "현재 옵션에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "current_valve_position": "현재 밸브 위치에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
-              "effect": "효과에 사용할 값을 반환하는 Jinja 템플릿입니다.",
-              "effect_list": "효과 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "fan_speed": "흡입 세기에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "fan_speed_list": "흡입 세기 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "gps": "GPS 좌표에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
@@ -1159,9 +1146,6 @@
               "precision": "정밀도 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "repeat": "반복 모드 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "reports_position": "위치 보고 여부 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
-              "rgb_color": "RGB 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
-              "rgbw_color": "RGBW 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
-              "rgbww_color": "RGBWW 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "shuffle": "셔플 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "sound_mode": "사운드 모드 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "sound_mode_list": "사용 가능한 사운드 모드 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
@@ -1318,7 +1302,7 @@
           },
           "domain_settings": {
             "name": "도메인 설정",
-            "description": "추가 구조화 설정이 필요한 도메인의 위치 및 폴리곤 제어 값을 설정합니다.",
+            "description": "Matter 조명 기능과 폴리곤 제어를 포함한 선택 도메인의 구조화된 설정입니다.",
             "data": {
               "polygon_geojson_json": "Polygon GeoJSON",
               "polygon_files_text": "Polygon 파일 또는 URL",
@@ -1326,7 +1310,8 @@
               "polygon_strategy": "Tracker 위치 선정 방식",
               "polygon_distance_meters": "Tracker 그룹 거리",
               "polygon_tracker_rules_json": "Tracker 규칙 JSON",
-              "polygon_away_state": "영역 밖 상태"
+              "polygon_away_state": "영역 밖 상태",
+              "matter_light_type": "Matter 조명 장치 유형"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -1335,12 +1320,13 @@
               "polygon_strategy": "다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다.",
               "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
               "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
-              "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다."
+              "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다.",
+              "matter_light_type": "Matter 조명 계약을 선택합니다. 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상 기능으로 엄격히 제한하며 효과와 깜빡임은 노출하지 않습니다."
             }
           },
           "native_value_templates": {
-            "name": "네이티브 값 Jinja 템플릿",
-            "description": "선택한 도메인의 네이티브 값에 적용할 Jinja 템플릿입니다. 소스 엔티티를 복사하면 확인 가능한 모든 속성을 자동으로 채웁니다. 이후 소스 변경 시 직접 수정한 값은 보존하고 수정하지 않은 helper 값만 다시 생성합니다. 각 필드에는 자동 생성 helper 또는 안전한 도메인 기본값이 설정됩니다.",
+            "name": "엔티티 상세 및 네이티브 값",
+            "description": "타입/device class, 단위(ISO 화폐 코드 포함), state class와 도메인 값을 설정합니다. 자주 쓰는 상세 값은 선택 또는 텍스트 입력으로 제공하며 동적 값에는 Jinja도 사용할 수 있습니다. 소스 변경 시 직접 수정한 값은 보존됩니다.",
             "data": {
               "hvac_modes": "HVAC 모드 목록",
               "fan_modes": "팬 모드 목록",
@@ -1388,8 +1374,6 @@
               "current_operation": "현재 운전 모드",
               "current_option": "현재 옵션",
               "current_valve_position": "현재 밸브 위치",
-              "effect": "효과",
-              "effect_list": "효과 목록",
               "fan_speed": "흡입 세기",
               "fan_speed_list": "흡입 세기 목록",
               "gps": "GPS 좌표",
@@ -1513,9 +1497,6 @@
               "precision": "정밀도",
               "repeat": "반복 모드",
               "reports_position": "위치 보고 여부",
-              "rgb_color": "RGB 색상",
-              "rgbw_color": "RGBW 색상",
-              "rgbww_color": "RGBWW 색상",
               "shuffle": "셔플",
               "sound_mode": "사운드 모드",
               "sound_mode_list": "사용 가능한 사운드 모드",
@@ -1588,8 +1569,6 @@
               "current_operation": "현재 운전 모드에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "current_option": "현재 옵션에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "current_valve_position": "현재 밸브 위치에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
-              "effect": "효과에 사용할 값을 반환하는 Jinja 템플릿입니다.",
-              "effect_list": "효과 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "fan_speed": "흡입 세기에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "fan_speed_list": "흡입 세기 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "gps": "GPS 좌표에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
@@ -1713,9 +1692,6 @@
               "precision": "정밀도 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "repeat": "반복 모드 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "reports_position": "위치 보고 여부 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
-              "rgb_color": "RGB 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
-              "rgbw_color": "RGBW 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
-              "rgbww_color": "RGBWW 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "shuffle": "셔플 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "sound_mode": "사운드 모드 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "sound_mode_list": "사용 가능한 사운드 모드 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
@@ -1785,6 +1761,14 @@
         "priority": "우선순위",
         "latest": "최근 업데이트",
         "median": "중앙 위치"
+      }
+    },
+    "matter_light_type": {
+      "options": {
+        "on_off": "켜기/끄기 조명",
+        "dimmable": "밝기 조절 조명",
+        "color_temperature": "색온도 조명",
+        "extended_color": "확장 색상 조명"
       }
     },
     "helper_update_mode": {

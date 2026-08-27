@@ -17,6 +17,7 @@ from homeassistant.components.light import (
     ATTR_COLOR_TEMP_KELVIN,
     ATTR_EFFECT,
     ATTR_EFFECT_LIST,
+    ATTR_FLASH,
     ATTR_HS_COLOR,
     ATTR_RGB_COLOR,
     ATTR_RGBW_COLOR,
@@ -55,6 +56,14 @@ CONF_INITIAL_WHITE_VALUE = "initial_white_value"
 CONF_SUPPORT_EFFECT = "support_effect"
 CONF_INITIAL_EFFECT = "initial_effect"
 CONF_INITIAL_EFFECT_LIST = "initial_effect_list"
+CONF_MATTER_LIGHT_TYPE = "matter_light_type"
+
+MATTER_LIGHT_COLOR_MODES = {
+    "on_off": {ColorMode.ONOFF},
+    "dimmable": {ColorMode.BRIGHTNESS},
+    "color_temperature": {ColorMode.COLOR_TEMP},
+    "extended_color": {ColorMode.HS, ColorMode.XY, ColorMode.COLOR_TEMP},
+}
 
 DEFAULT_LIGHT_VALUE = "on"
 DEFAULT_SUPPORT_BRIGHTNESS = True
@@ -87,6 +96,7 @@ BASE_SCHEMA = virtual_schema(DEFAULT_LIGHT_VALUE, {
         CONF_INITIAL_EFFECT_LIST,
         default=lambda: list(DEFAULT_INITIAL_EFFECT_LIST),
     ): cv.ensure_list,
+    vol.Optional(CONF_MATTER_LIGHT_TYPE): vol.In(MATTER_LIGHT_COLOR_MODES),
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
@@ -162,20 +172,19 @@ def _as_color_tuple(value, length: int, maximum: float, fallback=None):
 
 def validate_domain_options(config) -> None:
     """Reject malformed light colors and effects entered through the UI."""
+    if config.get(CONF_SUPPORT_EFFECT):
+        raise vol.Invalid("Matter-compatible lights do not support effects")
+    native_templates = config.get(CONF_NATIVE_TEMPLATES, {})
+    if isinstance(native_templates, dict) and {
+        "effect",
+        "effects",
+        "effect_list",
+    } & set(native_templates):
+        raise vol.Invalid("Matter-compatible lights do not support effect templates")
     if config.get(CONF_SUPPORT_COLOR) and _as_hs_color(
         config.get(CONF_INITIAL_COLOR)
     ) is None:
         raise vol.Invalid("initial_color must be a valid hue/saturation pair")
-    if config.get(CONF_SUPPORT_EFFECT):
-        effects = config.get(CONF_INITIAL_EFFECT_LIST)
-        if (
-            not isinstance(effects, list)
-            or not effects
-            or any(not isinstance(effect, str) or not effect for effect in effects)
-        ):
-            raise vol.Invalid("initial_effect_list must contain effect names")
-        if config.get(CONF_INITIAL_EFFECT) not in effects:
-            raise vol.Invalid("initial_effect must be in initial_effect_list")
 
 
 async def async_setup_platform(
@@ -231,19 +240,22 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._attr_color_temp_kelvin = None
         self._attr_effect = None
         self._attr_effect_list = None
-
-        if config.get(CONF_SUPPORT_COLOR_TEMP):
-            self._attr_supported_color_modes.add(ColorMode.COLOR_TEMP)
-        if config.get(CONF_SUPPORT_COLOR):
-            self._attr_supported_color_modes.add(ColorMode.HS)
-        if config.get(CONF_SUPPORT_BRIGHTNESS) and not self._attr_supported_color_modes:
-            self._attr_supported_color_modes.add(ColorMode.BRIGHTNESS)
-        if not self._attr_supported_color_modes:
-            self._attr_supported_color_modes.add(ColorMode.ONOFF)
-
-        if config.get(CONF_SUPPORT_EFFECT):
-            self._attr_supported_features |= LightEntityFeature.EFFECT
-            self._attr_effect_list = self._config.get(CONF_INITIAL_EFFECT_LIST)
+        matter_type = config.get(CONF_MATTER_LIGHT_TYPE)
+        if matter_type:
+            self._matter_color_modes = set(MATTER_LIGHT_COLOR_MODES[matter_type])
+        else:
+            # Load legacy entries safely while restricting them to Matter color
+            # capabilities. Effects are intentionally never restored.
+            self._matter_color_modes = set()
+            if config.get(CONF_SUPPORT_COLOR_TEMP):
+                self._matter_color_modes.add(ColorMode.COLOR_TEMP)
+            if config.get(CONF_SUPPORT_COLOR):
+                self._matter_color_modes.add(ColorMode.HS)
+            if config.get(CONF_SUPPORT_BRIGHTNESS) and not self._matter_color_modes:
+                self._matter_color_modes.add(ColorMode.BRIGHTNESS)
+            if not self._matter_color_modes:
+                self._matter_color_modes.add(ColorMode.ONOFF)
+        self._attr_supported_color_modes = set(self._matter_color_modes)
 
     @property
     def brightness(self) -> int | None:
@@ -421,6 +433,8 @@ class VirtualLight(VirtualEntity, LightEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on."""
+        if ATTR_EFFECT in kwargs or ATTR_FLASH in kwargs:
+            raise ValueError("Matter-compatible lights do not support effects or flash")
         _LOGGER.debug("turning %s on %s", self.name, kwargs)
         snapshot = {
             name: getattr(self, name, None)
@@ -497,6 +511,8 @@ class VirtualLight(VirtualEntity, LightEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the light off."""
+        if ATTR_FLASH in kwargs:
+            raise ValueError("Matter-compatible lights do not support flash")
         _LOGGER.debug("turning %s off %s", self.name, kwargs)
         self._attr_is_on = False
         self._update_attributes()
@@ -505,9 +521,10 @@ class VirtualLight(VirtualEntity, LightEntity):
     def _apply_native_template_value(self, name: str, value) -> bool:
         aliases = {
             "color_temp": "color_temp_kelvin",
-            "effects": "effect_list",
         }
         name = aliases.get(name, name)
+        if name in {"effect", "effects", "effect_list"}:
+            raise ValueError("Matter-compatible lights do not support effects")
         if name == "supported_color_modes":
             if not isinstance(value, (list, tuple, set)):
                 raise ValueError("supported_color_modes must render a list")
@@ -520,6 +537,9 @@ class VirtualLight(VirtualEntity, LightEntity):
                 value = {ColorMode.ONOFF}
             if ColorMode.ONOFF in value and len(value) > 1:
                 value.discard(ColorMode.ONOFF)
+            value &= self._matter_color_modes
+            if not value:
+                value = set(self._matter_color_modes)
             current = self._attr_supported_color_modes
             if current == value:
                 return False
@@ -562,16 +582,6 @@ class VirtualLight(VirtualEntity, LightEntity):
                 raise ValueError(f"{name} must be an integer") from err
             if not 1000 <= value <= 40000:
                 raise ValueError(f"{name} must be between 1000 and 40000")
-        elif name == "effect_list":
-            if not isinstance(value, (list, tuple, set)):
-                raise ValueError("effect_list must render a list")
-            value = [str(item).strip() for item in value if str(item).strip()]
-            if len(set(value)) != len(value):
-                raise ValueError("effect_list contains duplicate values")
-        elif name == "effect":
-            value = None if value in {None, ""} else str(value)
-            if value is not None and self._attr_effect_list and value not in self._attr_effect_list:
-                raise ValueError(f"Invalid light effect: {value}")
         elif name in {"state", "is_on"}:
             old_state = self._attr_is_on
             self.set_state(value)
@@ -611,11 +621,9 @@ class VirtualLight(VirtualEntity, LightEntity):
                 self._attr_min_color_temp_kelvin,
                 min(self._attr_max_color_temp_kelvin, self._attr_color_temp_kelvin),
             )
-        if self._attr_effect not in (self._attr_effect_list or []):
-            self._attr_effect = None
+        self._attr_effect = None
+        self._attr_effect_list = None
         self._attr_supported_features = LightEntityFeature(0)
-        if self._attr_effect_list:
-            self._attr_supported_features |= LightEntityFeature.EFFECT
 
     def set_state(self, value) -> None:
         self._attr_is_on = self._template_to_bool(value)
