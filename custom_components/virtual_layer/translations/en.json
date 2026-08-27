@@ -569,7 +569,7 @@
           "target_entity_type": "Target entity type"
         },
         "data_description": {
-          "target_entity_type": "The generated state, native-property, and supported command helpers will use this entity type. For example, a Switch source can drive a virtual Fan."
+          "target_entity_type": "The generated state, native-property, and supported command helpers will use this entity type. Multiple control and sensor sources can also compose one native virtual entity, such as a Humidifier."
         }
       },
       "entity_helper": {
@@ -1209,7 +1209,7 @@
           "target_entity_type": "Target entity type"
         },
         "data_description": {
-          "target_entity_type": "Changing the type regenerates compatible state, native-property, and command helpers according to the helper policy selected next."
+          "target_entity_type": "Changing the type regenerates compatible state, native-property, and command helpers for the selected source composition according to the helper policy selected next."
         }
       },
       "edit_entity_helper": {
@@ -1763,7 +1763,7 @@
           "target_entity_type": "Target entity type"
         },
         "data_description": {
-          "target_entity_type": "The generated state, native-property, and supported command helpers will use this entity type. For example, a Switch source can drive a virtual Fan."
+          "target_entity_type": "The generated state, native-property, and supported command helpers will use this entity type. Multiple control and sensor sources can also compose one native virtual entity, such as a Humidifier."
         }
       }
     }

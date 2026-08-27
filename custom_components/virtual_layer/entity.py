@@ -22,10 +22,11 @@ from homeassistant.const import (
     ATTR_DEVICE_CLASS,
     ATTR_ENTITY_ID,
     CONF_ICON,
+    EVENT_HOMEASSISTANT_STARTED,
     STATE_CLOSED,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import Context, callback
+from homeassistant.core import Context, CoreState, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import (
@@ -532,6 +533,18 @@ class VirtualEntity(RestoreEntity):
                     _async_template_changed,
                 ).async_remove
             )
+
+            # Source restoration and config-entry setup can settle around the
+            # startup boundary without a tracked callback delivering the final
+            # transition. Re-render after every integration has had its startup
+            # opportunity, matching the state seen by a later reload.
+            if self.hass.state is not CoreState.running:
+                self._refresh_remove_listeners.append(
+                    self.hass.bus.async_listen_once(
+                        EVENT_HOMEASSISTANT_STARTED,
+                        lambda _event: self._apply_templates(),
+                    )
+                )
 
         if self._pull_interval:
             self._refresh_remove_listeners.append(async_track_time_interval(

@@ -21,9 +21,10 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ICON,
     CONF_PLATFORM,
+    EVENT_HOMEASSISTANT_STARTED,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, Unauthorized, UnknownUser
 from homeassistant.helpers.entity import async_generate_entity_id
 from homeassistant.helpers.event import (
@@ -1711,6 +1712,11 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
             ],
             lambda _event, _updates: _async_apply_state_only_templates(hass, entity),
         ).async_remove)
+        if hass.state is not CoreState.running:
+            listeners.append(hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED,
+                lambda _event: _async_apply_state_only_templates(hass, entity),
+            ))
 
     pull_interval = entity.get(CONF_PULL_INTERVAL, 0)
     if pull_interval:

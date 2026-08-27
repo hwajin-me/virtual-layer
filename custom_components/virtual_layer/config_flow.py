@@ -1129,14 +1129,23 @@ _SINGLE_SOURCE_TARGET_DOMAINS = {
 }
 
 
-def _single_source_target_domains(
-    source_entity_id: str,
+def _source_target_domains(
+    source_entity_ids: str | Collection[str],
     inferred_platform: str,
     preserved_platform: str | None = None,
 ) -> tuple[str, ...]:
-    """Return the deliberately small set of supported single-source conversions."""
-    source_domain = source_entity_id.split(".", 1)[0]
-    configured = _SINGLE_SOURCE_TARGET_DOMAINS.get(source_domain, ())
+    """Return supported target domains for the selected source composition."""
+    entity_ids = (
+        [source_entity_ids]
+        if isinstance(source_entity_ids, str)
+        else list(source_entity_ids)
+    )
+    configured: tuple[str, ...] = ()
+    if len(entity_ids) == 1:
+        source_domain = entity_ids[0].split(".", 1)[0]
+        configured = _SINGLE_SOURCE_TARGET_DOMAINS.get(source_domain, ())
+    elif _humidifier_component_profile(entity_ids) is not None:
+        configured = ("humidifier",)
     preserved = (
         (preserved_platform,)
         if preserved_platform in VIRTUAL_ENTITY_DOMAINS
@@ -1146,13 +1155,13 @@ def _single_source_target_domains(
 
 
 def _entity_type_schema(
-    source_entity_id: str,
+    source_entity_ids: str | Collection[str],
     inferred_platform: str,
     default_platform: str | None = None,
 ) -> vol.Schema:
-    """Choose a compatible target domain for one source entity."""
-    platforms = _single_source_target_domains(
-        source_entity_id,
+    """Choose a compatible target domain for one or more source entities."""
+    platforms = _source_target_domains(
+        source_entity_ids,
         inferred_platform,
         default_platform,
     )
@@ -1171,6 +1180,21 @@ def _entity_type_schema(
             )
         ),
     })
+
+
+def _has_entity_type_choice(
+    source_entity_ids: Collection[str],
+    inferred_platform: str,
+    preserved_platform: str | None = None,
+) -> bool:
+    """Return whether the selected sources support more than one target type."""
+    return len(
+        _source_target_domains(
+            source_entity_ids,
+            inferred_platform,
+            preserved_platform,
+        )
+    ) > 1
 
 
 BOOLEAN_SOURCE_DOMAINS = {
@@ -4281,6 +4305,106 @@ def _boiler_source_profile(
     return None
 
 
+def _humidifier_component_profile(
+    entity_ids: Collection[str],
+) -> dict[str, int] | None:
+    """Return source roles for a humidifier split across helper entities."""
+    roles: dict[str, int] = {}
+    allowed_domains = {"number", "select", "sensor", "switch"}
+    for index, entity_id in enumerate(entity_ids):
+        domain = entity_id.split(".", 1)[0]
+        if domain not in allowed_domains or domain in roles:
+            return None
+        roles[domain] = index
+    if not {"number", "sensor", "switch"} <= roles.keys():
+        return None
+    return roles
+
+
+def _humidifier_component_native_templates(
+    entity_ids: list[str],
+    states: list,
+    profile: Mapping[str, int],
+) -> dict[str, str]:
+    """Build native humidifier properties from separate control entities."""
+    number_id = entity_ids[profile["number"]]
+    sensor_id = entity_ids[profile["sensor"]]
+    switch_id = entity_ids[profile["switch"]]
+    select_id = (
+        entity_ids[profile["select"]] if "select" in profile else None
+    )
+    number_state = states[profile["number"]]
+    templates = {
+        "is_on": (
+            f"{{{{ states({switch_id!r}) not in "
+            "['off', 'unknown', 'unavailable'] }}"
+        ),
+        "device_class": "{{ 'dehumidifier' }}",
+        "action": (
+            f"{{{{ 'drying' if states({switch_id!r}) == 'on' else 'off' }}}}"
+        ),
+        "available_modes": (
+            f"{{{{ state_attr({select_id!r}, 'options') | default([], true) | list }}}}"
+            if select_id
+            else "{{ [] }}"
+        ),
+        "mode": (
+            f"{{{{ states({select_id!r}) if states({select_id!r}) not in "
+            "['unknown', 'unavailable'] else none }}"
+            if select_id
+            else "{{ none }}"
+        ),
+        "current_humidity": (
+            f"{{{{ states({sensor_id!r}) | float(none) }}}}"
+        ),
+        "target_humidity": (
+            f"{{{{ states({number_id!r}) | float(none) }}}}"
+        ),
+        "min_humidity": _native_source_template(
+            number_id, number_state, "native_min_value", "number"
+        ),
+        "max_humidity": _native_source_template(
+            number_id, number_state, "native_max_value", "number"
+        ),
+        "target_humidity_step": _native_source_template(
+            number_id, number_state, "native_step", "number"
+        ),
+    }
+    return templates
+
+
+def _humidifier_component_command_actions(
+    entity_ids: list[str],
+    profile: Mapping[str, int],
+) -> dict[str, Any]:
+    """Build humidifier commands for separate number/select/switch helpers."""
+    number_id = entity_ids[profile["number"]]
+    switch_id = entity_ids[profile["switch"]]
+    actions: dict[str, Any] = {
+        "turn_off": [{
+            "action": "switch.turn_off",
+            "target": {ATTR_ENTITY_ID: switch_id},
+        }],
+        "turn_on": [{
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: switch_id},
+        }],
+        "set_humidity": [{
+            "action": "number.set_value",
+            "target": {ATTR_ENTITY_ID: number_id},
+            "data": {"value": "{{ humidity }}"},
+        }],
+    }
+    if "select" in profile:
+        select_id = entity_ids[profile["select"]]
+        actions["set_mode"] = [{
+            "action": "select.select_option",
+            "target": {ATTR_ENTITY_ID: select_id},
+            "data": {"option": "{{ mode }}"},
+        }]
+    return actions
+
+
 def _xiaomi_fan_number_profile(
     entity_ids: list[str],
     states: list,
@@ -4726,6 +4850,7 @@ def _reference_entity_defaults(
     all_location = _all_source_domains(entity_ids, LOCATION_SOURCE_DOMAINS)
     boiler_profile = _boiler_source_profile(entity_ids, states)
     fan_number_profile = _xiaomi_fan_number_profile(entity_ids, states)
+    humidifier_component_profile = _humidifier_component_profile(entity_ids)
     presence_or_motion_class = (
         _presence_or_motion_device_class(entity_ids, states) if all_boolean else None
     )
@@ -4760,8 +4885,8 @@ def _reference_entity_defaults(
 
     if target_platform is not None:
         allowed_target_platforms = set(
-            _single_source_target_domains(entity_ids[0], platform)
-        ) if len(entity_ids) == 1 else set()
+            _source_target_domains(entity_ids, platform)
+        )
         allowed_target_platforms.update(
             candidate
             for candidate in additional_target_platforms
@@ -4779,6 +4904,8 @@ def _reference_entity_defaults(
         )
     elif fan_number_profile is not None:
         initial_value = states[fan_number_profile[0]].state
+    elif platform == "humidifier" and humidifier_component_profile is not None:
+        initial_value = states[humidifier_component_profile["switch"]].state
     elif platform == "binary_sensor":
         if presence_or_motion_class:
             initial_value = (
@@ -4998,7 +5125,14 @@ def _reference_entity_defaults(
             }
         )
     attribute_templates: dict[str, str] = {}
-    source_command_actions = _source_command_actions(platform, entity_ids, states)
+    source_command_actions = (
+        _humidifier_component_command_actions(
+            entity_ids,
+            humidifier_component_profile,
+        )
+        if platform == "humidifier" and humidifier_component_profile is not None
+        else _source_command_actions(platform, entity_ids, states)
+    )
     if source_command_actions:
         defaults[CONF_COMMAND_ACTIONS_JSON] = _json_default(
             source_command_actions,
@@ -5043,6 +5177,10 @@ def _reference_entity_defaults(
     elif fan_number_profile is not None:
         defaults[CONF_VALUE_TEMPLATE] = (
             f"{{{{ {variable_names[fan_number_profile[0]]} }}}}"
+        )
+    elif platform == "humidifier" and humidifier_component_profile is not None:
+        defaults[CONF_VALUE_TEMPLATE] = (
+            f"{{{{ {variable_names[humidifier_component_profile['switch']]} }}}}"
         )
     elif len(entity_ids) == 1:
         defaults[CONF_VALUE_TEMPLATE] = f"{{{{ {variable_names[0]} }}}}"
@@ -5096,11 +5234,24 @@ def _reference_entity_defaults(
         fan_index, _number_index = fan_number_profile
         attribute_source_ids = [entity_ids[fan_index]]
         attribute_source_states = [states[fan_index]]
-    for attribute_name, template in _attribute_reference_templates(
+    generated_attribute_templates = _attribute_reference_templates(
         platform,
         attribute_source_ids,
         attribute_source_states,
-    ).items():
+    )
+    if platform == "humidifier" and humidifier_component_profile is not None:
+        for attribute_name in {
+            "device_class",
+            "humidity",
+            "max",
+            "min",
+            "mode",
+            "options",
+            "step",
+            "unit_of_measurement",
+        }:
+            generated_attribute_templates.pop(attribute_name, None)
+    for attribute_name, template in generated_attribute_templates.items():
         attribute_templates.setdefault(attribute_name, template)
     if attribute_templates:
         defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] = _json_default(attribute_templates)
@@ -5126,6 +5277,12 @@ def _reference_entity_defaults(
         native_templates["percentage"] = _xiaomi_fan_percentage_template(
             entity_ids[fan_index],
             entity_ids[number_index],
+        )
+    elif platform == "humidifier" and humidifier_component_profile is not None:
+        native_templates = _humidifier_component_native_templates(
+            entity_ids,
+            states,
+            humidifier_component_profile,
         )
     else:
         native_templates = (
@@ -6014,7 +6171,10 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                     self._source_entities,
                 )
                 if self._reference_defaults:
-                    if len(self._source_entities) == 1:
+                    if len(self._source_entities) == 1 or _has_entity_type_choice(
+                        self._source_entities,
+                        self._reference_defaults[CONF_PLATFORM],
+                    ):
                         return await self.async_step_entity_type()
                     return await self.async_step_entity_helper()
                 self._entity_defaults = {}
@@ -6043,8 +6203,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         )
 
     async def async_step_entity_type(self, user_input=None):
-        """Choose the virtual entity domain for a single source."""
-        if len(self._source_entities) != 1 or not self._reference_defaults:
+        """Choose the virtual entity domain for selected sources."""
+        if not self._source_entities or not self._reference_defaults:
             return await self.async_step_entity_source()
 
         errors = _flow_errors(self, "entity_type")
@@ -6063,7 +6223,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         return self.async_show_form(
             step_id="entity_type",
             data_schema=_entity_type_schema(
-                self._source_entities[0],
+                self._source_entities,
                 inferred_platform,
             ),
             errors=errors,
@@ -6304,7 +6464,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     CONF_TARGET_DEVICE_NAME,
                 )
                 if self._reference_defaults:
-                    if len(self._add_source_entities) == 1:
+                    if len(self._add_source_entities) == 1 or _has_entity_type_choice(
+                        self._add_source_entities,
+                        self._reference_defaults[CONF_PLATFORM],
+                    ):
                         return await self.async_step_entity_type()
                     return await self.async_step_entity_helper()
                 self._entity_defaults = _with_existing_device_defaults(
@@ -6341,8 +6504,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         )
 
     async def async_step_entity_type(self, user_input=None):
-        """Choose the virtual entity domain for a single source."""
-        if len(self._add_source_entities) != 1 or not self._reference_defaults:
+        """Choose the virtual entity domain for selected sources."""
+        if not self._add_source_entities or not self._reference_defaults:
             return await self.async_step_entity_source()
 
         errors = _flow_errors(self, "entity_type")
@@ -6361,7 +6524,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="entity_type",
             data_schema=_entity_type_schema(
-                self._add_source_entities[0],
+                self._add_source_entities,
                 inferred_platform,
             ),
             errors=errors,
@@ -6603,7 +6766,14 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 self._edit_sources_changed = selected_sources != _stored_entity_ids(
                     entity.get(CONF_SOURCE_ENTITIES),
                 )
-                if len(selected_sources) == 1:
+                if selected_sources and (
+                    len(selected_sources) == 1
+                    or _has_entity_type_choice(
+                        selected_sources,
+                        self._reference_defaults[CONF_PLATFORM],
+                        self._edit_original_platform,
+                    )
+                ):
                     return await self.async_step_edit_entity_type()
                 if self._edit_sources_changed or selected_sources:
                     return await self.async_step_edit_entity_helper()
@@ -6626,11 +6796,11 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         )
 
     async def async_step_edit_entity_type(self, user_input=None):
-        """Choose the virtual entity domain for one edited source."""
+        """Choose the virtual entity domain for edited sources."""
         if (
             self._edit_current_defaults is None
             or self._edit_source_entities is None
-            or len(self._edit_source_entities) != 1
+            or not self._edit_source_entities
             or not self._reference_defaults
         ):
             return await self.async_step_edit_entity_source()
@@ -6663,7 +6833,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="edit_entity_type",
             data_schema=_entity_type_schema(
-                self._edit_source_entities[0],
+                self._edit_source_entities,
                 inferred_platform,
                 self._edit_target_platform or current_platform,
             ),

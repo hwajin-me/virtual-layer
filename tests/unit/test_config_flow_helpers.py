@@ -2451,6 +2451,103 @@ def test_reference_humidifier_promotes_native_options(hass):
     assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "preserved"}
 
 
+def test_mixed_humidifier_components_offer_type_and_generate_helpers(hass):
+    entity_ids = [
+        "number.dressing_room_dehumidifier_target_humidity",
+        "switch.dressing_room_dehumidifier_power",
+        "select.dressing_room_dehumidifier_operating_mode",
+        "sensor.dressing_room_dehumidifier_humidity",
+    ]
+    hass.states.async_set(
+        entity_ids[0],
+        "50",
+        {"min": 30, "max": 70, "step": 5, "mode": "slider"},
+    )
+    hass.states.async_set(entity_ids[1], "on")
+    hass.states.async_set(
+        entity_ids[2],
+        "Medium",
+        {"options": ["Low", "Medium", "High"]},
+    )
+    hass.states.async_set(
+        entity_ids[3],
+        "52",
+        {"device_class": "humidity", "unit_of_measurement": "%"},
+    )
+
+    inferred = _reference_entity_defaults(hass, entity_ids)
+    type_schema = _entity_type_schema(entity_ids, inferred[CONF_PLATFORM])
+    type_selector = next(iter(type_schema.schema.values()))
+
+    assert inferred[CONF_PLATFORM] == "sensor"
+    assert {option["value"] for option in type_selector.config["options"]} == {
+        "humidifier",
+        "sensor",
+    }
+
+    defaults = _reference_entity_defaults(hass, entity_ids, "humidifier")
+    templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert defaults[CONF_PLATFORM] == "humidifier"
+    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert Template(templates["is_on"], hass).async_render(parse_result=True) is True
+    assert Template(templates["device_class"], hass).async_render(
+        parse_result=True
+    ) == "dehumidifier"
+    assert Template(templates["available_modes"], hass).async_render(
+        parse_result=True
+    ) == ["Low", "Medium", "High"]
+    assert Template(templates["mode"], hass).async_render(
+        parse_result=True
+    ) == "Medium"
+    assert Template(templates["current_humidity"], hass).async_render(
+        parse_result=True
+    ) == 52
+    assert Template(templates["target_humidity"], hass).async_render(
+        parse_result=True
+    ) == 50
+    assert Template(templates["min_humidity"], hass).async_render(
+        parse_result=True
+    ) == 30
+    assert Template(templates["max_humidity"], hass).async_render(
+        parse_result=True
+    ) == 70
+    assert Template(templates["target_humidity_step"], hass).async_render(
+        parse_result=True
+    ) == 5
+    attribute_templates = json.loads(
+        defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "{}") or "{}"
+    )
+    assert not {"max", "min", "mode", "options", "step"} & set(
+        attribute_templates
+    )
+    for template in attribute_templates.values():
+        Template(template, hass).ensure_valid()
+    availability = Template(defaults[CONF_AVAILABILITY_TEMPLATE], hass)
+    assert availability.async_render(parse_result=True) is True
+    hass.states.async_set(entity_ids[3], "unavailable")
+    assert availability.async_render(parse_result=True) is False
+    assert json.loads(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
+        "set_humidity": [{
+            "action": "number.set_value",
+            "data": {"value": "{{ humidity }}"},
+            "target": {ATTR_ENTITY_ID: entity_ids[0]},
+        }],
+        "set_mode": [{
+            "action": "select.select_option",
+            "data": {"option": "{{ mode }}"},
+            "target": {ATTR_ENTITY_ID: entity_ids[2]},
+        }],
+        "turn_off": [{
+            "action": "switch.turn_off",
+            "target": {ATTR_ENTITY_ID: entity_ids[1]},
+        }],
+        "turn_on": [{
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: entity_ids[1]},
+        }],
+    }
+
+
 def test_humidifier_edit_form_migrates_legacy_native_attributes():
     defaults = _entity_form_defaults(
         "Basement",

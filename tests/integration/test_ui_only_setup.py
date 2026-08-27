@@ -23,8 +23,9 @@ from homeassistant.const import (
     CONF_ICON,
     CONF_NAME,
     CONF_PLATFORM,
+    EVENT_HOMEASSISTANT_STARTED,
 )
-from homeassistant.core import Context
+from homeassistant.core import Context, CoreState
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers.template import Template
@@ -3714,6 +3715,81 @@ async def test_options_flow_prefills_and_creates_native_dehumidifier(hass):
     assert "supported_features" not in entity.get(CONF_ATTRIBUTES, {})
 
 
+async def test_options_flow_composes_humidifier_from_mixed_source_domains(hass):
+    entity_ids = [
+        "number.dressing_room_dehumidifier_target_humidity",
+        "switch.dressing_room_dehumidifier_power",
+        "select.dressing_room_dehumidifier_operating_mode",
+        "sensor.dressing_room_dehumidifier_humidity",
+    ]
+    hass.states.async_set(
+        entity_ids[0],
+        "50",
+        {"min": 30, "max": 70, "step": 5, "mode": "slider"},
+    )
+    hass.states.async_set(entity_ids[1], "on")
+    hass.states.async_set(
+        entity_ids[2],
+        "Medium",
+        {"options": ["Low", "Medium", "High"]},
+    )
+    hass.states.async_set(
+        entity_ids[3],
+        "52",
+        {"device_class": "humidity", "unit_of_measurement": "%"},
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: entity_ids},
+    )
+
+    assert result["step_id"] == "entity_type"
+    result = await _choose_add_template_helper(
+        hass,
+        result,
+        target_entity_type="humidifier",
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert defaults[CONF_PLATFORM] == "humidifier"
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["target_humidity"] == (
+        "{{ states('number.dressing_room_dehumidifier_target_humidity') "
+        "| float(none) }}"
+    )
+    assert "max" not in json.loads(
+        defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "{}") or "{}"
+    )
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_DEVICE_NAME: "Dressing Room Dehumidifier",
+            ATTR_ENTITY_ID: "humidifier.dressing_room_dehumidifier",
+        },
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entity = _first_stored_entity(result)
+    assert entity[CONF_PLATFORM] == "humidifier"
+    assert set(entity[CONF_COMMAND_ACTIONS]) == {
+        "set_humidity",
+        "set_mode",
+        "turn_off",
+        "turn_on",
+    }
+
+
 async def test_options_flow_can_edit_all_climate_modes(hass):
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
@@ -6680,6 +6756,86 @@ async def test_template_tracking_is_batched_for_regular_and_state_only_entities(
 
     assert track_state_only.call_count == 1
     assert len(track_state_only.call_args.args[1]) == 4
+
+
+async def test_startup_completion_rechecks_missed_source_availability(hass):
+    """Recover when source restoration finishes outside the tracked event window."""
+    hass.set_state(CoreState.starting)
+    availability_template = (
+        "{{ states('sensor.late_startup_source') not in "
+        "['unknown', 'unavailable'] }}"
+    )
+    regular_config = {
+        CONF_NAME: "Late Startup Sensor",
+        ATTR_ENTITY_ID: "sensor.late_startup_sensor",
+        ATTR_UNIQUE_ID: "late-startup-sensor",
+        ATTR_DEVICE_ID: "Startup",
+        CONF_INITIAL_VALUE: "idle",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: False,
+        CONF_SOURCE_ENTITIES: ["sensor.late_startup_source"],
+        CONF_AVAILABILITY_TEMPLATE: availability_template,
+    }
+    regular = VirtualSensor(regular_config, False)
+    regular.hass = hass
+    regular.async_schedule_update_ha_state = Mock()
+    regular._create_state(regular_config)
+
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+    )
+    state_only = {
+        CONF_PLATFORM: "tag",
+        CONF_NAME: "Late Startup Tag",
+        ATTR_ENTITY_ID: "tag.late_startup_tag",
+        ATTR_UNIQUE_ID: "late-startup-tag",
+        CONF_INITIAL_VALUE: "idle",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_SOURCE_ENTITIES: ["sensor.late_startup_source"],
+        CONF_AVAILABILITY_TEMPLATE: availability_template,
+    }
+    hass.states.async_set(
+        state_only[ATTR_ENTITY_ID],
+        state_only[CONF_INITIAL_VALUE],
+        {ATTR_AVAILABLE: True},
+    )
+
+    tracked = SimpleNamespace(async_remove=Mock())
+    with (
+        patch(
+            "custom_components.virtual_layer.entity.async_track_state_change_event",
+            return_value=Mock(),
+        ),
+        patch(
+            "custom_components.virtual_layer.entity.async_track_template_result",
+            return_value=tracked,
+        ),
+        patch(
+            "custom_components.virtual_layer.async_track_state_change_event",
+            return_value=Mock(),
+        ),
+        patch(
+            "custom_components.virtual_layer.async_track_template_result",
+            return_value=tracked,
+        ),
+    ):
+        regular._setup_templates()
+        regular._apply_templates()
+        _async_setup_state_only_templates(hass, entry, state_only)
+
+        assert regular.available is False
+        assert hass.states.get(state_only[ATTR_ENTITY_ID]).attributes[ATTR_AVAILABLE] is False
+
+        # Simulate a source which became ready before either listener observed
+        # its state event. The HA-started refresh must use the final state.
+        hass.states.async_set("sensor.late_startup_source", "ready")
+        hass.set_state(CoreState.running)
+        hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+        await hass.async_block_till_done()
+
+    assert regular.available is True
+    assert hass.states.get(state_only[ATTR_ENTITY_ID]).attributes[ATTR_AVAILABLE] is True
 
 
 async def test_unchanged_templates_do_not_schedule_redundant_state_writes(hass):

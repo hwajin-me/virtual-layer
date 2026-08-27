@@ -569,7 +569,7 @@
           "target_entity_type": "변경하고자 하는 엔티티 타입"
         },
         "data_description": {
-          "target_entity_type": "선택한 타입에 맞춰 상태, 네이티브 속성 및 지원 명령 helper를 생성합니다. 예를 들어 Switch 원본으로 가상 Fan을 만들 수 있습니다."
+          "target_entity_type": "선택한 타입에 맞춰 상태, 네이티브 속성 및 지원 명령 helper를 생성합니다. 여러 제어 및 센서 원본을 하나의 Humidifier 같은 네이티브 가상 엔티티로 조합할 수도 있습니다."
         }
       },
       "entity_helper": {
@@ -1209,7 +1209,7 @@
           "target_entity_type": "변경하고자 하는 엔티티 타입"
         },
         "data_description": {
-          "target_entity_type": "타입을 변경하면 다음 단계에서 선택하는 helper 정책에 따라 호환되는 상태, 네이티브 속성 및 명령 helper를 다시 생성합니다."
+          "target_entity_type": "타입을 변경하면 다음 단계에서 선택하는 helper 정책에 따라 선택한 원본 구성에 호환되는 상태, 네이티브 속성 및 명령 helper를 다시 생성합니다."
         }
       },
       "edit_entity_helper": {
@@ -1763,7 +1763,7 @@
           "target_entity_type": "변경하고자 하는 엔티티 타입"
         },
         "data_description": {
-          "target_entity_type": "선택한 타입에 맞춰 상태, 네이티브 속성 및 지원 명령 helper를 생성합니다. 예를 들어 Switch 원본으로 가상 Fan을 만들 수 있습니다."
+          "target_entity_type": "선택한 타입에 맞춰 상태, 네이티브 속성 및 지원 명령 helper를 생성합니다. 여러 제어 및 센서 원본을 하나의 Humidifier 같은 네이티브 가상 엔티티로 조합할 수도 있습니다."
         }
       }
     }
