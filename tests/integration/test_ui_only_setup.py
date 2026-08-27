@@ -6838,6 +6838,65 @@ async def test_startup_completion_rechecks_missed_source_availability(hass):
     assert hass.states.get(state_only[ATTR_ENTITY_ID]).attributes[ATTR_AVAILABLE] is True
 
 
+async def test_running_startup_fan_retries_missed_source_availability(hass):
+    """Recover a fan loaded after HA entered running state but before its source."""
+    source_entity_id = "fan.air_circulator_fan"
+    config = FAN_SCHEMA({
+        CONF_NAME: "Air Circulator Fan Copy",
+        ATTR_ENTITY_ID: "fan.air_circulator_fan_copy",
+        ATTR_UNIQUE_ID: "air-circulator-fan-copy",
+        ATTR_DEVICE_ID: "Air Circulator",
+        CONF_INITIAL_VALUE: "on",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: True,
+        CONF_SOURCE_ENTITIES: [source_entity_id],
+        CONF_AVAILABILITY_TEMPLATE: (
+            f"{{{{ states({source_entity_id!r}) not in "
+            "['unknown', 'unavailable'] }}"
+        ),
+        CONF_NATIVE_TEMPLATES: {
+            "is_on": (
+                f"{{{{ states({source_entity_id!r}) not in "
+                "['off', 'unknown', 'unavailable'] }}"
+            ),
+        },
+    })
+    fan = VirtualFan(config, False)
+    fan.hass = hass
+    fan.async_schedule_update_ha_state = Mock()
+    fan._create_state(config)
+    retry = Mock(return_value=Mock())
+    tracked = SimpleNamespace(async_remove=Mock())
+
+    with (
+        patch(
+            "custom_components.virtual_layer.entity.async_track_state_change_event",
+            return_value=Mock(),
+        ),
+        patch(
+            "custom_components.virtual_layer.entity.async_track_template_result",
+            return_value=tracked,
+        ),
+        patch(
+            "custom_components.virtual_layer.entity.async_call_later",
+            retry,
+        ),
+    ):
+        fan._setup_templates()
+        fan._apply_templates()
+        assert fan.available is False
+        assert retry.call_args.args[1] == 5
+
+        # Match the reported startup state: source/debug are on, while the
+        # virtual fan missed the source event and remains unavailable.
+        hass.states.async_set(source_entity_id, "on")
+        retry.call_args.args[2](None)
+
+    assert fan.available is True
+    assert fan.is_on is True
+    assert retry.call_count == 1
+
+
 async def test_unchanged_templates_do_not_schedule_redundant_state_writes(hass):
     config = {
         CONF_NAME: "Stable Sensor",

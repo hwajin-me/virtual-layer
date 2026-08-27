@@ -172,6 +172,7 @@ _STATE_ONLY_RESTORE_PROXIES_DATA = f"{COMPONENT_DOMAIN}_state_only_restore_proxi
 _ENTITY_ID_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_entity_id_guard_listeners"
 _DEVICE_METADATA_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_device_metadata_guard_listeners"
 _GENERATED_NAME_SUFFIX = "_virtual_layer_generated_name_suffix"
+_STARTUP_AVAILABILITY_RETRY_DELAYS = (5, 10, 15, 30)
 
 _STATE_ONLY_LIST_NATIVE_PROPERTIES = frozenset({
     "supported_languages",
@@ -1717,6 +1718,12 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
                 EVENT_HOMEASSISTANT_STARTED,
                 lambda _event: _async_apply_state_only_templates(hass, entity),
             ))
+        if entity.get(CONF_AVAILABILITY_TEMPLATE):
+            _async_schedule_state_only_startup_availability_retry(
+                hass,
+                entity,
+                listeners,
+            )
 
     pull_interval = entity.get(CONF_PULL_INTERVAL, 0)
     if pull_interval:
@@ -1727,6 +1734,33 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
         ))
     _async_setup_state_only_event_hooks(hass, entity, listeners)
     _async_apply_state_only_templates(hass, entity)
+
+
+@callback
+def _async_schedule_state_only_startup_availability_retry(
+    hass,
+    entity,
+    listeners,
+) -> None:
+    """Retry state-only availability while source integrations start."""
+    delays = iter(_STARTUP_AVAILABILITY_RETRY_DELAYS)
+
+    @callback
+    def _schedule_next() -> None:
+        try:
+            delay = next(delays)
+        except StopIteration:
+            return
+        listeners.append(async_call_later(hass, delay, _async_refresh))
+
+    @callback
+    def _async_refresh(_now) -> None:
+        _async_apply_state_only_templates(hass, entity)
+        state = hass.states.get(entity.get(ATTR_ENTITY_ID))
+        if state is not None and not state.attributes.get(ATTR_AVAILABLE, True):
+            _schedule_next()
+
+    _schedule_next()
 
 
 def _is_state_only_entity_id(entity_id):

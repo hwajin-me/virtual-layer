@@ -50,6 +50,7 @@ _VIRTUAL_ENTITY_COMMAND_NAMES = frozenset().union(
 )
 _MISSING = object()
 MAX_LOCAL_MEDIA_BYTES = 25 * 1024 * 1024
+_STARTUP_AVAILABILITY_RETRY_DELAYS = (5, 10, 15, 30)
 _LEGACY_ENUM_TEMPLATE_RE = re.compile(
     r"<[A-Za-z_][A-Za-z0-9_]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\|[A-Za-z_][A-Za-z0-9_]*)*)+:\s*"
@@ -545,6 +546,8 @@ class VirtualEntity(RestoreEntity):
                         lambda _event: self._apply_templates(),
                     )
                 )
+            if self._availability_template:
+                self._schedule_startup_availability_retry()
 
         if self._pull_interval:
             self._refresh_remove_listeners.append(async_track_time_interval(
@@ -554,6 +557,29 @@ class VirtualEntity(RestoreEntity):
             ))
 
         self._setup_event_hooks()
+
+    @callback
+    def _schedule_startup_availability_retry(self) -> None:
+        """Retry availability while source integrations finish startup."""
+        delays = iter(_STARTUP_AVAILABILITY_RETRY_DELAYS)
+
+        @callback
+        def _schedule_next() -> None:
+            try:
+                delay = next(delays)
+            except StopIteration:
+                return
+            self._refresh_remove_listeners.append(
+                async_call_later(self.hass, delay, _async_refresh)
+            )
+
+        @callback
+        def _async_refresh(_now) -> None:
+            self._apply_templates()
+            if not self._attr_available:
+                _schedule_next()
+
+        _schedule_next()
 
     @callback
     def _setup_event_hooks(self):
