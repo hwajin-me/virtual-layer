@@ -1029,6 +1029,10 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
     def _parse_media_state(value) -> MediaPlayerState | None:
         if isinstance(value, MediaPlayerState):
             return value
+        if isinstance(value, bool):
+            # Older multi-source helpers classified media players whose
+            # snapshot states were on/off as boolean sources.
+            return MediaPlayerState.ON if value else MediaPlayerState.OFF
         if not _has_value(value):
             return None
         try:

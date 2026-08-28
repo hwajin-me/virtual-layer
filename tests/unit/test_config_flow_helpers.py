@@ -1225,6 +1225,28 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     assert "values[0]" in templates["hvac_mode"]
     assert all(templates.values())
 
+    hass.states.async_set("climate.first", "cool")
+    hass.states.async_set("climate.second", "heat")
+    assert Template(templates["hvac_modes"], hass).async_render(
+        parse_result=True
+    ) == ["off", "cool", "heat"]
+
+
+def test_multiple_media_players_with_on_off_snapshots_use_state_helper(hass):
+    hass.states.async_set("media_player.tv", "off")
+    hass.states.async_set("media_player.apple_tv", "on")
+
+    defaults = _reference_entity_defaults(
+        hass,
+        ["media_player.tv", "media_player.apple_tv"],
+    )
+
+    assert defaults[CONF_PLATFORM] == "media_player"
+    assert "values[0]" in defaults[CONF_VALUE_TEMPLATE]
+    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+        {"tv": "off", "apple_tv": "on"}
+    ) == "off"
+
 
 def test_xiaomi_fan_uses_number_speed_only_for_favorite_and_manual_modes(hass):
     fan_entity_id = "fan.air_purifier_purifier_1"

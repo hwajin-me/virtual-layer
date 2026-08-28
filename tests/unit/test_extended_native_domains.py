@@ -774,6 +774,25 @@ def test_activity_entities_restore_configured_fallback_from_unknown_state():
     assert media.state is MediaPlayerState.IDLE
 
 
+def test_media_player_accepts_legacy_boolean_helper_state():
+    from custom_components.virtual_layer.media_player import (
+        ENTITY_CLASS as VirtualMediaPlayer,
+    )
+    from custom_components.virtual_layer.media_player import (
+        ENTITY_SCHEMA as MEDIA_PLAYER_SCHEMA,
+    )
+
+    media = VirtualMediaPlayer(
+        _config(MEDIA_PLAYER_SCHEMA, "media_player", "idle"),
+        False,
+    )
+
+    media.set_state(False)
+    assert media.state is MediaPlayerState.OFF
+    media.set_state(True)
+    assert media.state is MediaPlayerState.ON
+
+
 def test_text_restore_and_direct_state_respect_constraints():
     from custom_components.virtual_layer.text import ENTITY_CLASS as VirtualText
     from custom_components.virtual_layer.text import ENTITY_SCHEMA as TEXT_SCHEMA

@@ -4206,13 +4206,28 @@ def _merged_native_template(
     if property_name in NATIVE_TEMPLATE_LIST_PROPERTIES or all(
         isinstance(value, (list, tuple, set)) for value in values
     ):
+        fallback_values = []
+        for items in values:
+            if isinstance(items, (list, tuple, set)):
+                fallback_values.extend(
+                    item for item in items if item not in fallback_values
+                )
+        if not fallback_values:
+            fallback = _native_source_helper_default(platform, property_name)
+            if isinstance(fallback, list):
+                fallback_values = fallback
+        result = "ns.values"
+        if property_name == "hvac_modes" and fallback_values:
+            result += " if ns.values else " + repr(_plain_options(fallback_values))
         return (
             "{% set ns = namespace(values=[]) %}"
             "{% for items in ["
             + ", ".join(expressions)
             + "] %}{% if items is list %}{% for value in items %}"
             "{% if value not in ns.values %}{% set ns.values = ns.values + [value] %}"
-            "{% endif %}{% endfor %}{% endif %}{% endfor %}{{ ns.values }}"
+            "{% endif %}{% endfor %}{% endif %}{% endfor %}{{ "
+            + result
+            + " }}"
         )
     if property_name in NATIVE_TEMPLATE_MAPPING_PROPERTIES or all(
         isinstance(value, Mapping) for value in values
@@ -5308,7 +5323,7 @@ def _reference_entity_defaults(
         )
     elif len(entity_ids) == 1:
         defaults[CONF_VALUE_TEMPLATE] = f"{{{{ {variable_names[0]} }}}}"
-    elif all_boolean:
+    elif all_boolean and platform in BOOLEAN_SOURCE_DOMAINS | {"binary_sensor"}:
         boolean_checks = [
             f"(({variable_name} | lower) in ['1', 'on', 'open', 'true', 'unlocked', 'yes'])"
             for variable_name in variable_names
