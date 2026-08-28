@@ -3114,6 +3114,46 @@ def test_number_helper_ignores_invalid_runtime_values(hass):
         == "unknown"
     )
 
+    hass.states.async_set("sensor.first", "unknown")
+    hass.states.async_set("sensor.second", "unavailable")
+    assert Template(
+        defaults[CONF_AVAILABILITY_TEMPLATE], hass
+    ).async_render(parse_result=True) is False
+
+
+def test_number_helper_is_generated_with_one_temporarily_invalid_sensor(hass):
+    hass.states.async_set("sensor.first", "unknown")
+    hass.states.async_set("sensor.second", "20")
+
+    defaults = _reference_entity_defaults(hass, ["sensor.first", "sensor.second"])
+
+    assert defaults[CONF_INITIAL_VALUE] == "20.0"
+    assert "float(none)" in defaults[CONF_VALUE_TEMPLATE]
+    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+        variables={"first": "unknown", "second": "20"}, parse_result=True
+    ) == 20.0
+
+
+def test_number_helper_rejects_non_finite_values(hass):
+    hass.states.async_set("number.nan_reading", "nan")
+    hass.states.async_set("number.infinite_reading", "inf")
+    hass.states.async_set("number.valid_reading", "400")
+
+    defaults = _reference_entity_defaults(
+        hass,
+        ["number.nan_reading", "number.infinite_reading", "number.valid_reading"],
+    )
+
+    assert defaults[CONF_INITIAL_VALUE] == "400.0"
+    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+        variables={
+            "nan_reading": "nan",
+            "infinite_reading": "inf",
+            "valid_reading": "400",
+        },
+        parse_result=True,
+    ) == 400.0
+
 
 @pytest.mark.parametrize(
     ("states", "expected"),

@@ -791,6 +791,10 @@ def test_media_player_accepts_legacy_boolean_helper_state():
     assert media.state is MediaPlayerState.OFF
     media.set_state(True)
     assert media.state is MediaPlayerState.ON
+    media.set_state("False")
+    assert media.state is MediaPlayerState.OFF
+    media.set_state("True")
+    assert media.state is MediaPlayerState.ON
 
 
 def test_text_restore_and_direct_state_respect_constraints():

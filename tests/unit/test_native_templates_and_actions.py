@@ -585,6 +585,24 @@ def test_climate_native_templates_render_lists_enums_and_numbers(hass):
     assert ClimateEntityFeature.PRESET_MODE in entity.supported_features
 
 
+@pytest.mark.parametrize("rendered", [None, False, "", "[]", [], "unavailable"])
+def test_climate_keeps_last_hvac_modes_for_empty_transient_template(rendered):
+    entity = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.transient_modes",
+                "cool",
+                hvac_modes=["off", "cool"],
+            )
+        ),
+        False,
+    )
+    entity._create_state(entity._config)
+
+    assert entity._apply_native_template_value("hvac_modes", rendered) is False
+    assert entity.hvac_modes == [HVACMode.OFF, HVACMode.COOL]
+
+
 def test_climate_repairs_legacy_enum_repr_native_template(hass):
     entity = VirtualClimate(
         CLIMATE_SCHEMA(

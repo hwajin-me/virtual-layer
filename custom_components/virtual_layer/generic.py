@@ -1035,8 +1035,13 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             return MediaPlayerState.ON if value else MediaPlayerState.OFF
         if not _has_value(value):
             return None
+        normalized = str(value).strip().lower()
+        if normalized in {"false", "0", "no"}:
+            return MediaPlayerState.OFF
+        if normalized in {"true", "1", "yes"}:
+            return MediaPlayerState.ON
         try:
-            return MediaPlayerState(str(value).strip().lower())
+            return MediaPlayerState(normalized)
         except ValueError:
             return None
 

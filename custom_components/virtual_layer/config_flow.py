@@ -3723,21 +3723,22 @@ def _source_state_is_number(entity_id: str, state) -> bool:
     return math.isfinite(value)
 
 
-def _source_state_as_float(state) -> float:
+def _source_state_as_float(state) -> float | None:
     try:
         value = float(state.state)
     except (TypeError, ValueError, OverflowError):
-        return 0.0
-    return value if math.isfinite(value) else 0.0
+        return None
+    return value if math.isfinite(value) else None
 
 
 def _average_known_states(states: list) -> str:
-    values = [
-        _source_state_as_float(state)
-        for state in states
-        if _source_state_is_known(state)
-        and _source_state_is_number(state.entity_id, state)
-    ]
+    values = []
+    for state in states:
+        if not _source_state_is_known(state):
+            continue
+        value = _source_state_as_float(state)
+        if value is not None:
+            values.append(value)
     values = _filtered_numeric_values(values)
     return str(sum(values) / len(values)) if values else "unknown"
 
@@ -4955,7 +4956,7 @@ def _reference_entity_defaults(
         for entity_id, state in zip(entity_ids, states, strict=True)
     ]
     all_number = all(number_sources) or (
-        sum(number_sources) >= 2
+        sum(number_sources) >= 1
         and all(
             is_number
             or (

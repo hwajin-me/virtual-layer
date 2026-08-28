@@ -565,7 +565,12 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             "temperature": CONF_TARGET_TEMPERATURE,
         }.get(name, name)
         if name == CONF_HVAC_MODES:
-            if isinstance(value, (list, tuple)) and not value:
+            empty_value = value is None or value is False or (
+                isinstance(value, str)
+                and value.strip().lower()
+                in {"", "[]", "none", "unknown", "unavailable"}
+            )
+            if empty_value or isinstance(value, (list, tuple)) and not value:
                 # Legacy generated helpers can temporarily render an empty
                 # union while source attributes are unavailable. Keep the last
                 # valid modes without producing a persistent warning.
