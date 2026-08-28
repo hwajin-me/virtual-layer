@@ -305,7 +305,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         _LOGGER.debug("Setting state for %s", self.entity_id)
         self._attr_native_value = self._coerce_native_value(value)
         self._attr_state = self._attr_native_value
-        self.async_schedule_update_ha_state()
+        self._schedule_state_update()
 
     def set_state(self, value) -> None:
         self.set(value)

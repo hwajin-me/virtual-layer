@@ -329,7 +329,7 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
             else:
                 raise ValueError(f"Invalid vacuum activity: {value}")
         self._attr_activity = activity
-        self.async_schedule_update_ha_state()
+        self._schedule_state_update()
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name in {"state", CONF_ACTIVITY, "activity"}:

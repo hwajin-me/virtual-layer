@@ -4401,7 +4401,8 @@ async def test_options_flow_can_prefill_composite_sensor_with_average_template(h
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_PLATFORM] == "sensor"
     assert defaults[CONF_INITIAL_VALUE] == "23.0"
-    assert "select('is_number')" in defaults[CONF_VALUE_TEMPLATE]
+    assert "float(none)" in defaults[CONF_VALUE_TEMPLATE]
+    assert "set threshold = 3" in defaults[CONF_VALUE_TEMPLATE]
     assert "values | average" in defaults[CONF_VALUE_TEMPLATE]
 
 

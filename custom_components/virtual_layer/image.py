@@ -486,4 +486,4 @@ class VirtualImage(VirtualEntity, ImageEntity):
 
     def set_state(self, value) -> None:
         """Keep generic/template state updates harmless for image entities."""
-        self.async_schedule_update_ha_state()
+        self._schedule_state_update()

@@ -67,6 +67,7 @@ from custom_components.virtual_layer.config_flow import (
     NATIVE_TEMPLATE_MAXIMUM_PROPERTIES,
     NATIVE_TEMPLATE_MINIMUM_PROPERTIES,
     NATIVE_TEMPLATE_NUMERIC_PROPERTIES,
+    NUMERIC_OUTLIER_THRESHOLD,
     InvalidDomainOptions,
     InvalidEntityId,
     InvalidEntityReference,
@@ -3040,8 +3041,9 @@ def test_reference_entity_defaults_combines_number_sources_with_average_template
 
     assert defaults[CONF_PLATFORM] == "sensor"
     assert defaults[CONF_INITIAL_VALUE] == "22.0"
-    assert "select('is_number')" in defaults[CONF_VALUE_TEMPLATE]
+    assert "float(none)" in defaults[CONF_VALUE_TEMPLATE]
     assert "values | average" in defaults[CONF_VALUE_TEMPLATE]
+    assert f"set threshold = {NUMERIC_OUTLIER_THRESHOLD}" in defaults[CONF_VALUE_TEMPLATE]
 
 
 def test_reference_entity_defaults_treats_zero_one_sensors_as_numbers(hass):
@@ -3089,6 +3091,36 @@ def test_number_helper_ignores_invalid_runtime_values(hass):
         ).strip()
         == "unknown"
     )
+
+
+@pytest.mark.parametrize(
+    ("states", "expected"),
+    [
+        (("400", "410", "420"), 410.0),
+        (("400", "410", "1000000"), 405.0),
+        (("390", "400", "410", "1000000"), 400.0),
+        (("400", "1000000"), 400.0),
+        (("unknown", "400", "420"), 410.0),
+        (("-10", "0", "10"), 0.0),
+    ],
+)
+def test_number_helper_filters_positive_spikes(hass, states, expected):
+    entity_ids = [f"sensor.reading_{index}" for index in range(len(states))]
+    for entity_id, state in zip(entity_ids, states, strict=True):
+        hass.states.async_set(entity_id, state)
+
+    defaults = _reference_entity_defaults(hass, entity_ids)
+    variables = {
+        name: state
+        for name, state in zip(
+            json.loads(defaults[CONF_TEMPLATE_SOURCES_JSON]), states, strict=True
+        )
+    }
+
+    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+        variables=variables, parse_result=True
+    ) == expected
+    assert float(defaults[CONF_INITIAL_VALUE]) == expected
 
 
 def test_reference_entity_defaults_preserves_water_usage_class_and_unit(hass):

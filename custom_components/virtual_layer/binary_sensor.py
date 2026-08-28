@@ -128,12 +128,12 @@ class VirtualBinarySensor(VirtualEntity, BinarySensorEntity):
     def turn_on(self) -> None:
         _LOGGER.debug(f"turning {self.name} on")
         self._attr_is_on = True
-        self.async_schedule_update_ha_state()
+        self._schedule_state_update()
 
     def turn_off(self) -> None:
         _LOGGER.debug(f"turning {self.name} off")
         self._attr_is_on = False
-        self.async_schedule_update_ha_state()
+        self._schedule_state_update()
 
     def toggle(self) -> None:
         if self.is_on:

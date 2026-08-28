@@ -1338,6 +1338,7 @@ def _render_native_templates(entity, hass):
     entity.hass = hass
     entity._create_state(entity._config)
     entity.async_schedule_update_ha_state = Mock()
+    entity.schedule_update_ha_state = Mock()
     entity.async_write_ha_state = Mock()
     entity._apply_templates()
 

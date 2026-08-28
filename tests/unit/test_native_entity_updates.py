@@ -55,6 +55,27 @@ def _config(schema, entity_id, initial_value):
     })
 
 
+async def test_state_updates_use_thread_safe_scheduler_outside_event_loop(hass):
+    entity = VirtualSensor(
+        _config(SENSOR_SCHEMA, "sensor.thread_safe", "idle"),
+        False,
+    )
+    entity.hass = hass
+    entity.async_schedule_update_ha_state = Mock()
+    entity.schedule_update_ha_state = Mock()
+
+    entity._schedule_state_update()
+    entity.async_schedule_update_ha_state.assert_called_once_with(
+        force_refresh=False,
+    )
+    entity.schedule_update_ha_state.assert_not_called()
+
+    entity.async_schedule_update_ha_state.reset_mock()
+    await hass.async_add_executor_job(entity._schedule_state_update)
+    entity.async_schedule_update_ha_state.assert_not_called()
+    entity.schedule_update_ha_state.assert_called_once_with(force_refresh=False)
+
+
 def test_virtual_entity_debug_logs_do_not_expose_configuration_or_state(caplog):
     secret = "secret-token-that-must-not-be-logged"
     with caplog.at_level(logging.DEBUG, logger="custom_components.virtual_layer.entity"):

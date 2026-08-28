@@ -134,6 +134,7 @@ NEW_DEVICE_TARGET = "__new_device__"
 HELPER_UPDATE_AUTO = "automatic"
 HELPER_UPDATE_KEEP = "keep_current"
 HELPER_UPDATE_FORCE = "force_helper"
+NUMERIC_OUTLIER_THRESHOLD = 3
 _MISSING_NATIVE_DEFAULT = object()
 
 CLIMATE_NATIVE_TEMPLATE_PROPERTIES = (
@@ -3737,7 +3738,64 @@ def _average_known_states(states: list) -> str:
         if _source_state_is_known(state)
         and _source_state_is_number(state.entity_id, state)
     ]
+    values = _filtered_numeric_values(values)
     return str(sum(values) / len(values)) if values else "unknown"
+
+
+def _filtered_numeric_values(values: list[float]) -> list[float]:
+    """Drop positive numeric spikes using a median-relative threshold."""
+    if len(values) < 2:
+        return values
+    ordered = sorted(values)
+    if len(ordered) == 2:
+        reference = ordered[0]
+    else:
+        middle = len(ordered) // 2
+        reference = (
+            ordered[middle]
+            if len(ordered) % 2
+            else (ordered[middle - 1] + ordered[middle]) / 2
+        )
+    if reference <= 0:
+        return values
+    return [
+        value
+        for value in values
+        if value <= 0 or value <= reference * NUMERIC_OUTLIER_THRESHOLD
+    ]
+
+
+def _robust_average_helper_template(
+    expressions: list[str], empty_value: str = "none"
+) -> str:
+    """Build a numeric average helper that ignores invalid values and spikes."""
+    return (
+        f"{{% set threshold = {NUMERIC_OUTLIER_THRESHOLD} %}}"
+        "{% set ns = namespace(values=[]) %}"
+        "{% for raw_value in ["
+        + ", ".join(expressions)
+        + "] %}{% set value = raw_value | float(none) %}"
+        "{% if raw_value | is_number and value is not none %}"
+        "{% set ns.values = ns.values + [value] %}"
+        "{% endif %}{% endfor %}"
+        "{% set ordered = ns.values | sort %}"
+        "{% set count = ordered | count %}"
+        "{% if count >= 3 %}"
+        "{% set middle = count // 2 %}"
+        "{% set median = ordered[middle] if count % 2 else "
+        "(ordered[middle - 1] + ordered[middle]) / 2 %}"
+        "{% elif count == 2 %}{% set median = ordered[0] %}"
+        "{% else %}{% set median = none %}{% endif %}"
+        "{% set kept = namespace(values=[]) %}"
+        "{% for value in ordered %}"
+        "{% if median is none or median <= 0 or value <= 0 or "
+        "value <= median * threshold %}"
+        "{% set kept.values = kept.values + [value] %}"
+        "{% endif %}{% endfor %}"
+        "{{ (kept.values | average) if kept.values else "
+        + empty_value
+        + " }}"
+    )
 
 
 def _all_source_domains(entity_ids: list[str], domains: set[str]) -> bool:
@@ -4877,9 +4935,22 @@ def _reference_entity_defaults(
         _source_state_is_boolean(entity_id, state)
         for entity_id, state in zip(entity_ids, states, strict=True)
     )
-    all_number = all(
+    number_sources = [
         _source_state_is_number(entity_id, state)
         for entity_id, state in zip(entity_ids, states, strict=True)
+    ]
+    all_number = all(number_sources) or (
+        sum(number_sources) >= 2
+        and all(
+            is_number
+            or (
+                entity_id.startswith("sensor.")
+                and not _source_state_is_known(state)
+            )
+            for entity_id, state, is_number in zip(
+                entity_ids, states, number_sources, strict=True
+            )
+        )
     )
     all_datetime = _all_source_domains(entity_ids, DATETIME_SOURCE_DOMAINS)
     all_date = _all_source_domains(entity_ids, DATE_SOURCE_DOMAINS)
@@ -5244,11 +5315,16 @@ def _reference_entity_defaults(
         ]
         defaults[CONF_VALUE_TEMPLATE] = "{{ " + " and ".join(boolean_checks) + " }}"
     elif all_number:
-        defaults[CONF_VALUE_TEMPLATE] = (
-            "{% set values = ["
-            + ", ".join(variable_names)
-            + "] | select('is_number') | map('float') | list %}"
-            "{{ (values | average) if values else 'unknown' }}"
+        defaults[CONF_VALUE_TEMPLATE] = _robust_average_helper_template(
+            variable_names,
+            "'unknown'",
+        )
+        defaults[CONF_AVAILABILITY_TEMPLATE] = (
+            "{{ (["
+            + ", ".join(
+                f"states({entity_id!r}) | is_number" for entity_id in entity_ids
+            )
+            + "] | select | list | count) > 0 }}"
         )
     elif all_datetime:
         defaults[CONF_VALUE_TEMPLATE] = _latest_datetime_helper_template(variable_names)

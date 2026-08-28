@@ -8,6 +8,7 @@ import inspect
 import logging
 import math
 import re
+from asyncio import get_running_loop
 from contextvars import ContextVar
 from datetime import timedelta
 from enum import Enum
@@ -482,6 +483,17 @@ class VirtualEntity(RestoreEntity):
         self._attr_available = value
         self._update_attributes()
         self.async_schedule_update_ha_state()
+
+    def _schedule_state_update(self, force_refresh: bool = False) -> None:
+        """Schedule a state update safely from loop or executor contexts."""
+        try:
+            on_hass_loop = get_running_loop() is self.hass.loop
+        except RuntimeError:
+            on_hass_loop = False
+        if on_hass_loop:
+            self.async_schedule_update_ha_state(force_refresh=force_refresh)
+        else:
+            self.schedule_update_ha_state(force_refresh=force_refresh)
 
     def set_attributes(self, attributes):
         self._virtual_attributes.update({
@@ -1237,7 +1249,7 @@ class VirtualEntity(RestoreEntity):
 
         if changed:
             self._update_attributes()
-            self.async_schedule_update_ha_state()
+            self._schedule_state_update()
 
     def _apply_attribute_sources(self):
         changed = False
