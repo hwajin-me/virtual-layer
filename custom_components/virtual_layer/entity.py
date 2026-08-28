@@ -487,7 +487,7 @@ class VirtualEntity(RestoreEntity):
     def _schedule_state_update(self, force_refresh: bool = False) -> None:
         """Schedule a state update safely from loop or executor contexts."""
         try:
-            on_hass_loop = get_running_loop() is self.hass.loop
+            on_hass_loop = self.hass is None or get_running_loop() is self.hass.loop
         except RuntimeError:
             on_hass_loop = False
         if on_hass_loop:

@@ -14,6 +14,7 @@ import homeassistant.helpers.area_registry as ar
 import homeassistant.helpers.config_validation as cv
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
+import homeassistant.loader as loader
 import voluptuous as vol
 from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.config_entries import ConfigEntry
@@ -290,6 +291,20 @@ def _entry_platforms_from_entities(entities):
     ]
 
 
+async def _async_preload_entry_platforms(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    platforms,
+) -> None:
+    """Populate HA's platform cache without importing modules on the event loop."""
+    if not platforms:
+        return
+    integration = await loader.async_get_integration(hass, entry.domain)
+    await hass.async_add_import_executor_job(
+        lambda: tuple(integration.get_platform(platform) for platform in platforms),
+    )
+
+
 def str_to_bool(value) -> bool:
     value = value.lower()
     if value in ["y", "yes", "t", "true", "on", "1"]:
@@ -402,6 +417,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     platforms_loaded = False
     try:
         if platforms:
+            await _async_preload_entry_platforms(hass, entry, platforms)
             await hass.config_entries.async_forward_entry_setups(entry, platforms)
         platforms_loaded = True
     finally:

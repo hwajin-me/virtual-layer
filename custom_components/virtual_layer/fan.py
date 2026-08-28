@@ -182,6 +182,16 @@ class VirtualFan(VirtualEntity, FanEntity):
             features |= FanEntityFeature.PRESET_MODE
         self._attr_supported_features = features
 
+    @property
+    def speed_count(self) -> int:
+        """Return a non-zero step count whenever percentage control is exposed."""
+        if self._attr_speed_count > 0:
+            return self._attr_speed_count
+        # A customized set_percentage action can expose SET_SPEED even when
+        # the source does not publish percentage_step. Treat that as continuous
+        # percentage control instead of letting HA calculate 100 / 0.
+        return 100
+
     def _create_state(self, config):
         super()._create_state(config)
 
@@ -357,14 +367,14 @@ class VirtualFan(VirtualEntity, FanEntity):
         self._attr_percentage = self._nearest_percentage(percentage)
         self._attr_preset_mode = None
         self._update_attributes()
-        self.async_write_ha_state()
+        self._schedule_state_update()
 
     def _set_preset_mode(self, preset_mode: str) -> None:
         if preset_mode in self.preset_modes:
             self._attr_preset_mode = preset_mode
             self._attr_percentage = None
             self._update_attributes()
-            self.async_write_ha_state()
+            self._schedule_state_update()
         else:
             raise ValueError(f"Invalid preset mode: {preset_mode}")
 
@@ -409,7 +419,7 @@ class VirtualFan(VirtualEntity, FanEntity):
             raise ValueError(f"Invalid fan direction: {direction}")
         self._attr_current_direction = direction
         self._update_attributes()
-        self.async_write_ha_state()
+        self._schedule_state_update()
 
     async def async_oscillate(self, oscillating: bool) -> None:
         """Set oscillation."""
@@ -418,7 +428,7 @@ class VirtualFan(VirtualEntity, FanEntity):
             raise TypeError("Oscillating must be a boolean")
         self._attr_oscillating = oscillating
         self._update_attributes()
-        self.async_write_ha_state()
+        self._schedule_state_update()
 
     def set_state(self, value) -> None:
         value = str(value).lower()

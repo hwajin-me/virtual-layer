@@ -10,6 +10,7 @@ from homeassistant.components.vacuum import (
     VacuumActivity,
     VacuumEntityFeature,
 )
+from homeassistant.components.fan import FanEntityFeature
 from homeassistant.const import ATTR_ENTITY_ID
 
 from custom_components.virtual_layer.binary_sensor import (
@@ -266,6 +267,34 @@ def test_power_entities_reject_invalid_state_without_turning_off(entity):
         entity.set_state("definitely-not-a-power-state")
 
     assert entity.is_on is True
+
+
+async def test_fan_action_without_speed_count_is_safe_from_executor(hass):
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            {
+                **_config(FAN_SCHEMA, "fan.continuous", "off"),
+                CONF_COMMAND_ACTIONS: {
+                    "set_percentage": {"action": "script.set_fan_percentage"},
+                },
+            }
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_schedule_update_ha_state = Mock()
+    entity.schedule_update_ha_state = Mock()
+
+    assert FanEntityFeature.SET_SPEED in entity.supported_features
+    assert entity.speed_count == 100
+    assert entity.percentage_step == 1
+
+    await hass.async_add_executor_job(entity.set_state, "67")
+
+    assert entity.percentage == 67
+    entity.async_schedule_update_ha_state.assert_not_called()
+    entity.schedule_update_ha_state.assert_called_once_with(force_refresh=False)
 
 
 @pytest.mark.parametrize(("restored", "expected"), [(65, 65), ("invalid", None)])
