@@ -3695,8 +3695,16 @@ def _json_default(value) -> str:
     """
     if not value:
         return ""
+    # ``json.dumps`` accepts several str-like Home Assistant enum classes as
+    # mapping keys without converting their concrete Python type.  PyYAML's
+    # SafeDumper then rejects those keys.  A JSON round trip is intentional:
+    # it guarantees that the value handed to YAML consists only of plain JSON
+    # primitives, including for enum implementations from newer HA versions.
+    serialized_value = json.loads(
+        json.dumps(_json_safe(_plain_options(value)), allow_nan=False)
+    )
     return yaml.safe_dump(
-        _json_safe(_plain_options(value)),
+        serialized_value,
         allow_unicode=True,
         default_flow_style=False,
         sort_keys=False,
@@ -3729,41 +3737,48 @@ def _json_safe(value, _seen=None, _depth=0):
     enum_value = getattr(value, "value", None)
     if enum_value is not None and type(value) is not type(enum_value):
         return _json_safe(enum_value, _seen, _depth + 1)
+
+    # Do not use a successful json.dumps() call as a shortcut for containers.
+    # ``StrEnum`` values are accepted by json as both values *and mapping keys*,
+    # but PyYAML's SafeDumper does not know how to represent the enum subclass.
+    # Recursively normalizing containers keeps YAML form defaults safe for
+    # attributes returned by Home Assistant platforms (notably vacuum).
+    if _seen is None:
+        _seen = set()
+    if isinstance(value, Mapping):
+        identity = id(value)
+        if identity in _seen:
+            return None
+        _seen.add(identity)
+        try:
+            result = {}
+            for key, item in value.items():
+                safe_key = _json_safe(key, _seen, _depth + 1)
+                if safe_key is None:
+                    continue
+                if not isinstance(safe_key, str):
+                    try:
+                        safe_key = str(safe_key)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                result[safe_key] = _json_safe(item, _seen, _depth + 1)
+            return result
+        finally:
+            _seen.remove(identity)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        identity = id(value)
+        if identity in _seen:
+            return None
+        _seen.add(identity)
+        try:
+            return [_json_safe(item, _seen, _depth + 1) for item in value]
+        finally:
+            _seen.remove(identity)
     try:
         json.dumps(value, allow_nan=False)
         json_bytes(value)
         return value
     except (TypeError, ValueError, OverflowError, RecursionError):
-        if _seen is None:
-            _seen = set()
-        if isinstance(value, Mapping):
-            identity = id(value)
-            if identity in _seen:
-                return None
-            _seen.add(identity)
-            try:
-                result = {}
-                for key, item in value.items():
-                    try:
-                        safe_key = str(key)
-                    except (TypeError, ValueError, OverflowError):
-                        continue
-                    result[safe_key] = _json_safe(item, _seen, _depth + 1)
-                return result
-            finally:
-                _seen.remove(identity)
-        if isinstance(value, (list, tuple, set, frozenset)):
-            identity = id(value)
-            if identity in _seen:
-                return None
-            _seen.add(identity)
-            try:
-                return [
-                    _json_safe(item, _seen, _depth + 1)
-                    for item in value
-                ]
-            finally:
-                _seen.remove(identity)
         if isinstance(value, int) and not isinstance(value, bool):
             return None
         try:

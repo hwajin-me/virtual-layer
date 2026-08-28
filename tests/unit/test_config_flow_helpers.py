@@ -1878,6 +1878,30 @@ def test_json_default_normalizes_string_enum_attributes():
     assert result == {"attribute": "motion_detection"}
 
 
+def test_json_default_normalizes_string_enum_attribute_keys():
+    """YAML defaults must not retain StrEnum keys accepted by json.dumps."""
+
+    class VacuumAttribute(str, Enum):
+        FAN_SPEED_LIST = "fan_speed_list"
+
+    result = _yaml_value(
+        _json_default({VacuumAttribute.FAN_SPEED_LIST: ["quiet", "turbo"]})
+    )
+
+    assert result == {"fan_speed_list": ["quiet", "turbo"]}
+
+
+def test_json_default_normalizes_str_subclass_keys_for_yaml():
+    """json accepts str subclasses that PyYAML SafeDumper rejects."""
+
+    class HomeAssistantAttribute(str):
+        pass
+
+    result = _yaml_value(_json_default({HomeAssistantAttribute("device_class"): ""}))
+
+    assert result == {"device_class": ""}
+
+
 def test_literal_template_serializes_nested_enum_values_without_python_repr(hass):
     value = {
         "list": [HVACAction.HEATING],
