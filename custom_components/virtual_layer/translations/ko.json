@@ -6,8 +6,8 @@
     },
     "error": {
       "group_name_used": "이미 사용 중인 장치 이름입니다. 다른 이름을 입력하세요.",
-      "invalid_json": "올바른 JSON 객체를 입력하세요.",
-      "invalid_template": "Jinja 템플릿 문법을 수정하세요. JSON 필드는 각 키의 템플릿 값을 확인하세요. 실패한 키는 Home Assistant 로그에 기록됩니다.",
+      "invalid_json": "올바른 YAML 객체를 입력하세요.",
+      "invalid_template": "Jinja 템플릿 문법을 수정하세요. YAML 필드는 각 키의 템플릿 값을 확인하세요. 실패한 키는 Home Assistant 로그에 기록됩니다.",
       "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
       "source_unavailable": "선택한 원본 엔티티를 더 이상 사용할 수 없습니다. 이전 단계로 돌아가 다시 선택하세요.",
       "helper_update_failed": "자동 helper 업데이트에 실패했습니다. 현재 값을 유지했으니 아래 템플릿을 확인하고 수정하세요.",
@@ -102,24 +102,24 @@
             "name": "고급 설정",
             "description": "선택적 소스 매핑, 속성, 이벤트 훅, 명령 액션 및 통합별 설정입니다.",
             "data": {
-              "template_sources_json": "템플릿 소스 JSON",
-              "event_hooks_json": "이벤트 훅 JSON",
-              "attributes_json": "속성 JSON",
-              "attribute_sources_json": "속성 소스 JSON",
-              "attribute_templates_json": "속성 템플릿 JSON",
-              "native_templates_json": "네이티브 속성 템플릿 JSON",
-              "command_actions_json": "명령 Action JSON",
-              "domain_options_json": "도메인 옵션 JSON"
+              "template_sources_json": "템플릿 소스 YAML",
+              "event_hooks_json": "이벤트 훅 YAML",
+              "attributes_json": "속성 YAML",
+              "attribute_sources_json": "속성 소스 YAML",
+              "attribute_templates_json": "속성 템플릿 YAML",
+              "native_templates_json": "네이티브 속성 템플릿 YAML",
+              "command_actions_json": "명령 Action YAML",
+              "domain_options_json": "도메인 옵션 YAML"
             },
             "data_description": {
-              "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
+              "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 YAML 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
               "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
-              "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
-              "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-              "attribute_templates_json": "값이 Jinja 템플릿인 JSON 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
+              "attributes_json": "속성을 담은 YAML 객체입니다. 예: battery_level -> 91",
+              "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 YAML 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
+              "attribute_templates_json": "값이 Jinja 템플릿인 YAML 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
               "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
-              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다.",
-              "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
+              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다. 가상 도메인이 지원하는 모든 명령을 여기에서 매핑할 수 있습니다. choose 조건을 사용하면 preset mode 또는 다른 명령 인자에 따라 서로 다른 대상 엔티티와 Action으로 전달할 수 있습니다.",
+              "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 YAML 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
             }
           },
           "domain_settings": {
@@ -131,7 +131,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker 위치 선정 방식",
               "polygon_distance_meters": "Tracker 그룹 거리",
-              "polygon_tracker_rules_json": "Tracker 규칙 JSON",
+              "polygon_tracker_rules_json": "Tracker 규칙 YAML",
               "polygon_away_state": "영역 밖 상태",
               "matter_light_type": "Matter 조명 장치 유형"
             },
@@ -578,8 +578,8 @@
   },
   "options": {
     "error": {
-      "invalid_json": "올바른 JSON 객체를 입력하세요.",
-      "invalid_template": "Jinja 템플릿 문법을 수정하세요. JSON 필드는 각 키의 템플릿 값을 확인하세요. 실패한 키는 Home Assistant 로그에 기록됩니다.",
+      "invalid_json": "올바른 YAML 객체를 입력하세요.",
+      "invalid_template": "Jinja 템플릿 문법을 수정하세요. YAML 필드는 각 키의 템플릿 값을 확인하세요. 실패한 키는 Home Assistant 로그에 기록됩니다.",
       "invalid_entity_id": "올바른 엔티티 ID를 입력하세요.",
       "source_unavailable": "선택한 원본 엔티티를 더 이상 사용할 수 없습니다. 이전 단계로 돌아가 다시 선택하세요.",
       "helper_update_failed": "자동 helper 업데이트에 실패했습니다. 현재 값을 유지했으니 아래 템플릿을 확인하고 수정하세요.",
@@ -734,24 +734,24 @@
             "name": "고급 설정",
             "description": "선택적 소스 매핑, 속성, 이벤트 훅, 명령 액션 및 통합별 설정입니다.",
             "data": {
-              "template_sources_json": "템플릿 소스 JSON",
-              "event_hooks_json": "이벤트 훅 JSON",
-              "attributes_json": "속성 JSON",
-              "attribute_sources_json": "속성 소스 JSON",
-              "attribute_templates_json": "속성 템플릿 JSON",
-              "native_templates_json": "네이티브 속성 템플릿 JSON",
-              "command_actions_json": "명령 Action JSON",
-              "domain_options_json": "도메인 옵션 JSON"
+              "template_sources_json": "템플릿 소스 YAML",
+              "event_hooks_json": "이벤트 훅 YAML",
+              "attributes_json": "속성 YAML",
+              "attribute_sources_json": "속성 소스 YAML",
+              "attribute_templates_json": "속성 템플릿 YAML",
+              "native_templates_json": "네이티브 속성 템플릿 YAML",
+              "command_actions_json": "명령 Action YAML",
+              "domain_options_json": "도메인 옵션 YAML"
             },
             "data_description": {
-              "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
+              "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 YAML 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
               "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
-              "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
-              "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-              "attribute_templates_json": "값이 Jinja 템플릿인 JSON 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
+              "attributes_json": "속성을 담은 YAML 객체입니다. 예: battery_level -> 91",
+              "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 YAML 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
+              "attribute_templates_json": "값이 Jinja 템플릿인 YAML 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
               "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
-              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다.",
-              "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
+              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다. 가상 도메인이 지원하는 모든 명령을 여기에서 매핑할 수 있습니다. choose 조건을 사용하면 preset mode 또는 다른 명령 인자에 따라 서로 다른 대상 엔티티와 Action으로 전달할 수 있습니다.",
+              "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 YAML 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
             }
           },
           "domain_settings": {
@@ -763,7 +763,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker 위치 선정 방식",
               "polygon_distance_meters": "Tracker 그룹 거리",
-              "polygon_tracker_rules_json": "Tracker 규칙 JSON",
+              "polygon_tracker_rules_json": "Tracker 규칙 YAML",
               "polygon_away_state": "영역 밖 상태",
               "matter_light_type": "Matter 조명 장치 유형"
             },
@@ -1280,24 +1280,24 @@
             "name": "고급 설정",
             "description": "선택적 소스 매핑, 속성, 이벤트 훅, 명령 액션 및 통합별 설정입니다.",
             "data": {
-              "template_sources_json": "템플릿 소스 JSON",
-              "event_hooks_json": "이벤트 훅 JSON",
-              "attributes_json": "속성 JSON",
-              "attribute_sources_json": "속성 소스 JSON",
-              "attribute_templates_json": "속성 템플릿 JSON",
-              "native_templates_json": "네이티브 속성 템플릿 JSON",
-              "command_actions_json": "명령 Action JSON",
-              "domain_options_json": "도메인 옵션 JSON"
+              "template_sources_json": "템플릿 소스 YAML",
+              "event_hooks_json": "이벤트 훅 YAML",
+              "attributes_json": "속성 YAML",
+              "attribute_sources_json": "속성 소스 YAML",
+              "attribute_templates_json": "속성 템플릿 YAML",
+              "native_templates_json": "네이티브 속성 템플릿 YAML",
+              "command_actions_json": "명령 Action YAML",
+              "domain_options_json": "도메인 옵션 YAML"
             },
             "data_description": {
-              "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 JSON 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
+              "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 YAML 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
               "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
-              "attributes_json": "속성을 담은 JSON 객체입니다. 예: battery_level -> 91",
-              "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 JSON 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-              "attribute_templates_json": "값이 Jinja 템플릿인 JSON 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
+              "attributes_json": "속성을 담은 YAML 객체입니다. 예: battery_level -> 91",
+              "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 YAML 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
+              "attribute_templates_json": "값이 Jinja 템플릿인 YAML 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
               "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
-              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다.",
-              "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 JSON 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
+              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다. 가상 도메인이 지원하는 모든 명령을 여기에서 매핑할 수 있습니다. choose 조건을 사용하면 preset mode 또는 다른 명령 인자에 따라 서로 다른 대상 엔티티와 Action으로 전달할 수 있습니다.",
+              "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 YAML 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
             }
           },
           "domain_settings": {
@@ -1309,7 +1309,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker 위치 선정 방식",
               "polygon_distance_meters": "Tracker 그룹 거리",
-              "polygon_tracker_rules_json": "Tracker 규칙 JSON",
+              "polygon_tracker_rules_json": "Tracker 규칙 YAML",
               "polygon_away_state": "영역 밖 상태",
               "matter_light_type": "Matter 조명 장치 유형"
             },

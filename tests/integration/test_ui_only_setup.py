@@ -8,6 +8,7 @@ import homeassistant.helpers.area_registry as ar
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
 import pytest
+import yaml
 import voluptuous as vol
 from homeassistant.components.camera import Camera, CameraEntityFeature, CameraState
 from homeassistant.components.camera.const import StreamType
@@ -161,6 +162,11 @@ from custom_components.virtual_layer.const import (
 )
 from custom_components.virtual_layer.sensor import VirtualSensor
 
+def _yaml_value(value):
+    """Return either a YAML editor object or serialized YAML."""
+    return yaml.safe_load(value) if isinstance(value, str) and value else value
+
+
 pytestmark = pytest.mark.integration
 
 
@@ -308,7 +314,7 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_PLATFORM] == "sensor"
     assert defaults[CONF_INITIAL_VALUE] == "12.5"
-    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+    assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         "class": "energy",
         "unit_of_measurement": "kWh",
     }
@@ -424,7 +430,7 @@ async def test_options_flow_converts_single_switch_source_to_fan(hass):
         "{{ states('switch.desk_fan_power') not in "
         "['off', 'unknown', 'unavailable'] }}"
     )
-    assert json.loads(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
+    assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
         "turn_off": [{
             "action": "switch.turn_off",
             "target": {ATTR_ENTITY_ID: "switch.desk_fan_power"},
@@ -537,7 +543,7 @@ async def test_options_flow_edit_changes_single_switch_backed_entity_to_fan(hass
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_PLATFORM] == "fan"
     assert defaults[ATTR_ENTITY_ID] == "fan.desk_power_virtual"
-    assert json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])["turn_on"] == [{
+    assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])["turn_on"] == [{
         "action": "switch.turn_on",
         "target": {ATTR_ENTITY_ID: "switch.desk_power"},
     }]
@@ -686,7 +692,7 @@ async def test_edit_automatic_repairs_legacy_switch_backed_fan_actions(hass):
     )
 
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
-    actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     assert actions["turn_on"] == [{
         "action": "switch.turn_on",
         "target": {ATTR_ENTITY_ID: "switch.legacy_fan_power"},
@@ -728,15 +734,15 @@ async def test_options_flow_ignores_restored_source_metadata(hass):
     result = await _choose_add_template_helper(hass, result)
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
 
-    assert ATTR_RESTORED not in json.loads(defaults[CONF_ATTRIBUTES_JSON])
-    assert ATTR_RESTORED not in json.loads(
+    assert ATTR_RESTORED not in _yaml_value(defaults[CONF_ATTRIBUTES_JSON])
+    assert ATTR_RESTORED not in _yaml_value(
         defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]
     )
 
     # A flow opened before the fix can still submit the old generated fields.
     # They are Home Assistant-owned metadata and should be repaired, not block
     # the complete entity form with invalid_template.
-    stale_templates = json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+    stale_templates = _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
     stale_templates.update({
         ATTR_RESTORED: "{{ <RestoredState> }}",
         "access_token": "{{ <rotating-token> }}",
@@ -792,8 +798,8 @@ async def test_options_flow_camera_alias_tracks_native_camera_states(hass):
 
     assert defaults[CONF_PLATFORM] == "camera"
     assert defaults[CONF_INITIAL_VALUE] == CameraState.RECORDING
-    assert "access_token" not in json.loads(defaults[CONF_ATTRIBUTES_JSON] or "{}")
-    assert "access_token" not in json.loads(
+    assert "access_token" not in _yaml_value(defaults[CONF_ATTRIBUTES_JSON] or "{}")
+    assert "access_token" not in _yaml_value(
         defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] or "{}"
     )
 
@@ -905,7 +911,7 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
     assert "switch.hot_water" not in defaults[CONF_NATIVE_VALUE_TEMPLATES][
         "current_temperature"
     ]
-    generated_actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    generated_actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     assert generated_actions["turn_off"] == [
         {
             "action": "switch.turn_on",
@@ -1366,7 +1372,7 @@ async def test_home_assistant_loads_korean_config_translations(hass):
     assert config_translations[
         "component.virtual_layer.config.step.entity.sections."
         "advanced_settings.data.event_hooks_json"
-    ] == "이벤트 훅 JSON"
+    ] == "이벤트 훅 YAML"
     assert "상태 변경" in config_translations[
         "component.virtual_layer.config.step.entity.sections."
         "advanced_settings.data_description.event_hooks_json"
@@ -2259,7 +2265,7 @@ async def test_options_flow_refreshes_generated_helper_when_sources_change(
         hass.states.async_set(entity_id, "off", {"device_class": "door"})
 
     old_defaults = _reference_entity_defaults(hass, old_sources)
-    old_template_sources = json.loads(old_defaults[CONF_TEMPLATE_SOURCES_JSON])
+    old_template_sources = _yaml_value(old_defaults[CONF_TEMPLATE_SOURCES_JSON])
     legacy_profile = _auto_helper_profile(old_defaults)
     legacy_profile[CONF_TEMPLATE_SOURCES_JSON] = old_defaults[
         CONF_TEMPLATE_SOURCES_JSON
@@ -2327,9 +2333,8 @@ async def test_options_flow_refreshes_generated_helper_when_sources_change(
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     expected_helper = _reference_entity_defaults(hass, new_sources)
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "\n".join(new_sources)
-    assert defaults[CONF_TEMPLATE_SOURCES_JSON] == expected_helper.get(
-        CONF_TEMPLATE_SOURCES_JSON,
-        "",
+    assert _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON]) == (
+        _yaml_value(expected_helper.get(CONF_TEMPLATE_SOURCES_JSON)) or {}
     )
     assert defaults[CONF_VALUE_TEMPLATE] == expected_helper.get(CONF_VALUE_TEMPLATE, "")
 
@@ -2370,7 +2375,7 @@ async def test_options_flow_recovers_stale_helper_after_partial_source_update(
 
     old_defaults = _reference_entity_defaults(hass, old_sources)
     new_defaults = _reference_entity_defaults(hass, new_sources)
-    old_template_sources = json.loads(old_defaults[CONF_TEMPLATE_SOURCES_JSON])
+    old_template_sources = _yaml_value(old_defaults[CONF_TEMPLATE_SOURCES_JSON])
     stored_auto_helper = (
         _auto_helper_profile(new_defaults)
         if auto_helper_marker == "new_profile"
@@ -2428,9 +2433,9 @@ async def test_options_flow_recovers_stale_helper_after_partial_source_update(
     assert result["step_id"] == "edit_entity"
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "\n".join(new_sources)
-    assert defaults[CONF_TEMPLATE_SOURCES_JSON] == new_defaults[
-        CONF_TEMPLATE_SOURCES_JSON
-    ]
+    assert _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON]) == _yaml_value(
+        new_defaults[CONF_TEMPLATE_SOURCES_JSON]
+    )
     assert defaults[CONF_VALUE_TEMPLATE] == new_defaults[CONF_VALUE_TEMPLATE]
     assert "door_sensor_5_contact" not in defaults[CONF_TEMPLATE_SOURCES_JSON]
     assert "door_sensor_7_contact" in defaults[CONF_TEMPLATE_SOURCES_JSON]
@@ -2465,7 +2470,7 @@ async def test_options_flow_recovers_sorted_legacy_boolean_or_helper(hass):
 
     old_defaults = _reference_entity_defaults(hass, old_sources)
     new_defaults = _reference_entity_defaults(hass, new_sources)
-    old_template_sources = json.loads(old_defaults[CONF_TEMPLATE_SOURCES_JSON])
+    old_template_sources = _yaml_value(old_defaults[CONF_TEMPLATE_SOURCES_JSON])
     old_or_template = (
         "{{ ((door_sensor_6_contact | lower) in "
         "['1', 'on', 'open', 'true', 'unlocked', 'yes']) or "
@@ -2522,9 +2527,9 @@ async def test_options_flow_recovers_sorted_legacy_boolean_or_helper(hass):
     )
     assert result["step_id"] == "edit_entity"
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
-    assert defaults[CONF_TEMPLATE_SOURCES_JSON] == new_defaults[
-        CONF_TEMPLATE_SOURCES_JSON
-    ]
+    assert _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON]) == _yaml_value(
+        new_defaults[CONF_TEMPLATE_SOURCES_JSON]
+    )
     assert defaults[CONF_VALUE_TEMPLATE] == new_defaults[CONF_VALUE_TEMPLATE]
     assert "door_sensor_5_contact" not in defaults[CONF_VALUE_TEMPLATE]
     assert "door_sensor_7_contact" in defaults[CONF_VALUE_TEMPLATE]
@@ -2566,12 +2571,12 @@ async def test_edit_same_sources_can_force_helpers_from_current_source_attribute
                             ATTR_ENTITY_ID: source_entity_id,
                             CONF_ATTRIBUTE: "state",
                         }
-                        for variable_name, source_entity_id in json.loads(
+                        for variable_name, source_entity_id in _yaml_value(
                             generated[CONF_TEMPLATE_SOURCES_JSON]
                         ).items()
                     },
                     CONF_VALUE_TEMPLATE: generated[CONF_VALUE_TEMPLATE],
-                    CONF_ATTRIBUTE_TEMPLATES: json.loads(
+                    CONF_ATTRIBUTE_TEMPLATES: _yaml_value(
                         generated[CONF_ATTRIBUTE_TEMPLATES_JSON]
                     ),
                     CONF_AUTO_HELPER: _auto_helper_profile(generated),
@@ -2607,7 +2612,7 @@ async def test_edit_same_sources_can_force_helpers_from_current_source_attribute
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_FORCE},
     )
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
-    templates = json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+    templates = _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
     assert "energy" in templates
 
 
@@ -2626,7 +2631,7 @@ async def test_options_flow_handles_custom_template_when_sources_change(
         hass.states.async_set(entity_id, "off", {"device_class": "door"})
 
     generated = _reference_entity_defaults(hass, old_sources)
-    template_sources = json.loads(generated[CONF_TEMPLATE_SOURCES_JSON])
+    template_sources = _yaml_value(generated[CONF_TEMPLATE_SOURCES_JSON])
     custom_template = (
         generated[CONF_VALUE_TEMPLATE][:-3]
         + " and (door_5 != 'unavailable') }}"
@@ -2708,7 +2713,7 @@ async def test_edit_form_source_change_requires_helper_policy(hass):
         hass.states.async_set(entity_id, "off", {"device_class": "door"})
 
     generated = _reference_entity_defaults(hass, old_sources)
-    template_sources = json.loads(generated[CONF_TEMPLATE_SOURCES_JSON])
+    template_sources = _yaml_value(generated[CONF_TEMPLATE_SOURCES_JSON])
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "ui"},
@@ -2774,9 +2779,9 @@ async def test_edit_form_source_change_requires_helper_policy(hass):
     assert edited[CONF_ENTITY_NAME] == "Renamed Combined Doors"
     assert edited[CONF_DEVICE_MODEL] == "Updated Model"
     assert edited[CONF_VALUE_TEMPLATE] == generated[CONF_VALUE_TEMPLATE]
-    assert edited[CONF_TEMPLATE_SOURCES_JSON] == generated[
-        CONF_TEMPLATE_SOURCES_JSON
-    ]
+    assert _yaml_value(edited[CONF_TEMPLATE_SOURCES_JSON]) == _yaml_value(
+        generated[CONF_TEMPLATE_SOURCES_JSON]
+    )
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -2799,7 +2804,7 @@ async def test_repeated_source_changes_regenerate_from_latest_helper_baseline(ha
         hass.states.async_set(entity_id, "off", {"device_class": "door"})
 
     generated = _reference_entity_defaults(hass, first_sources)
-    template_sources = json.loads(generated[CONF_TEMPLATE_SOURCES_JSON])
+    template_sources = _yaml_value(generated[CONF_TEMPLATE_SOURCES_JSON])
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "ui"},
@@ -2857,9 +2862,9 @@ async def test_repeated_source_changes_regenerate_from_latest_helper_baseline(ha
     final_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     expected = _reference_entity_defaults(hass, final_sources)
     assert final_defaults[CONF_VALUE_TEMPLATE] == expected[CONF_VALUE_TEMPLATE]
-    assert final_defaults[CONF_TEMPLATE_SOURCES_JSON] == expected[
-        CONF_TEMPLATE_SOURCES_JSON
-    ]
+    assert _yaml_value(final_defaults[CONF_TEMPLATE_SOURCES_JSON]) == _yaml_value(
+        expected[CONF_TEMPLATE_SOURCES_JSON]
+    )
     assert "door_6" not in final_defaults[CONF_VALUE_TEMPLATE]
 
 
@@ -2923,7 +2928,7 @@ async def test_options_flow_refreshes_untouched_native_jinja_and_keeps_custom_fi
     generated = _reference_entity_defaults(hass, ["climate.old_unit"])
     generated_native = generated[CONF_NATIVE_VALUE_TEMPLATES]
     stored_native = {**generated_native, "fan_mode": "{{ 'quiet' }}"}
-    template_sources = json.loads(generated[CONF_TEMPLATE_SOURCES_JSON])
+    template_sources = _yaml_value(generated[CONF_TEMPLATE_SOURCES_JSON])
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "ui"},
@@ -2992,7 +2997,7 @@ async def test_options_flow_refreshes_entity_id_when_source_domain_changes(hass)
     hass.states.async_set("sensor.old_value", "20")
     hass.states.async_set("binary_sensor.new_door", "off")
     old_defaults = _reference_entity_defaults(hass, ["sensor.old_value"])
-    old_template_sources = json.loads(old_defaults[CONF_TEMPLATE_SOURCES_JSON])
+    old_template_sources = _yaml_value(old_defaults[CONF_TEMPLATE_SOURCES_JSON])
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "ui"},
@@ -3148,7 +3153,7 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     assert defaults[CONF_ENTITY_NAME] == "Kitchen Lamp"
     assert defaults[CONF_PLATFORM] == "light"
     assert defaults[CONF_INITIAL_VALUE] == "on"
-    assert defaults["attributes_json"] == '{"brightness": 128}'
+    assert defaults["attributes_json"] == {"brightness": 128}
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -3282,12 +3287,12 @@ async def test_creation_flows_apply_the_selected_template_helper_policy(hass):
     assert defaults[CONF_PLATFORM] == "sensor"
     assert defaults[CONF_INITIAL_VALUE] == "21.5"
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "sensor.room_temperature"
-    assert defaults[CONF_ATTRIBUTES_JSON] == '{"quality": "good"}'
+    assert defaults[CONF_ATTRIBUTES_JSON] == {"quality": "good"}
     assert defaults[CONF_VALUE_TEMPLATE] == ""
     assert defaults[CONF_AVAILABILITY_TEMPLATE] == ""
     assert defaults[CONF_ICON_TEMPLATE] == ""
-    assert defaults[CONF_TEMPLATE_SOURCES_JSON] == ""
-    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == ""
+    assert defaults[CONF_TEMPLATE_SOURCES_JSON] == {}
+    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == {}
     assert all(
         "sensor.room_temperature" not in template
         for template in defaults[CONF_NATIVE_VALUE_TEMPLATES].values()
@@ -3528,8 +3533,8 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
         parse_result=True
     ) == 23.0
     assert all(native_templates.values())
-    assert defaults[CONF_DOMAIN_OPTIONS_JSON] == ""
-    assert defaults["attributes_json"] == ""
+    assert defaults[CONF_DOMAIN_OPTIONS_JSON] == {}
+    assert defaults["attributes_json"] == {}
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -3618,7 +3623,7 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
 
     assert defaults[CONF_PLATFORM] == "fan"
-    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == ""
+    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == {}
     assert "percentage_step" in defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"]
 
     result = await hass.config_entries.options.async_configure(
@@ -3693,7 +3698,7 @@ async def test_options_flow_combines_xiaomi_fan_and_speed_number(hass):
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
 
     assert defaults[CONF_PLATFORM] == "fan"
-    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == ""
+    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == {}
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -3775,7 +3780,7 @@ async def test_options_flow_prefills_and_creates_native_dehumidifier(hass):
         parse_result=True
     ) == 50
     assert all(native_templates.values())
-    assert defaults[CONF_DOMAIN_OPTIONS_JSON] == ""
+    assert defaults[CONF_DOMAIN_OPTIONS_JSON] == {}
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -3843,7 +3848,7 @@ async def test_options_flow_composes_humidifier_from_mixed_source_domains(hass):
         "{{ states('number.dressing_room_dehumidifier_target_humidity') "
         "| float(none) }}"
     )
-    assert "max" not in json.loads(
+    assert "max" not in _yaml_value(
         defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "{}") or "{}"
     )
 
@@ -4326,7 +4331,7 @@ async def test_presence_motion_helper_retains_detected_state_until_all_sources_c
     for entity_id, state in zip(source_ids, ("on", "on", "off"), strict=True):
         hass.states.async_set(entity_id, state, {"device_class": "motion"})
     defaults = _reference_entity_defaults(hass, source_ids)
-    template_sources = json.loads(defaults[CONF_TEMPLATE_SOURCES_JSON])
+    template_sources = _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON])
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "motion-helper"},
@@ -5408,7 +5413,7 @@ async def test_reconfigure_group_name_preserves_identity_and_cleans_runtime_cach
     assert hass.data[COMPONENT_DOMAIN]["new"][ATTR_CONFIG_ENTRY_ID] == entry.entry_id
     renamed_registry_entry = er.async_get(hass).async_get("sensor.stable_sensor")
     assert renamed_registry_entry.unique_id == original_unique_id
-    saved_groups = json.loads(meta_file.read_text())[ATTR_DEVICES]
+    saved_groups = _yaml_value(meta_file.read_text())[ATTR_DEVICES]
     assert "old" not in saved_groups
     assert saved_groups["new"]["stable-key"][ATTR_UNIQUE_ID] == original_unique_id
 
@@ -5499,7 +5504,7 @@ async def test_remove_entry_cleans_metadata_registries_and_state_even_after_fail
 
     await async_remove_entry(hass, entry)
 
-    assert json.loads(meta_file.read_text())[ATTR_DEVICES] == {"other": {}}
+    assert _yaml_value(meta_file.read_text())[ATTR_DEVICES] == {"other": {}}
     assert entity_registry.async_get("sensor.stale_sensor") is None
     assert device_registry.async_get_device(
         identifiers={(COMPONENT_DOMAIN, "stale-device")},
@@ -7054,7 +7059,7 @@ async def test_generated_attribute_helpers_follow_multiple_source_attributes(has
         CONF_INITIAL_VALUE: "ready",
         CONF_INITIAL_AVAILABILITY: True,
         CONF_PERSISTENT: False,
-        CONF_ATTRIBUTE_TEMPLATES: json.loads(
+        CONF_ATTRIBUTE_TEMPLATES: _yaml_value(
             defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]
         ),
     }
@@ -7104,7 +7109,7 @@ async def test_generated_numeric_helper_ignores_unavailable_sources_at_runtime(h
             ATTR_ENTITY_ID: entity_id,
             CONF_ATTRIBUTE: "state",
         }
-        for name, entity_id in json.loads(
+        for name, entity_id in _yaml_value(
             defaults[CONF_TEMPLATE_SOURCES_JSON],
         ).items()
     }

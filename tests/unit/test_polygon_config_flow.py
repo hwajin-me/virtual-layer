@@ -3,6 +3,7 @@
 import json
 
 import pytest
+import yaml
 from homeassistant.const import CONF_PLATFORM
 
 from custom_components.virtual_layer.config_flow import (
@@ -42,6 +43,11 @@ from custom_components.virtual_layer.device_tracker import (
     DEVICE_TRACKER_SCHEMA,
     validate_domain_options,
 )
+
+def _yaml_value(value):
+    """Return either a YAML editor object or serialized YAML."""
+    return yaml.safe_load(value) if isinstance(value, str) and value else value
+
 
 pytestmark = pytest.mark.unit
 
@@ -121,14 +127,14 @@ def test_config_flow_builds_and_restores_polygon_fields():
             CONF_INITIAL_VALUE: "not_home",
         },
     )
-    assert json.loads(defaults[CONF_POLYGON_GEOJSON_JSON]) == GEOJSON
+    assert _yaml_value(defaults[CONF_POLYGON_GEOJSON_JSON]) == GEOJSON
     assert defaults[CONF_POLYGON_FILES_TEXT].splitlines() == [
         "zones/work.geojson",
         "https://example.test/trip.geojson",
     ]
     assert defaults[CONF_POLYGON_PERSON] == "person.family"
     assert defaults[CONF_POLYGON_DISTANCE_INPUT] == 250
-    assert json.loads(defaults[CONF_POLYGON_TRACKER_RULES_JSON]) == {
+    assert _yaml_value(defaults[CONF_POLYGON_TRACKER_RULES_JSON]) == {
         "device_tracker.phone_a": {"dominant": True, "priority": 1},
     }
 

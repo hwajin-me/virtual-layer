@@ -7,6 +7,7 @@ from types import MappingProxyType
 
 import pytest
 import voluptuous as vol
+import yaml
 from homeassistant.components.camera import CameraEntityFeature
 from homeassistant.components.climate.const import HVACAction
 from homeassistant.components.vacuum import VacuumActivity
@@ -171,6 +172,11 @@ from custom_components.virtual_layer.const import (
     CONF_VIA_DEVICE_ID,
     VIRTUAL_ENTITY_DOMAINS,
 )
+
+def _yaml_value(value):
+    """Return either a YAML editor object or serialized YAML."""
+    return yaml.safe_load(value) if isinstance(value, str) and value else value
+
 
 pytestmark = pytest.mark.unit
 
@@ -389,7 +395,7 @@ def test_single_switch_source_can_target_fan_with_power_command_helpers(hass):
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["is_on"] == (
         "{{ states('switch.source') not in ['off', 'unknown', 'unavailable'] }}"
     )
-    assert json.loads(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
+    assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
         "turn_off": [{
             "action": "switch.turn_off",
             "target": {ATTR_ENTITY_ID: "switch.source"},
@@ -959,7 +965,7 @@ def test_reference_calendar_keeps_non_event_vendor_attributes(hass):
 
     defaults = _reference_entity_defaults(hass, ["calendar.work"])
 
-    assert json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
+    assert _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
         "vendor_color": "{{ state_attr('calendar.work', 'vendor_color') }}",
     }
 
@@ -1004,8 +1010,8 @@ def test_reference_ignores_restored_and_media_access_attributes(
     )
 
     defaults = _reference_entity_defaults(hass, [entity_id])
-    attributes = json.loads(defaults[CONF_ATTRIBUTES_JSON])
-    attribute_templates = json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+    attributes = _yaml_value(defaults[CONF_ATTRIBUTES_JSON])
+    attribute_templates = _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
 
     assert set(attributes).isdisjoint(
         {ATTR_RESTORED, "access_token", "entity_picture"}
@@ -1149,7 +1155,7 @@ def test_same_domain_state_helpers_select_first_known_value(hass):
         defaults = _reference_entity_defaults(hass, [first, second])
         variables = {
             name: hass.states.get(entity_id).state
-            for name, entity_id in json.loads(
+            for name, entity_id in _yaml_value(
                 defaults[CONF_TEMPLATE_SOURCES_JSON]
             ).items()
         }
@@ -1169,7 +1175,7 @@ def test_attribute_helpers_include_attributes_present_on_only_one_source(hass):
         hass,
         ["sensor.first", "sensor.second"],
     )
-    templates = json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+    templates = _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
 
     assert "state_attr('sensor.first', 'power')" in templates["power"]
     assert "state_attr('sensor.second', 'power')" in templates["power"]
@@ -1295,7 +1301,7 @@ def test_xiaomi_fan_uses_number_speed_only_for_favorite_and_manual_modes(hass):
     )
     assert Template(percentage_template, hass).async_render(parse_result=True) == 35
 
-    actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     speed_choice = actions["set_percentage"][0]
     assert speed_choice["choose"][0]["sequence"][0]["target"] == {
         ATTR_ENTITY_ID: number_entity_id,
@@ -1383,7 +1389,7 @@ def test_fan_speed_number_scale_is_detected_and_normalized(
         hass.states.get(number_entity_id),
     ) == expected_kind
 
-    actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     speed_action = actions["set_percentage"][0]["choose"][0]["sequence"][0]
     assert speed_action["action"] == f"{number_entity_id.split('.', 1)[0]}.set_value"
     value_template = speed_action["data"]["value"]
@@ -1823,28 +1829,28 @@ def test_edit_defaults_repair_legacy_enum_repr_for_every_entity_domain(platform)
         CONF_ICON_TEMPLATE,
     ):
         assert defaults[field_name] == "{{ 'active' }}", (platform, field_name)
-    assert json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
+    assert _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
         "legacy_attribute": "{{ 'active' }}",
     }
-    event_hook = json.loads(defaults[CONF_EVENT_HOOKS_JSON])[0]
+    event_hook = _yaml_value(defaults[CONF_EVENT_HOOKS_JSON])[0]
     assert event_hook[CONF_VALUE_TEMPLATE] == "{{ 'active' }}"
     assert event_hook[CONF_AVAILABILITY_TEMPLATE] == "{{ 'active' }}"
     assert event_hook[CONF_ATTRIBUTE_TEMPLATES]["legacy_hook"] == "{{ 'active' }}"
-    command = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])["legacy_command"]
+    command = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])["legacy_command"]
     assert command["sequence"][0]["variables"]["legacy_value"] == "{{ 'active' }}"
     if native_properties:
         assert defaults[CONF_NATIVE_VALUE_TEMPLATES][native_properties[0]] == (
             "{{ 'active' }}"
         )
     if platform == "device_tracker":
-        rules = json.loads(defaults[CONF_POLYGON_TRACKER_RULES_JSON])
+        rules = _yaml_value(defaults[CONF_POLYGON_TRACKER_RULES_JSON])
         assert rules["device_tracker.phone"]["condition_template"] == (
             "{{ 'active' }}"
         )
 
 
 def test_json_default_sanitizes_values_that_cannot_be_saved_by_home_assistant():
-    result = json.loads(
+    result = _yaml_value(
         _json_default(
             {
                 "object": object(),
@@ -2100,7 +2106,7 @@ def test_reference_entity_defaults_avoids_jinja_reserved_source_variable_names(h
 
     defaults = _reference_entity_defaults(hass, entity_ids)
 
-    template_sources = json.loads(defaults[CONF_TEMPLATE_SOURCES_JSON])
+    template_sources = _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON])
     assert template_sources == {
         "source_none": "sensor.none",
         "source_true": "sensor.true",
@@ -2276,10 +2282,10 @@ def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
     source_attributes["temperature"] = None
     hass.states.async_set("climate.living_room", "cool", source_attributes)
     assert Template(target_template, hass).async_render(parse_result=True) == 23.0
-    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {
+    assert _yaml_value(defaults[CONF_ATTRIBUTES_JSON]) == {
         "vendor_attribute": "preserved",
     }
-    command_actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    command_actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     assert set(command_actions) == {
         "set_fan_mode",
         "set_hvac_mode",
@@ -2337,7 +2343,7 @@ def test_reference_heating_only_climate_builds_heat_off_boiler_helper(hass):
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_mode"] == (
         defaults[CONF_VALUE_TEMPLATE]
     )
-    actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     assert set(actions) == {
         "set_hvac_mode",
         "set_temperature",
@@ -2660,8 +2666,8 @@ def test_reference_fan_promotes_native_speed_preset_and_motion_options(hass):
     assert defaults["oscillating"] is True
     assert defaults["direction"] is True
     assert defaults["current_direction"] == "reverse"
-    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "kept"}
-    command_actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    assert _yaml_value(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "kept"}
+    command_actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     assert set(command_actions) == {
         "oscillate",
         "set_direction",
@@ -2737,7 +2743,7 @@ def test_camera_motion_actions_do_not_require_on_off_support(hass):
     )
 
     defaults = _reference_entity_defaults(hass, ["camera.motion_only"])
-    command_actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    command_actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
 
     assert "enable_motion_detection" in command_actions
     assert "disable_motion_detection" in command_actions
@@ -2774,7 +2780,7 @@ def test_fan_edit_form_migrates_legacy_native_attributes():
     assert defaults["oscillating"] is True
     assert defaults["direction"] is True
     assert defaults["current_direction"] == "reverse"
-    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {
+    assert _yaml_value(defaults[CONF_ATTRIBUTES_JSON]) == {
         "vendor": "preserved"
     }
 
@@ -2800,7 +2806,7 @@ def test_climate_edit_form_migrates_legacy_fan_attributes_over_empty_fields():
 
     assert defaults["fan_modes"] == ["auto", "turbo"]
     assert defaults["fan_mode"] == "auto"
-    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {
+    assert _yaml_value(defaults[CONF_ATTRIBUTES_JSON]) == {
         "vendor_attribute": "preserved"
     }
 
@@ -2834,7 +2840,7 @@ def test_reference_humidifier_promotes_native_options(hass):
     assert defaults["target_humidity"] == 50
     assert defaults["modes"] == ["auto", "sleep"]
     assert defaults["mode"] == "auto"
-    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "preserved"}
+    assert _yaml_value(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "preserved"}
 
 
 def test_mixed_humidifier_components_offer_type_and_generate_helpers(hass):
@@ -2900,7 +2906,7 @@ def test_mixed_humidifier_components_offer_type_and_generate_helpers(hass):
     assert Template(templates["target_humidity_step"], hass).async_render(
         parse_result=True
     ) == 5
-    attribute_templates = json.loads(
+    attribute_templates = _yaml_value(
         defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "{}") or "{}"
     )
     assert not {"max", "min", "mode", "options", "step"} & set(
@@ -2912,7 +2918,7 @@ def test_mixed_humidifier_components_offer_type_and_generate_helpers(hass):
     assert availability.async_render(parse_result=True) is True
     hass.states.async_set(entity_ids[3], "unavailable")
     assert availability.async_render(parse_result=True) is False
-    assert json.loads(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
+    assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
         "set_humidity": [{
             "action": "number.set_value",
             "data": {"value": "{{ humidity }}"},
@@ -2961,7 +2967,7 @@ def test_humidifier_edit_form_migrates_legacy_native_attributes():
     assert defaults["target_humidity"] == 50
     assert defaults["modes"] == ["auto", "sleep"]
     assert defaults["mode"] == "auto"
-    assert json.loads(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "preserved"}
+    assert _yaml_value(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "preserved"}
 
 
 def test_build_entity_config_validates_location_helper_options():
@@ -3032,9 +3038,10 @@ def test_reference_entity_defaults_combines_boolean_sources_with_and_template(ha
         defaults[CONF_SOURCE_ENTITIES_TEXT]
         == "binary_sensor.front_door\nswitch.alarm_ready"
     )
-    assert defaults[CONF_TEMPLATE_SOURCES_JSON] == (
-        '{"alarm_ready": "switch.alarm_ready", "front_door": "binary_sensor.front_door"}'
-    )
+    assert _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON]) == {
+        "front_door": "binary_sensor.front_door",
+        "alarm_ready": "switch.alarm_ready",
+    }
     assert " and " in defaults[CONF_VALUE_TEMPLATE]
     assert "front_door | lower" in defaults[CONF_VALUE_TEMPLATE]
     assert "alarm_ready | lower" in defaults[CONF_VALUE_TEMPLATE]
@@ -3077,21 +3084,21 @@ def test_presence_motion_helper_uses_majority_and_delayed_all_off_clear(
 
     assert defaults[CONF_PLATFORM] == "binary_sensor"
     assert defaults[CONF_INITIAL_VALUE] == "on"
-    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {CONF_CLASS: "motion"}
+    assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {CONF_CLASS: "motion"}
     assert "(active | count) > 3 / 2" in defaults[CONF_VALUE_TEMPLATE]
     assert "all_off" in defaults[CONF_VALUE_TEMPLATE]
     assert "this.state == 'on'" in defaults[CONF_VALUE_TEMPLATE]
     assert "< 300" in defaults[CONF_VALUE_TEMPLATE]
 
     single_source_defaults = _reference_entity_defaults(hass, source_ids[:1])
-    assert json.loads(single_source_defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+    assert _yaml_value(single_source_defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         CONF_CLASS: "motion",
     }
     assert "this.state == 'on'" in single_source_defaults[CONF_VALUE_TEMPLATE]
 
     hass.states.async_set("binary_sensor.combined_motion", "on")
     template = Template(defaults[CONF_VALUE_TEMPLATE], hass)
-    template_sources = json.loads(defaults[CONF_TEMPLATE_SOURCES_JSON])
+    template_sources = _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON])
 
     def render_template():
         variables = {
@@ -3269,7 +3276,7 @@ def test_number_helper_filters_positive_spikes(hass, states, expected):
     variables = {
         name: state
         for name, state in zip(
-            json.loads(defaults[CONF_TEMPLATE_SOURCES_JSON]), states, strict=True
+            _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON]), states, strict=True
         )
     }
 
@@ -3299,7 +3306,7 @@ def test_reference_entity_defaults_preserves_water_usage_class_and_unit(hass):
         ],
     )
 
-    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+    assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         "class": "water",
         "unit_of_measurement": "L",
     }
@@ -3377,9 +3384,10 @@ def test_reference_entity_defaults_combines_string_sources_with_concat_template(
     assert defaults[CONF_INITIAL_VALUE] == "washeco"
     assert "values | join('')" in defaults[CONF_VALUE_TEMPLATE]
     assert "washer_phase, washer_mode" in defaults[CONF_VALUE_TEMPLATE]
-    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == (
-        '{"washer_mode": "{{ washer_mode }}", "washer_phase": "{{ washer_phase }}"}'
-    )
+    assert _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
+        "washer_phase": "{{ washer_phase }}",
+        "washer_mode": "{{ washer_mode }}",
+    }
 
 
 def test_reference_entity_defaults_generates_dynamic_single_source_attributes(hass):
@@ -3394,7 +3402,7 @@ def test_reference_entity_defaults_generates_dynamic_single_source_attributes(ha
     )
 
     defaults = _reference_entity_defaults(hass, ["climate.office"])
-    templates = json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+    templates = _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
 
     assert templates == {
         "vendor_status": "{{ state_attr('climate.office', 'vendor_status') }}",
@@ -3433,7 +3441,7 @@ def test_reference_entity_defaults_merges_common_attributes_by_type(hass):
         hass,
         ["sensor.first_process", "sensor.second_process"],
     )
-    templates = json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+    templates = _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
 
     assert Template(templates["active"], hass).async_render() is False
     assert Template(templates["load"], hass).async_render() == 15.0
@@ -3465,7 +3473,7 @@ def test_reference_camera_defaults_create_image_and_stream_alias(hass):
     assert defaults[CONF_INITIAL_VALUE] == "on"
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "camera.front_door"
     assert defaults[CONF_VALUE_TEMPLATE] == "{{ front_door }}"
-    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+    assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         "source_entity": "camera.front_door",
     }
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["source_entity"] == (
@@ -3619,7 +3627,7 @@ def test_reference_entity_defaults_creates_location_median_helper(hass):
     assert defaults[CONF_PLATFORM] == "device_tracker"
     assert defaults[CONF_INITIAL_VALUE] == "not_home"
     assert defaults[CONF_VALUE_TEMPLATE] == ""
-    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+    assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         CONF_LOCATION_HELPER: {
             "distance_threshold_meters": 300,
             "priority_window_seconds": 1800,
@@ -3648,7 +3656,7 @@ def test_multiple_geolocation_sources_use_device_tracker_location_helper(hass):
 
     assert defaults[CONF_PLATFORM] == "device_tracker"
     assert defaults[CONF_VALUE_TEMPLATE] == ""
-    assert CONF_LOCATION_HELPER in json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON])
+    assert CONF_LOCATION_HELPER in _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON])
 
 
 def test_reference_entity_defaults_uses_location_helper_for_single_location_source(
@@ -3669,7 +3677,7 @@ def test_reference_entity_defaults_uses_location_helper_for_single_location_sour
 
     assert defaults[CONF_PLATFORM] == "device_tracker"
     assert defaults[CONF_VALUE_TEMPLATE] == ""
-    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+    assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         CONF_LOCATION_HELPER: {
             "distance_threshold_meters": 300,
             "priority_window_seconds": 1800,
@@ -3976,7 +3984,7 @@ def test_entity_form_preserves_generic_direct_domain_options_for_editing():
         },
     )
 
-    assert json.loads(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+    assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         "humidity": 48,
         "temperature": 21.5,
     }
@@ -4372,7 +4380,7 @@ def test_auto_helper_refreshes_attribute_jinja_per_key_and_removes_stale_helpers
         _auto_helper_profile(generated),
     )
 
-    assert json.loads(refreshed[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
+    assert _yaml_value(refreshed[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
         "added": "{{ state_attr('sensor.new', 'added') }}",
         "customized": "{{ 42 }}",
         "generated": "{{ state_attr('sensor.new', 'generated') }}",
@@ -4384,7 +4392,7 @@ def test_auto_helper_refreshes_attribute_jinja_per_key_and_removes_stale_helpers
         _auto_helper_profile(generated),
         force_template_helper=True,
     )
-    assert json.loads(forced[CONF_ATTRIBUTE_TEMPLATES_JSON]) == json.loads(
+    assert _yaml_value(forced[CONF_ATTRIBUTE_TEMPLATES_JSON]) == _yaml_value(
         reference[CONF_ATTRIBUTE_TEMPLATES_JSON]
     )
 
@@ -5214,24 +5222,26 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
     assert defaults[CONF_INITIAL_AVAILABILITY] is False
     assert defaults[CONF_PERSISTENT] is False
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "sensor.washer_power"
-    assert '"power"' in defaults[CONF_TEMPLATE_SOURCES_JSON]
+    assert "power:" in defaults[CONF_TEMPLATE_SOURCES_JSON]
     assert defaults[CONF_PULL_INTERVAL] == 30
     assert defaults[CONF_VALUE_TEMPLATE] == "{{ power }}"
-    assert json.loads(defaults[CONF_EVENT_HOOKS_JSON]) == [
+    assert _yaml_value(defaults[CONF_EVENT_HOOKS_JSON]) == [
         {
             "trigger": "event",
             "event_type": "virtual_layer_manual_update",
             CONF_VALUE_TEMPLATE: "{{ trigger.data.value }}",
         }
     ]
-    assert defaults[CONF_ATTRIBUTES_JSON] == '{"source": "simulation"}'
-    assert json.loads(defaults[CONF_ATTRIBUTE_SOURCES_JSON]) == {
+    assert _yaml_value(defaults[CONF_ATTRIBUTES_JSON]) == {
+        "source": "simulation"
+    }
+    assert _yaml_value(defaults[CONF_ATTRIBUTE_SOURCES_JSON]) == {
         "battery": {
             CONF_ATTRIBUTE: "battery_level",
             ATTR_ENTITY_ID: "sensor.washer_power",
         },
     }
-    assert json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
+    assert _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
         "detail": "{{ power }}",
     }
 
@@ -5516,6 +5526,80 @@ def test_unstructured_domain_keeps_advanced_native_template_json_input():
         marker.schema for marker in advanced.schema.schema
     }
     assert CONF_NATIVE_TEMPLATES_JSON in advanced_fields
+
+
+def test_generated_helpers_are_editable_values_and_yaml_suggestions(hass):
+    fan_entity_id = "fan.air_purifier"
+    number_entity_id = "number.air_purifier_favorite_speed"
+    hass.states.async_set(
+        fan_entity_id,
+        "on",
+        {
+            "preset_mode": "Favorite",
+            "preset_modes": ["Auto", "Favorite"],
+            "supported_features": 56,
+        },
+    )
+    hass.states.async_set(
+        number_entity_id,
+        "1460",
+        {"min": 300, "max": 2200, "step": 1},
+    )
+    generated = _reference_entity_defaults(
+        hass,
+        [fan_entity_id, number_entity_id],
+    )
+    schema = _entity_schema(generated)
+    outer = {marker.schema: (marker, value) for marker, value in schema.schema.items()}
+    advanced = outer[CONF_ADVANCED_SETTINGS][1]
+    advanced_fields = {
+        marker.schema: (marker, value)
+        for marker, value in advanced.schema.schema.items()
+    }
+    command_marker, command_selector = advanced_fields[CONF_COMMAND_ACTIONS_JSON]
+
+    assert isinstance(command_selector, selector.ObjectSelector)
+    assert command_marker.description["suggested_value"] == _yaml_value(
+        generated[CONF_COMMAND_ACTIONS_JSON]
+    )
+
+    form_data = _flatten_entity_form_sections(schema({}))
+    actions = form_data[CONF_COMMAND_ACTIONS_JSON]
+    assert actions == command_marker.description["suggested_value"]
+    assert actions["set_percentage"][0]["choose"][0]["sequence"][0][
+        "target"
+    ] == {ATTR_ENTITY_ID: number_entity_id}
+
+    native_section = outer[CONF_NATIVE_VALUE_TEMPLATES][1]
+    percentage_marker = next(
+        marker
+        for marker in native_section.schema.schema
+        if marker.schema == "percentage"
+    )
+    assert percentage_marker.description["suggested_value"] == form_data[
+        CONF_NATIVE_VALUE_TEMPLATES
+    ]["percentage"]
+
+
+def test_yaml_editor_accepts_yaml_and_legacy_json_for_command_actions():
+    yaml_actions = """
+set_preset_mode:
+  - choose:
+      - conditions: "{{ preset_mode == 'sleep' }}"
+        sequence:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.real_fan_mode
+            data:
+              option: quiet
+"""
+    parsed_yaml = _parse_command_actions(yaml_actions, "fan")
+    parsed_json = _parse_command_actions(json.dumps(parsed_yaml), "fan")
+
+    assert parsed_yaml == parsed_json
+    assert parsed_yaml["set_preset_mode"][0]["choose"][0]["sequence"][0][
+        "target"
+    ] == {ATTR_ENTITY_ID: "input_select.real_fan_mode"}
 
 
 def test_vacuum_domain_selection_reopens_with_dedicated_jinja_fields():

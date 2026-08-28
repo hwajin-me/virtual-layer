@@ -19,6 +19,7 @@ import homeassistant.helpers.config_validation as cv
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
+import yaml
 from homeassistant import config_entries, exceptions
 from homeassistant.components.camera import CameraEntityFeature
 from homeassistant.components.climate import ClimateEntityFeature
@@ -1028,6 +1029,7 @@ _DOMAIN_OPTION_RESERVED_KEYS = {
 MULTILINE_TEXT_SELECTOR = selector.TextSelector(
     selector.TextSelectorConfig(multiline=True),
 )
+YAML_OBJECT_SELECTOR = selector.ObjectSelector()
 TEMPLATE_SELECTOR = selector.TemplateSelector()
 ICON_SELECTOR = selector.IconSelector(selector.IconSelectorConfig())
 ENTITY_SELECTOR = selector.EntitySelector(
@@ -1055,6 +1057,15 @@ POLYGON_DISTANCE_SELECTOR = selector.NumberSelector(
 def _native_property_selector(platform: str, property_name: str):
     """Return a useful editor while keeping native values template-backed."""
     return TEMPLATE_SELECTOR
+
+
+def _editable_optional(field_name: str, value: Any) -> vol.Optional:
+    """Expose generated logic as both a suggestion and the editable value."""
+    return vol.Optional(
+        field_name,
+        default=value,
+        description={"suggested_value": _plain_options(value)},
+    )
 
 
 def _reference_entity_schema(
@@ -1470,7 +1481,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     if managed_native_properties and CONF_NATIVE_VALUE_TEMPLATES not in defaults:
         try:
             stored_templates = _parse_native_templates(
-                str(defaults.get(CONF_NATIVE_TEMPLATES_JSON, "") or "").strip()
+                defaults.get(CONF_NATIVE_TEMPLATES_JSON)
             )
         except InvalidJson:
             stored_templates = {}
@@ -1524,39 +1535,42 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         ): selector.DeviceSelector(),
     })
     advanced_schema = {
-        vol.Optional(
+        _editable_optional(
             CONF_TEMPLATE_SOURCES_JSON,
-            default=defaults.get(CONF_TEMPLATE_SOURCES_JSON, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_EVENT_HOOKS_JSON, default=defaults.get(CONF_EVENT_HOOKS_JSON, "")
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_ATTRIBUTES_JSON, default=defaults.get(CONF_ATTRIBUTES_JSON, "")
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
+            _yaml_editor_default(defaults.get(CONF_TEMPLATE_SOURCES_JSON)),
+        ): YAML_OBJECT_SELECTOR,
+        _editable_optional(
+            CONF_EVENT_HOOKS_JSON,
+            _yaml_editor_default(defaults.get(CONF_EVENT_HOOKS_JSON)),
+        ): YAML_OBJECT_SELECTOR,
+        _editable_optional(
+            CONF_ATTRIBUTES_JSON,
+            _yaml_editor_default(defaults.get(CONF_ATTRIBUTES_JSON)),
+        ): YAML_OBJECT_SELECTOR,
+        _editable_optional(
             CONF_ATTRIBUTE_SOURCES_JSON,
-            default=defaults.get(CONF_ATTRIBUTE_SOURCES_JSON, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
+            _yaml_editor_default(defaults.get(CONF_ATTRIBUTE_SOURCES_JSON)),
+        ): YAML_OBJECT_SELECTOR,
+        _editable_optional(
             CONF_ATTRIBUTE_TEMPLATES_JSON,
-            default=defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
+            _yaml_editor_default(defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON)),
+        ): YAML_OBJECT_SELECTOR,
+        _editable_optional(
             CONF_COMMAND_ACTIONS_JSON,
-            default=defaults.get(CONF_COMMAND_ACTIONS_JSON, ""),
-        ): MULTILINE_TEXT_SELECTOR,
-        vol.Optional(
-            CONF_DOMAIN_OPTIONS_JSON, default=defaults.get(CONF_DOMAIN_OPTIONS_JSON, "")
-        ): MULTILINE_TEXT_SELECTOR,
+            _yaml_editor_default(defaults.get(CONF_COMMAND_ACTIONS_JSON)),
+        ): YAML_OBJECT_SELECTOR,
+        _editable_optional(
+            CONF_DOMAIN_OPTIONS_JSON,
+            _yaml_editor_default(defaults.get(CONF_DOMAIN_OPTIONS_JSON)),
+        ): YAML_OBJECT_SELECTOR,
     }
     if platform not in DOMAIN_NATIVE_TEMPLATE_PROPERTIES:
         advanced_schema[
-            vol.Optional(
+            _editable_optional(
                 CONF_NATIVE_TEMPLATES_JSON,
-                default=defaults.get(CONF_NATIVE_TEMPLATES_JSON, ""),
+                _yaml_editor_default(defaults.get(CONF_NATIVE_TEMPLATES_JSON)),
             )
-        ] = MULTILINE_TEXT_SELECTOR
+        ] = YAML_OBJECT_SELECTOR
     schema = {
         vol.Required(
             CONF_DEVICE_NAME, default=defaults.get(CONF_DEVICE_NAME, "Virtual Device")
@@ -1569,9 +1583,9 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")
         ): str,
         vol.Optional(CONF_ICON, default=defaults.get(CONF_ICON, "")): ICON_SELECTOR,
-        vol.Optional(
+        _editable_optional(
             CONF_ICON_TEMPLATE,
-            default=defaults.get(CONF_ICON_TEMPLATE, ""),
+            defaults.get(CONF_ICON_TEMPLATE, ""),
         ): TEMPLATE_SELECTOR,
         vol.Optional(ATTR_ENTITY_ID, default=default_entity_id): str,
         vol.Required(
@@ -1595,12 +1609,12 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         vol.Optional(
             CONF_PULL_INTERVAL, default=defaults.get(CONF_PULL_INTERVAL, 0)
         ): PULL_INTERVAL_SELECTOR,
-        vol.Optional(
-            CONF_VALUE_TEMPLATE, default=defaults.get(CONF_VALUE_TEMPLATE, "")
+        _editable_optional(
+            CONF_VALUE_TEMPLATE, defaults.get(CONF_VALUE_TEMPLATE, "")
         ): TEMPLATE_SELECTOR,
-        vol.Optional(
+        _editable_optional(
             CONF_AVAILABILITY_TEMPLATE,
-            default=defaults.get(CONF_AVAILABILITY_TEMPLATE, ""),
+            defaults.get(CONF_AVAILABILITY_TEMPLATE, ""),
         ): TEMPLATE_SELECTOR,
         vol.Optional(CONF_ADVANCED_SETTINGS, default=dict): section(
             vol.Schema(advanced_schema),
@@ -1611,10 +1625,10 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     if platform == "device_tracker":
         domain_schema.update(
             {
-                vol.Optional(
+                _editable_optional(
                     CONF_POLYGON_GEOJSON_JSON,
-                    default=defaults.get(CONF_POLYGON_GEOJSON_JSON, ""),
-                ): MULTILINE_TEXT_SELECTOR,
+                    _yaml_editor_default(defaults.get(CONF_POLYGON_GEOJSON_JSON)),
+                ): YAML_OBJECT_SELECTOR,
                 vol.Optional(
                     CONF_POLYGON_FILES_TEXT,
                     default=defaults.get(CONF_POLYGON_FILES_TEXT, ""),
@@ -1632,10 +1646,12 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     CONF_POLYGON_DISTANCE_INPUT,
                     default=defaults.get(CONF_POLYGON_DISTANCE_INPUT, 300),
                 ): POLYGON_DISTANCE_SELECTOR,
-                vol.Optional(
+                _editable_optional(
                     CONF_POLYGON_TRACKER_RULES_JSON,
-                    default=defaults.get(CONF_POLYGON_TRACKER_RULES_JSON, ""),
-                ): MULTILINE_TEXT_SELECTOR,
+                    _yaml_editor_default(
+                        defaults.get(CONF_POLYGON_TRACKER_RULES_JSON)
+                    ),
+                ): YAML_OBJECT_SELECTOR,
                 vol.Optional(
                     CONF_POLYGON_AWAY_STATE_INPUT,
                     default=defaults.get(CONF_POLYGON_AWAY_STATE_INPUT, "not_home"),
@@ -1675,9 +1691,9 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         template_schema = {}
         for property_name in native_template_properties:
             default = template_defaults.get(property_name)
-            marker = vol.Optional(
+            marker = _editable_optional(
                 property_name,
-                default=default if isinstance(default, str) else "",
+                default if isinstance(default, str) else "",
             )
             template_schema[marker] = _native_property_selector(
                 platform, property_name
@@ -1856,32 +1872,34 @@ def _reject_json_constant(value: str):
     raise ValueError(f"Invalid JSON constant: {value}")
 
 
-def _parse_json_object(value: str, field_name: str) -> dict[str, Any]:
-    if not value:
+def _parse_yaml_value(value: Any, field_name: str):
+    """Parse a native YAML-editor value or legacy JSON/YAML text."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, str):
+        try:
+            try:
+                value = json.loads(value, parse_constant=_reject_json_constant)
+            except json.JSONDecodeError:
+                value = yaml.safe_load(value)
+        except (RecursionError, TypeError, ValueError, yaml.YAMLError) as err:
+            raise InvalidJson(field_name) from err
+    return _validate_ha_json_value(value, field_name)
+
+
+def _parse_json_object(value: Any, field_name: str) -> dict[str, Any]:
+    """Parse an object from the YAML editor or a legacy JSON string."""
+    if value in (None, ""):
         return {}
-    try:
-        parsed = json.loads(
-            value,
-            parse_constant=_reject_json_constant,
-        )
-    except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as err:
-        raise InvalidJson(field_name) from err
+    parsed = _parse_yaml_value(value, field_name)
     if not isinstance(parsed, dict):
         raise InvalidJson(field_name)
-    return _validate_ha_json_value(parsed, field_name)
+    return parsed
 
 
-def _parse_json_value(value: str, field_name: str):
-    if not value:
-        return None
-    try:
-        parsed = json.loads(
-            value,
-            parse_constant=_reject_json_constant,
-        )
-    except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as err:
-        raise InvalidJson(field_name) from err
-    return _validate_ha_json_value(parsed, field_name)
+def _parse_json_value(value: Any, field_name: str):
+    """Parse any value from the YAML editor or a legacy JSON string."""
+    return _parse_yaml_value(value, field_name)
 
 
 def _validate_ha_json_value(value, field_name: str):
@@ -2472,7 +2490,7 @@ def _build_entity_config(
         entity[CONF_SOURCE_ENTITIES] = source_entities
 
     template_sources = _parse_template_sources(
-        _text_default(user_input.get(CONF_TEMPLATE_SOURCES_JSON)),
+        user_input.get(CONF_TEMPLATE_SOURCES_JSON),
     )
     if template_sources:
         entity[CONF_TEMPLATE_SOURCES] = template_sources
@@ -2497,13 +2515,13 @@ def _build_entity_config(
         entity[CONF_AVAILABILITY_TEMPLATE] = availability_template
 
     event_hooks = _parse_event_hooks(
-        _text_default(user_input.get(CONF_EVENT_HOOKS_JSON))
+        user_input.get(CONF_EVENT_HOOKS_JSON)
     )
     if event_hooks:
         entity[CONF_EVENT_HOOKS] = event_hooks
 
     attributes = _parse_json_object(
-        _text_default(user_input.get(CONF_ATTRIBUTES_JSON)), CONF_ATTRIBUTES_JSON
+        user_input.get(CONF_ATTRIBUTES_JSON), CONF_ATTRIBUTES_JSON
     )
     attributes = _normalize_attribute_mapping(attributes, CONF_ATTRIBUTES_JSON)
     attributes = _without_transient_source_attributes(attributes)
@@ -2511,14 +2529,14 @@ def _build_entity_config(
         entity[CONF_ATTRIBUTES] = attributes
 
     attribute_sources = _parse_attribute_sources(
-        _text_default(user_input.get(CONF_ATTRIBUTE_SOURCES_JSON)),
+        user_input.get(CONF_ATTRIBUTE_SOURCES_JSON),
     )
     attribute_sources = _without_transient_source_attributes(attribute_sources)
     if attribute_sources:
         entity[CONF_ATTRIBUTE_SOURCES] = attribute_sources
 
     attribute_templates = _parse_json_object(
-        _text_default(user_input.get(CONF_ATTRIBUTE_TEMPLATES_JSON)),
+        user_input.get(CONF_ATTRIBUTE_TEMPLATES_JSON),
         CONF_ATTRIBUTE_TEMPLATES_JSON,
     )
     attribute_templates = _normalize_attribute_mapping(
@@ -2533,7 +2551,7 @@ def _build_entity_config(
         entity[CONF_ATTRIBUTE_TEMPLATES] = attribute_templates
 
     native_templates = _parse_native_templates(
-        _text_default(user_input.get(CONF_NATIVE_TEMPLATES_JSON)),
+        user_input.get(CONF_NATIVE_TEMPLATES_JSON),
     )
     native_value_templates = user_input.get(CONF_NATIVE_VALUE_TEMPLATES, {})
     if not isinstance(native_value_templates, Mapping):
@@ -2552,14 +2570,14 @@ def _build_entity_config(
         entity[CONF_NATIVE_TEMPLATES] = native_templates
 
     command_actions = _parse_command_actions(
-        _text_default(user_input.get(CONF_COMMAND_ACTIONS_JSON)),
+        user_input.get(CONF_COMMAND_ACTIONS_JSON),
         platform,
     )
     if command_actions:
         entity[CONF_COMMAND_ACTIONS] = command_actions
 
     domain_options = _parse_domain_options(
-        _text_default(user_input.get(CONF_DOMAIN_OPTIONS_JSON)),
+        user_input.get(CONF_DOMAIN_OPTIONS_JSON),
     )
     if platform == "light":
         domain_options.pop(CONF_MATTER_LIGHT_TYPE, None)
@@ -2631,9 +2649,7 @@ def _build_entity_config(
                 domain_options[field_name] = value
     entity.update(domain_options)
 
-    polygon_geojson_text = _text_default(
-        user_input.get(CONF_POLYGON_GEOJSON_JSON)
-    ).strip()
+    polygon_geojson_value = user_input.get(CONF_POLYGON_GEOJSON_JSON)
     polygon_files = [
         item.strip()
         for item in _multiline_list_default(
@@ -2649,10 +2665,8 @@ def _build_entity_config(
             raise InvalidEntityReference(CONF_POLYGON_PERSON) from err
         if not polygon_person.startswith("person."):
             raise InvalidEntityReference(CONF_POLYGON_PERSON)
-    polygon_rules_text = _text_default(
-        user_input.get(CONF_POLYGON_TRACKER_RULES_JSON)
-    ).strip()
-    if any((polygon_geojson_text, polygon_files, polygon_person, polygon_rules_text)):
+    polygon_rules_value = user_input.get(CONF_POLYGON_TRACKER_RULES_JSON)
+    if any((polygon_geojson_value, polygon_files, polygon_person, polygon_rules_value)):
         if platform != "device_tracker":
             raise InvalidDomainOptions
         try:
@@ -2678,14 +2692,14 @@ def _build_entity_config(
             ).strip(),
             CONF_POLYGON_TRACKER_RULES: repair_legacy_template_data(
                 _parse_json_object(
-                    polygon_rules_text,
+                    polygon_rules_value,
                     CONF_POLYGON_TRACKER_RULES_JSON,
                 )
             ),
         }
-        if polygon_geojson_text:
+        if polygon_geojson_value:
             polygon[CONF_POLYGON_GEOJSON] = _parse_json_object(
-                polygon_geojson_text,
+                polygon_geojson_value,
                 CONF_POLYGON_GEOJSON_JSON,
             )
             try:
@@ -3507,9 +3521,33 @@ def _delete_ui_device(options: dict[str, Any], device_name: str) -> dict[str, An
 
 
 def _json_default(value) -> str:
+    """Serialize an editable structured value as YAML.
+
+    The legacy function name and form-field keys remain stable so existing
+    config entries and in-progress flows continue to round-trip.
+    """
     if not value:
         return ""
-    return json.dumps(_json_safe(_plain_options(value)), sort_keys=True)
+    return yaml.safe_dump(
+        _json_safe(_plain_options(value)),
+        allow_unicode=True,
+        default_flow_style=False,
+        sort_keys=False,
+    ).strip()
+
+
+def _yaml_editor_default(value: Any) -> Any:
+    """Return native data for Home Assistant's editable YAML object selector."""
+    if value in (None, ""):
+        return {}
+    if isinstance(value, str):
+        try:
+            return _parse_yaml_value(value, "yaml_editor")
+        except InvalidJson:
+            # Damaged legacy text must remain visible and removable. Keeping it
+            # as text lets the user repair it without blocking the whole entry.
+            return value
+    return _plain_options(value)
 
 
 def _json_safe(value, _seen=None, _depth=0):
@@ -5803,12 +5841,10 @@ def _without_template_helpers(reference_defaults: Mapping) -> dict[str, Any]:
     ):
         defaults.pop(field_name, None)
 
-    domain_options_text = _text_default(
-        defaults.get(CONF_DOMAIN_OPTIONS_JSON),
-    ).strip()
-    if domain_options_text:
+    domain_options_value = defaults.get(CONF_DOMAIN_OPTIONS_JSON)
+    if domain_options_value:
         try:
-            domain_options = _parse_domain_options(domain_options_text)
+            domain_options = _parse_domain_options(domain_options_value)
         except InvalidJson:
             domain_options = None
         if isinstance(domain_options, dict) and CONF_LOCATION_HELPER in domain_options:
@@ -5826,8 +5862,8 @@ def _attribute_template_mapping(value: Any) -> dict[str, str]:
         if not value.strip():
             return {}
         try:
-            value = json.loads(value)
-        except (TypeError, ValueError):
+            value = yaml.safe_load(value)
+        except (TypeError, ValueError, yaml.YAMLError):
             return {}
     if not isinstance(value, Mapping):
         return {}

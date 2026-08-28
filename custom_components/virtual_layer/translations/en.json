@@ -6,8 +6,8 @@
     },
     "error": {
       "group_name_used": "That device name is already in use, try another.",
-      "invalid_json": "Enter a valid JSON object.",
-      "invalid_template": "Fix the Jinja template syntax. In JSON fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
+      "invalid_json": "Enter a valid YAML object.",
+      "invalid_template": "Fix the Jinja template syntax. In YAML fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
       "invalid_entity_id": "Enter valid entity IDs.",
       "source_unavailable": "The selected source entity is no longer available. Go back and select it again.",
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
@@ -102,24 +102,24 @@
             "name": "Advanced settings",
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
-              "template_sources_json": "Template sources JSON",
-              "event_hooks_json": "Event hooks JSON",
-              "attributes_json": "Attributes JSON",
-              "attribute_sources_json": "Attribute sources JSON",
-              "attribute_templates_json": "Attribute templates JSON",
-              "native_templates_json": "Native property templates JSON",
-              "command_actions_json": "Command actions JSON",
-              "domain_options_json": "Domain options JSON"
+              "template_sources_json": "Template sources YAML",
+              "event_hooks_json": "Event hooks YAML",
+              "attributes_json": "Attributes YAML",
+              "attribute_sources_json": "Attribute sources YAML",
+              "attribute_templates_json": "Attribute templates YAML",
+              "native_templates_json": "Native property templates YAML",
+              "command_actions_json": "Command actions YAML",
+              "domain_options_json": "Domain options YAML"
             },
             "data_description": {
-              "template_sources_json": "A JSON object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
+              "template_sources_json": "A YAML object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
               "event_hooks_json": "Optional hooks that listen to state changes or Home Assistant events. Each hook can set value_template, availability_template, attributes, or attribute_templates and receives a trigger variable.",
-              "attributes_json": "A JSON object. Example key: battery_level -> 91.",
-              "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
-              "attribute_templates_json": "A JSON object whose values are Jinja templates. Copying sources generates state_attr helpers for every available dynamic attribute. Attributes available from multiple sources use type-aware helpers: boolean AND, numeric average, unique list union, string concatenation, or ordered mapping merge. Later edits preserve only the keys you customized.",
+              "attributes_json": "A YAML object. Example key: battery_level -> 91.",
+              "attribute_sources_json": "A YAML object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
+              "attribute_templates_json": "A YAML object whose values are Jinja templates. Copying sources generates state_attr helpers for every available dynamic attribute. Attributes available from multiple sources use type-aware helpers: boolean AND, numeric average, unique list union, string concatenation, or ordered mapping merge. Later edits preserve only the keys you customized.",
               "native_templates_json": "Jinja templates for native Home Assistant properties. Values may render strings, numbers, booleans, objects, or lists. Use property names such as state, fan_modes, effect_list, source_list, operation_list, position, gps, or battery_level.",
-              "command_actions_json": "Home Assistant action sequences keyed by native command name, such as turn_on, set_temperature, set_fan_mode, set_percentage, or set_humidity. Command arguments are available as template variables. Generated source helpers fix numeric values to each entity's advertised minimum, maximum, and step.",
-              "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
+              "command_actions_json": "Home Assistant action sequences keyed by native command name, such as turn_on, set_temperature, set_fan_mode, set_percentage, or set_humidity. Command arguments are available as template variables. Generated source helpers fix numeric values to each entity's advertised minimum, maximum, and step. Every command supported by the virtual domain can be mapped here. Use choose conditions to route a preset mode or any other command argument to different target entities and actions.",
+              "domain_options_json": "Optional YAML object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
             }
           },
           "domain_settings": {
@@ -131,7 +131,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker selection strategy",
               "polygon_distance_meters": "Tracker grouping distance",
-              "polygon_tracker_rules_json": "Tracker rules JSON",
+              "polygon_tracker_rules_json": "Tracker rules YAML",
               "polygon_away_state": "Outside-zone state",
               "matter_light_type": "Matter light device type"
             },
@@ -578,8 +578,8 @@
   },
   "options": {
     "error": {
-      "invalid_json": "Enter a valid JSON object.",
-      "invalid_template": "Fix the Jinja template syntax. In JSON fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
+      "invalid_json": "Enter a valid YAML object.",
+      "invalid_template": "Fix the Jinja template syntax. In YAML fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
       "invalid_entity_id": "Enter valid entity IDs.",
       "source_unavailable": "The selected source entity is no longer available. Go back and select it again.",
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
@@ -734,24 +734,24 @@
             "name": "Advanced settings",
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
-              "template_sources_json": "Template sources JSON",
-              "event_hooks_json": "Event hooks JSON",
-              "attributes_json": "Attributes JSON",
-              "attribute_sources_json": "Attribute sources JSON",
-              "attribute_templates_json": "Attribute templates JSON",
-              "native_templates_json": "Native property templates JSON",
-              "command_actions_json": "Command actions JSON",
-              "domain_options_json": "Domain options JSON"
+              "template_sources_json": "Template sources YAML",
+              "event_hooks_json": "Event hooks YAML",
+              "attributes_json": "Attributes YAML",
+              "attribute_sources_json": "Attribute sources YAML",
+              "attribute_templates_json": "Attribute templates YAML",
+              "native_templates_json": "Native property templates YAML",
+              "command_actions_json": "Command actions YAML",
+              "domain_options_json": "Domain options YAML"
             },
             "data_description": {
-              "template_sources_json": "A JSON object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
+              "template_sources_json": "A YAML object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
               "event_hooks_json": "Optional hooks that listen to state changes or Home Assistant events. Each hook can set value_template, availability_template, attributes, or attribute_templates and receives a trigger variable.",
-              "attributes_json": "A JSON object. Example key: battery_level -> 91.",
-              "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
-              "attribute_templates_json": "A JSON object whose values are Jinja templates. Copying sources generates state_attr helpers for every available dynamic attribute. Attributes available from multiple sources use type-aware helpers: boolean AND, numeric average, unique list union, string concatenation, or ordered mapping merge. Later edits preserve only the keys you customized.",
+              "attributes_json": "A YAML object. Example key: battery_level -> 91.",
+              "attribute_sources_json": "A YAML object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
+              "attribute_templates_json": "A YAML object whose values are Jinja templates. Copying sources generates state_attr helpers for every available dynamic attribute. Attributes available from multiple sources use type-aware helpers: boolean AND, numeric average, unique list union, string concatenation, or ordered mapping merge. Later edits preserve only the keys you customized.",
               "native_templates_json": "Jinja templates for native Home Assistant properties. Values may render strings, numbers, booleans, objects, or lists. Use property names such as state, fan_modes, effect_list, source_list, operation_list, position, gps, or battery_level.",
-              "command_actions_json": "Home Assistant action sequences keyed by native command name, such as turn_on, set_temperature, set_fan_mode, set_percentage, or set_humidity. Command arguments are available as template variables. Generated source helpers fix numeric values to each entity's advertised minimum, maximum, and step.",
-              "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
+              "command_actions_json": "Home Assistant action sequences keyed by native command name, such as turn_on, set_temperature, set_fan_mode, set_percentage, or set_humidity. Command arguments are available as template variables. Generated source helpers fix numeric values to each entity's advertised minimum, maximum, and step. Every command supported by the virtual domain can be mapped here. Use choose conditions to route a preset mode or any other command argument to different target entities and actions.",
+              "domain_options_json": "Optional YAML object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
             }
           },
           "domain_settings": {
@@ -763,7 +763,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker selection strategy",
               "polygon_distance_meters": "Tracker grouping distance",
-              "polygon_tracker_rules_json": "Tracker rules JSON",
+              "polygon_tracker_rules_json": "Tracker rules YAML",
               "polygon_away_state": "Outside-zone state",
               "matter_light_type": "Matter light device type"
             },
@@ -1280,24 +1280,24 @@
             "name": "Advanced settings",
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
-              "template_sources_json": "Template sources JSON",
-              "event_hooks_json": "Event hooks JSON",
-              "attributes_json": "Attributes JSON",
-              "attribute_sources_json": "Attribute sources JSON",
-              "attribute_templates_json": "Attribute templates JSON",
-              "native_templates_json": "Native property templates JSON",
-              "command_actions_json": "Command actions JSON",
-              "domain_options_json": "Domain options JSON"
+              "template_sources_json": "Template sources YAML",
+              "event_hooks_json": "Event hooks YAML",
+              "attributes_json": "Attributes YAML",
+              "attribute_sources_json": "Attribute sources YAML",
+              "attribute_templates_json": "Attribute templates YAML",
+              "native_templates_json": "Native property templates YAML",
+              "command_actions_json": "Command actions YAML",
+              "domain_options_json": "Domain options YAML"
             },
             "data_description": {
-              "template_sources_json": "A JSON object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
+              "template_sources_json": "A YAML object mapping template variable names to source states or attributes. Example keys: power -> sensor.washer_power, door -> binary_sensor.washer_door.state.",
               "event_hooks_json": "Optional hooks that listen to state changes or Home Assistant events. Each hook can set value_template, availability_template, attributes, or attribute_templates and receives a trigger variable.",
-              "attributes_json": "A JSON object. Example key: battery_level -> 91.",
-              "attribute_sources_json": "A JSON object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
-              "attribute_templates_json": "A JSON object whose values are Jinja templates. Copying sources generates state_attr helpers for every available dynamic attribute. Attributes available from multiple sources use type-aware helpers: boolean AND, numeric average, unique list union, string concatenation, or ordered mapping merge. Later edits preserve only the keys you customized.",
+              "attributes_json": "A YAML object. Example key: battery_level -> 91.",
+              "attribute_sources_json": "A YAML object mapping virtual attributes to source attributes. Example key: battery -> sensor.remote.battery_level. Use \"state\" to copy the source state.",
+              "attribute_templates_json": "A YAML object whose values are Jinja templates. Copying sources generates state_attr helpers for every available dynamic attribute. Attributes available from multiple sources use type-aware helpers: boolean AND, numeric average, unique list union, string concatenation, or ordered mapping merge. Later edits preserve only the keys you customized.",
               "native_templates_json": "Jinja templates for native Home Assistant properties. Values may render strings, numbers, booleans, objects, or lists. Use property names such as state, fan_modes, effect_list, source_list, operation_list, position, gps, or battery_level.",
-              "command_actions_json": "Home Assistant action sequences keyed by native command name, such as turn_on, set_temperature, set_fan_mode, set_percentage, or set_humidity. Command arguments are available as template variables. Generated source helpers fix numeric values to each entity's advertised minimum, maximum, and step.",
-              "domain_options_json": "Optional JSON object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
+              "command_actions_json": "Home Assistant action sequences keyed by native command name, such as turn_on, set_temperature, set_fan_mode, set_percentage, or set_humidity. Command arguments are available as template variables. Generated source helpers fix numeric values to each entity's advertised minimum, maximum, and step. Every command supported by the virtual domain can be mapped here. Use choose conditions to route a preset mode or any other command argument to different target entities and actions.",
+              "domain_options_json": "Optional YAML object for direct settings specific to the selected entity domain. Generic domains expose these values as state attributes; examples include climate modes, camera source_entity aliases, image_path, or stream_source. Common fields cannot be overridden."
             }
           },
           "domain_settings": {
@@ -1309,7 +1309,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker selection strategy",
               "polygon_distance_meters": "Tracker grouping distance",
-              "polygon_tracker_rules_json": "Tracker rules JSON",
+              "polygon_tracker_rules_json": "Tracker rules YAML",
               "polygon_away_state": "Outside-zone state",
               "matter_light_type": "Matter light device type"
             },
