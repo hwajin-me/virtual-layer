@@ -47,7 +47,7 @@ from . import (
     get_entity_from_domain,
 )
 from .const import *
-from .entity import VirtualEntity, virtual_schema
+from .entity import VirtualEntity, repair_legacy_template_data, virtual_schema
 from .polygon import (
     find_polygon_zone,
     load_polygon_zones,
@@ -433,6 +433,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         """Return a safe polygon configuration without blocking old settings."""
         if not isinstance(value, dict):
             return None
+        value = repair_legacy_template_data(value)
         try:
             polygon_validation_config = {CONF_POLYGONAL_ZONE: value}
             if source_entities is not None:

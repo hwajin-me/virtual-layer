@@ -799,6 +799,10 @@ def test_attribute_template_preserves_structured_jinja_result(hass):
                     CONF_ATTRIBUTE_TEMPLATES: {
                         "programs": "{{ ['cotton', 'eco'] }}",
                         "details": "{{ {'cycles': 3, 'active': true} }}",
+                        "device_trackers": (
+                            "{{ <DeviceTrackerSourceType.GPS: 'gps'> }}"
+                        ),
+                        "max": "{{ <LegacyLimit.MAX: 100> }}",
                     }
                 },
             )
@@ -813,6 +817,8 @@ def test_attribute_template_preserves_structured_jinja_result(hass):
 
     assert entity.extra_state_attributes["programs"] == ["cotton", "eco"]
     assert entity.extra_state_attributes["details"] == {"cycles": 3, "active": True}
+    assert entity.extra_state_attributes["device_trackers"] == "gps"
+    assert entity.extra_state_attributes["max"] == 100
 
 
 async def test_command_action_receives_native_arguments_and_can_disable_optimism(hass):
@@ -835,7 +841,12 @@ async def test_command_action_receives_native_arguments_and_can_disable_optimism
                             "sequence": [
                                 {
                                     "action": "virtual_test.capture",
-                                    "data": {"requested": "{{ percentage }}"},
+                                    "data": {
+                                        "requested": "{{ percentage }}",
+                                        "legacy_limit": (
+                                            "{{ <LegacyLimit.MAX: 100> }}"
+                                        ),
+                                    },
                                 }
                             ],
                         }
@@ -851,7 +862,7 @@ async def test_command_action_receives_native_arguments_and_can_disable_optimism
 
     await entity.async_set_percentage(73)
 
-    assert calls == [{"requested": 67}]
+    assert calls == [{"requested": 67, "legacy_limit": 100}]
     assert entity.percentage == 0
     entity.async_write_ha_state.assert_not_called()
 

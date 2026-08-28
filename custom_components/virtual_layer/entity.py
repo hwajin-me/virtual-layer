@@ -54,7 +54,8 @@ _STARTUP_AVAILABILITY_RETRY_DELAYS = (5, 10, 15, 30)
 _LEGACY_ENUM_TEMPLATE_RE = re.compile(
     r"<[A-Za-z_][A-Za-z0-9_]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\|[A-Za-z_][A-Za-z0-9_]*)*)+:\s*"
-    r"((?:'(?:\\.|[^'\\])*')|(?:\"(?:\\.|[^\"\\])*\")|-?\d+(?:\.\d+)?)>"
+    r"((?:'(?:\\.|[^'\\])*')|(?:\"(?:\\.|[^\"\\])*\")|"
+    r"-?\d+(?:\.\d+)?|True|False|None)>"
 )
 _COMMAND_ACTION_CHAIN: ContextVar[frozenset[tuple[int, str]]] = ContextVar(
     "virtual_layer_command_action_chain",
@@ -79,7 +80,7 @@ def nearest_step_value(
 
 
 def repair_legacy_enum_template(template: str) -> str:
-    """Repair enum repr literals emitted by older native helper generation."""
+    """Repair enum repr literals emitted by older helper generation."""
     if not isinstance(template, str) or "<" not in template:
         return template
 
@@ -104,6 +105,35 @@ def repair_legacy_enum_template(template: str) -> str:
         return match.group(0) if quote is not None else match.group(1)
 
     return _LEGACY_ENUM_TEMPLATE_RE.sub(_replace, template)
+
+
+def repair_legacy_template_data(value, _seen=None, _depth=0):
+    """Repair legacy enum reprs in a JSON-like template container."""
+    if isinstance(value, str):
+        return repair_legacy_enum_template(value)
+    if _depth > 100:
+        return None
+    if not isinstance(value, (dict, list, tuple)):
+        return value
+    if _seen is None:
+        _seen = set()
+    identity = id(value)
+    if identity in _seen:
+        return None
+    _seen.add(identity)
+    try:
+        if isinstance(value, dict):
+            return {
+                key: repair_legacy_template_data(item, _seen, _depth + 1)
+                for key, item in value.items()
+            }
+        items = [
+            repair_legacy_template_data(item, _seen, _depth + 1)
+            for item in value
+        ]
+        return tuple(items) if isinstance(value, tuple) else items
+    finally:
+        _seen.remove(identity)
 
 def nonnegative_int(value) -> int:
     """Coerce a non-negative integer without accepting booleans as numbers."""
@@ -251,7 +281,9 @@ class VirtualEntity(RestoreEntity):
         self._platform_domain = domain
         self._configured_icon = config.get(CONF_ICON)
         self._attr_icon = self._configured_icon
-        self._icon_template = config.get(CONF_ICON_TEMPLATE)
+        self._icon_template = repair_legacy_enum_template(
+            config.get(CONF_ICON_TEMPLATE)
+        )
         self._persistent = config.get(CONF_PERSISTENT)
         self._virtual_attributes = {
             name: value
@@ -264,16 +296,19 @@ class VirtualEntity(RestoreEntity):
             if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
         }
         self._attribute_templates = {
-            name: template
+            name: repair_legacy_enum_template(template)
             for name, template in dict(config.get(CONF_ATTRIBUTE_TEMPLATES, {})).items()
             if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
+            and isinstance(template, str)
         }
         self._native_templates = {
             str(name).strip(): repair_legacy_enum_template(template)
             for name, template in dict(config.get(CONF_NATIVE_TEMPLATES, {})).items()
             if self._valid_native_template_name(name) and isinstance(template, str)
         }
-        self._command_actions = dict(config.get(CONF_COMMAND_ACTIONS, {}))
+        self._command_actions = repair_legacy_template_data(
+            dict(config.get(CONF_COMMAND_ACTIONS, {}))
+        )
         self._command_scripts = {}
         self._pull_interval = config.get(CONF_PULL_INTERVAL, 0)
         self._source_entities = config.get(CONF_SOURCE_ENTITIES, [])
@@ -281,10 +316,14 @@ class VirtualEntity(RestoreEntity):
             name: self._normalize_template_source(source)
             for name, source in dict(config.get(CONF_TEMPLATE_SOURCES, {})).items()
         }
-        self._value_template = config.get(CONF_VALUE_TEMPLATE)
-        self._availability_template = config.get(CONF_AVAILABILITY_TEMPLATE)
+        self._value_template = repair_legacy_enum_template(
+            config.get(CONF_VALUE_TEMPLATE)
+        )
+        self._availability_template = repair_legacy_enum_template(
+            config.get(CONF_AVAILABILITY_TEMPLATE)
+        )
         self._event_hooks = [
-            hook
+            repair_legacy_template_data(hook)
             for hook in config.get(CONF_EVENT_HOOKS, [])
             if isinstance(hook, dict) and hook.get("enabled", True)
         ]

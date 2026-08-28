@@ -49,6 +49,8 @@ from custom_components.virtual_layer.config_flow import (
     CONF_MATTER_LIGHT_TYPE,
     CONF_NATIVE_TEMPLATES_JSON,
     CONF_NATIVE_VALUE_TEMPLATES,
+    CONF_POLYGON_GEOJSON_JSON,
+    CONF_POLYGON_TRACKER_RULES_JSON,
     CONF_REFERENCE_ENTITY_ID,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
@@ -100,6 +102,7 @@ from custom_components.virtual_layer.config_flow import (
     _native_source_helper_default,
     _native_source_template,
     _needs_domain_specific_form,
+    _normalize_attribute_mapping,
     _normalize_reference_entity_ids,
     _options_schema,
     _parse_command_actions,
@@ -154,6 +157,7 @@ from custom_components.virtual_layer.const import (
     CONF_POLYGON_DISTANCE_METERS,
     CONF_POLYGON_FILES,
     CONF_POLYGON_STRATEGY,
+    CONF_POLYGON_TRACKER_RULES,
     CONF_POLYGONAL_ZONE,
     CONF_PULL_INTERVAL,
     CONF_SERIAL_NUMBER,
@@ -550,43 +554,28 @@ def test_native_value_template_sections_match_domain_properties():
 
         assert set(template_validators) == set(expected_properties), platform
         assert CONF_NATIVE_TEMPLATES_JSON not in validators, platform
-        for property_name, validator in template_validators.items():
-            if property_name in {
-                "native_unit_of_measurement",
-                "suggested_unit_of_measurement",
-                "unit_of_measurement",
-            }:
-                assert isinstance(validator, selector.TextSelector), platform
-            elif (platform, property_name) in {
-                ("sensor", "device_class"),
-                ("sensor", "state_class"),
-                ("number", "device_class"),
-                ("number", "mode"),
-            }:
-                assert isinstance(validator, selector.SelectSelector), platform
-            else:
-                assert isinstance(validator, selector.TemplateSelector), platform
+        for validator in template_validators.values():
+            assert isinstance(validator, selector.TemplateSelector), platform
 
 
-def test_sensor_details_offer_device_class_state_class_unit_and_icon():
+def test_sensor_details_offer_template_backed_native_properties_and_icon():
     schema = _entity_schema({CONF_PLATFORM: "sensor"})
     outer = {marker.schema: validator for marker, validator in schema.schema.items()}
     assert outer[CONF_NATIVE_VALUE_TEMPLATES].options["collapsed"] is False
     native = _section_validators(schema, CONF_NATIVE_VALUE_TEMPLATES)
 
-    assert isinstance(native["device_class"], selector.SelectSelector)
-    assert "monetary" in native["device_class"].config["options"]
-    assert isinstance(native["state_class"], selector.SelectSelector)
-    assert isinstance(native["native_unit_of_measurement"], selector.TextSelector)
+    assert isinstance(native["device_class"], selector.TemplateSelector)
+    assert isinstance(native["state_class"], selector.TemplateSelector)
+    assert isinstance(native["native_unit_of_measurement"], selector.TemplateSelector)
 
     _device_name, entity = _build_entity_config(
         _entity_input(
             {
                 CONF_ICON: "mdi:cash",
                 CONF_NATIVE_VALUE_TEMPLATES: {
-                    "device_class": "monetary",
-                    "state_class": "total_increasing",
-                    "native_unit_of_measurement": "KRW",
+                    "device_class": "{{ 'monetary' }}",
+                    "state_class": "{{ 'total_increasing' }}",
+                    "native_unit_of_measurement": "{{ 'KRW' }}",
                 },
             }
         )
@@ -594,9 +583,9 @@ def test_sensor_details_offer_device_class_state_class_unit_and_icon():
 
     assert entity[CONF_ICON] == "mdi:cash"
     assert entity[CONF_NATIVE_TEMPLATES] == {
-        "device_class": "monetary",
-        "state_class": "total_increasing",
-        "native_unit_of_measurement": "KRW",
+        "device_class": "{{ 'monetary' }}",
+        "state_class": "{{ 'total_increasing' }}",
+        "native_unit_of_measurement": "{{ 'KRW' }}",
     }
 
 
@@ -1544,6 +1533,199 @@ def test_native_template_parser_repairs_legacy_enum_repr(hass):
     ).async_render(parse_result=True) == "heating"
 
 
+def test_attribute_template_parser_repairs_legacy_enum_repr(hass):
+    templates = _normalize_attribute_mapping(
+        {
+            "device_trackers": (
+                "{{ <DeviceTrackerSourceType.GPS: 'gps'> }}"
+            ),
+            "max": "{{ <LegacyLimit.MAX: 100> }}",
+            "vendor_label": "{{ \"<LegacyLimit.MAX: 100>\" }}",
+        },
+        CONF_ATTRIBUTE_TEMPLATES_JSON,
+        templates=True,
+    )
+
+    assert templates["device_trackers"] == "{{ 'gps' }}"
+    assert templates["max"] == "{{ 100 }}"
+    assert templates["vendor_label"] == "{{ \"<LegacyLimit.MAX: 100>\" }}"
+    assert Template(templates["device_trackers"], hass).async_render() == "gps"
+    assert Template(templates["max"], hass).async_render() == 100
+
+
+def test_build_entity_config_repairs_legacy_enum_repr_attribute_template(hass):
+    _, entity = _build_entity_config(
+        _entity_input({
+            CONF_PLATFORM: "device_tracker",
+            CONF_ATTRIBUTE_TEMPLATES_JSON: json.dumps({
+                "device_trackers": (
+                    "{{ [<TrackerSource.GPS: 'gps'>, "
+                    "<TrackerSource.ROUTER: 'router'>] }}"
+                ),
+                "vendor_label": "{{ \"<TrackerSource.GPS: 'gps'>\" }}",
+            }),
+        })
+    )
+
+    assert entity[CONF_ATTRIBUTE_TEMPLATES] == {
+        "device_trackers": "{{ ['gps', 'router'] }}",
+        "vendor_label": "{{ \"<TrackerSource.GPS: 'gps'>\" }}",
+    }
+    assert Template(
+        entity[CONF_ATTRIBUTE_TEMPLATES]["device_trackers"],
+        hass,
+    ).async_render(parse_result=True) == ["gps", "router"]
+
+
+def test_build_entity_config_repairs_legacy_repr_in_nested_template_fields(hass):
+    legacy_string = "{{ <LegacyMode.ACTIVE: 'active'> }}"
+    legacy_number = "{{ <LegacyLimit.MAX: 100> }}"
+    _, entity = _build_entity_config(
+        _entity_input({
+            CONF_PLATFORM: "switch",
+            CONF_VALUE_TEMPLATE: legacy_string,
+            CONF_AVAILABILITY_TEMPLATE: "{{ <LegacyFlag.YES: True> }}",
+            CONF_ICON_TEMPLATE: "{{ <LegacyIcon.HOME: 'mdi:home'> }}",
+            CONF_EVENT_HOOKS_JSON: json.dumps([{
+                "trigger": "event",
+                "event_type": "legacy_event",
+                CONF_VALUE_TEMPLATE: legacy_string,
+                CONF_AVAILABILITY_TEMPLATE: "{{ <LegacyFlag.YES: True> }}",
+                CONF_ATTRIBUTE_TEMPLATES: {"limit": legacy_number},
+            }]),
+            CONF_COMMAND_ACTIONS_JSON: json.dumps({
+                "turn_on": [{
+                    "variables": {"limit": legacy_number},
+                }],
+            }),
+        })
+    )
+
+    assert entity[CONF_VALUE_TEMPLATE] == "{{ 'active' }}"
+    assert entity[CONF_AVAILABILITY_TEMPLATE] == "{{ True }}"
+    assert entity[CONF_ICON_TEMPLATE] == "{{ 'mdi:home' }}"
+    hook = entity[CONF_EVENT_HOOKS][0]
+    assert hook[CONF_VALUE_TEMPLATE] == "{{ 'active' }}"
+    assert hook[CONF_AVAILABILITY_TEMPLATE] == "{{ True }}"
+    assert hook[CONF_ATTRIBUTE_TEMPLATES]["limit"] == "{{ 100 }}"
+    assert entity[CONF_COMMAND_ACTIONS]["turn_on"][0]["variables"]["limit"] == (
+        "{{ 100 }}"
+    )
+    for template in (
+        entity[CONF_VALUE_TEMPLATE],
+        entity[CONF_AVAILABILITY_TEMPLATE],
+        entity[CONF_ICON_TEMPLATE],
+        hook[CONF_VALUE_TEMPLATE],
+        hook[CONF_AVAILABILITY_TEMPLATE],
+        hook[CONF_ATTRIBUTE_TEMPLATES]["limit"],
+    ):
+        Template(template, hass).ensure_valid()
+
+
+def test_build_device_tracker_repairs_legacy_polygon_condition_template(hass):
+    _, entity = _build_entity_config(
+        _entity_input({
+            CONF_PLATFORM: "device_tracker",
+            CONF_SOURCE_ENTITIES_TEXT: "device_tracker.phone",
+            CONF_POLYGON_GEOJSON_JSON: json.dumps({
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "properties": {"name": "Home"},
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[
+                            [126.9, 37.5],
+                            [127.0, 37.5],
+                            [127.0, 37.6],
+                            [126.9, 37.5],
+                        ]],
+                    },
+                }],
+            }),
+            CONF_POLYGON_TRACKER_RULES_JSON: json.dumps({
+                "device_tracker.phone": {
+                    "condition_template": "{{ <LegacyFlag.YES: True> }}",
+                },
+            }),
+        })
+    )
+
+    template = entity[CONF_POLYGONAL_ZONE][CONF_POLYGON_TRACKER_RULES][
+        "device_tracker.phone"
+    ]["condition_template"]
+    assert template == "{{ True }}"
+    Template(template, hass).ensure_valid()
+
+
+@pytest.mark.parametrize("platform", VIRTUAL_ENTITY_DOMAINS)
+def test_edit_defaults_repair_legacy_enum_repr_for_every_entity_domain(platform):
+    legacy_template = "{{ <LegacyMode.ACTIVE: 'active'> }}"
+    entity = {
+        CONF_PLATFORM: platform,
+        CONF_NAME: "Legacy",
+        CONF_INITIAL_VALUE: "unknown",
+        CONF_VALUE_TEMPLATE: legacy_template,
+        CONF_AVAILABILITY_TEMPLATE: legacy_template,
+        CONF_ICON_TEMPLATE: legacy_template,
+        CONF_ATTRIBUTE_TEMPLATES: {"legacy_attribute": legacy_template},
+        CONF_EVENT_HOOKS: [{
+            "trigger": "event",
+            "event_type": "legacy_event",
+            CONF_VALUE_TEMPLATE: legacy_template,
+            CONF_AVAILABILITY_TEMPLATE: legacy_template,
+            CONF_ATTRIBUTE_TEMPLATES: {"legacy_hook": legacy_template},
+        }],
+        CONF_COMMAND_ACTIONS: {
+            "legacy_command": {
+                "sequence": [{
+                    "variables": {"legacy_value": legacy_template},
+                }],
+            },
+        },
+    }
+    native_properties = DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
+    if native_properties:
+        entity[CONF_NATIVE_TEMPLATES] = {
+            native_properties[0]: legacy_template,
+        }
+    if platform == "device_tracker":
+        entity[CONF_POLYGONAL_ZONE] = {
+            CONF_POLYGON_TRACKER_RULES: {
+                "device_tracker.phone": {
+                    "condition_template": legacy_template,
+                },
+            },
+        }
+
+    defaults = _entity_form_defaults("Legacy Device", entity)
+
+    for field_name in (
+        CONF_VALUE_TEMPLATE,
+        CONF_AVAILABILITY_TEMPLATE,
+        CONF_ICON_TEMPLATE,
+    ):
+        assert defaults[field_name] == "{{ 'active' }}", (platform, field_name)
+    assert json.loads(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
+        "legacy_attribute": "{{ 'active' }}",
+    }
+    event_hook = json.loads(defaults[CONF_EVENT_HOOKS_JSON])[0]
+    assert event_hook[CONF_VALUE_TEMPLATE] == "{{ 'active' }}"
+    assert event_hook[CONF_AVAILABILITY_TEMPLATE] == "{{ 'active' }}"
+    assert event_hook[CONF_ATTRIBUTE_TEMPLATES]["legacy_hook"] == "{{ 'active' }}"
+    command = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])["legacy_command"]
+    assert command["sequence"][0]["variables"]["legacy_value"] == "{{ 'active' }}"
+    if native_properties:
+        assert defaults[CONF_NATIVE_VALUE_TEMPLATES][native_properties[0]] == (
+            "{{ 'active' }}"
+        )
+    if platform == "device_tracker":
+        rules = json.loads(defaults[CONF_POLYGON_TRACKER_RULES_JSON])
+        assert rules["device_tracker.phone"]["condition_template"] == (
+            "{{ 'active' }}"
+        )
+
+
 def test_json_default_sanitizes_values_that_cannot_be_saved_by_home_assistant():
     result = json.loads(
         _json_default(
@@ -1560,6 +1742,23 @@ def test_json_default_sanitizes_values_that_cannot_be_saved_by_home_assistant():
     assert sorted(result["set"]) == ["one", "two"]
     assert result["too_large"] is None
     assert result["not_finite"] == "nan"
+
+
+def test_literal_template_serializes_nested_enum_values_without_python_repr(hass):
+    value = {
+        "list": [HVACAction.HEATING],
+        "mapping": {"action": HVACAction.COOLING},
+        "set": {HVACAction.IDLE},
+    }
+
+    template = _literal_template(value)
+
+    assert "<HVACAction" not in template
+    assert Template(template, hass).async_render(parse_result=True) == {
+        "list": ["heating"],
+        "mapping": {"action": "cooling"},
+        "set": ["idle"],
+    }
 
 
 @pytest.mark.parametrize("debounce", ["Infinity", True])

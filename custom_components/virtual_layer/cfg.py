@@ -27,7 +27,11 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.util import slugify
 
 from .const import *
-from .entity import repair_legacy_enum_template, virtual_schema
+from .entity import (
+    repair_legacy_enum_template,
+    repair_legacy_template_data,
+    virtual_schema,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,7 +92,7 @@ def _normalize_event_hooks(value, device_name, index):
             )
             continue
 
-        hook = dict(stored_hook)
+        hook = repair_legacy_template_data(dict(stored_hook))
         trigger = str(hook.get("trigger", "state")).strip().lower()
         if trigger not in {"state", "event"}:
             _LOGGER.warning(
@@ -178,7 +182,11 @@ def _normalize_event_hooks(value, device_name, index):
                     or name.strip() in normalized_values
                 ):
                     continue
-                normalized_values[name.strip()] = item
+                normalized_values[name.strip()] = (
+                    repair_legacy_enum_template(item)
+                    if field_name == CONF_ATTRIBUTE_TEMPLATES
+                    else item
+                )
             if normalized_values:
                 hook[field_name] = normalized_values
             else:
@@ -530,7 +538,11 @@ def _normalize_common_entity_config(entity, device_name, index):
                 or name.strip() in normalized_values
             ):
                 continue
-            normalized_values[name.strip()] = item
+            normalized_values[name.strip()] = (
+                repair_legacy_enum_template(item)
+                if key == CONF_ATTRIBUTE_TEMPLATES
+                else item
+            )
         entity[key] = normalized_values
 
     native_templates = entity.get(CONF_NATIVE_TEMPLATES, {})
@@ -569,6 +581,7 @@ def _normalize_common_entity_config(entity, device_name, index):
                     continue
                 if command.strip() not in valid_commands:
                     continue
+                spec = repair_legacy_template_data(spec)
                 sequence = spec
                 if isinstance(spec, Mapping) and "sequence" in spec:
                     if set(spec) - {"sequence", "optimistic"}:
@@ -666,6 +679,12 @@ def _normalize_common_entity_config(entity, device_name, index):
                 index,
             )
             entity.pop(key, None)
+        elif key in entity:
+            entity[key] = repair_legacy_enum_template(entity[key])
+
+    polygon = entity.get(CONF_POLYGONAL_ZONE)
+    if isinstance(polygon, Mapping):
+        entity[CONF_POLYGONAL_ZONE] = repair_legacy_template_data(dict(polygon))
 
     pull_interval = entity.get(CONF_PULL_INTERVAL)
     if pull_interval is not None:

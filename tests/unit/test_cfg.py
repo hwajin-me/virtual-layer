@@ -39,6 +39,8 @@ from custom_components.virtual_layer.const import (
     CONF_NAME,
     CONF_NATIVE_TEMPLATES,
     CONF_PERSISTENT,
+    CONF_POLYGON_TRACKER_RULES,
+    CONF_POLYGONAL_ZONE,
     CONF_PULL_INTERVAL,
     CONF_SOURCE_ENTITIES,
     CONF_TEMPLATE_SOURCES,
@@ -151,6 +153,7 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
             CONF_ATTRIBUTE_TEMPLATES: {
                 " summary ": "{{ 1 }}",
                 "summary": "{{ 2 }}",
+                "max": "{{ <LegacyLimit.MAX: 100> }}",
                 "invalid": {"not": "jinja"},
                 ATTR_RESTORED: "{{ <RestoredState> }}",
                 "access_token": "{{ <rotating-token> }}",
@@ -159,6 +162,23 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
             },
             CONF_NATIVE_TEMPLATES: {
                 " hvac_action ": "{{ <HVACAction.HEATING: 'heating'> }}",
+            },
+            CONF_VALUE_TEMPLATE: "{{ <LegacyMode.ACTIVE: 'active'> }}",
+            CONF_AVAILABILITY_TEMPLATE: "{{ <LegacyFlag.YES: True> }}",
+            CONF_ICON_TEMPLATE: "{{ <LegacyIcon.HOME: 'mdi:home'> }}",
+            CONF_COMMAND_ACTIONS: {
+                "set_native_value": [{
+                    "variables": {
+                        "legacy": "{{ <LegacyLimit.MAX: 100> }}",
+                    },
+                }],
+            },
+            CONF_POLYGONAL_ZONE: {
+                CONF_POLYGON_TRACKER_RULES: {
+                    "device_tracker.phone": {
+                        "condition_template": "{{ <LegacyFlag.YES: True> }}",
+                    },
+                },
             },
             CONF_EVENT_HOOKS: [{
                 "trigger": "event",
@@ -170,8 +190,11 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
                 },
                 CONF_ATTRIBUTE_TEMPLATES: {
                     "detail": "{{ trigger.event.event_type }}",
+                    "legacy": "{{ <LegacyMode.ACTIVE: 'active'> }}",
                     "entity_picture": "{{ <tokenized-picture> }}",
                 },
+                CONF_VALUE_TEMPLATE: "{{ <LegacyMode.ACTIVE: 'active'> }}",
+                CONF_AVAILABILITY_TEMPLATE: "{{ <LegacyFlag.YES: True> }}",
             }],
             CONF_PULL_INTERVAL: True,
         },
@@ -189,17 +212,32 @@ def test_stored_entity_normalization_sanitizes_non_finite_values():
             CONF_ATTRIBUTE: "battery_level",
         }
     }
-    assert normalized[CONF_ATTRIBUTE_TEMPLATES] == {"summary": "{{ 1 }}"}
+    assert normalized[CONF_ATTRIBUTE_TEMPLATES] == {
+        "summary": "{{ 1 }}",
+        "max": "{{ 100 }}",
+    }
     assert normalized[CONF_NATIVE_TEMPLATES] == {
         "hvac_action": "{{ 'heating' }}",
     }
+    assert normalized[CONF_VALUE_TEMPLATE] == "{{ 'active' }}"
+    assert normalized[CONF_AVAILABILITY_TEMPLATE] == "{{ True }}"
+    assert normalized[CONF_ICON_TEMPLATE] == "{{ 'mdi:home' }}"
+    assert normalized[CONF_COMMAND_ACTIONS]["set_native_value"][0]["variables"] == {
+        "legacy": "{{ 100 }}",
+    }
+    assert normalized[CONF_POLYGONAL_ZONE][CONF_POLYGON_TRACKER_RULES][
+        "device_tracker.phone"
+    ]["condition_template"] == "{{ True }}"
     assert normalized[CONF_EVENT_HOOKS] == [{
         "trigger": "event",
         "event_type": "virtual_layer_update",
         CONF_ATTRIBUTES: {"safe": "ready"},
         CONF_ATTRIBUTE_TEMPLATES: {
             "detail": "{{ trigger.event.event_type }}",
+            "legacy": "{{ 'active' }}",
         },
+        CONF_VALUE_TEMPLATE: "{{ 'active' }}",
+        CONF_AVAILABILITY_TEMPLATE: "{{ True }}",
     }]
     assert normalized[CONF_PULL_INTERVAL] == 0
 

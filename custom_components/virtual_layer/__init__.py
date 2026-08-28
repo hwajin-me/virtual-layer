@@ -43,6 +43,7 @@ from .cfg import (
     _delete_meta_data,
 )
 from .const import *
+from .entity import repair_legacy_enum_template
 
 _LOGGER = logging.getLogger(__name__)
 _MISSING = object()
@@ -1155,7 +1156,7 @@ def _render_state_only_template(
     variables = _state_only_template_variables(hass, entity)
     if extra_variables:
         variables.update(extra_variables)
-    return Template(str(template), hass).async_render(
+    return Template(repair_legacy_enum_template(str(template)), hass).async_render(
         variables=variables,
         parse_result=parse_result,
     )
@@ -1706,7 +1707,7 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
             hass,
             [
                 TrackTemplate(
-                    Template(str(template), hass),
+                    Template(repair_legacy_enum_template(str(template)), hass),
                     _state_only_template_variables(hass, entity),
                 )
                 for template in templates

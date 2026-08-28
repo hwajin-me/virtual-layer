@@ -312,7 +312,7 @@ def test_polygon_domain_options_validate_rules_and_survive_invalid_stored_data(
                 "dominant": True,
                 "weight": 2,
                 "max_age_seconds": 1800,
-                "condition_template": "{{ source.state != 'unavailable' }}",
+                "condition_template": "{{ <LegacyFlag.YES: True> }}",
             },
         },
     }
@@ -322,7 +322,11 @@ def test_polygon_domain_options_validate_rules_and_survive_invalid_stored_data(
         validate_domain_options({CONF_POLYGONAL_ZONE: invalid_options})
 
     assert VirtualDeviceTracker._normalize_polygon_config({"broken": True}) is None
-    assert VirtualDeviceTracker._normalize_polygon_config(valid) is not None
+    normalized = VirtualDeviceTracker._normalize_polygon_config(valid)
+    assert normalized is not None
+    assert normalized[CONF_POLYGON_TRACKER_RULES]["device_tracker.phone"][
+        "condition_template"
+    ] == "{{ True }}"
     assert VirtualDeviceTracker._normalize_location_helper({
         "distance_threshold_meters": float("nan"),
     }) is None

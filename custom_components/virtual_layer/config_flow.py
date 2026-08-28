@@ -67,6 +67,7 @@ from .entity import (
     nonnegative_int,
     positive_tick,
     repair_legacy_enum_template,
+    repair_legacy_template_data,
 )
 from .fan_options import (
     FAN_FORM_FIELDS,
@@ -2009,7 +2010,9 @@ def _normalize_attribute_mapping(
         normalized_name = name.strip()
         if normalized_name in normalized:
             raise InvalidJson(field_name)
-        normalized[normalized_name] = item
+        normalized[normalized_name] = (
+            repair_legacy_enum_template(item) if templates else item
+        )
     return normalized
 
 
@@ -2024,7 +2027,9 @@ def _without_transient_source_attributes(value: Mapping) -> dict[str, Any]:
 
 def _parse_command_actions(value: str, platform: str | None = None) -> dict[str, Any]:
     """Parse and validate command-to-HA-action mappings."""
-    parsed = _parse_json_object(value, CONF_COMMAND_ACTIONS_JSON)
+    parsed = repair_legacy_template_data(
+        _parse_json_object(value, CONF_COMMAND_ACTIONS_JSON)
+    )
     valid_commands = _platform_command_names(platform) if platform else None
     for command, spec in parsed.items():
         if not isinstance(command, str) or not command.strip().isidentifier():
@@ -2071,7 +2076,7 @@ def _parse_event_hooks(value: str) -> list[dict[str, Any]]:
     for hook in parsed:
         if not isinstance(hook, dict):
             raise InvalidJson(CONF_EVENT_HOOKS_JSON)
-        next_hook = _plain_options(hook)
+        next_hook = repair_legacy_template_data(_plain_options(hook))
         trigger = str(next_hook.get("trigger", "state")).strip().lower()
         if trigger not in {"state", "event"}:
             raise InvalidJson(CONF_EVENT_HOOKS_JSON)
@@ -2443,7 +2448,9 @@ def _build_entity_config(
     if icon:
         entity[CONF_ICON] = icon
 
-    icon_template = _text_default(user_input.get(CONF_ICON_TEMPLATE)).strip()
+    icon_template = repair_legacy_enum_template(
+        _text_default(user_input.get(CONF_ICON_TEMPLATE)).strip()
+    )
     if icon_template:
         entity[CONF_ICON_TEMPLATE] = icon_template
 
@@ -2476,13 +2483,15 @@ def _build_entity_config(
     if pull_interval:
         entity[CONF_PULL_INTERVAL] = pull_interval
 
-    value_template = _text_default(user_input.get(CONF_VALUE_TEMPLATE)).strip()
+    value_template = repair_legacy_enum_template(
+        _text_default(user_input.get(CONF_VALUE_TEMPLATE)).strip()
+    )
     if value_template:
         entity[CONF_VALUE_TEMPLATE] = value_template
 
-    availability_template = _text_default(
-        user_input.get(CONF_AVAILABILITY_TEMPLATE)
-    ).strip()
+    availability_template = repair_legacy_enum_template(
+        _text_default(user_input.get(CONF_AVAILABILITY_TEMPLATE)).strip()
+    )
     if availability_template:
         entity[CONF_AVAILABILITY_TEMPLATE] = availability_template
 
@@ -2666,9 +2675,11 @@ def _build_entity_config(
                     "not_home",
                 )
             ).strip(),
-            CONF_POLYGON_TRACKER_RULES: _parse_json_object(
-                polygon_rules_text,
-                CONF_POLYGON_TRACKER_RULES_JSON,
+            CONF_POLYGON_TRACKER_RULES: repair_legacy_template_data(
+                _parse_json_object(
+                    polygon_rules_text,
+                    CONF_POLYGON_TRACKER_RULES_JSON,
+                )
             ),
         }
         if polygon_geojson_text:
@@ -3504,6 +3515,8 @@ def _json_safe(value, _seen=None, _depth=0):
     """Return a value that can be displayed and saved as Home Assistant JSON."""
     if _depth > 100:
         return None
+    if isinstance(value, Enum):
+        return _json_safe(value.value, _seen, _depth + 1)
     try:
         json.dumps(value, allow_nan=False)
         json_bytes(value)
@@ -5543,7 +5556,7 @@ def _attribute_template_mapping(value: Any) -> dict[str, str]:
     if not isinstance(value, Mapping):
         return {}
     return {
-        str(attribute_name): template
+        str(attribute_name): repair_legacy_enum_template(template)
         for attribute_name, template in _plain_options(value).items()
         if isinstance(attribute_name, str)
         and attribute_name.strip()
@@ -5856,6 +5869,8 @@ def _entity_form_defaults(
         field_value = entity.get(field_name)
         if isinstance(field_value, Mapping):
             cleaned = _without_transient_source_attributes(field_value)
+            if field_name == CONF_ATTRIBUTE_TEMPLATES:
+                cleaned = repair_legacy_template_data(cleaned)
             if cleaned:
                 entity[field_name] = cleaned
             else:
@@ -5903,7 +5918,9 @@ def _entity_form_defaults(
         CONF_DEVICE_VIA_DEVICE_ID: _text_default(device.get(CONF_VIA_DEVICE_ID)),
         CONF_ENTITY_NAME: _text_default(entity.get(CONF_NAME), "Virtual Entity"),
         CONF_ICON: _text_default(entity.get(CONF_ICON)),
-        CONF_ICON_TEMPLATE: _text_default(entity.get(CONF_ICON_TEMPLATE)),
+        CONF_ICON_TEMPLATE: repair_legacy_enum_template(
+            _text_default(entity.get(CONF_ICON_TEMPLATE))
+        ),
         ATTR_ENTITY_ID: _text_default(entity.get(ATTR_ENTITY_ID)),
         CONF_PLATFORM: platform,
         CONF_INITIAL_VALUE: _text_default(
@@ -5920,11 +5937,15 @@ def _entity_form_defaults(
         ),
         CONF_TEMPLATE_SOURCES_JSON: _json_default(entity.get(CONF_TEMPLATE_SOURCES)),
         CONF_PULL_INTERVAL: _nonnegative_int_default(entity.get(CONF_PULL_INTERVAL)),
-        CONF_VALUE_TEMPLATE: _text_default(entity.get(CONF_VALUE_TEMPLATE)),
-        CONF_AVAILABILITY_TEMPLATE: _text_default(
-            entity.get(CONF_AVAILABILITY_TEMPLATE),
+        CONF_VALUE_TEMPLATE: repair_legacy_enum_template(
+            _text_default(entity.get(CONF_VALUE_TEMPLATE))
         ),
-        CONF_EVENT_HOOKS_JSON: _json_default(entity.get(CONF_EVENT_HOOKS)),
+        CONF_AVAILABILITY_TEMPLATE: repair_legacy_enum_template(
+            _text_default(entity.get(CONF_AVAILABILITY_TEMPLATE))
+        ),
+        CONF_EVENT_HOOKS_JSON: _json_default(
+            repair_legacy_template_data(entity.get(CONF_EVENT_HOOKS))
+        ),
         CONF_ATTRIBUTES_JSON: _json_default(entity.get(CONF_ATTRIBUTES)),
         CONF_ATTRIBUTE_SOURCES_JSON: _json_default(entity.get(CONF_ATTRIBUTE_SOURCES)),
         CONF_ATTRIBUTE_TEMPLATES_JSON: _json_default(
@@ -5932,7 +5953,9 @@ def _entity_form_defaults(
         ),
         CONF_NATIVE_TEMPLATES_JSON: _json_default(additional_native_templates),
         CONF_NATIVE_VALUE_TEMPLATES: native_value_templates,
-        CONF_COMMAND_ACTIONS_JSON: _json_default(entity.get(CONF_COMMAND_ACTIONS)),
+        CONF_COMMAND_ACTIONS_JSON: _json_default(
+            repair_legacy_template_data(entity.get(CONF_COMMAND_ACTIONS))
+        ),
     }
     polygon = entity.get(CONF_POLYGONAL_ZONE)
     if not isinstance(polygon, Mapping):
@@ -5962,7 +5985,9 @@ def _entity_form_defaults(
                 300,
             ),
             CONF_POLYGON_TRACKER_RULES_JSON: _json_default(
-                polygon.get(CONF_POLYGON_TRACKER_RULES),
+                repair_legacy_template_data(
+                    polygon.get(CONF_POLYGON_TRACKER_RULES)
+                ),
             ),
             CONF_POLYGON_AWAY_STATE_INPUT: (
                 _text_default(polygon.get(CONF_POLYGON_AWAY_STATE), "not_home")

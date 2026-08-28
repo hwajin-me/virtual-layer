@@ -20,18 +20,38 @@ from custom_components.virtual_layer.light import LIGHT_SCHEMA, VirtualLight
 from custom_components.virtual_layer.vacuum import VACUUM_SCHEMA, VirtualVacuum
 
 
-climate = VirtualClimate(
-    CLIMATE_SCHEMA({
-        "name": "Docker Climate",
-        "entity_id": "climate.docker_climate",
-        "initial_value": "heat",
-        "hvac_modes": ["off", "heat"],
-        "native_templates": {
-            "hvac_action": "{{ <HVACAction.HEATING: 'heating'> }}",
-        },
-    }),
-    False,
-)
+climate_config = CLIMATE_SCHEMA({
+    "name": "Docker Climate",
+    "entity_id": "climate.docker_climate",
+    "initial_value": "heat",
+    "hvac_modes": ["off", "heat"],
+    "native_templates": {
+        "hvac_action": "{{ <HVACAction.HEATING: 'heating'> }}",
+    },
+})
+# Home Assistant's template validator requires its event loop. Add these after
+# the synchronous schema smoke so this container test can cover runtime repair.
+climate_config.update({
+    "value_template": "{{ <HVACMode.HEAT: 'heat'> }}",
+    "availability_template": "{{ <LegacyFlag.YES: True> }}",
+    "icon_template": "{{ <LegacyIcon.FIRE: 'mdi:fire'> }}",
+    "attribute_templates": {
+        "source_type": "{{ <LegacySource.VIRTUAL: 'virtual'> }}",
+    },
+    "event_hooks": [{
+        "trigger": "event",
+        "event_type": "docker_test",
+        "value_template": "{{ <HVACMode.HEAT: 'heat'> }}",
+    }],
+    "command_actions": {
+        "set_temperature": [{
+            "variables": {
+                "legacy_limit": "{{ <LegacyLimit.MAX: 100> }}",
+            },
+        }],
+    },
+})
+climate = VirtualClimate(climate_config, False)
 vacuum = VirtualVacuum(
     VACUUM_SCHEMA({
         "name": "Docker Vacuum",
@@ -62,6 +82,14 @@ light = VirtualLight(
 )
 
 assert climate._native_templates["hvac_action"] == "{{ 'heating' }}"
+assert climate._value_template == "{{ 'heat' }}"
+assert climate._availability_template == "{{ True }}"
+assert climate._icon_template == "{{ 'mdi:fire' }}"
+assert climate._attribute_templates["source_type"] == "{{ 'virtual' }}"
+assert climate._event_hooks[0]["value_template"] == "{{ 'heat' }}"
+assert climate._command_actions["set_temperature"][0]["variables"] == {
+    "legacy_limit": "{{ 100 }}",
+}
 assert int(vacuum.supported_features) >= 0
 assert CameraEntityFeature.STREAM in camera.supported_features
 assert light.supported_color_modes == {

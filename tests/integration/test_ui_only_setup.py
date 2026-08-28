@@ -1185,6 +1185,82 @@ async def test_climate_edit_repairs_legacy_enum_repr_native_template(hass):
     assert saved[CONF_NATIVE_TEMPLATES]["hvac_action"] == "{{ 'heating' }}"
 
 
+async def test_device_tracker_edit_repairs_legacy_enum_repr_attribute_template(hass):
+    device_name = "Legacy Tracker"
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                device_name: [{
+                    CONF_PLATFORM: "device_tracker",
+                    CONF_NAME: "Person",
+                    CONF_INITIAL_VALUE: "home",
+                    CONF_INITIAL_AVAILABILITY: True,
+                    CONF_PERSISTENT: True,
+                    CONF_VALUE_TEMPLATE: (
+                        "{{ <DeviceTrackerState.HOME: 'home'> }}"
+                    ),
+                    CONF_AVAILABILITY_TEMPLATE: "{{ <LegacyFlag.YES: True> }}",
+                    CONF_ICON_TEMPLATE: "{{ <LegacyIcon.PERSON: 'mdi:account'> }}",
+                    CONF_ATTRIBUTE_TEMPLATES: {
+                        "device_trackers": (
+                            "{{ <DeviceTrackerSourceType.GPS: 'gps'> }}"
+                        ),
+                    },
+                    CONF_NATIVE_TEMPLATES: {
+                        "location": "{{ <DeviceTrackerState.HOME: 'home'> }}",
+                    },
+                    CONF_EVENT_HOOKS: [{
+                        "trigger": "event",
+                        "event_type": "legacy_tracker_update",
+                        CONF_VALUE_TEMPLATE: (
+                            "{{ <DeviceTrackerState.HOME: 'home'> }}"
+                        ),
+                        CONF_ATTRIBUTE_TEMPLATES: {
+                            "source_type": (
+                                "{{ <DeviceTrackerSourceType.GPS: 'gps'> }}"
+                            ),
+                        },
+                    }],
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_KEY: _entity_key(device_name, 0)},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {},
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    saved = result["data"][ATTR_DEVICES][device_name][0]
+    assert saved[CONF_VALUE_TEMPLATE] == "{{ 'home' }}"
+    assert saved[CONF_AVAILABILITY_TEMPLATE] == "{{ True }}"
+    assert saved[CONF_ICON_TEMPLATE] == "{{ 'mdi:account' }}"
+    assert saved[CONF_ATTRIBUTE_TEMPLATES]["device_trackers"] == "{{ 'gps' }}"
+    assert saved[CONF_NATIVE_TEMPLATES]["location"] == "{{ 'home' }}"
+    assert saved[CONF_EVENT_HOOKS][0][CONF_VALUE_TEMPLATE] == "{{ 'home' }}"
+    assert saved[CONF_EVENT_HOOKS][0][CONF_ATTRIBUTE_TEMPLATES][
+        "source_type"
+    ] == "{{ 'gps' }}"
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
 def test_common_service_schemas_reject_non_finite_values(value):
     with pytest.raises(vol.Invalid):
@@ -5529,6 +5605,35 @@ def test_state_only_invalid_templates_keep_current_values(hass):
         {CONF_AVAILABILITY_TEMPLATE: "{{ 'not-a-boolean' }}"},
         SimpleNamespace(data={}),
     )
+
+
+def test_state_only_entity_repairs_legacy_enum_repr_in_every_template_kind(hass):
+    entity = {
+        ATTR_ENTITY_ID: "tag.legacy_templates",
+        CONF_VALUE_TEMPLATE: "{{ <LegacyState.READY: 'ready'> }}",
+        CONF_AVAILABILITY_TEMPLATE: "{{ <LegacyFlag.YES: True> }}",
+        CONF_ICON_TEMPLATE: "{{ <LegacyIcon.TAG: 'mdi:tag'> }}",
+        CONF_NATIVE_TEMPLATES: {
+            "supported_features": "{{ <LegacyFeatures.SCAN: 8> }}",
+        },
+        CONF_ATTRIBUTE_TEMPLATES: {
+            "source_type": "{{ <LegacySource.VIRTUAL: 'virtual'> }}",
+        },
+    }
+    hass.states.async_set(
+        entity[ATTR_ENTITY_ID],
+        "old",
+        {ATTR_AVAILABLE: False},
+    )
+
+    _async_apply_state_only_templates(hass, entity)
+
+    state = hass.states.get(entity[ATTR_ENTITY_ID])
+    assert state.state == "ready"
+    assert state.attributes[ATTR_AVAILABLE] is True
+    assert state.attributes[CONF_ICON] == "mdi:tag"
+    assert state.attributes["supported_features"] == 8
+    assert state.attributes["source_type"] == "virtual"
 
     assert hass.states.get(entity[ATTR_ENTITY_ID]).attributes[ATTR_AVAILABLE] is True
 
