@@ -1372,7 +1372,7 @@ async def test_home_assistant_loads_korean_config_translations(hass):
     assert config_translations[
         "component.virtual_layer.config.step.entity.sections."
         "advanced_settings.data.event_hooks_json"
-    ] == "이벤트 훅 YAML"
+    ] == "이벤트 훅 Jinja 템플릿"
     assert "상태 변경" in config_translations[
         "component.virtual_layer.config.step.entity.sections."
         "advanced_settings.data_description.event_hooks_json"
@@ -3182,7 +3182,14 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
             "target": {ATTR_ENTITY_ID: "light.kitchen_lamp"},
         }],
     }
-    assert next(iter(result["data"][ATTR_DEVICES].values())) == [{
+    actual_entities = next(iter(result["data"][ATTR_DEVICES].values()))
+    for generated_field in (
+        CONF_EVENT_HOOKS,
+        CONF_ATTRIBUTE_SOURCES,
+        CONF_ATTRIBUTE_TEMPLATES,
+    ):
+        actual_entities[0].pop(generated_field, None)
+    assert actual_entities == [{
             CONF_PLATFORM: "light",
             "matter_light_type": "dimmable",
             CONF_NAME: "Kitchen Lamp",
@@ -3623,7 +3630,7 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
 
     assert defaults[CONF_PLATFORM] == "fan"
-    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == {}
+    assert "source_available" in defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]
     assert "percentage_step" in defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"]
 
     result = await hass.config_entries.options.async_configure(
@@ -3637,7 +3644,7 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = _first_stored_entity(result)
-    assert CONF_ATTRIBUTE_TEMPLATES not in entity
+    assert "source_available" in entity[CONF_ATTRIBUTE_TEMPLATES]
     assert entity["speed_count"] == 5
 
     runtime_config = {
@@ -3698,7 +3705,7 @@ async def test_options_flow_combines_xiaomi_fan_and_speed_number(hass):
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
 
     assert defaults[CONF_PLATFORM] == "fan"
-    assert defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] == {}
+    assert "source_available" in defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -3710,7 +3717,7 @@ async def test_options_flow_combines_xiaomi_fan_and_speed_number(hass):
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = _first_stored_entity(result)
-    assert CONF_ATTRIBUTE_TEMPLATES not in entity
+    assert "source_available" in entity[CONF_ATTRIBUTE_TEMPLATES]
     percentage_template = entity[CONF_NATIVE_TEMPLATES]["percentage"]
     assert Template(percentage_template, hass).async_render(parse_result=True) == 72
 
@@ -4000,6 +4007,12 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
     entity = _first_stored_entity(result)
     entity.pop(ATTR_ENTITY_KEY)
     entity.pop("auto_helper")
+    for generated_field in (
+        CONF_EVENT_HOOKS,
+        CONF_ATTRIBUTE_SOURCES,
+        CONF_ATTRIBUTE_TEMPLATES,
+    ):
+        entity.pop(generated_field, None)
     assert entity == {
         CONF_PLATFORM: "binary_sensor",
         CONF_NAME: "All Doors Ready",

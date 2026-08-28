@@ -67,7 +67,7 @@
           "initial_availability": "Initial availability used when no availability template is configured.",
           "persistent": "Restore the last state after Home Assistant restarts. Disable it to return to the initial value.",
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
-          "availability_template": "Optional Jinja template that returns whether the virtual entity is available.",
+          "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
           "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes."
         },
@@ -102,14 +102,14 @@
             "name": "Advanced settings",
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
-              "template_sources_json": "Template sources YAML",
-              "event_hooks_json": "Event hooks YAML",
-              "attributes_json": "Attributes YAML",
-              "attribute_sources_json": "Attribute sources YAML",
-              "attribute_templates_json": "Attribute templates YAML",
-              "native_templates_json": "Native property templates YAML",
-              "command_actions_json": "Command actions YAML",
-              "domain_options_json": "Domain options YAML"
+              "template_sources_json": "Template sources Jinja template",
+              "event_hooks_json": "Event hooks Jinja template",
+              "attributes_json": "Attributes Jinja template",
+              "attribute_sources_json": "Attribute sources Jinja template",
+              "attribute_templates_json": "Attribute templates Jinja template",
+              "native_templates_json": "Native property Jinja templates",
+              "command_actions_json": "Command actions Jinja template",
+              "domain_options_json": "Domain options Jinja template"
             },
             "data_description": {
               "template_sources_json": "Maps Jinja variable names to source states or attributes. YAML example:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nUse variables named source and battery in editable templates.\nMultiple sources:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nThen reference the variables from value_template.",
@@ -131,7 +131,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker selection strategy",
               "polygon_distance_meters": "Tracker grouping distance",
-              "polygon_tracker_rules_json": "Tracker rules YAML",
+              "polygon_tracker_rules_json": "Tracker rules Jinja templates",
               "polygon_away_state": "Outside-zone state",
               "matter_light_type": "Matter light device type"
             },
@@ -699,7 +699,7 @@
           "initial_availability": "Initial availability used when no availability template is configured.",
           "persistent": "Restore the last state after Home Assistant restarts. Disable it to return to the initial value.",
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
-          "availability_template": "Optional Jinja template that returns whether the virtual entity is available.",
+          "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
           "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes."
         },
@@ -734,14 +734,14 @@
             "name": "Advanced settings",
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
-              "template_sources_json": "Template sources YAML",
-              "event_hooks_json": "Event hooks YAML",
-              "attributes_json": "Attributes YAML",
-              "attribute_sources_json": "Attribute sources YAML",
-              "attribute_templates_json": "Attribute templates YAML",
-              "native_templates_json": "Native property templates YAML",
-              "command_actions_json": "Command actions YAML",
-              "domain_options_json": "Domain options YAML"
+              "template_sources_json": "Template sources Jinja template",
+              "event_hooks_json": "Event hooks Jinja template",
+              "attributes_json": "Attributes Jinja template",
+              "attribute_sources_json": "Attribute sources Jinja template",
+              "attribute_templates_json": "Attribute templates Jinja template",
+              "native_templates_json": "Native property Jinja templates",
+              "command_actions_json": "Command actions Jinja template",
+              "domain_options_json": "Domain options Jinja template"
             },
             "data_description": {
               "template_sources_json": "Maps Jinja variable names to source states or attributes. YAML example:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nUse variables named source and battery in editable templates.\nMultiple sources:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nThen reference the variables from value_template.",
@@ -763,7 +763,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker selection strategy",
               "polygon_distance_meters": "Tracker grouping distance",
-              "polygon_tracker_rules_json": "Tracker rules YAML",
+              "polygon_tracker_rules_json": "Tracker rules Jinja templates",
               "polygon_away_state": "Outside-zone state",
               "matter_light_type": "Matter light device type"
             },
@@ -1245,7 +1245,7 @@
           "initial_availability": "Initial availability used when no availability template is configured.",
           "persistent": "Restore the last state after Home Assistant restarts. Disable it to return to the initial value.",
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
-          "availability_template": "Optional Jinja template that returns whether the virtual entity is available.",
+          "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
           "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes."
         },
@@ -1280,14 +1280,14 @@
             "name": "Advanced settings",
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
-              "template_sources_json": "Template sources YAML",
-              "event_hooks_json": "Event hooks YAML",
-              "attributes_json": "Attributes YAML",
-              "attribute_sources_json": "Attribute sources YAML",
-              "attribute_templates_json": "Attribute templates YAML",
-              "native_templates_json": "Native property templates YAML",
-              "command_actions_json": "Command actions YAML",
-              "domain_options_json": "Domain options YAML"
+              "template_sources_json": "Template sources Jinja template",
+              "event_hooks_json": "Event hooks Jinja template",
+              "attributes_json": "Attributes Jinja template",
+              "attribute_sources_json": "Attribute sources Jinja template",
+              "attribute_templates_json": "Attribute templates Jinja template",
+              "native_templates_json": "Native property Jinja templates",
+              "command_actions_json": "Command actions Jinja template",
+              "domain_options_json": "Domain options Jinja template"
             },
             "data_description": {
               "template_sources_json": "Maps Jinja variable names to source states or attributes. YAML example:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nUse variables named source and battery in editable templates.\nMultiple sources:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nThen reference the variables from value_template.",
@@ -1309,7 +1309,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker selection strategy",
               "polygon_distance_meters": "Tracker grouping distance",
-              "polygon_tracker_rules_json": "Tracker rules YAML",
+              "polygon_tracker_rules_json": "Tracker rules Jinja templates",
               "polygon_away_state": "Outside-zone state",
               "matter_light_type": "Matter light device type"
             },

@@ -1029,8 +1029,27 @@ _DOMAIN_OPTION_RESERVED_KEYS = {
 MULTILINE_TEXT_SELECTOR = selector.TextSelector(
     selector.TextSelectorConfig(multiline=True),
 )
-YAML_OBJECT_SELECTOR = selector.ObjectSelector()
-TEMPLATE_SELECTOR = selector.TemplateSelector()
+
+
+class _JinjaLogicSelector(selector.TemplateSelector):
+    """Template selector that can also round-trip legacy structured defaults."""
+
+    def __call__(self, data: Any) -> Any:
+        if isinstance(data, (dict, list)):
+            return data
+        # Defer compilation to the config-flow validator so errors can be
+        # attached to the correct advanced field (and legacy JSON text can be
+        # migrated by the existing parser).
+        if isinstance(data, str):
+            return data
+        return super().__call__(data)
+
+
+# All Jinja editors defer compilation to config-flow validation, matching the
+# behavior of Home Assistant template entity forms while retaining legacy
+# structured values for advanced fields.
+TEMPLATE_SELECTOR = _JinjaLogicSelector()
+JINJA_LOGIC_SELECTOR = TEMPLATE_SELECTOR
 ICON_SELECTOR = selector.IconSelector(selector.IconSelectorConfig())
 ENTITY_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(
@@ -1670,31 +1689,31 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         _editable_optional(
             CONF_TEMPLATE_SOURCES_JSON,
             _yaml_editor_default(defaults.get(CONF_TEMPLATE_SOURCES_JSON)),
-        ): YAML_OBJECT_SELECTOR,
+        ): JINJA_LOGIC_SELECTOR,
         _editable_optional(
             CONF_EVENT_HOOKS_JSON,
             _yaml_editor_default(defaults.get(CONF_EVENT_HOOKS_JSON)),
-        ): YAML_OBJECT_SELECTOR,
+        ): JINJA_LOGIC_SELECTOR,
         _editable_optional(
             CONF_ATTRIBUTES_JSON,
             _yaml_editor_default(defaults.get(CONF_ATTRIBUTES_JSON)),
-        ): YAML_OBJECT_SELECTOR,
+        ): JINJA_LOGIC_SELECTOR,
         _editable_optional(
             CONF_ATTRIBUTE_SOURCES_JSON,
             _yaml_editor_default(defaults.get(CONF_ATTRIBUTE_SOURCES_JSON)),
-        ): YAML_OBJECT_SELECTOR,
+        ): JINJA_LOGIC_SELECTOR,
         _editable_optional(
             CONF_ATTRIBUTE_TEMPLATES_JSON,
             _yaml_editor_default(defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON)),
-        ): YAML_OBJECT_SELECTOR,
+        ): JINJA_LOGIC_SELECTOR,
         _editable_optional(
             CONF_COMMAND_ACTIONS_JSON,
             _yaml_editor_default(defaults.get(CONF_COMMAND_ACTIONS_JSON)),
-        ): YAML_OBJECT_SELECTOR,
+        ): JINJA_LOGIC_SELECTOR,
         _editable_optional(
             CONF_DOMAIN_OPTIONS_JSON,
             _yaml_editor_default(defaults.get(CONF_DOMAIN_OPTIONS_JSON)),
-        ): YAML_OBJECT_SELECTOR,
+        ): JINJA_LOGIC_SELECTOR,
     }
     if platform not in DOMAIN_NATIVE_TEMPLATE_PROPERTIES:
         advanced_schema[
@@ -1702,7 +1721,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 CONF_NATIVE_TEMPLATES_JSON,
                 _yaml_editor_default(defaults.get(CONF_NATIVE_TEMPLATES_JSON)),
             )
-        ] = YAML_OBJECT_SELECTOR
+        ] = JINJA_LOGIC_SELECTOR
     schema = {
         vol.Required(
             CONF_DEVICE_NAME, default=defaults.get(CONF_DEVICE_NAME, "Virtual Device")
@@ -1760,7 +1779,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 _editable_optional(
                     CONF_POLYGON_GEOJSON_JSON,
                     _yaml_editor_default(defaults.get(CONF_POLYGON_GEOJSON_JSON)),
-                ): YAML_OBJECT_SELECTOR,
+                ): JINJA_LOGIC_SELECTOR,
                 vol.Optional(
                     CONF_POLYGON_FILES_TEXT,
                     default=defaults.get(CONF_POLYGON_FILES_TEXT, ""),
@@ -1783,7 +1802,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     _yaml_editor_default(
                         defaults.get(CONF_POLYGON_TRACKER_RULES_JSON)
                     ),
-                ): YAML_OBJECT_SELECTOR,
+                ): JINJA_LOGIC_SELECTOR,
                 vol.Optional(
                     CONF_POLYGON_AWAY_STATE_INPUT,
                     default=defaults.get(CONF_POLYGON_AWAY_STATE_INPUT, "not_home"),
@@ -5761,6 +5780,39 @@ def _reference_entity_defaults(
         attribute_templates.setdefault(attribute_name, template)
     if attribute_templates:
         defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] = _json_default(attribute_templates)
+
+    # Keep every source-backed advanced editor useful on first open. These
+    # helpers are deliberately conservative: the event hook is disabled until
+    # the user enables it, while attribute helpers are immediately renderable.
+    if entity_ids:
+        primary_source = entity_ids[0]
+        defaults.setdefault(
+            CONF_ATTRIBUTE_SOURCES_JSON,
+            _json_default({"source_state": f"{primary_source}.state"}),
+        )
+        defaults.setdefault(
+            CONF_ATTRIBUTE_TEMPLATES_JSON,
+            _json_default({
+                "source_available": (
+                    "{{ states("
+                    + repr(primary_source)
+                    + ") not in ['unknown', 'unavailable'] }}"
+                )
+            }),
+        )
+        defaults.setdefault(
+            CONF_EVENT_HOOKS_JSON,
+            _json_default([
+                {
+                    "enabled": False,
+                    "trigger": "state",
+                    ATTR_ENTITY_ID: [primary_source],
+                    CONF_ATTRIBUTE_TEMPLATES: {
+                        "last_triggered_state": "{{ trigger.to_state.state }}"
+                    },
+                }
+            ]),
+        )
 
     if boiler_profile is not None:
         climate_index, _hot_water_switch_id = boiler_profile

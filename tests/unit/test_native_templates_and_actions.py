@@ -941,6 +941,52 @@ async def test_command_action_defaults_to_optimistic_native_update(hass):
     entity.async_write_ha_state.assert_called_once()
 
 
+async def test_command_action_supports_complex_jinja_templates(hass):
+    calls = []
+
+    hass.services.async_register(
+        "virtual_test",
+        "capture_complex",
+        lambda call: calls.append(dict(call.data)),
+    )
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            _base(
+                "fan.complex_action",
+                "off",
+                speed_count=10,
+                **{
+                    CONF_COMMAND_ACTIONS: {
+                        "set_percentage": [
+                            {
+                                "action": "virtual_test.capture_complex",
+                                "data": {
+                                    "requested": (
+                                        "{% set adjusted = percentage | float(0) %}"
+                                        "{{ (adjusted * 2) | round(0) | int }}"
+                                    ),
+                                    "mode": (
+                                        "{% if percentage >= 50 %}high"
+                                        "{% else %}low{% endif %}"
+                                    ),
+                                },
+                            }
+                        ]
+                    }
+                },
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    await entity.async_set_percentage(35)
+
+    assert calls == [{"requested": 80, "mode": "low"}]
+
+
 async def test_command_actions_run_for_independent_concurrent_commands(hass):
     calls = []
     both_started = asyncio.Event()

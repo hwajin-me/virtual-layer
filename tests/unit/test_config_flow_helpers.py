@@ -896,7 +896,7 @@ def test_reference_fan_derives_speed_count_from_percentage_step(hass):
     template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"]
 
     assert Template(template, hass).async_render(parse_result=True) == 4
-    assert defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "") == ""
+    assert "source_available" in _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
 
 
 def test_multiple_fan_speed_count_helpers_remain_valid_jinja(hass):
@@ -907,7 +907,7 @@ def test_multiple_fan_speed_count_helpers_remain_valid_jinja(hass):
     template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"]
 
     assert Template(template, hass).async_render(parse_result=True) == 4.5
-    assert defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "") == ""
+    assert "source_available" in _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
 
 
 def test_reference_calendar_builds_event_from_standard_source_attributes(hass):
@@ -937,7 +937,7 @@ def test_reference_calendar_builds_event_from_standard_source_attributes(hass):
         "location": "Clinic",
         "description": "Bring documents",
     }
-    assert defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "") == ""
+    assert "source_available" in _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
 
 
 def test_reference_event_copies_event_attributes_mapping(hass):
@@ -954,7 +954,7 @@ def test_reference_event_copies_event_attributes_mapping(hass):
 
     assert attributes["event_type"] == "pressed"
     assert attributes["button"] == 1
-    assert defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "") == ""
+    assert "source_available" in _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
 
 
 def test_reference_calendar_keeps_non_event_vendor_attributes(hass):
@@ -1284,7 +1284,7 @@ def test_xiaomi_fan_uses_number_speed_only_for_favorite_and_manual_modes(hass):
 
     assert defaults[CONF_PLATFORM] == "fan"
     assert defaults[CONF_INITIAL_VALUE] == "on"
-    assert defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "") == ""
+    assert "source_available" in _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
     percentage_template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["percentage"]
     Template(percentage_template, hass).ensure_valid()
     assert Template(percentage_template, hass).async_render(parse_result=True) == 72
@@ -5559,7 +5559,7 @@ def test_generated_helpers_are_editable_values_and_yaml_suggestions(hass):
     }
     command_marker, command_selector = advanced_fields[CONF_COMMAND_ACTIONS_JSON]
 
-    assert isinstance(command_selector, selector.ObjectSelector)
+    assert isinstance(command_selector, selector.TemplateSelector)
     assert command_marker.description["suggested_value"] == _yaml_value(
         generated[CONF_COMMAND_ACTIONS_JSON]
     )
@@ -5580,6 +5580,47 @@ def test_generated_helpers_are_editable_values_and_yaml_suggestions(hass):
     assert percentage_marker.description["suggested_value"] == form_data[
         CONF_NATIVE_VALUE_TEMPLATES
     ]["percentage"]
+
+
+@pytest.mark.parametrize("platform", VIRTUAL_ENTITY_DOMAINS)
+def test_every_entity_domain_exposes_advanced_logic_as_jinja_editors(platform):
+    schema = _entity_schema({CONF_PLATFORM: platform})
+    schema({})
+    sections = {
+        marker.schema: validator
+        for marker, validator in schema.schema.items()
+        if isinstance(marker, vol.Marker) and isinstance(validator, section)
+    }
+    advanced = sections[CONF_ADVANCED_SETTINGS].schema
+    advanced_fields = {
+        marker.schema: validator
+        for marker, validator in advanced.schema.items()
+        if isinstance(marker, vol.Marker)
+    }
+
+    assert advanced_fields
+    assert all(
+        isinstance(validator, selector.TemplateSelector)
+        for validator in advanced_fields.values()
+    )
+
+
+def test_source_defaults_generate_all_editable_advanced_helpers(hass):
+    hass.states.async_set("sensor.primary", "42", {"friendly_name": "Primary"})
+    defaults = _reference_entity_defaults(hass, ["sensor.primary"])
+
+    assert _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON]) == {
+        "primary": "sensor.primary"
+    }
+    assert _yaml_value(defaults[CONF_ATTRIBUTE_SOURCES_JSON]) == {
+        "source_state": "sensor.primary.state"
+    }
+    attribute_templates = _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
+    assert "source_available" in attribute_templates
+    assert "states('sensor.primary')" in attribute_templates["source_available"]
+    event_hooks = _yaml_value(defaults[CONF_EVENT_HOOKS_JSON])
+    assert event_hooks[0]["enabled"] is False
+    assert event_hooks[0][CONF_ATTRIBUTE_TEMPLATES]["last_triggered_state"]
 
 
 def test_entity_sections_carry_actual_values_and_every_marker_has_a_suggestion(hass):

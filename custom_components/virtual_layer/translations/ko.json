@@ -67,7 +67,7 @@
           "initial_availability": "가용성 템플릿이 없을 때 사용하는 초기 가용 상태입니다.",
           "persistent": "Home Assistant 재시작 후 마지막 상태를 복원합니다. 끄면 초기값으로 돌아갑니다.",
           "value_template": "엔티티의 주 상태를 만드는 Jinja 템플릿입니다. 소스 엔티티를 복사하면 helper가 생성되며, 이후 소스 변경 시 직접 수정한 템플릿은 보존됩니다.",
-          "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다.",
+          "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다. 예시 식(앞뒤를 Jinja 구분자로 감싸세요): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요."
         },
@@ -102,14 +102,14 @@
             "name": "고급 설정",
             "description": "선택적 소스 매핑, 속성, 이벤트 훅, 명령 액션 및 통합별 설정입니다.",
             "data": {
-              "template_sources_json": "템플릿 소스 YAML",
-              "event_hooks_json": "이벤트 훅 YAML",
-              "attributes_json": "속성 YAML",
-              "attribute_sources_json": "속성 소스 YAML",
-              "attribute_templates_json": "속성 템플릿 YAML",
-              "native_templates_json": "네이티브 속성 템플릿 YAML",
-              "command_actions_json": "명령 Action YAML",
-              "domain_options_json": "도메인 옵션 YAML"
+              "template_sources_json": "템플릿 소스 Jinja 템플릿",
+              "event_hooks_json": "이벤트 훅 Jinja 템플릿",
+              "attributes_json": "속성 Jinja 템플릿",
+              "attribute_sources_json": "속성 소스 Jinja 템플릿",
+              "attribute_templates_json": "속성 템플릿 Jinja 템플릿",
+              "native_templates_json": "네이티브 속성 템플릿 Jinja 템플릿",
+              "command_actions_json": "명령 Action Jinja 템플릿",
+              "domain_options_json": "도메인 옵션 Jinja 템플릿"
             },
             "data_description": {
               "template_sources_json": "Jinja 변수 이름을 소스 상태 또는 속성에 연결합니다. YAML 예시:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\n편집 가능한 템플릿에서 source와 battery라는 변수로 사용합니다.\n다중 소스 예시:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\n이후 value_template에서 이 변수들을 참조합니다.",
@@ -131,7 +131,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker 위치 선정 방식",
               "polygon_distance_meters": "Tracker 그룹 거리",
-              "polygon_tracker_rules_json": "Tracker 규칙 YAML",
+              "polygon_tracker_rules_json": "Tracker 규칙 Jinja 템플릿",
               "polygon_away_state": "영역 밖 상태",
               "matter_light_type": "Matter 조명 장치 유형"
             },
@@ -699,7 +699,7 @@
           "initial_availability": "가용성 템플릿이 없을 때 사용하는 초기 가용 상태입니다.",
           "persistent": "Home Assistant 재시작 후 마지막 상태를 복원합니다. 끄면 초기값으로 돌아갑니다.",
           "value_template": "엔티티의 주 상태를 만드는 Jinja 템플릿입니다. 소스 엔티티를 복사하면 helper가 생성되며, 이후 소스 변경 시 직접 수정한 템플릿은 보존됩니다.",
-          "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다.",
+          "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다. 예시 식(앞뒤를 Jinja 구분자로 감싸세요): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요."
         },
@@ -734,14 +734,14 @@
             "name": "고급 설정",
             "description": "선택적 소스 매핑, 속성, 이벤트 훅, 명령 액션 및 통합별 설정입니다.",
             "data": {
-              "template_sources_json": "템플릿 소스 YAML",
-              "event_hooks_json": "이벤트 훅 YAML",
-              "attributes_json": "속성 YAML",
-              "attribute_sources_json": "속성 소스 YAML",
-              "attribute_templates_json": "속성 템플릿 YAML",
-              "native_templates_json": "네이티브 속성 템플릿 YAML",
-              "command_actions_json": "명령 Action YAML",
-              "domain_options_json": "도메인 옵션 YAML"
+              "template_sources_json": "템플릿 소스 Jinja 템플릿",
+              "event_hooks_json": "이벤트 훅 Jinja 템플릿",
+              "attributes_json": "속성 Jinja 템플릿",
+              "attribute_sources_json": "속성 소스 Jinja 템플릿",
+              "attribute_templates_json": "속성 템플릿 Jinja 템플릿",
+              "native_templates_json": "네이티브 속성 템플릿 Jinja 템플릿",
+              "command_actions_json": "명령 Action Jinja 템플릿",
+              "domain_options_json": "도메인 옵션 Jinja 템플릿"
             },
             "data_description": {
               "template_sources_json": "Jinja 변수 이름을 소스 상태 또는 속성에 연결합니다. YAML 예시:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\n편집 가능한 템플릿에서 source와 battery라는 변수로 사용합니다.\n다중 소스 예시:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\n이후 value_template에서 이 변수들을 참조합니다.",
@@ -763,7 +763,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker 위치 선정 방식",
               "polygon_distance_meters": "Tracker 그룹 거리",
-              "polygon_tracker_rules_json": "Tracker 규칙 YAML",
+              "polygon_tracker_rules_json": "Tracker 규칙 Jinja 템플릿",
               "polygon_away_state": "영역 밖 상태",
               "matter_light_type": "Matter 조명 장치 유형"
             },
@@ -1245,7 +1245,7 @@
           "initial_availability": "가용성 템플릿이 없을 때 사용하는 초기 가용 상태입니다.",
           "persistent": "Home Assistant 재시작 후 마지막 상태를 복원합니다. 끄면 초기값으로 돌아갑니다.",
           "value_template": "엔티티의 주 상태를 만드는 Jinja 템플릿입니다. 소스 엔티티를 복사하면 helper가 생성되며, 이후 소스 변경 시 직접 수정한 템플릿은 보존됩니다.",
-          "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다.",
+          "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다. 예시 식(앞뒤를 Jinja 구분자로 감싸세요): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
           "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요."
         },
@@ -1280,14 +1280,14 @@
             "name": "고급 설정",
             "description": "선택적 소스 매핑, 속성, 이벤트 훅, 명령 액션 및 통합별 설정입니다.",
             "data": {
-              "template_sources_json": "템플릿 소스 YAML",
-              "event_hooks_json": "이벤트 훅 YAML",
-              "attributes_json": "속성 YAML",
-              "attribute_sources_json": "속성 소스 YAML",
-              "attribute_templates_json": "속성 템플릿 YAML",
-              "native_templates_json": "네이티브 속성 템플릿 YAML",
-              "command_actions_json": "명령 Action YAML",
-              "domain_options_json": "도메인 옵션 YAML"
+              "template_sources_json": "템플릿 소스 Jinja 템플릿",
+              "event_hooks_json": "이벤트 훅 Jinja 템플릿",
+              "attributes_json": "속성 Jinja 템플릿",
+              "attribute_sources_json": "속성 소스 Jinja 템플릿",
+              "attribute_templates_json": "속성 템플릿 Jinja 템플릿",
+              "native_templates_json": "네이티브 속성 템플릿 Jinja 템플릿",
+              "command_actions_json": "명령 Action Jinja 템플릿",
+              "domain_options_json": "도메인 옵션 Jinja 템플릿"
             },
             "data_description": {
               "template_sources_json": "Jinja 변수 이름을 소스 상태 또는 속성에 연결합니다. YAML 예시:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\n편집 가능한 템플릿에서 source와 battery라는 변수로 사용합니다.\n다중 소스 예시:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\n이후 value_template에서 이 변수들을 참조합니다.",
@@ -1309,7 +1309,7 @@
               "polygon_person": "Person",
               "polygon_strategy": "Tracker 위치 선정 방식",
               "polygon_distance_meters": "Tracker 그룹 거리",
-              "polygon_tracker_rules_json": "Tracker 규칙 YAML",
+              "polygon_tracker_rules_json": "Tracker 규칙 Jinja 템플릿",
               "polygon_away_state": "영역 밖 상태",
               "matter_light_type": "Matter 조명 장치 유형"
             },
