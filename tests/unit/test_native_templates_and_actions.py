@@ -1036,6 +1036,18 @@ async def test_command_actions_run_for_independent_concurrent_commands(hass):
     assert entity.percentage == 0
 
 
+async def test_entity_cleanup_ignores_already_removed_one_time_listeners(hass):
+    entity = VirtualFan(FAN_SCHEMA(_base("fan.cleanup", "off")), False)
+    entity.hass = hass
+    entity._refresh_remove_listeners = [Mock(side_effect=ValueError)]
+    entity._hook_debounce_cancelers = {0: Mock(side_effect=ValueError)}
+
+    await entity.async_will_remove_from_hass()
+
+    assert entity._refresh_remove_listeners == []
+    assert entity._hook_debounce_cancelers == {}
+
+
 async def test_command_action_chain_still_prevents_recursive_reentry(hass):
     calls = 0
     entity = None

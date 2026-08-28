@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import timedelta
+from enum import Enum
 from types import MappingProxyType
 
 import pytest
@@ -1866,6 +1867,15 @@ def test_json_default_sanitizes_values_that_cannot_be_saved_by_home_assistant():
     assert sorted(result["set"]) == ["one", "two"]
     assert result["too_large"] is None
     assert result["not_finite"] == "nan"
+
+
+def test_json_default_normalizes_string_enum_attributes():
+    class CameraAttribute(str, Enum):
+        MOTION_DETECTION = "motion_detection"
+
+    result = _yaml_value(_json_default({"attribute": CameraAttribute.MOTION_DETECTION}))
+
+    assert result == {"attribute": "motion_detection"}
 
 
 def test_literal_template_serializes_nested_enum_values_without_python_repr(hass):

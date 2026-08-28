@@ -3723,6 +3723,12 @@ def _json_safe(value, _seen=None, _depth=0):
         return None
     if isinstance(value, Enum):
         return _json_safe(value.value, _seen, _depth + 1)
+    # Some integration state attributes expose enum-like values that inherit
+    # from ``str`` and therefore pass json.dumps unchanged. Normalize those
+    # values before YAML serialization as well.
+    enum_value = getattr(value, "value", None)
+    if enum_value is not None and type(value) is not type(enum_value):
+        return _json_safe(enum_value, _seen, _depth + 1)
     try:
         json.dumps(value, allow_nan=False)
         json_bytes(value)

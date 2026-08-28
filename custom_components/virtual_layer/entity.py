@@ -472,9 +472,17 @@ class VirtualEntity(RestoreEntity):
             await script.async_stop()
         self._command_scripts = {}
         for remove_listener in self._refresh_remove_listeners:
-            remove_listener()
+            try:
+                remove_listener()
+            except (KeyError, ValueError):
+                # One-time listeners remove themselves after firing. Their
+                # stale callback may still be present in our cleanup list.
+                pass
         for remove_listener in self._hook_debounce_cancelers.values():
-            remove_listener()
+            try:
+                remove_listener()
+            except (KeyError, ValueError):
+                pass
         self._refresh_remove_listeners = []
         self._hook_debounce_cancelers = {}
         await super().async_will_remove_from_hass()
