@@ -4532,7 +4532,7 @@ def _xiaomi_fan_number_profile(
     number_indexes = [
         index
         for index, entity_id in enumerate(entity_ids)
-        if entity_id.startswith("number.")
+        if entity_id.split(".", 1)[0] in {"input_number", "number"}
     ]
     if len(fan_indexes) != 1 or len(number_indexes) != 1:
         return None
@@ -4550,20 +4550,183 @@ def _xiaomi_fan_number_profile(
     return fan_indexes[0], number_indexes[0]
 
 
+def _finite_source_number(value: Any) -> float | None:
+    """Return a finite source capability value or unknown."""
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _fan_number_speed_kind(number_entity_id: str, number_state) -> str:
+    """Classify a separate fan-speed number as percent, level, or RPM."""
+    attributes = number_state.attributes
+    unit = str(attributes.get(CONF_UNIT_OF_MEASUREMENT, "")).strip().lower()
+    identity = " ".join(
+        (
+            number_entity_id,
+            str(attributes.get(ATTR_FRIENDLY_NAME, "")),
+            unit,
+        )
+    ).lower()
+    minimum = _finite_source_number(attributes.get("min"))
+    maximum = _finite_source_number(attributes.get("max"))
+
+    if unit in {"%", "percent", "percentage"} or (
+        minimum == 0 and maximum == 100
+    ):
+        return "percentage"
+    if (
+        unit in {"rpm", "r/min", "rev/min"}
+        or re.search(r"(^|[^a-z])rpm([^a-z]|$)", identity)
+        or maximum is not None
+        and maximum > 100
+    ):
+        return "rpm"
+    return "level"
+
+
+def _xiaomi_fan_speed_count_template(
+    number_entity_id: str,
+    speed_kind: str,
+) -> str:
+    """Build a fan speed-count helper appropriate for the number's scale."""
+    if speed_kind == "rpm":
+        # RPM ranges often contain thousands of integer values. Exposing every
+        # RPM as a discrete fan speed makes HA's percentage step unusably tiny.
+        return "{{ 100 }}"
+    minimum = f"state_attr({number_entity_id!r}, 'min') | float(0)"
+    maximum = f"state_attr({number_entity_id!r}, 'max') | float(100)"
+    step = f"state_attr({number_entity_id!r}, 'step') | float(1)"
+    if speed_kind == "percentage":
+        return (
+            "{% set step = " + step + " %}"
+            "{{ ([1, (100 / step) | round(0) | int] | max) if step > 0 else 100 }}"
+        )
+    return (
+        "{% set minimum = " + minimum + " %}"
+        "{% set maximum = " + maximum + " %}"
+        "{% set step = " + step + " %}"
+        "{{ ((((maximum - minimum) / step) | round(0) | int) + 1) "
+        "if step > 0 and maximum >= minimum else 100 }}"
+    )
+
+
 def _xiaomi_fan_percentage_template(
     fan_entity_id: str,
     number_entity_id: str,
+    speed_kind: str,
 ) -> str:
-    """Use Xiaomi's separate speed number in Favorite and Manual modes."""
-    return (
+    """Normalize a separate percent, level, or RPM number for HA's fan UI."""
+    prefix = (
         "{% set mode = state_attr(" + repr(fan_entity_id)
         + ", 'preset_mode') | string | lower %}"
-        "{% set number_speed = states(" + repr(number_entity_id)
-        + ") | float(none) %}"
-        "{{ number_speed if mode in ['favorite', 'manual'] "
-        "and number_speed is not none else state_attr("
-        + repr(fan_entity_id) + ", 'percentage') }}"
+        "{% set raw = states(" + repr(number_entity_id) + ") | float(none) %}"
+        "{% set minimum = state_attr(" + repr(number_entity_id)
+        + ", 'min') | float(0) %}"
+        "{% set maximum = state_attr(" + repr(number_entity_id)
+        + ", 'max') | float(100) %}"
+        "{% set step = state_attr(" + repr(number_entity_id)
+        + ", 'step') | float(1) %}"
     )
+    fallback = "state_attr(" + repr(fan_entity_id) + ", 'percentage')"
+    if speed_kind == "percentage":
+        normalized = "[0, [100, raw] | min] | max | round(0) | int"
+    elif speed_kind == "rpm":
+        normalized = (
+            "1 if raw <= minimum else "
+            "(100 if raw >= maximum else "
+            "(1 + ((raw - minimum) * 99 / (maximum - minimum))) | round(0) | int)"
+        )
+    else:
+        normalized = (
+            "{% set count = (((maximum - minimum) / step) | round(0) | int) + 1 %}"
+            "{% set index = (((raw - minimum) / step) | round(0) | int) + 1 %}"
+            "{{ ([1, [count, index] | min] | max) * 100 / count "
+            "if mode in ['favorite', 'manual'] and raw is not none and "
+            "step > 0 and maximum >= minimum else " + fallback + " }}"
+        )
+        return prefix + normalized
+    return (
+        prefix
+        + "{{ (" + normalized + ") if mode in ['favorite', 'manual'] "
+        "and raw is not none and maximum > minimum else " + fallback + " }}"
+    )
+
+
+def _xiaomi_fan_number_value_template(
+    number_entity_id: str,
+    speed_kind: str,
+) -> str:
+    """Convert a requested HA fan percentage back to the source number scale."""
+    prefix = (
+        "{% set requested = [0, [100, percentage | float(0)] | min] | max %}"
+        "{% set minimum = state_attr(" + repr(number_entity_id)
+        + ", 'min') | float(0) %}"
+        "{% set maximum = state_attr(" + repr(number_entity_id)
+        + ", 'max') | float(100) %}"
+        "{% set step = state_attr(" + repr(number_entity_id)
+        + ", 'step') | float(1) %}"
+    )
+    if speed_kind == "percentage":
+        raw = "requested"
+    elif speed_kind == "rpm":
+        raw = "minimum if requested <= 1 else minimum + ((requested - 1) * (maximum - minimum) / 99)"
+    else:
+        raw = (
+            "minimum + (((((requested * ((((maximum - minimum) / step) | round(0) | int) + 1) "
+            "/ 100) - 1) | round(0) | int)) * step)"
+        )
+    return (
+        prefix
+        + "{% set raw = " + raw + " %}"
+        "{{ minimum + (((((raw - minimum) / step) + 0.5) | int) * step) "
+        "if step > 0 and maximum >= minimum else raw }}"
+    )
+
+
+def _xiaomi_fan_command_actions(
+    fan_entity_id: str,
+    number_entity_id: str,
+    speed_kind: str,
+    actions: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Route fan percentage writes to the range number in manual modes."""
+    result = dict(actions)
+    number_domain = number_entity_id.split(".", 1)[0]
+    choose: dict[str, Any] = {
+        "choose": [{
+            "conditions": (
+                "{{ state_attr(" + repr(fan_entity_id)
+                + ", 'preset_mode') | string | lower in ['favorite', 'manual'] "
+                "and percentage | float(0) > 0 }}"
+            ),
+            "sequence": [{
+                "action": f"{number_domain}.set_value",
+                "target": {ATTR_ENTITY_ID: number_entity_id},
+                "data": {
+                    "value": _xiaomi_fan_number_value_template(
+                        number_entity_id,
+                        speed_kind,
+                    )
+                },
+            }],
+        }],
+    }
+    turn_off = result.get("turn_off")
+    if isinstance(turn_off, list) and turn_off:
+        choose["choose"].append({
+            "conditions": "{{ percentage | float(0) == 0 }}",
+            "sequence": turn_off,
+        })
+    existing = result.get("set_percentage")
+    if isinstance(existing, list) and existing:
+        choose["default"] = existing
+    result["set_percentage"] = [choose]
+    return result
 
 
 def _xiaomi_fan_availability_template(
@@ -5273,6 +5436,18 @@ def _reference_entity_defaults(
         if platform == "humidifier" and humidifier_component_profile is not None
         else _source_command_actions(platform, entity_ids, states)
     )
+    if fan_number_profile is not None:
+        fan_index, number_index = fan_number_profile
+        speed_kind = _fan_number_speed_kind(
+            entity_ids[number_index],
+            states[number_index],
+        )
+        source_command_actions = _xiaomi_fan_command_actions(
+            entity_ids[fan_index],
+            entity_ids[number_index],
+            speed_kind,
+            source_command_actions,
+        )
     if source_command_actions:
         defaults[CONF_COMMAND_ACTIONS_JSON] = _json_default(
             source_command_actions,
@@ -5414,6 +5589,10 @@ def _reference_entity_defaults(
         })
     elif fan_number_profile is not None:
         fan_index, number_index = fan_number_profile
+        speed_kind = _fan_number_speed_kind(
+            entity_ids[number_index],
+            states[number_index],
+        )
         native_templates = _native_reference_templates(
             platform,
             [entity_ids[fan_index]],
@@ -5422,6 +5601,11 @@ def _reference_entity_defaults(
         native_templates["percentage"] = _xiaomi_fan_percentage_template(
             entity_ids[fan_index],
             entity_ids[number_index],
+            speed_kind,
+        )
+        native_templates["speed_count"] = _xiaomi_fan_speed_count_template(
+            entity_ids[number_index],
+            speed_kind,
         )
     elif platform == "humidifier" and humidifier_component_profile is not None:
         native_templates = _humidifier_component_native_templates(

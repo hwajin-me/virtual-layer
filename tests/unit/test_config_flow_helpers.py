@@ -89,6 +89,7 @@ from custom_components.virtual_layer.config_flow import (
     _entity_key_from_stable_key,
     _entity_schema,
     _entity_type_schema,
+    _fan_number_speed_kind,
     _find_entity_by_selection_key,
     _flatten_entity_form_sections,
     _flow_errors,
@@ -1295,9 +1296,102 @@ def test_xiaomi_fan_uses_number_speed_only_for_favorite_and_manual_modes(hass):
     assert Template(percentage_template, hass).async_render(parse_result=True) == 35
 
     actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
-    assert actions["set_percentage"][0]["target"] == {
-        ATTR_ENTITY_ID: fan_entity_id,
+    speed_choice = actions["set_percentage"][0]
+    assert speed_choice["choose"][0]["sequence"][0]["target"] == {
+        ATTR_ENTITY_ID: number_entity_id,
     }
+    assert speed_choice["default"][0]["target"] == {ATTR_ENTITY_ID: fan_entity_id}
+
+
+@pytest.mark.parametrize(
+    (
+        "number_entity_id",
+        "attributes",
+        "state",
+        "expected_kind",
+        "expected_percentage",
+        "expected_count",
+        "expected_source_value",
+    ),
+    [
+        (
+            "number.air_purifier_favorite_speed",
+            {"min": 300, "max": 2200, "step": 1},
+            "1460",
+            "rpm",
+            61,
+            100,
+            1452,
+        ),
+        (
+            "input_number.air_purifier_favorite_level",
+            {"min": 1, "max": 5, "step": 1},
+            "3",
+            "level",
+            60,
+            5,
+            3,
+        ),
+        (
+            "number.air_purifier_favorite_percentage",
+            {"min": 0, "max": 100, "step": 5, "unit_of_measurement": "%"},
+            "65",
+            "percentage",
+            65,
+            20,
+            65,
+        ),
+    ],
+)
+def test_fan_speed_number_scale_is_detected_and_normalized(
+    hass,
+    number_entity_id,
+    attributes,
+    state,
+    expected_kind,
+    expected_percentage,
+    expected_count,
+    expected_source_value,
+):
+    fan_entity_id = "fan.air_purifier"
+    hass.states.async_set(
+        fan_entity_id,
+        "on",
+        {
+            "preset_mode": "Favorite",
+            "preset_modes": ["Auto", "Sleep", "Favorite"],
+            "supported_features": 56,
+        },
+    )
+    hass.states.async_set(number_entity_id, state, attributes)
+
+    defaults = _reference_entity_defaults(
+        hass,
+        [fan_entity_id, number_entity_id],
+    )
+
+    assert defaults[CONF_PLATFORM] == "fan"
+    templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert Template(templates["percentage"], hass).async_render(
+        parse_result=True
+    ) == expected_percentage
+    assert Template(templates["speed_count"], hass).async_render(
+        parse_result=True
+    ) == expected_count
+    assert _fan_number_speed_kind(
+        number_entity_id,
+        hass.states.get(number_entity_id),
+    ) == expected_kind
+
+    actions = json.loads(defaults[CONF_COMMAND_ACTIONS_JSON])
+    speed_action = actions["set_percentage"][0]["choose"][0]["sequence"][0]
+    assert speed_action["action"] == f"{number_entity_id.split('.', 1)[0]}.set_value"
+    value_template = speed_action["data"]["value"]
+    Template(value_template, hass).ensure_valid()
+    assert Template(value_template, hass).async_render(
+        {"percentage": expected_percentage},
+        parse_result=True,
+    ) == expected_source_value
 
 
 def test_build_entity_config_supports_composite_templates_and_attributes():
