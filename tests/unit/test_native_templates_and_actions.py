@@ -31,6 +31,7 @@ from homeassistant.components.vacuum import VacuumActivity, VacuumEntityFeature
 from homeassistant.components.water_heater import WaterHeaterEntityFeature
 from homeassistant.const import ATTR_ENTITY_ID, UnitOfTemperature
 from homeassistant.core import State
+from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
 
 from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
@@ -601,6 +602,32 @@ def test_climate_keeps_last_hvac_modes_for_empty_transient_template(rendered):
 
     assert entity._apply_native_template_value("hvac_modes", rendered) is False
     assert entity.hvac_modes == [HVACMode.OFF, HVACMode.COOL]
+
+
+def test_climate_extracts_hvac_modes_from_rendered_source_state(hass):
+    hass.states.async_set(
+        "climate.source",
+        "off",
+        {"hvac_modes": [HVACMode.OFF, HVACMode.COOL, HVACMode.DRY]},
+    )
+    rendered_source = Template(
+        "{{ states.climate.source }}",
+        hass,
+    ).async_render(parse_result=True)
+    entity = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.rendered_source",
+                "off",
+                hvac_modes=["off", "heat"],
+            )
+        ),
+        False,
+    )
+    entity._create_state(entity._config)
+
+    assert entity._apply_native_template_value("hvac_modes", rendered_source)
+    assert entity.hvac_modes == [HVACMode.OFF, HVACMode.COOL, HVACMode.DRY]
 
 
 def test_climate_repairs_legacy_enum_repr_native_template(hass):

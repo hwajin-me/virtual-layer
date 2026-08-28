@@ -5,8 +5,10 @@ This component provides support for a virtual climate entity.
 
 from __future__ import annotations
 
+import ast
 import logging
 import math
+import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -92,6 +94,47 @@ def _safe_hvac_mode(value) -> HVACMode | None:
         return _as_hvac_mode(value)
     except (TypeError, ValueError):
         return None
+
+
+def _rendered_hvac_modes(value):
+    """Extract HVAC modes from native lists or rendered source state objects."""
+    attributes = getattr(value, "attributes", None)
+    if isinstance(attributes, Mapping):
+        return attributes.get(CONF_HVAC_MODES)
+    if isinstance(value, Mapping) and CONF_HVAC_MODES in value:
+        return value.get(CONF_HVAC_MODES)
+    if isinstance(value, str) and "TemplateState(" in value:
+        match = re.search(r"(?:^|[; ])hvac_modes=\[(.*?)\](?:,| @)", value)
+        if match:
+            rendered_modes = match.group(1)
+            enum_modes = re.findall(
+                r"<HVACMode\.[A-Z_]+:\s*['\"]([^'\"]+)['\"]>",
+                rendered_modes,
+            )
+            if enum_modes:
+                return enum_modes
+            try:
+                parsed_modes = ast.literal_eval(f"[{rendered_modes}]")
+            except (SyntaxError, ValueError):
+                pass
+            else:
+                if isinstance(parsed_modes, list):
+                    return parsed_modes
+    if not isinstance(value, (list, tuple)):
+        return value
+
+    modes = []
+    for item in value:
+        item_attributes = getattr(item, "attributes", None)
+        if isinstance(item_attributes, Mapping):
+            item = item_attributes.get(CONF_HVAC_MODES)
+        elif isinstance(item, Mapping) and CONF_HVAC_MODES in item:
+            item = item.get(CONF_HVAC_MODES)
+        if isinstance(item, (list, tuple)):
+            modes.extend(mode for mode in item if mode not in modes)
+        else:
+            modes.append(item)
+    return modes
 
 
 def _as_hvac_action(value) -> HVACAction | None:
@@ -565,6 +608,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             "temperature": CONF_TARGET_TEMPERATURE,
         }.get(name, name)
         if name == CONF_HVAC_MODES:
+            value = _rendered_hvac_modes(value)
             empty_value = value is None or value is False or (
                 isinstance(value, str)
                 and value.strip().lower()
