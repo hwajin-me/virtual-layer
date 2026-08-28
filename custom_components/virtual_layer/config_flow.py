@@ -1059,13 +1059,135 @@ def _native_property_selector(platform: str, property_name: str):
     return TEMPLATE_SELECTOR
 
 
+_FORM_FIELD_EXAMPLES: dict[str, Any] = {
+    ATTR_GROUP_NAME: "Living Room",
+    CONF_DEVICE_NAME: "Living Room Air Purifier",
+    CONF_DEVICE_ID: "living-room-air-purifier",
+    CONF_DEVICE_MANUFACTURER: "Virtual Layer",
+    CONF_DEVICE_MODEL: "Composite Device",
+    CONF_DEVICE_SW_VERSION: "1.0.0",
+    CONF_DEVICE_HW_VERSION: "rev-a",
+    CONF_DEVICE_SERIAL_NUMBER: "VL-001",
+    CONF_DEVICE_CONFIGURATION_URL: "https://example.com/device",
+    CONF_DEVICE_SUGGESTED_AREA: "Living Room",
+    CONF_ENTITY_NAME: "Air Purifier",
+    ATTR_ENTITY_ID: "fan.living_room_air_purifier",
+    CONF_ICON: "mdi:air-purifier",
+    CONF_SOURCE_ENTITIES_TEXT: "fan.air_purifier\nnumber.air_purifier_speed",
+    CONF_INITIAL_VALUE: "off",
+    CONF_VALUE_TEMPLATE: "{{ states('sensor.source') }}",
+    CONF_AVAILABILITY_TEMPLATE: (
+        "{{ states('sensor.source') not in ['unknown', 'unavailable'] }}"
+    ),
+    CONF_ICON_TEMPLATE: "{{ state_attr('sensor.source', 'icon') }}",
+    CONF_TEMPLATE_SOURCES_JSON: {"source": "sensor.source"},
+    CONF_EVENT_HOOKS_JSON: [
+        {
+            "trigger": "state",
+            ATTR_ENTITY_ID: ["sensor.source"],
+            CONF_VALUE_TEMPLATE: "{{ trigger.to_state.state }}",
+        }
+    ],
+    CONF_ATTRIBUTES_JSON: {"source_type": "composite"},
+    CONF_ATTRIBUTE_SOURCES_JSON: {"battery_level": "sensor.remote.battery_level"},
+    CONF_ATTRIBUTE_TEMPLATES_JSON: {"power": "{{ states('sensor.power') | float(0) }}"},
+    CONF_NATIVE_TEMPLATES_JSON: {
+        "vendor_property": "{{ state_attr('sensor.source', 'vendor_property') }}"
+    },
+    CONF_COMMAND_ACTIONS_JSON: {
+        "turn_on": [
+            {
+                "action": "switch.turn_on",
+                "target": {ATTR_ENTITY_ID: "switch.real_device"},
+            }
+        ]
+    },
+    CONF_DOMAIN_OPTIONS_JSON: {"vendor_option": True},
+    CONF_POLYGON_GEOJSON_JSON: {
+        "type": "FeatureCollection",
+        "features": [],
+    },
+    CONF_POLYGON_TRACKER_RULES_JSON: {
+        "device_tracker.phone": {"enabled": True, "priority": 1}
+    },
+}
+
+
+def _form_suggestion(field_name: Any, value: Any) -> Any:
+    """Return the current value or a useful field-specific example."""
+    if value not in (None, "", [], {}):
+        return _plain_options(value)
+    return _plain_options(_FORM_FIELD_EXAMPLES.get(field_name, value))
+
+
 def _editable_optional(field_name: str, value: Any) -> vol.Optional:
     """Expose generated logic as both a suggestion and the editable value."""
     return vol.Optional(
         field_name,
         default=value,
-        description={"suggested_value": _plain_options(value)},
+        description={"suggested_value": _form_suggestion(field_name, value)},
     )
+
+
+def _complete_form_schema(schema: vol.Schema) -> vol.Schema:
+    """Populate actual defaults and matching suggestions throughout a form."""
+    for marker, validator in schema.schema.items():
+        if not isinstance(marker, vol.Marker):
+            continue
+
+        nested_schema = (
+            validator
+            if isinstance(validator, vol.Schema)
+            else validator.schema
+            if isinstance(validator, section)
+            else None
+        )
+        if nested_schema is not None:
+            _complete_form_schema(nested_schema)
+            try:
+                section_value = nested_schema({})
+            except vol.Invalid:
+                section_value = None
+            if section_value:
+                marker.default = vol.default_factory(_plain_options(section_value))
+
+        if marker.default is vol.UNDEFINED:
+            default = vol.UNDEFINED
+            if isinstance(validator, selector.SelectSelector):
+                if validator.config.get("multiple"):
+                    default = []
+                else:
+                    options = validator.config.get("options", [])
+                    if options:
+                        first = options[0]
+                        default = (
+                            first.get("value") if isinstance(first, Mapping) else first
+                        )
+            elif isinstance(
+                validator, selector.EntitySelector
+            ) and validator.config.get("multiple"):
+                default = []
+            if default is not vol.UNDEFINED:
+                marker.default = vol.default_factory(_plain_options(default))
+
+        if marker.default is not vol.UNDEFINED:
+            try:
+                value = marker.default()
+            except (RecursionError, TypeError, ValueError):
+                continue
+            description = dict(marker.description or {})
+            description["suggested_value"] = _form_suggestion(
+                marker.schema,
+                value,
+            )
+            marker.description = description
+        else:
+            # Optional selectors such as a single person entity cannot validate
+            # an empty value. They still receive an explicit blank suggestion.
+            description = dict(marker.description or {})
+            description["suggested_value"] = ""
+            marker.description = description
+    return schema
 
 
 def _reference_entity_schema(
@@ -1098,40 +1220,44 @@ def _reference_entity_schema(
                 mode=selector.SelectSelectorMode.DROPDOWN,
             ),
         )
-    return vol.Schema(schema)
+    return _complete_form_schema(vol.Schema(schema))
 
 
 def _helper_update_schema() -> vol.Schema:
     """Choose how generated templates are handled after source changes."""
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_HELPER_UPDATE_MODE,
-                default=HELPER_UPDATE_AUTO,
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        HELPER_UPDATE_AUTO,
-                        HELPER_UPDATE_KEEP,
-                        HELPER_UPDATE_FORCE,
-                    ],
-                    translation_key="helper_update_mode",
-                    mode=selector.SelectSelectorMode.LIST,
-                )
-            ),
-        }
+    return _complete_form_schema(
+        vol.Schema(
+            {
+                vol.Required(
+                    CONF_HELPER_UPDATE_MODE,
+                    default=HELPER_UPDATE_AUTO,
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            HELPER_UPDATE_AUTO,
+                            HELPER_UPDATE_KEEP,
+                            HELPER_UPDATE_FORCE,
+                        ],
+                        translation_key="helper_update_mode",
+                        mode=selector.SelectSelectorMode.LIST,
+                    )
+                ),
+            }
+        )
     )
 
 
 def _helper_usage_schema() -> vol.Schema:
     """Choose whether source-based helpers populate a new entity form."""
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_USE_TEMPLATE_HELPER,
-                default=True,
-            ): selector.BooleanSelector(),
-        }
+    return _complete_form_schema(
+        vol.Schema(
+            {
+                vol.Required(
+                    CONF_USE_TEMPLATE_HELPER,
+                    default=True,
+                ): selector.BooleanSelector(),
+            }
+        )
     )
 
 
@@ -1185,16 +1311,20 @@ def _entity_type_schema(
         {"value": platform, "label": platform.replace("_", " ").title()}
         for platform in platforms
     ]
-    return vol.Schema({
-        vol.Required(CONF_TARGET_ENTITY_TYPE, default=selected): (
-            selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=options,
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            )
-        ),
-    })
+    return _complete_form_schema(
+        vol.Schema(
+            {
+                vol.Required(CONF_TARGET_ENTITY_TYPE, default=selected): (
+                    selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=options,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                ),
+            }
+        )
+    )
 
 
 def _has_entity_type_choice(
@@ -1376,17 +1506,19 @@ def _options_schema(options: dict[str, Any]) -> vol.Schema:
         actions.append(ACTION_MANAGE_DEVICES)
         actions.append(ACTION_DELETE_DEVICE)
     actions.append(ACTION_FINISH)
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_ACTION, default=ACTION_ADD_ENTITY
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=actions,
-                    translation_key="options_action",
+    return _complete_form_schema(
+        vol.Schema(
+            {
+                vol.Required(
+                    CONF_ACTION, default=ACTION_ADD_ENTITY
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=actions,
+                        translation_key="options_action",
+                    ),
                 ),
-            ),
-        }
+            }
+        )
     )
 
 
@@ -1398,7 +1530,7 @@ def _setup_schema(
     }
     if include_entity_toggle:
         schema[vol.Optional(CONF_ADD_FIRST_ENTITY, default=False)] = cv.boolean
-    return vol.Schema(schema)
+    return _complete_form_schema(vol.Schema(schema))
 
 
 def _normalized_group_name(value) -> str:
@@ -1702,7 +1834,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             vol.Schema(template_schema),
             {"collapsed": platform not in {"binary_sensor", "number", "sensor"}},
         )
-    return vol.Schema(schema, extra=vol.ALLOW_EXTRA)
+    return _complete_form_schema(vol.Schema(schema, extra=vol.ALLOW_EXTRA))
 
 
 def _needs_domain_specific_form(user_input) -> bool:
@@ -1797,45 +1929,49 @@ def _align_form_entity_id_domain(user_input: dict[str, Any]) -> dict[str, Any]:
 def _device_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     """Build the Device-only metadata form used by the options flow."""
     defaults = defaults or {}
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_DEVICE_NAME,
-                default=defaults.get(CONF_DEVICE_NAME, "Virtual Device"),
-            ): str,
-            vol.Optional(CONF_DEVICE_ID, default=defaults.get(CONF_DEVICE_ID, "")): str,
-            vol.Optional(
-                CONF_DEVICE_MANUFACTURER,
-                default=defaults.get(CONF_DEVICE_MANUFACTURER, ""),
-            ): str,
-            vol.Optional(
-                CONF_DEVICE_MODEL, default=defaults.get(CONF_DEVICE_MODEL, "")
-            ): str,
-            vol.Optional(
-                CONF_DEVICE_SW_VERSION,
-                default=defaults.get(CONF_DEVICE_SW_VERSION, ""),
-            ): str,
-            vol.Optional(
-                CONF_DEVICE_HW_VERSION,
-                default=defaults.get(CONF_DEVICE_HW_VERSION, ""),
-            ): str,
-            vol.Optional(
-                CONF_DEVICE_SERIAL_NUMBER,
-                default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, ""),
-            ): str,
-            vol.Optional(
-                CONF_DEVICE_CONFIGURATION_URL,
-                default=defaults.get(CONF_DEVICE_CONFIGURATION_URL, ""),
-            ): str,
-            vol.Optional(
-                CONF_DEVICE_SUGGESTED_AREA,
-                default=defaults.get(CONF_DEVICE_SUGGESTED_AREA, ""),
-            ): str,
-            vol.Optional(
-                CONF_DEVICE_VIA_DEVICE_ID,
-                default=defaults.get(CONF_DEVICE_VIA_DEVICE_ID, ""),
-            ): selector.DeviceSelector(),
-        }
+    return _complete_form_schema(
+        vol.Schema(
+            {
+                vol.Required(
+                    CONF_DEVICE_NAME,
+                    default=defaults.get(CONF_DEVICE_NAME, "Virtual Device"),
+                ): str,
+                vol.Optional(
+                    CONF_DEVICE_ID, default=defaults.get(CONF_DEVICE_ID, "")
+                ): str,
+                vol.Optional(
+                    CONF_DEVICE_MANUFACTURER,
+                    default=defaults.get(CONF_DEVICE_MANUFACTURER, ""),
+                ): str,
+                vol.Optional(
+                    CONF_DEVICE_MODEL, default=defaults.get(CONF_DEVICE_MODEL, "")
+                ): str,
+                vol.Optional(
+                    CONF_DEVICE_SW_VERSION,
+                    default=defaults.get(CONF_DEVICE_SW_VERSION, ""),
+                ): str,
+                vol.Optional(
+                    CONF_DEVICE_HW_VERSION,
+                    default=defaults.get(CONF_DEVICE_HW_VERSION, ""),
+                ): str,
+                vol.Optional(
+                    CONF_DEVICE_SERIAL_NUMBER,
+                    default=defaults.get(CONF_DEVICE_SERIAL_NUMBER, ""),
+                ): str,
+                vol.Optional(
+                    CONF_DEVICE_CONFIGURATION_URL,
+                    default=defaults.get(CONF_DEVICE_CONFIGURATION_URL, ""),
+                ): str,
+                vol.Optional(
+                    CONF_DEVICE_SUGGESTED_AREA,
+                    default=defaults.get(CONF_DEVICE_SUGGESTED_AREA, ""),
+                ): str,
+                vol.Optional(
+                    CONF_DEVICE_VIA_DEVICE_ID,
+                    default=defaults.get(CONF_DEVICE_VIA_DEVICE_ID, ""),
+                ): selector.DeviceSelector(),
+            }
+        )
     )
 
 
@@ -3091,12 +3227,16 @@ def _managed_device_choices(options: dict[str, Any]) -> dict[str, str]:
 
 
 def _select_device_schema(options: dict[str, Any]) -> vol.Schema:
-    return vol.Schema(
-        {
-            vol.Required(CONF_MANAGED_DEVICE_NAME): vol.In(
-                _managed_device_choices(options)
-            ),
-        }
+    choices = _managed_device_choices(options)
+    return _complete_form_schema(
+        vol.Schema(
+            {
+                vol.Required(
+                    CONF_MANAGED_DEVICE_NAME,
+                    default=next(iter(choices), ""),
+                ): vol.In(choices),
+            }
+        )
     )
 
 
@@ -3430,28 +3570,36 @@ def _entity_choices(
 
 
 def _select_entity_schema(options: dict[str, Any]) -> vol.Schema:
-    return vol.Schema(
-        {
-            vol.Required(CONF_ENTITY_KEY): vol.In(_entity_choices(options)),
-        }
+    choices = _entity_choices(options)
+    return _complete_form_schema(
+        vol.Schema(
+            {
+                vol.Required(
+                    CONF_ENTITY_KEY,
+                    default=next(iter(choices), ""),
+                ): vol.In(choices),
+            }
+        )
     )
 
 
 def _delete_entities_schema(options: dict[str, Any]) -> vol.Schema:
     choices = _entity_choices(options, include_invalid=True)
-    return vol.Schema(
-        {
-            vol.Required(CONF_ENTITY_KEYS): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        {"value": value, "label": label}
-                        for value, label in choices.items()
-                    ],
-                    multiple=True,
-                    mode=selector.SelectSelectorMode.LIST,
+    return _complete_form_schema(
+        vol.Schema(
+            {
+                vol.Required(CONF_ENTITY_KEYS, default=[]): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            {"value": value, "label": label}
+                            for value, label in choices.items()
+                        ],
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.LIST,
+                    ),
                 ),
-            ),
-        }
+            }
+        )
     )
 
 

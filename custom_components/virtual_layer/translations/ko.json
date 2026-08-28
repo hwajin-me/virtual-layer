@@ -112,14 +112,14 @@
               "domain_options_json": "도메인 옵션 YAML"
             },
             "data_description": {
-              "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 YAML 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
-              "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
-              "attributes_json": "속성을 담은 YAML 객체입니다. 예: battery_level -> 91",
-              "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 YAML 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-              "attribute_templates_json": "값이 Jinja 템플릿인 YAML 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
-              "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
-              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다. 가상 도메인이 지원하는 모든 명령을 여기에서 매핑할 수 있습니다. choose 조건을 사용하면 preset mode 또는 다른 명령 인자에 따라 서로 다른 대상 엔티티와 Action으로 전달할 수 있습니다.",
-              "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 YAML 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
+              "template_sources_json": "Jinja 변수 이름을 소스 상태 또는 속성에 연결합니다. YAML 예시:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\n편집 가능한 템플릿에서 source와 battery라는 변수로 사용합니다.",
+              "event_hooks_json": "상태 변경 또는 이벤트 trigger 이후 편집 가능한 helper를 실행합니다. YAML 예시:\n- trigger: state\n  entity_id: [sensor.source]\n  value_template: trigger.to_state.state  # Jinja 구분자로 감싸세요\navailability_template, attributes, attribute_templates도 설정할 수 있습니다.",
+              "attributes_json": "가상 엔티티에 게시할 정적 추가 속성입니다. YAML 예시:\nsource_type: composite\npriority: 1",
+              "attribute_sources_json": "가상 속성을 실제 엔티티 상태 또는 속성에 연결합니다. YAML 예시:\nbattery: sensor.remote.battery_level\nmode: select.real_mode.state",
+              "attribute_templates_json": "속성을 편집 가능한 Jinja helper에 연결합니다. YAML 예시:\npower: states(\"sensor.power\") | float(0)  # 이 식을 Jinja 구분자로 감싸세요\n자동 helper는 값 타입에 따라 boolean AND/OR, 숫자 평균, 고유 목록 합치기, 문자열 연결, 순차 mapping 병합을 사용합니다.",
+              "native_templates_json": "네이티브 Home Assistant 속성을 Jinja에 연결합니다. YAML 예시:\nvendor_property: state_attr(\"sensor.source\", \"vendor_property\")  # Jinja 구분자로 감싸세요\n관리 속성은 보통 네이티브 값에서 개별 표시되며, 이 editor에서는 추가 도메인/제조사 속성을 편집할 수 있습니다.",
+              "command_actions_json": "가상 도메인의 모든 명령을 Home Assistant Action에 연결합니다. preset_mode, percentage, temperature, option, position 같은 명령 인자를 템플릿 변수로 사용할 수 있습니다. YAML 예시:\nset_preset_mode:\n  - choose:\n      - conditions: preset_mode == \"sleep\"  # Jinja 구분자로 감싸세요\n        sequence:\n          - action: input_select.select_option\n            target:\n              entity_id: input_select.real_mode\n            data:\n              option: quiet\n값은 단일 Action, Action 목록 또는 sequence와 optimistic 키를 가진 mapping 형식입니다.",
+              "domain_options_json": "전용 입력으로 표시되지 않는 선택 도메인의 추가 옵션입니다. YAML 예시:\nsource_entity: camera.front_door\nstream_source: rtsp://example/stream\n예약된 공통 필드는 덮어쓸 수 없습니다."
             }
           },
           "domain_settings": {
@@ -744,14 +744,14 @@
               "domain_options_json": "도메인 옵션 YAML"
             },
             "data_description": {
-              "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 YAML 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
-              "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
-              "attributes_json": "속성을 담은 YAML 객체입니다. 예: battery_level -> 91",
-              "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 YAML 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-              "attribute_templates_json": "값이 Jinja 템플릿인 YAML 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
-              "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
-              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다. 가상 도메인이 지원하는 모든 명령을 여기에서 매핑할 수 있습니다. choose 조건을 사용하면 preset mode 또는 다른 명령 인자에 따라 서로 다른 대상 엔티티와 Action으로 전달할 수 있습니다.",
-              "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 YAML 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
+              "template_sources_json": "Jinja 변수 이름을 소스 상태 또는 속성에 연결합니다. YAML 예시:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\n편집 가능한 템플릿에서 source와 battery라는 변수로 사용합니다.",
+              "event_hooks_json": "상태 변경 또는 이벤트 trigger 이후 편집 가능한 helper를 실행합니다. YAML 예시:\n- trigger: state\n  entity_id: [sensor.source]\n  value_template: trigger.to_state.state  # Jinja 구분자로 감싸세요\navailability_template, attributes, attribute_templates도 설정할 수 있습니다.",
+              "attributes_json": "가상 엔티티에 게시할 정적 추가 속성입니다. YAML 예시:\nsource_type: composite\npriority: 1",
+              "attribute_sources_json": "가상 속성을 실제 엔티티 상태 또는 속성에 연결합니다. YAML 예시:\nbattery: sensor.remote.battery_level\nmode: select.real_mode.state",
+              "attribute_templates_json": "속성을 편집 가능한 Jinja helper에 연결합니다. YAML 예시:\npower: states(\"sensor.power\") | float(0)  # 이 식을 Jinja 구분자로 감싸세요\n자동 helper는 값 타입에 따라 boolean AND/OR, 숫자 평균, 고유 목록 합치기, 문자열 연결, 순차 mapping 병합을 사용합니다.",
+              "native_templates_json": "네이티브 Home Assistant 속성을 Jinja에 연결합니다. YAML 예시:\nvendor_property: state_attr(\"sensor.source\", \"vendor_property\")  # Jinja 구분자로 감싸세요\n관리 속성은 보통 네이티브 값에서 개별 표시되며, 이 editor에서는 추가 도메인/제조사 속성을 편집할 수 있습니다.",
+              "command_actions_json": "가상 도메인의 모든 명령을 Home Assistant Action에 연결합니다. preset_mode, percentage, temperature, option, position 같은 명령 인자를 템플릿 변수로 사용할 수 있습니다. YAML 예시:\nset_preset_mode:\n  - choose:\n      - conditions: preset_mode == \"sleep\"  # Jinja 구분자로 감싸세요\n        sequence:\n          - action: input_select.select_option\n            target:\n              entity_id: input_select.real_mode\n            data:\n              option: quiet\n값은 단일 Action, Action 목록 또는 sequence와 optimistic 키를 가진 mapping 형식입니다.",
+              "domain_options_json": "전용 입력으로 표시되지 않는 선택 도메인의 추가 옵션입니다. YAML 예시:\nsource_entity: camera.front_door\nstream_source: rtsp://example/stream\n예약된 공통 필드는 덮어쓸 수 없습니다."
             }
           },
           "domain_settings": {
@@ -1290,14 +1290,14 @@
               "domain_options_json": "도메인 옵션 YAML"
             },
             "data_description": {
-              "template_sources_json": "템플릿 변수 이름을 소스 상태 또는 속성에 연결하는 YAML 객체입니다. 예: power -> sensor.washer_power, door -> binary_sensor.washer_door.state",
-              "event_hooks_json": "상태 변경이나 Home Assistant 이벤트를 수신하는 선택 훅입니다. 각 훅은 value_template, availability_template, attributes, attribute_templates를 설정할 수 있고 trigger 변수를 받습니다.",
-              "attributes_json": "속성을 담은 YAML 객체입니다. 예: battery_level -> 91",
-              "attribute_sources_json": "가상 속성을 소스 엔티티 속성에 연결하는 YAML 객체입니다. 예: battery -> sensor.remote.battery_level. 소스 상태를 복사하려면 속성 이름으로 \"state\"를 사용하세요.",
-              "attribute_templates_json": "값이 Jinja 템플릿인 YAML 객체입니다. 소스를 복사하면 사용 가능한 모든 동적 속성에 state_attr helper를 생성합니다. 여러 소스에서 제공되는 속성은 타입에 따라 boolean AND, 숫자 평균, 중복 제거 목록 합치기, 문자열 연결, 순차 mapping 병합 helper를 생성합니다. 이후 수정에서는 직접 바꾼 키만 보존합니다.",
-              "native_templates_json": "Home Assistant 네이티브 속성에 적용할 Jinja 템플릿입니다. 문자열, 숫자, boolean, object, list를 반환할 수 있습니다. state, fan_modes, effect_list, source_list, operation_list, position, gps, battery_level 같은 속성 이름을 사용하세요.",
-              "command_actions_json": "turn_on, set_temperature, set_fan_mode, set_percentage, set_humidity 같은 네이티브 명령 이름별 Home Assistant Action 목록입니다. 명령 인자를 템플릿 변수로 사용할 수 있습니다. 자동 생성된 원본 helper는 각 엔티티가 알리는 최솟값, 최댓값, 단계에 숫자 값을 맞춥니다. 가상 도메인이 지원하는 모든 명령을 여기에서 매핑할 수 있습니다. choose 조건을 사용하면 preset mode 또는 다른 명령 인자에 따라 서로 다른 대상 엔티티와 Action으로 전달할 수 있습니다.",
-              "domain_options_json": "선택한 엔티티 도메인의 직접 설정을 위한 선택 YAML 객체입니다. 일반 도메인에서는 이 값이 상태 속성으로 노출됩니다. 예: Climate 모드, Camera source_entity 별칭, image_path, stream_source. 공통 필드는 덮어쓸 수 없습니다."
+              "template_sources_json": "Jinja 변수 이름을 소스 상태 또는 속성에 연결합니다. YAML 예시:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\n편집 가능한 템플릿에서 source와 battery라는 변수로 사용합니다.",
+              "event_hooks_json": "상태 변경 또는 이벤트 trigger 이후 편집 가능한 helper를 실행합니다. YAML 예시:\n- trigger: state\n  entity_id: [sensor.source]\n  value_template: trigger.to_state.state  # Jinja 구분자로 감싸세요\navailability_template, attributes, attribute_templates도 설정할 수 있습니다.",
+              "attributes_json": "가상 엔티티에 게시할 정적 추가 속성입니다. YAML 예시:\nsource_type: composite\npriority: 1",
+              "attribute_sources_json": "가상 속성을 실제 엔티티 상태 또는 속성에 연결합니다. YAML 예시:\nbattery: sensor.remote.battery_level\nmode: select.real_mode.state",
+              "attribute_templates_json": "속성을 편집 가능한 Jinja helper에 연결합니다. YAML 예시:\npower: states(\"sensor.power\") | float(0)  # 이 식을 Jinja 구분자로 감싸세요\n자동 helper는 값 타입에 따라 boolean AND/OR, 숫자 평균, 고유 목록 합치기, 문자열 연결, 순차 mapping 병합을 사용합니다.",
+              "native_templates_json": "네이티브 Home Assistant 속성을 Jinja에 연결합니다. YAML 예시:\nvendor_property: state_attr(\"sensor.source\", \"vendor_property\")  # Jinja 구분자로 감싸세요\n관리 속성은 보통 네이티브 값에서 개별 표시되며, 이 editor에서는 추가 도메인/제조사 속성을 편집할 수 있습니다.",
+              "command_actions_json": "가상 도메인의 모든 명령을 Home Assistant Action에 연결합니다. preset_mode, percentage, temperature, option, position 같은 명령 인자를 템플릿 변수로 사용할 수 있습니다. YAML 예시:\nset_preset_mode:\n  - choose:\n      - conditions: preset_mode == \"sleep\"  # Jinja 구분자로 감싸세요\n        sequence:\n          - action: input_select.select_option\n            target:\n              entity_id: input_select.real_mode\n            data:\n              option: quiet\n값은 단일 Action, Action 목록 또는 sequence와 optimistic 키를 가진 mapping 형식입니다.",
+              "domain_options_json": "전용 입력으로 표시되지 않는 선택 도메인의 추가 옵션입니다. YAML 예시:\nsource_entity: camera.front_door\nstream_source: rtsp://example/stream\n예약된 공통 필드는 덮어쓸 수 없습니다."
             }
           },
           "domain_settings": {

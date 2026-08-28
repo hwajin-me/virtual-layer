@@ -19,6 +19,7 @@ from homeassistant.const import (
     CONF_NAME,
     CONF_PLATFORM,
 )
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import selector
 from homeassistant.helpers.template import Template
@@ -5579,6 +5580,63 @@ def test_generated_helpers_are_editable_values_and_yaml_suggestions(hass):
     assert percentage_marker.description["suggested_value"] == form_data[
         CONF_NATIVE_VALUE_TEMPLATES
     ]["percentage"]
+
+
+def test_entity_sections_carry_actual_values_and_every_marker_has_a_suggestion(hass):
+    hass.states.async_set(
+        "fan.air_purifier",
+        "on",
+        {
+            "friendly_name": "Air Purifier",
+            "preset_mode": "Favorite",
+            "preset_modes": ["Auto", "Favorite"],
+            "supported_features": 56,
+        },
+    )
+    hass.states.async_set(
+        "number.air_purifier_speed",
+        "1460",
+        {"min": 300, "max": 2200, "step": 1},
+    )
+    generated = _reference_entity_defaults(
+        hass,
+        ["fan.air_purifier", "number.air_purifier_speed"],
+    )
+    schema = _entity_schema(generated)
+    form = schema({})
+
+    assert form[CONF_DEVICE_DETAILS][CONF_DEVICE_MODEL] == ""
+    assert form[CONF_ADVANCED_SETTINGS][CONF_COMMAND_ACTIONS_JSON]["set_percentage"]
+    assert (
+        form[CONF_NATIVE_VALUE_TEMPLATES]["percentage"]
+        == generated[CONF_NATIVE_VALUE_TEMPLATES]["percentage"]
+    )
+
+    def _assert_suggestions(current_schema):
+        for marker, validator in current_schema.schema.items():
+            if not isinstance(marker, vol.Marker):
+                continue
+            assert marker.description is not None
+            assert "suggested_value" in marker.description
+            nested_schema = (
+                validator
+                if isinstance(validator, vol.Schema)
+                else validator.schema
+                if isinstance(validator, section)
+                else None
+            )
+            if nested_schema is not None:
+                _assert_suggestions(nested_schema)
+
+    _assert_suggestions(schema)
+
+    outer = {marker.schema: marker for marker in schema.schema}
+    details_marker = next(
+        marker
+        for marker in schema.schema[outer[CONF_DEVICE_DETAILS]].schema.schema
+        if marker.schema == CONF_DEVICE_MODEL
+    )
+    assert details_marker.description["suggested_value"] == "Composite Device"
 
 
 def test_yaml_editor_accepts_yaml_and_legacy_json_for_command_actions():

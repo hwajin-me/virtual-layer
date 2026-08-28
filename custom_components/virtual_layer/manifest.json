@@ -1,6 +1,6 @@
 {
   "domain": "virtual_layer",
-  "name": "Virtual Layer",
+  "name": "Virtual Device and Entity Layer",
   "codeowners": [
     "@twrecked",
     "@hwajin-me"
@@ -12,5 +12,5 @@
   "requirements": [
     "aiofiles"
   ],
-  "version": "1.0.46"
+  "version": "1.0.47"
 }
