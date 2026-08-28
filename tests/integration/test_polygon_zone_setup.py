@@ -39,6 +39,7 @@ from custom_components.virtual_layer.const import (
 )
 from custom_components.virtual_layer.device_tracker import (
     ATTR_POLYGON_PERSON,
+    ATTR_POLYGON_SELECTED_SOURCE,
     ATTR_POLYGON_SELECTED_MEMBERS,
     ATTR_POLYGON_ZONE,
 )
@@ -207,3 +208,63 @@ async def test_polygon_tracker_zone_sensor_and_map_image_share_one_virtual_devic
     assert registry.async_get("device_tracker.family_polygon") is not None
     assert registry.async_get("sensor.family_polygon_zone") is None
     assert registry.async_get("image.family_polygon_map") is None
+
+
+async def test_person_only_polygon_tracker_tracks_person_coordinates(hass):
+    """A configured person is an active polygon source when no trackers exist."""
+    hass.states.async_set(
+        "person.alex",
+        "not_home",
+        {ATTR_LATITUDE: 37.5000, ATTR_LONGITUDE: 127.0000, "gps_accuracy": 15},
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "person-only"},
+        options={
+            ATTR_DEVICES: {
+                "Alex Location": [{
+                    CONF_PLATFORM: "device_tracker",
+                    CONF_NAME: "Alex Polygon",
+                    ATTR_ENTITY_ID: "device_tracker.alex_polygon",
+                    CONF_INITIAL_VALUE: "not_home",
+                    CONF_INITIAL_AVAILABILITY: True,
+                    CONF_PERSISTENT: False,
+                    CONF_POLYGONAL_ZONE: {
+                        CONF_POLYGON_GEOJSON: GEOJSON,
+                        CONF_POLYGON_PERSON_ENTITY: "person.alex",
+                        CONF_POLYGON_TRACKER_RULES: {},
+                    },
+                }],
+            },
+            ATTR_DEVICE_ATTRIBUTES: {
+                "Alex Location": {
+                    ATTR_DEVICE_ID: "alex-location-device",
+                    CONF_NAME: "Alex Location",
+                },
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id) is True
+    await hass.async_block_till_done()
+
+    state = hass.states.get("device_tracker.alex_polygon")
+    assert state.state == "Seoul Home"
+    assert state.attributes[ATTR_LATITUDE] == 37.5
+    assert state.attributes[ATTR_LONGITUDE] == 127.0
+    assert state.attributes[ATTR_POLYGON_PERSON] == "person.alex"
+    assert state.attributes[ATTR_POLYGON_SELECTED_SOURCE] == "person.alex"
+    assert state.attributes[ATTR_POLYGON_SELECTED_MEMBERS] == ["person.alex"]
+
+    hass.states.async_set(
+        "person.alex",
+        "not_home",
+        {ATTR_LATITUDE: 35.1796, ATTR_LONGITUDE: 129.0756, "gps_accuracy": 10},
+    )
+    await hass.async_block_till_done()
+
+    state = hass.states.get("device_tracker.alex_polygon")
+    assert state.state == "not_home"
+    assert state.attributes[ATTR_LATITUDE] == 35.1796
+    assert state.attributes[ATTR_LONGITUDE] == 129.0756

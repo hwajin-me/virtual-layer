@@ -88,6 +88,34 @@ from .polygon import parse_geojson_zones
 
 _LOGGER = logging.getLogger(__name__)
 
+
+class _StrictYamlLoader(yaml.SafeLoader):
+    """Safe YAML loader which preserves the form's one-key/one-value contract."""
+
+    def construct_mapping(self, node, deep=False):
+        self.flatten_mapping(node)
+        mapping = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                duplicate = key in mapping
+            except TypeError as err:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found an unhashable key",
+                    key_node.start_mark,
+                ) from err
+            if duplicate:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    f"found duplicate key {key!r}",
+                    key_node.start_mark,
+                )
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
+
 CONF_ACTION = "action"
 CONF_ADD_FIRST_ENTITY = "add_first_entity"
 CONF_ATTRIBUTE_SOURCES_JSON = "attribute_sources_json"
@@ -2036,7 +2064,7 @@ def _parse_yaml_value(value: Any, field_name: str):
             try:
                 value = json.loads(value, parse_constant=_reject_json_constant)
             except json.JSONDecodeError:
-                value = yaml.safe_load(value)
+                value = yaml.load(value, Loader=_StrictYamlLoader)
         except (RecursionError, TypeError, ValueError, yaml.YAMLError) as err:
             raise InvalidJson(field_name) from err
     return _validate_ha_json_value(value, field_name)
@@ -6083,7 +6111,7 @@ def _attribute_template_mapping(value: Any) -> dict[str, str]:
         if not value.strip():
             return {}
         try:
-            value = yaml.safe_load(value)
+            value = yaml.load(value, Loader=_StrictYamlLoader)
         except (TypeError, ValueError, yaml.YAMLError):
             return {}
     if not isinstance(value, Mapping):

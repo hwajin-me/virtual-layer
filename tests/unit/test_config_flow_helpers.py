@@ -2031,6 +2031,19 @@ def test_build_entity_config_deduplicates_sources_and_rejects_invalid_template_v
     assert err.value.field_name == CONF_TEMPLATE_SOURCES_JSON
 
 
+def test_build_entity_config_rejects_duplicate_yaml_mapping_keys():
+    with pytest.raises(InvalidJson) as err:
+        _build_entity_config(
+            _entity_input(
+                {
+                    CONF_ATTRIBUTES_JSON: "device_class: temperature\ndevice_class: humidity",
+                }
+            )
+        )
+
+    assert err.value.field_name == CONF_ATTRIBUTES_JSON
+
+
 def test_build_entity_config_normalizes_attribute_names_and_rejects_bad_templates():
     _, entity = _build_entity_config(
         _entity_input(
