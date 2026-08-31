@@ -1073,11 +1073,14 @@ class _JinjaLogicSelector(selector.TemplateSelector):
         return super().__call__(data)
 
 
-# All Jinja editors defer compilation to config-flow validation, matching the
-# behavior of Home Assistant template entity forms while retaining legacy
-# structured values for advanced fields.
+# Templates use the Home Assistant template editor. Structured advanced values
+# are YAML text, not individual Jinja templates. Assigning TemplateSelector to
+# dict/list defaults renders their descriptions but no usable editor in current
+# Home Assistant frontends.
 TEMPLATE_SELECTOR = _JinjaLogicSelector()
-JINJA_LOGIC_SELECTOR = TEMPLATE_SELECTOR
+YAML_TEXT_SELECTOR = selector.TextSelector(
+    selector.TextSelectorConfig(multiline=True),
+)
 ICON_SELECTOR = selector.IconSelector(selector.IconSelectorConfig())
 ENTITY_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(
@@ -1605,6 +1608,25 @@ def _flatten_entity_form_sections(user_input: Mapping | None) -> dict[str, Any]:
     # Flat values win for compatibility with flows opened before an integration
     # reload changed these controls into sections.
     section_values.update(flattened)
+    # The frontend receives structured advanced values as visible YAML text
+    # areas. Normalize valid YAML back to its native shape for existing flow
+    # logic, while retaining malformed text so validation can show its error.
+    for field_name in (
+        CONF_TEMPLATE_SOURCES_JSON,
+        CONF_EVENT_HOOKS_JSON,
+        CONF_ATTRIBUTES_JSON,
+        CONF_ATTRIBUTE_SOURCES_JSON,
+        CONF_ATTRIBUTE_TEMPLATES_JSON,
+        CONF_NATIVE_TEMPLATES_JSON,
+        CONF_COMMAND_ACTIONS_JSON,
+        CONF_DOMAIN_OPTIONS_JSON,
+        CONF_POLYGON_GEOJSON_JSON,
+        CONF_POLYGON_TRACKER_RULES_JSON,
+    ):
+        if field_name in section_values:
+            section_values[field_name] = _yaml_editor_default(
+                section_values[field_name]
+            )
     return section_values
 
 
@@ -1716,40 +1738,40 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     advanced_schema = {
         _editable_optional(
             CONF_TEMPLATE_SOURCES_JSON,
-            _yaml_editor_default(defaults.get(CONF_TEMPLATE_SOURCES_JSON)),
-        ): JINJA_LOGIC_SELECTOR,
+            _yaml_text_editor_default(defaults.get(CONF_TEMPLATE_SOURCES_JSON)),
+        ): YAML_TEXT_SELECTOR,
         _editable_optional(
             CONF_EVENT_HOOKS_JSON,
-            _yaml_editor_default(defaults.get(CONF_EVENT_HOOKS_JSON)),
-        ): JINJA_LOGIC_SELECTOR,
+            _yaml_text_editor_default(defaults.get(CONF_EVENT_HOOKS_JSON)),
+        ): YAML_TEXT_SELECTOR,
         _editable_optional(
             CONF_ATTRIBUTES_JSON,
-            _yaml_editor_default(defaults.get(CONF_ATTRIBUTES_JSON)),
-        ): JINJA_LOGIC_SELECTOR,
+            _yaml_text_editor_default(defaults.get(CONF_ATTRIBUTES_JSON)),
+        ): YAML_TEXT_SELECTOR,
         _editable_optional(
             CONF_ATTRIBUTE_SOURCES_JSON,
-            _yaml_editor_default(defaults.get(CONF_ATTRIBUTE_SOURCES_JSON)),
-        ): JINJA_LOGIC_SELECTOR,
+            _yaml_text_editor_default(defaults.get(CONF_ATTRIBUTE_SOURCES_JSON)),
+        ): YAML_TEXT_SELECTOR,
         _editable_optional(
             CONF_ATTRIBUTE_TEMPLATES_JSON,
-            _yaml_editor_default(defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON)),
-        ): JINJA_LOGIC_SELECTOR,
+            _yaml_text_editor_default(defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON)),
+        ): YAML_TEXT_SELECTOR,
         _editable_optional(
             CONF_COMMAND_ACTIONS_JSON,
-            _yaml_editor_default(defaults.get(CONF_COMMAND_ACTIONS_JSON)),
-        ): JINJA_LOGIC_SELECTOR,
+            _yaml_text_editor_default(defaults.get(CONF_COMMAND_ACTIONS_JSON)),
+        ): YAML_TEXT_SELECTOR,
         _editable_optional(
             CONF_DOMAIN_OPTIONS_JSON,
-            _yaml_editor_default(defaults.get(CONF_DOMAIN_OPTIONS_JSON)),
-        ): JINJA_LOGIC_SELECTOR,
+            _yaml_text_editor_default(defaults.get(CONF_DOMAIN_OPTIONS_JSON)),
+        ): YAML_TEXT_SELECTOR,
     }
     if platform not in DOMAIN_NATIVE_TEMPLATE_PROPERTIES:
         advanced_schema[
             _editable_optional(
                 CONF_NATIVE_TEMPLATES_JSON,
-                _yaml_editor_default(defaults.get(CONF_NATIVE_TEMPLATES_JSON)),
+                _yaml_text_editor_default(defaults.get(CONF_NATIVE_TEMPLATES_JSON)),
             )
-        ] = JINJA_LOGIC_SELECTOR
+        ] = YAML_TEXT_SELECTOR
     schema = {
         vol.Required(
             CONF_DEVICE_NAME, default=defaults.get(CONF_DEVICE_NAME, "Virtual Device")
@@ -1806,8 +1828,8 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             {
                 _editable_optional(
                     CONF_POLYGON_GEOJSON_JSON,
-                    _yaml_editor_default(defaults.get(CONF_POLYGON_GEOJSON_JSON)),
-                ): JINJA_LOGIC_SELECTOR,
+                    _yaml_text_editor_default(defaults.get(CONF_POLYGON_GEOJSON_JSON)),
+                ): YAML_TEXT_SELECTOR,
                 vol.Optional(
                     CONF_POLYGON_FILES_TEXT,
                     default=defaults.get(CONF_POLYGON_FILES_TEXT, ""),
@@ -1827,10 +1849,10 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 ): POLYGON_DISTANCE_SELECTOR,
                 _editable_optional(
                     CONF_POLYGON_TRACKER_RULES_JSON,
-                    _yaml_editor_default(
+                    _yaml_text_editor_default(
                         defaults.get(CONF_POLYGON_TRACKER_RULES_JSON)
                     ),
-                ): JINJA_LOGIC_SELECTOR,
+                ): YAML_TEXT_SELECTOR,
                 vol.Optional(
                     CONF_POLYGON_AWAY_STATE_INPUT,
                     default=defaults.get(CONF_POLYGON_AWAY_STATE_INPUT, "not_home"),
@@ -3751,6 +3773,19 @@ def _yaml_editor_default(value: Any) -> Any:
             # as text lets the user repair it without blocking the whole entry.
             return value
     return _plain_options(value)
+
+
+def _yaml_text_editor_default(value: Any) -> str:
+    """Return a visible YAML textarea value for structured form fields."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, str):
+        try:
+            return _json_default(_parse_yaml_value(value, "yaml_editor"))
+        except InvalidJson:
+            # Keep malformed legacy text visible so it can be repaired.
+            return value
+    return _json_default(value)
 
 
 def _json_safe(value, _seen=None, _depth=0):
@@ -6337,10 +6372,7 @@ def _legacy_auto_helper_profiles(
     source_entities: list[str],
 ) -> list[dict[str, Any]]:
     """Return exact helper formats generated by older Virtual Layer releases."""
-    if (
-        len(source_entities) < 2
-        or reference_defaults.get(CONF_PLATFORM) != "binary_sensor"
-    ):
+    if len(source_entities) < 2:
         return []
 
     existing_variables: set[str] = set()
@@ -6348,12 +6380,39 @@ def _legacy_auto_helper_profiles(
         _source_variable_name(entity_id, existing_variables)
         for entity_id in source_entities
     ]
-    boolean_checks = [
-        f"(({variable_name} | lower) in ['1', 'on', 'open', 'true', 'unlocked', 'yes'])"
-        for variable_name in variable_names
-    ]
     legacy_defaults = dict(reference_defaults)
-    legacy_defaults[CONF_VALUE_TEMPLATE] = "{{ " + " or ".join(boolean_checks) + " }}"
+    platform = reference_defaults.get(CONF_PLATFORM)
+    if platform == "binary_sensor":
+        boolean_checks = [
+            f"(({variable_name} | lower) in ['1', 'on', 'open', 'true', 'unlocked', 'yes'])"
+            for variable_name in variable_names
+        ]
+        legacy_defaults[CONF_VALUE_TEMPLATE] = (
+            "{{ " + " or ".join(boolean_checks) + " }}"
+        )
+    elif platform == "sensor" and "set threshold" in str(
+        reference_defaults.get(CONF_VALUE_TEMPLATE, "")
+    ):
+        # Before the robust numeric helper was introduced, generated sensor
+        # merges used this simple average. Recognize it exactly so an untouched
+        # legacy helper is upgraded on the next automatic/forced source edit,
+        # rather than being mistaken for a user customization.
+        legacy_defaults[CONF_VALUE_TEMPLATE] = (
+            "{% set values = ["
+            + ", ".join(variable_names)
+            + "] | select('is_number') | map('float') | list %}"
+            "{{ (values | average) if values else 'unknown' }}"
+        )
+        legacy_defaults[CONF_AVAILABILITY_TEMPLATE] = (
+            "{{ "
+            + " and ".join(
+                f"states({entity_id!r}) not in ['unknown', 'unavailable']"
+                for entity_id in source_entities
+            )
+            + " }}"
+        )
+    else:
+        return []
     return [_auto_helper_profile(legacy_defaults)]
 
 

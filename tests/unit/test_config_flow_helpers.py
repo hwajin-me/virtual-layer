@@ -92,6 +92,7 @@ from custom_components.virtual_layer.config_flow import (
     _entity_key_from_stable_key,
     _entity_schema,
     _entity_type_schema,
+    _existing_auto_helper_profile,
     _fan_number_speed_kind,
     _find_entity_by_selection_key,
     _flatten_entity_form_sections,
@@ -311,7 +312,7 @@ def test_entity_form_collapses_secondary_fields_and_flattens_submissions():
         }
     )
     assert flattened[CONF_DEVICE_ID] == "flat-device"
-    assert flattened[CONF_ATTRIBUTES_JSON] == '{"source": true}'
+    assert flattened[CONF_ATTRIBUTES_JSON] == {"source": True}
     assert flattened["fan_mode"] == "auto"
     assert CONF_DEVICE_DETAILS not in flattened
 
@@ -347,6 +348,30 @@ def test_entity_form_uses_icon_and_template_selectors():
 
     assert isinstance(validators[CONF_ICON], selector.IconSelector)
     assert isinstance(validators[CONF_ICON_TEMPLATE], selector.TemplateSelector)
+
+
+def test_structured_advanced_fields_use_visible_yaml_textareas():
+    """Structured YAML must not be sent to the frontend as a template selector."""
+    schema = _entity_schema(
+        {
+            CONF_PLATFORM: "sensor",
+            CONF_ATTRIBUTES_JSON: {"device_class": "temperature"},
+        }
+    )
+    advanced = _section_validators(schema, CONF_ADVANCED_SETTINGS)
+
+    assert all(
+        isinstance(validator, selector.TextSelector)
+        for validator in advanced.values()
+    )
+    defaults = schema({})
+    assert defaults[CONF_ADVANCED_SETTINGS][CONF_ATTRIBUTES_JSON] == (
+        "device_class: temperature"
+    )
+
+    tracker_schema = _entity_schema({CONF_PLATFORM: "device_tracker"})
+    domain = _section_validators(tracker_schema, CONF_DOMAIN_SETTINGS)
+    assert isinstance(domain[CONF_POLYGON_GEOJSON_JSON], selector.TextSelector)
 
 
 def test_all_config_flow_forms_are_frontend_serializable():
@@ -3217,6 +3242,51 @@ def test_reference_entity_defaults_combines_number_sources_with_average_template
     assert f"set threshold = {NUMERIC_OUTLIER_THRESHOLD}" in defaults[CONF_VALUE_TEMPLATE]
 
 
+def test_legacy_numeric_helper_is_upgraded_to_the_spike_safe_template(hass):
+    source_entities = ["sensor.co2_one", "sensor.co2_two"]
+    hass.states.async_set(source_entities[0], "500")
+    hass.states.async_set(source_entities[1], "600")
+
+    reference = _reference_entity_defaults(hass, source_entities)
+    template_sources = _yaml_value(reference[CONF_TEMPLATE_SOURCES_JSON])
+    legacy_template = (
+        "{% set values = ["
+        + ", ".join(template_sources)
+        + "] | select('is_number') | map('float') | list %}"
+        "{{ (values | average) if values else 'unknown' }}"
+    )
+    legacy_defaults = {
+        **reference,
+        CONF_VALUE_TEMPLATE: legacy_template,
+        CONF_AVAILABILITY_TEMPLATE: (
+            "{{ states('sensor.co2_one') not in ['unknown', 'unavailable'] "
+            "and states('sensor.co2_two') not in ['unknown', 'unavailable'] }}"
+        ),
+    }
+    entity = {
+        CONF_SOURCE_ENTITIES: source_entities,
+        CONF_TEMPLATE_SOURCES: {
+            variable_name: {ATTR_ENTITY_ID: entity_id, CONF_ATTRIBUTE: "state"}
+            for variable_name, entity_id in template_sources.items()
+        },
+        CONF_VALUE_TEMPLATE: legacy_template,
+    }
+
+    profile = _existing_auto_helper_profile(hass, entity, legacy_defaults)
+    refreshed = _reference_edit_defaults(
+        legacy_defaults,
+        reference,
+        profile,
+    )
+
+    assert profile is not None
+    assert refreshed[CONF_VALUE_TEMPLATE] == reference[CONF_VALUE_TEMPLATE]
+    assert "set threshold" in refreshed[CONF_VALUE_TEMPLATE]
+    assert refreshed[CONF_AVAILABILITY_TEMPLATE] == reference[
+        CONF_AVAILABILITY_TEMPLATE
+    ]
+
+
 def test_reference_entity_defaults_treats_zero_one_sensors_as_numbers(hass):
     hass.states.async_set("sensor.failed_jobs", "0")
     hass.states.async_set("sensor.pending_jobs", "1")
@@ -5606,14 +5676,14 @@ def test_generated_helpers_are_editable_values_and_yaml_suggestions(hass):
     }
     command_marker, command_selector = advanced_fields[CONF_COMMAND_ACTIONS_JSON]
 
-    assert isinstance(command_selector, selector.TemplateSelector)
-    assert command_marker.description["suggested_value"] == _yaml_value(
+    assert isinstance(command_selector, selector.TextSelector)
+    assert _yaml_value(command_marker.description["suggested_value"]) == _yaml_value(
         generated[CONF_COMMAND_ACTIONS_JSON]
     )
 
     form_data = _flatten_entity_form_sections(schema({}))
     actions = form_data[CONF_COMMAND_ACTIONS_JSON]
-    assert actions == command_marker.description["suggested_value"]
+    assert actions == _yaml_value(command_marker.description["suggested_value"])
     assert actions["set_percentage"][0]["choose"][0]["sequence"][0][
         "target"
     ] == {ATTR_ENTITY_ID: number_entity_id}
@@ -5630,7 +5700,7 @@ def test_generated_helpers_are_editable_values_and_yaml_suggestions(hass):
 
 
 @pytest.mark.parametrize("platform", VIRTUAL_ENTITY_DOMAINS)
-def test_every_entity_domain_exposes_advanced_logic_as_jinja_editors(platform):
+def test_every_entity_domain_exposes_advanced_logic_as_yaml_editors(platform):
     schema = _entity_schema({CONF_PLATFORM: platform})
     schema({})
     sections = {
@@ -5647,7 +5717,7 @@ def test_every_entity_domain_exposes_advanced_logic_as_jinja_editors(platform):
 
     assert advanced_fields
     assert all(
-        isinstance(validator, selector.TemplateSelector)
+        isinstance(validator, selector.TextSelector)
         for validator in advanced_fields.values()
     )
 
@@ -5694,7 +5764,9 @@ def test_entity_sections_carry_actual_values_and_every_marker_has_a_suggestion(h
     form = schema({})
 
     assert form[CONF_DEVICE_DETAILS][CONF_DEVICE_MODEL] == ""
-    assert form[CONF_ADVANCED_SETTINGS][CONF_COMMAND_ACTIONS_JSON]["set_percentage"]
+    assert _yaml_value(
+        form[CONF_ADVANCED_SETTINGS][CONF_COMMAND_ACTIONS_JSON]
+    )["set_percentage"]
     assert (
         form[CONF_NATIVE_VALUE_TEMPLATES]["percentage"]
         == generated[CONF_NATIVE_VALUE_TEMPLATES]["percentage"]
