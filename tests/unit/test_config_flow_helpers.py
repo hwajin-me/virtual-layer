@@ -22,6 +22,7 @@ from homeassistant.const import (
 )
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
@@ -76,6 +77,7 @@ from custom_components.virtual_layer.config_flow import (
     InvalidEntityReference,
     InvalidEntitySelection,
     InvalidJson,
+    InvalidTemplate,
     _append_ui_entity,
     _auto_helper_profile,
     _build_device_config,
@@ -132,6 +134,7 @@ from custom_components.virtual_layer.config_flow import (
     _source_command_actions,
     _stored_entity_ids,
     _validate_platform_entity,
+    _validate_entity_templates,
     _without_template_helpers,
 )
 from custom_components.virtual_layer.const import (
@@ -2056,6 +2059,59 @@ def test_build_entity_config_deduplicates_sources_and_rejects_invalid_template_v
     assert err.value.field_name == CONF_TEMPLATE_SOURCES_JSON
 
 
+def test_entity_template_validation_rejects_invalid_embedded_action_jinja(hass):
+    """Action payload templates must be compiled before an entity is saved."""
+    with pytest.raises(InvalidTemplate) as err:
+        _validate_entity_templates(
+            hass,
+            {
+                CONF_PLATFORM: "switch",
+                ATTR_ENTITY_ID: "switch.action_template",
+                CONF_COMMAND_ACTIONS: {
+                    "turn_on": [{
+                        "action": "switch.turn_on",
+                        "data": {"note": "{{ an_unclosed_expression"},
+                    }],
+                },
+            },
+        )
+
+    assert err.value.field_name == CONF_COMMAND_ACTIONS_JSON
+    assert err.value.template_name == "turn_on[0].data.note"
+
+
+@pytest.mark.parametrize("platform", VIRTUAL_ENTITY_DOMAINS)
+def test_every_entity_domain_rejects_invalid_common_and_native_templates(hass, platform):
+    """Every advertised domain uses the same pre-save Jinja validation path."""
+    entity_id = f"{platform}.template_validation"
+    with pytest.raises(InvalidTemplate) as common_error:
+        _validate_entity_templates(
+            hass,
+            {
+                CONF_PLATFORM: platform,
+                ATTR_ENTITY_ID: entity_id,
+                CONF_VALUE_TEMPLATE: "{{ missing_closing_delimiter",
+            },
+        )
+    assert common_error.value.field_name == CONF_VALUE_TEMPLATE
+
+    native_properties = DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
+    if native_properties:
+        property_name = native_properties[0]
+        with pytest.raises(InvalidTemplate) as native_error:
+            _validate_entity_templates(
+                hass,
+                {
+                    CONF_PLATFORM: platform,
+                    ATTR_ENTITY_ID: entity_id,
+                    CONF_NATIVE_TEMPLATES: {
+                        property_name: "{% if true %}",
+                    },
+                },
+            )
+        assert native_error.value.template_name == property_name
+
+
 def test_build_entity_config_rejects_duplicate_yaml_mapping_keys():
     with pytest.raises(InvalidJson) as err:
         _build_entity_config(
@@ -3618,14 +3674,36 @@ def test_reference_light_generates_boolean_and_brightness_templates(hass):
     assert defaults[CONF_AVAILABILITY_TEMPLATE] == (
         "{{ states('light.desk') not in ['unknown', 'unavailable'] }}"
     )
+    assert defaults[CONF_ICON] == "mdi:desk-lamp"
     assert defaults[CONF_ICON_TEMPLATE] == (
         "{{ state_attr('light.desk', 'icon') | default('', true) }}"
     )
     _, entity = _build_entity_config(_entity_input(defaults))
+    assert entity[CONF_ICON] == "mdi:desk-lamp"
     assert entity[CONF_ICON_TEMPLATE] == (
         "{{ state_attr('light.desk', 'icon') | default('', true) }}"
     )
     assert CONF_ICON not in entity.get(CONF_ATTRIBUTES, {})
+
+
+def test_reference_icon_uses_source_registry_original_icon_as_fallback(hass):
+    """Sources without a state icon still seed a usable dynamic alias icon."""
+    source_entry = er.async_get(hass).async_get_or_create(
+        "switch",
+        "test",
+        "registry-icon-source",
+        suggested_object_id="registry_icon_source",
+        original_icon="mdi:toggle-switch-off-outline",
+    )
+    source_entity_id = source_entry.entity_id
+    hass.states.async_set(source_entity_id, "off")
+
+    defaults = _reference_entity_defaults(hass, [source_entity_id])
+
+    assert defaults[CONF_ICON] == "mdi:toggle-switch-off-outline"
+    assert defaults[CONF_ICON_TEMPLATE] == (
+        f"{{{{ state_attr({source_entity_id!r}, 'icon') | default('', true) }}}}"
+    )
 
 
 def test_reference_tts_generates_language_and_option_templates(hass):

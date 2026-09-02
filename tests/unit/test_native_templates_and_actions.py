@@ -85,6 +85,7 @@ from custom_components.virtual_layer.light import (
 from custom_components.virtual_layer.lock import LOCK_SCHEMA, VirtualLock
 from custom_components.virtual_layer.number import NUMBER_SCHEMA, VirtualNumber
 from custom_components.virtual_layer.sensor import SENSOR_SCHEMA, VirtualSensor
+from custom_components.virtual_layer.switch import SWITCH_SCHEMA, VirtualSwitch
 from custom_components.virtual_layer.vacuum import VACUUM_SCHEMA, VirtualVacuum
 from custom_components.virtual_layer.valve import VALVE_SCHEMA, VirtualValve
 
@@ -1350,6 +1351,123 @@ async def test_unconfigured_native_command_proxies_to_all_same_domain_sources(ha
         "percentage": 40,
         ATTR_ENTITY_ID: ["fan.first", "fan.second"],
     }]
+
+
+async def test_source_state_wins_over_optimistic_fan_command(hass):
+    """Use the source's final, potentially clamped value after a command."""
+    hass.states.async_set("fan.source", "on", {"percentage": 20})
+
+    async def _set_percentage(call):
+        # Model a physical fan which clamps a requested value to a supported
+        # hardware setting before it reports the new state.
+        hass.states.async_set(
+            "fan.source",
+            "on",
+            {"percentage": 40 if call.data["percentage"] == 60 else 0},
+        )
+
+    hass.services.async_register("fan", "set_percentage", _set_percentage)
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            _base(
+                "fan.authoritative_source",
+                "off",
+                speed_count=5,
+                **{
+                    CONF_SOURCE_ENTITIES: ["fan.source"],
+                    CONF_VALUE_TEMPLATE: "{{ states('fan.source') }}",
+                    CONF_NATIVE_TEMPLATES: {
+                        "percentage": "{{ state_attr('fan.source', 'percentage') }}",
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._update_attributes()
+    entity._setup_templates()
+
+    await entity.async_set_percentage(60)
+
+    assert entity.percentage == 40
+
+
+async def test_source_state_wins_over_optimistic_switch_command(hass):
+    """A switch source may reject a local power command."""
+    hass.states.async_set("switch.source", "off")
+
+    async def _turn_on(call):
+        # The source accepted the service call but remains off, as can happen
+        # when a physical safety interlock rejects it.
+        hass.states.async_set(call.data[ATTR_ENTITY_ID][0], "off")
+
+    hass.services.async_register("switch", "turn_on", _turn_on)
+    entity = VirtualSwitch(
+        SWITCH_SCHEMA(
+            _base(
+                "switch.authoritative_source",
+                "off",
+                **{
+                    CONF_SOURCE_ENTITIES: ["switch.source"],
+                    CONF_VALUE_TEMPLATE: "{{ states('switch.source') }}",
+                },
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._setup_templates()
+
+    await entity.async_turn_on()
+
+    assert entity.is_on is False
+
+
+async def test_source_state_wins_over_optimistic_climate_command(hass):
+    """Climate source values remain authoritative after set_temperature."""
+    hass.states.async_set("climate.source", "cool", {"temperature": 20})
+
+    async def _set_temperature(call):
+        # The device clamps the requested temperature to its own range.
+        hass.states.async_set(
+            call.data[ATTR_ENTITY_ID][0],
+            "cool",
+            {"temperature": 22},
+        )
+
+    hass.services.async_register("climate", "set_temperature", _set_temperature)
+    entity = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.authoritative_source",
+                "cool",
+                hvac_modes=["off", "cool"],
+                min_temp=10,
+                max_temp=30,
+                **{
+                    CONF_SOURCE_ENTITIES: ["climate.source"],
+                    CONF_VALUE_TEMPLATE: "{{ states('climate.source') }}",
+                    CONF_NATIVE_TEMPLATES: {
+                        "target_temperature": (
+                            "{{ state_attr('climate.source', 'temperature') }}"
+                        ),
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._update_attributes()
+    entity._setup_templates()
+
+    await entity.async_set_temperature(temperature=25)
+
+    assert entity.target_temperature == 22
 
 
 async def test_generated_command_action_forwards_complete_command_data(hass):

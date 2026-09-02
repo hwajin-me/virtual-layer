@@ -265,8 +265,20 @@ class VirtualEntity(RestoreEntity):
                     kwargs,
                 )
                 if action_result is False:
+                    # A non-optimistic action may have updated a source before
+                    # it returned. Apply its authoritative state immediately
+                    # instead of waiting for a later state-change callback.
+                    if self._source_entities:
+                        self._apply_templates()
                     return None
-                return await __method(self, *args, **kwargs)
+                result = await __method(self, *args, **kwargs)
+                # Native methods publish an optimistic local value. A source
+                # can legitimately clamp, reject, or otherwise transform that
+                # request (for example, fan speed steps), so let the configured
+                # source/native templates win once the command has completed.
+                if self._source_entities:
+                    self._apply_templates()
+                return result
 
             _with_command_action._virtual_action_wrapped = True
             setattr(cls, method_name, _with_command_action)

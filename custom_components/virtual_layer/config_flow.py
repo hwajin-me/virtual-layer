@@ -3012,6 +3012,26 @@ def _validate_entity_templates(hass, entity: Mapping) -> None:
             )
             raise InvalidTemplate(field_name, template_name, str(err)) from err
 
+    def _validate_embedded_templates(value, field_name: str, path: str = "") -> None:
+        """Validate Jinja nested in an action's data, target, or conditions."""
+        if isinstance(value, str):
+            # Script actions allow ordinary strings everywhere. Only hand Jinja
+            # expressions/statements/comments to the template compiler, so
+            # service names and user-facing static text remain plain strings.
+            if any(marker in value for marker in ("{{", "{%", "{#")):
+                _validate(value, field_name, path or field_name)
+            return
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                key_name = str(key)
+                next_path = f"{path}.{key_name}" if path else key_name
+                _validate_embedded_templates(item, field_name, next_path)
+            return
+        if isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                next_path = f"{path}[{index}]"
+                _validate_embedded_templates(item, field_name, next_path)
+
     for field_name in (
         CONF_VALUE_TEMPLATE,
         CONF_AVAILABILITY_TEMPLATE,
@@ -3065,6 +3085,15 @@ def _validate_entity_templates(hass, entity: Mapping) -> None:
                         CONF_POLYGON_TRACKER_RULES_JSON,
                         f"{rule_name}.condition_template",
                     )
+
+    # cv.SCRIPT_SCHEMA validates an action's structure but deliberately defers
+    # templated data compilation until the action runs. Reject malformed Jinja
+    # here so users can correct it in the UI instead of discovering it only
+    # after a live command fails.
+    _validate_embedded_templates(
+        entity.get(CONF_COMMAND_ACTIONS),
+        CONF_COMMAND_ACTIONS_JSON,
+    )
 
 
 def _make_entity_key() -> str:
@@ -4161,6 +4190,23 @@ def _device_name_for_source_entity(hass, entity_id: str) -> str:
     if device_entry is None:
         return "Virtual Device"
     return device_entry.name_by_user or device_entry.name or "Virtual Device"
+
+
+def _source_icon(hass, entity_id: str, state) -> str | None:
+    """Return the current source icon, with registry metadata as a fallback."""
+    candidates = [state.attributes.get(CONF_ICON)]
+    if entity_entry := er.async_get(hass).async_get(entity_id):
+        # A user-selected registry icon is what Home Assistant displays; the
+        # integration-provided original icon is the next best static fallback.
+        candidates.extend((entity_entry.icon, entity_entry.original_icon))
+    return next(
+        (
+            icon.strip()
+            for icon in candidates
+            if isinstance(icon, str) and icon.strip()
+        ),
+        None,
+    )
 
 
 def _combined_device_name(hass, entity_ids: list[str]) -> str:
@@ -5551,6 +5597,10 @@ def _reference_entity_defaults(
             + " }}"
         ),
     }
+    # Keep a stable fallback while the source is starting/unavailable and let
+    # the generated icon template below follow subsequent source icon changes.
+    if source_icon := _source_icon(hass, entity_ids[0], first_state):
+        defaults[CONF_ICON] = source_icon
     if platform == "light":
         source_modes = set(first_state.attributes.get("supported_color_modes", []))
         defaults[CONF_MATTER_LIGHT_TYPE] = (
