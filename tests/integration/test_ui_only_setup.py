@@ -5188,7 +5188,7 @@ async def test_setup_entry_registers_same_name_devices_separately_by_id(
     assert first.name == second.name == "Washer"
 
 
-async def test_setup_entry_syncs_and_restores_device_registry_metadata(hass, tmp_path, monkeypatch):
+async def test_setup_entry_syncs_metadata_and_allows_clearing_device_area(hass, tmp_path, monkeypatch):
     meta_file = tmp_path / "virtual_layer.meta.json"
     monkeypatch.setattr(
         "custom_components.virtual_layer.cfg.default_meta_file",
@@ -5248,7 +5248,11 @@ async def test_setup_entry_syncs_and_restores_device_registry_metadata(hass, tmp
 
     child_device = device_registry.async_get(child_device.id)
     assert child_device.manufacturer == "Acme"
-    assert child_device.area_id == kitchen.id
+    assert child_device.area_id is None
+    assert (
+        CONF_SUGGESTED_AREA
+        not in entry.options[ATTR_DEVICE_ATTRIBUTES]["Child"]
+    )
 
     assert await async_unload_entry(hass, entry) is True
     hass.config_entries.async_update_entry(

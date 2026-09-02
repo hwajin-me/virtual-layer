@@ -48,6 +48,8 @@ from custom_components.virtual_layer.const import (
     CONF_SOURCE_ENTITIES,
     CONF_VALUE_TEMPLATE,
     VIRTUAL_ENTITY_COMMANDS,
+    VIRTUAL_ENTITY_NON_SERVICE_COMMANDS,
+    VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES,
 )
 from custom_components.virtual_layer.cover import COVER_SCHEMA, VirtualCover
 from custom_components.virtual_layer.device_tracker import (
@@ -125,6 +127,57 @@ def test_command_contracts_match_wrapped_platform_methods():
         }
 
         assert wrapped_commands == expected_commands, domain
+
+
+async def test_runtime_fallback_proxies_every_service_command(hass):
+    """The legacy/runtime fallback must propagate the complete command contract."""
+    calls = []
+    registered_services = set()
+
+    for domain, commands in VIRTUAL_ENTITY_COMMANDS.items():
+        for command in commands:
+            if (domain, command) in VIRTUAL_ENTITY_NON_SERVICE_COMMANDS:
+                continue
+            service = VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES.get(
+                (domain, command),
+                command,
+            )
+            if (domain, service) in registered_services:
+                continue
+
+            async def _capture(call, service_name=service):
+                calls.append((call.domain, service_name, dict(call.data)))
+
+            hass.services.async_register(domain, service, _capture)
+            registered_services.add((domain, service))
+
+    expected = []
+    for domain, commands in VIRTUAL_ENTITY_COMMANDS.items():
+        for command in sorted(commands):
+            if (domain, command) in VIRTUAL_ENTITY_NON_SERVICE_COMMANDS:
+                continue
+            service = VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES.get(
+                (domain, command),
+                command,
+            )
+            entity = object.__new__(VirtualEntity)
+            entity.hass = hass
+            entity.entity_id = f"{domain}.virtual"
+            entity._platform_domain = domain
+            entity._source_entities = [f"{domain}.source"]
+            entity._context = None
+
+            await entity._async_proxy_source_command(command, {"marker": command})
+            expected.append((
+                domain,
+                service,
+                {
+                    "marker": command,
+                    ATTR_ENTITY_ID: [f"{domain}.source"],
+                },
+            ))
+
+    assert calls == expected
 
 
 @pytest.mark.parametrize(

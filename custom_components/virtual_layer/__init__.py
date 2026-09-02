@@ -4,6 +4,7 @@ This component provides support for virtual components.
 """
 
 import asyncio
+import copy
 import inspect
 import logging
 import math
@@ -856,7 +857,9 @@ def _configured_area_id(hass, device: Mapping) -> str | None:
     return area.id if area is not None else None
 
 
-def _device_registry_updates_for_config(hass, device: Mapping, registry_entry=None) -> dict:
+def _device_registry_updates_for_config(
+    hass, device: Mapping, registry_entry=None, *, sync_area: bool = True
+) -> dict:
     """Return registry updates needed to match a Virtual Layer device config."""
     updates = {}
     desired = {
@@ -864,8 +867,9 @@ def _device_registry_updates_for_config(hass, device: Mapping, registry_entry=No
         "manufacturer": device.get(CONF_MANUFACTURER) or COMPONENT_MANUFACTURER,
         "model": device.get(CONF_MODEL) or COMPONENT_MODEL,
         "sw_version": device.get(CONF_SW_VERSION) or '0.0.1',
-        "area_id": _configured_area_id(hass, device),
     }
+    if sync_area:
+        desired["area_id"] = _configured_area_id(hass, device)
     for config_key, registry_key in (
         (CONF_HW_VERSION, "hw_version"),
         (CONF_SERIAL_NUMBER, "serial_number"),
@@ -890,6 +894,26 @@ def _device_metadata_owner_entry_id(hass, registry_entry) -> str | None:
         and config_entry.domain == COMPONENT_DOMAIN
     ]
     return min(entry_ids) if entry_ids else None
+
+
+def _async_clear_configured_device_area(hass, entry, virtual_device_id: str) -> bool:
+    """Persist a user removing a Device area in the device registry."""
+    options = copy.deepcopy(dict(entry.options))
+    device_attributes = options.get(ATTR_DEVICE_ATTRIBUTES)
+    if not isinstance(device_attributes, Mapping):
+        return False
+
+    for device in device_attributes.values():
+        if not isinstance(device, dict):
+            continue
+        if device.get(ATTR_DEVICE_ID) != virtual_device_id:
+            continue
+        if CONF_SUGGESTED_AREA not in device:
+            return False
+        device.pop(CONF_SUGGESTED_AREA)
+        hass.config_entries.async_update_entry(entry, options=options)
+        return True
+    return False
 
 
 @callback
@@ -934,7 +958,18 @@ def _async_setup_device_metadata_guard(hass, entry, devices) -> None:
             return
         if _device_metadata_owner_entry_id(hass, registry_entry) != entry.entry_id:
             return
-        updates = _device_registry_updates_for_config(hass, device, registry_entry)
+        virtual_device_id = device.get(ATTR_DEVICE_ID)
+        if (
+            registry_entry.area_id is None
+            and isinstance(virtual_device_id, str)
+            and _configured_area_id(hass, device) is not None
+            and _async_clear_configured_device_area(hass, entry, virtual_device_id)
+        ):
+            device = dict(device)
+            device.pop(CONF_SUGGESTED_AREA, None)
+        updates = _device_registry_updates_for_config(
+            hass, device, registry_entry, sync_area=False
+        )
         if not updates:
             return
         try:

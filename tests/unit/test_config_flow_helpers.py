@@ -132,6 +132,7 @@ from custom_components.virtual_layer.config_flow import (
     _setup_schema,
     _source_command_data_template,
     _source_command_actions,
+    _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES,
     _stored_entity_ids,
     _validate_platform_entity,
     _validate_entity_templates,
@@ -177,6 +178,9 @@ from custom_components.virtual_layer.const import (
     CONF_VALUE_TEMPLATE,
     CONF_VIA_DEVICE_ID,
     VIRTUAL_ENTITY_DOMAINS,
+    VIRTUAL_ENTITY_COMMANDS,
+    VIRTUAL_ENTITY_NON_SERVICE_COMMANDS,
+    VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES,
 )
 
 def _yaml_value(value):
@@ -559,6 +563,35 @@ def test_all_supported_cross_domain_power_helpers_are_valid(
             "action": f"{source_platform}.{command}",
             "target": {ATTR_ENTITY_ID: source_entity_id},
         }]
+
+
+@pytest.mark.parametrize("platform", sorted(VIRTUAL_ENTITY_COMMANDS))
+def test_source_command_helpers_cover_every_proxiable_domain_command(hass, platform):
+    """Every advertised service command gets a source propagation helper."""
+    entity_id = f"{platform}.source"
+    attributes = {"supported_features": (1 << 31) - 1}
+    for (domain, _command), capability_names in (
+        _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES.items()
+    ):
+        if domain == platform:
+            attributes.update({name: ["supported"] for name in capability_names})
+    hass.states.async_set(entity_id, "on", attributes)
+    state = hass.states.get(entity_id)
+    assert state is not None
+
+    actions = _source_command_actions(platform, [entity_id], [state])
+    expected_commands = {
+        command
+        for command in VIRTUAL_ENTITY_COMMANDS[platform]
+        if (platform, command) not in VIRTUAL_ENTITY_NON_SERVICE_COMMANDS
+    }
+    assert set(actions) == expected_commands
+    for command, sequence in actions.items():
+        service = VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES.get(
+            (platform, command),
+            command,
+        )
+        assert sequence[0]["action"] == f"{platform}.{service}"
 
 
 def test_native_value_template_sections_match_domain_properties():
@@ -4412,13 +4445,14 @@ def test_auto_helper_refreshes_generated_boiler_actions_but_preserves_custom_act
         reference,
         _auto_helper_profile(generated),
     )
-    assert refreshed[CONF_COMMAND_ACTIONS_JSON] == reference[
-        CONF_COMMAND_ACTIONS_JSON
-    ]
+    assert _yaml_value(refreshed[CONF_COMMAND_ACTIONS_JSON]) == (
+        current_generated_actions
+    )
 
     customized = {
         **generated,
         CONF_COMMAND_ACTIONS_JSON: json.dumps({
+            "turn_on": old_generated_actions["turn_on"],
             "turn_off": [{"action": "script.custom_boiler_off"}],
         }),
     }
@@ -4427,9 +4461,10 @@ def test_auto_helper_refreshes_generated_boiler_actions_but_preserves_custom_act
         reference,
         _auto_helper_profile(generated),
     )
-    assert refreshed_custom[CONF_COMMAND_ACTIONS_JSON] == customized[
-        CONF_COMMAND_ACTIONS_JSON
-    ]
+    assert _yaml_value(refreshed_custom[CONF_COMMAND_ACTIONS_JSON]) == {
+        "turn_on": current_generated_actions["turn_on"],
+        "turn_off": [{"action": "script.custom_boiler_off"}],
+    }
 
     forced = _reference_edit_defaults(
         customized,
@@ -4437,9 +4472,9 @@ def test_auto_helper_refreshes_generated_boiler_actions_but_preserves_custom_act
         _auto_helper_profile(generated),
         force_template_helper=True,
     )
-    assert forced[CONF_COMMAND_ACTIONS_JSON] == reference[
-        CONF_COMMAND_ACTIONS_JSON
-    ]
+    assert _yaml_value(forced[CONF_COMMAND_ACTIONS_JSON]) == (
+        current_generated_actions
+    )
 
 
 def test_auto_helper_refreshes_native_jinja_per_field_and_preserves_custom_values():
@@ -4503,12 +4538,14 @@ def test_auto_helper_refreshes_icon_and_availability_per_field():
         CONF_PLATFORM: "sensor",
         CONF_SOURCE_ENTITIES_TEXT: "sensor.old",
         CONF_AVAILABILITY_TEMPLATE: "{{ states('sensor.old') != 'unavailable' }}",
+        CONF_ICON: "mdi:old-source",
         CONF_ICON_TEMPLATE: "{{ state_attr('sensor.old', 'icon') }}",
     }
     reference = {
         CONF_PLATFORM: "sensor",
         CONF_SOURCE_ENTITIES_TEXT: "sensor.new",
         CONF_AVAILABILITY_TEMPLATE: "{{ states('sensor.new') != 'unavailable' }}",
+        CONF_ICON: "mdi:new-source",
         CONF_ICON_TEMPLATE: "{{ state_attr('sensor.new', 'icon') }}",
     }
     customized = {
@@ -4522,7 +4559,19 @@ def test_auto_helper_refreshes_icon_and_availability_per_field():
         _auto_helper_profile(generated),
     )
     assert refreshed[CONF_AVAILABILITY_TEMPLATE] == "{{ true }}"
+    assert refreshed[CONF_ICON] == reference[CONF_ICON]
     assert refreshed[CONF_ICON_TEMPLATE] == reference[CONF_ICON_TEMPLATE]
+
+    customized_icon = {
+        **customized,
+        CONF_ICON: "mdi:account-edit",
+    }
+    refreshed_custom_icon = _reference_edit_defaults(
+        customized_icon,
+        reference,
+        _auto_helper_profile(generated),
+    )
+    assert refreshed_custom_icon[CONF_ICON] == "mdi:account-edit"
 
     forced = _reference_edit_defaults(
         customized,
@@ -4533,6 +4582,7 @@ def test_auto_helper_refreshes_icon_and_availability_per_field():
     assert forced[CONF_AVAILABILITY_TEMPLATE] == reference[
         CONF_AVAILABILITY_TEMPLATE
     ]
+    assert forced[CONF_ICON] == reference[CONF_ICON]
     assert forced[CONF_ICON_TEMPLATE] == reference[CONF_ICON_TEMPLATE]
 
 
@@ -5624,6 +5674,27 @@ def test_command_actions_reject_commands_not_implemented_by_selected_domain():
         '{"set_fan_mode": [{"action": "climate.set_fan_mode"}]}',
         "climate",
     )
+
+
+def test_command_action_keys_are_normalized_without_silent_collisions():
+    actions = _parse_command_actions(
+        '{" turn_on ": [{"action": "switch.turn_on"}]}',
+        "switch",
+    )
+    assert actions == {
+        "turn_on": [{"action": "switch.turn_on"}],
+    }
+
+    with pytest.raises(InvalidJson):
+        _parse_command_actions(
+            """
+turn_on:
+  - action: switch.turn_on
+" turn_on ":
+  - action: switch.turn_on
+""",
+            "switch",
+        )
 
 
 def test_entity_form_round_trips_native_templates_and_command_actions():

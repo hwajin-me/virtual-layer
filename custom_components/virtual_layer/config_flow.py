@@ -926,6 +926,7 @@ _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_TEMPLATE_SOURCES_JSON,
     CONF_VALUE_TEMPLATE,
     CONF_AVAILABILITY_TEMPLATE,
+    CONF_ICON,
     CONF_ICON_TEMPLATE,
     CONF_EVENT_HOOKS_JSON,
     CONF_ATTRIBUTES_JSON,
@@ -962,6 +963,7 @@ _AUTO_HELPER_TEMPLATE_FIELDS = frozenset(
 )
 _AUTO_HELPER_INDEPENDENT_TEMPLATE_FIELDS = frozenset({
     CONF_AVAILABILITY_TEMPLATE,
+    CONF_ICON,
     CONF_ICON_TEMPLATE,
 })
 
@@ -2255,10 +2257,14 @@ def _parse_command_actions(value: str, platform: str | None = None) -> dict[str,
         _parse_json_object(value, CONF_COMMAND_ACTIONS_JSON)
     )
     valid_commands = _platform_command_names(platform) if platform else None
+    normalized_actions = {}
     for command, spec in parsed.items():
         if not isinstance(command, str) or not command.strip().isidentifier():
             raise InvalidJson(CONF_COMMAND_ACTIONS_JSON)
-        if valid_commands is not None and command.strip() not in valid_commands:
+        normalized_command = command.strip()
+        if normalized_command in normalized_actions:
+            raise InvalidJson(CONF_COMMAND_ACTIONS_JSON)
+        if valid_commands is not None and normalized_command not in valid_commands:
             raise InvalidJson(CONF_COMMAND_ACTIONS_JSON)
         if isinstance(spec, list):
             sequence = spec
@@ -2278,7 +2284,8 @@ def _parse_command_actions(value: str, platform: str | None = None) -> dict[str,
             cv.SCRIPT_SCHEMA(sequence)
         except vol.Invalid as err:
             raise InvalidJson(CONF_COMMAND_ACTIONS_JSON) from err
-    return parsed
+        normalized_actions[normalized_command] = spec
+    return normalized_actions
 
 
 def _parse_event_hooks(value: str) -> list[dict[str, Any]]:
@@ -6054,6 +6061,14 @@ def _reference_edit_defaults(
                 force_template_helper=force_template_helper,
             )
             continue
+        if field == CONF_COMMAND_ACTIONS_JSON:
+            merged[field] = _merge_command_helper_actions(
+                current_defaults,
+                reference_defaults,
+                auto_profile,
+                force_template_helper=force_template_helper,
+            )
+            continue
         if field in _AUTO_HELPER_TEMPLATE_FIELDS:
             if templates_are_generated:
                 merged[field] = reference_defaults.get(field, "")
@@ -6288,6 +6303,58 @@ def _merge_native_helper_templates(
         if next_value:
             merged[property_name] = next_value
     return merged
+
+
+def _command_action_mapping(value: Any) -> dict[str, Any]:
+    """Normalize editable command actions for per-command helper merging."""
+    if isinstance(value, str):
+        if not value.strip():
+            return {}
+        try:
+            value = _parse_json_value(value, CONF_COMMAND_ACTIONS_JSON)
+        except InvalidJson:
+            return {}
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        str(command).strip(): repair_legacy_template_data(spec)
+        for command, spec in _plain_options(value).items()
+        if isinstance(command, str) and command.strip()
+    }
+
+
+def _merge_command_helper_actions(
+    current_defaults: Mapping,
+    reference_defaults: Mapping,
+    auto_profile: Mapping | None,
+    *,
+    force_template_helper: bool,
+) -> str:
+    """Refresh generated commands while preserving independently edited ones."""
+    current = _command_action_mapping(
+        current_defaults.get(CONF_COMMAND_ACTIONS_JSON),
+    )
+    generated = _command_action_mapping(
+        reference_defaults.get(CONF_COMMAND_ACTIONS_JSON),
+    )
+    baseline = _command_action_mapping(
+        auto_profile.get(CONF_COMMAND_ACTIONS_JSON) if auto_profile else None,
+    )
+    if force_template_helper:
+        return _json_default(generated)
+
+    merged = {}
+    missing = object()
+    for command in sorted(current.keys() | generated.keys() | baseline.keys()):
+        current_spec = current.get(command, missing)
+        baseline_spec = baseline.get(command, missing)
+        if current_spec == baseline_spec:
+            next_spec = generated.get(command, missing)
+        else:
+            next_spec = current_spec
+        if next_spec is not missing:
+            merged[command] = next_spec
+    return _json_default(merged)
 
 
 def _auto_helper_field_default(field: str) -> Any:
