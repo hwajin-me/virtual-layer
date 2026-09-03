@@ -987,6 +987,13 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
         ("climate", "set_hvac_mode"),
     ]
     assert calls[1][2]["hvac_mode"] == "fan_only"
+    hass.states.async_set(
+        "climate.boiler",
+        "fan_only",
+        hass.states.get("climate.boiler").attributes,
+    )
+    boiler._apply_templates()
+    assert boiler.hvac_mode is HVACMode.OFF
 
     calls.clear()
     await boiler.async_set_hvac_mode(HVACMode.HEAT)
@@ -1037,7 +1044,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
         air_conditioner_entity_id,
         "cool",
         {
-            "hvac_modes": ["off", "cool", "dry", "fan_only"],
+            "hvac_modes": ["off", "heat", "cool", "dry", "fan_only"],
             "min_temp": 18,
             "max_temp": 30,
             "target_temp_step": 1,
@@ -1045,9 +1052,15 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
             "temperature": 24,
             "fan_modes": ["medium", "high", "turbo", "auto"],
             "fan_mode": "auto",
+            "preset_modes": ["none", "sleep", "quiet", "speed", "ai_comfort"],
+            "preset_mode": "none",
+            "swing_modes": [],
+            "swing_mode": None,
             "supported_features": int(
                 ClimateEntityFeature.TARGET_TEMPERATURE
                 | ClimateEntityFeature.FAN_MODE
+                | ClimateEntityFeature.PRESET_MODE
+                | ClimateEntityFeature.SWING_MODE
             ),
         },
     )
@@ -1078,6 +1091,10 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     assert climate.target_temperature == 24
     assert (climate.min_temp, climate.max_temp) == (18, 30)
     assert climate.fan_modes == ["medium", "high", "turbo", "auto"]
+    assert climate.preset_modes == ["none", "sleep", "quiet", "speed", "ai_comfort"]
+    assert ClimateEntityFeature.FAN_MODE in climate.supported_features
+    assert ClimateEntityFeature.PRESET_MODE in climate.supported_features
+    assert ClimateEntityFeature.SWING_MODE not in climate.supported_features
 
     calls = []
 
@@ -1088,6 +1105,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
         ("climate", "set_hvac_mode"),
         ("climate", "set_temperature"),
         ("climate", "set_fan_mode"),
+        ("climate", "set_preset_mode"),
         ("switch", "turn_on"),
     ):
         hass.services.async_register(domain, service, _capture)
@@ -1171,12 +1189,46 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     assert calls[0][2]["fan_mode"] == "high"
 
     calls.clear()
+    await climate.async_set_preset_mode("quiet")
+    assert calls == [(
+        "climate",
+        "set_preset_mode",
+        {
+            ATTR_ENTITY_ID: [air_conditioner_entity_id],
+            "preset_mode": "quiet",
+        },
+    )]
+
+    calls.clear()
     await climate.async_set_temperature(temperature=26)
     assert [(domain, service) for domain, service, _data in calls] == [
         ("climate", "set_temperature"),
     ]
     assert calls[0][2][ATTR_ENTITY_ID] == [air_conditioner_entity_id]
     assert calls[0][2]["temperature"] == 26
+
+    # A heat-pump AC and the boiler both use the virtual ``heat`` mode.  When
+    # the AC is already heating, its displayed room setpoint must remain the
+    # target for a plain temperature write; only an explicit ``hvac_mode=heat``
+    # request selects the boiler's high water-temperature range.
+    hass.states.async_set(air_conditioner_entity_id, "heat", {
+        **hass.states.get(air_conditioner_entity_id).attributes,
+        "temperature": 23,
+    })
+    climate._apply_templates()
+    hass.states.async_set("climate.combined", "heat")
+    assert climate.hvac_mode is HVACMode.HEAT
+    assert climate.target_temperature == 23
+    calls.clear()
+    await climate.async_set_temperature(temperature=24)
+    assert calls == [(
+        "climate",
+        "set_temperature",
+        {
+            ATTR_ENTITY_ID: [air_conditioner_entity_id],
+            "temperature": 24,
+        },
+    )]
 
     # Boiler setpoints are water temperatures and can legitimately exceed the
     # active AC's 18–30 °C room range.  The command must reach the boiler
@@ -1192,11 +1244,15 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
             "hvac_mode": "heat",
         },
     )]
-    assert climate.target_temperature == 24
+    assert climate.target_temperature == 23
 
     # A separate heat command writes the virtual state before SiHAS publishes
     # its new source state.  A following high boiler setpoint must still avoid
     # the stale cooling source.
+    hass.states.async_set(air_conditioner_entity_id, "cool", {
+        **hass.states.get(air_conditioner_entity_id).attributes,
+        "temperature": 24,
+    })
     hass.states.async_set("climate.combined", "heat")
     calls.clear()
     await climate.async_set_temperature(temperature=50)
@@ -1214,6 +1270,8 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     assert climate.hvac_mode is HVACMode.OFF
     assert climate.target_temperature == 48
     assert (climate.min_temp, climate.max_temp) == (0, 80)
+    assert ClimateEntityFeature.FAN_MODE not in climate.supported_features
+    assert ClimateEntityFeature.PRESET_MODE not in climate.supported_features
     calls.clear()
     await climate.async_set_temperature(temperature=49)
     assert [(domain, service) for domain, service, _data in calls] == [

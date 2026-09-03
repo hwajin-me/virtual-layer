@@ -1427,7 +1427,7 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     assert [choice["conditions"] for choice in temperature_action["choose"]] == [
         "{{ hvac_mode is defined and hvac_mode in ['cool'] }}",
         "{{ hvac_mode is defined and hvac_mode == 'heat' }}",
-        "{{ this is not none and this.state == 'heat' }}",
+        "{{ this is not none and this.state == 'heat' and states('climate.air_conditioner') != 'heat' }}",
         "{{ this is not none and this.state in ['cool'] }}",
         "{{ states('climate.air_conditioner') not in ['off', 'unknown', 'unavailable', 'none', ''] }}",
     ]
@@ -1625,6 +1625,49 @@ def test_combined_climate_helper_covers_source_order_and_state_matrix(hass):
     hass.states.async_set(air_conditioner_entity_id, "unavailable")
     hass.states.async_set(hot_water_switch_id, "unavailable")
     assert availability_template.async_render(parse_result=True) is False
+
+
+def test_combined_climate_helper_turns_off_virtual_boiler_alias(hass):
+    """Do not send raw-only fan_only to an off/heat virtual boiler source."""
+    hass.states.async_set(
+        "climate.virtual_boiler",
+        "off",
+        {
+            "hvac_modes": ["off", "heat"],
+            "min_temp": 0,
+            "max_temp": 80,
+            "temperature": 48,
+        },
+    )
+    hass.states.async_set("switch.hot_water", "on")
+    hass.states.async_set(
+        "climate.air_conditioner",
+        "cool",
+        {"hvac_modes": ["off", "cool", "dry", "fan_only"]},
+    )
+
+    defaults = _reference_entity_defaults(
+        hass,
+        [
+            "climate.virtual_boiler",
+            "switch.hot_water",
+            "climate.air_conditioner",
+        ],
+    )
+    actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
+    cooling_sequence = actions["set_hvac_mode"][0]["choose"][1]["sequence"]
+
+    assert cooling_sequence[0] == {
+        "action": "switch.turn_on",
+        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+    }
+    assert cooling_sequence[1] == {
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: "climate.virtual_boiler"},
+        "data": {"hvac_mode": "off"},
+    }
+    assert actions["turn_off"][1]["data"] == {"hvac_mode": "off"}
+    assert actions["turn_on"][1]["data"] == {"hvac_mode": "off"}
 
 
 def test_multiple_media_players_with_on_off_snapshots_use_state_helper(hass):
@@ -2845,7 +2888,7 @@ def test_reference_heating_only_climate_builds_heat_off_boiler_helper(hass):
     assert actions["turn_off"] == [
         {
             "action": "climate.set_hvac_mode",
-            "data": {"hvac_mode": "off"},
+            "data": {"hvac_mode": "fan_only"},
             "target": {ATTR_ENTITY_ID: "climate.boiler"},
         }
     ]
@@ -2855,6 +2898,23 @@ def test_reference_heating_only_climate_builds_heat_off_boiler_helper(hass):
         for action in sequence
     )
     assert CONF_COMMAND_ACTIONS_JSON not in _without_template_helpers(defaults)
+
+
+def test_reference_virtual_boiler_off_does_not_send_unsupported_fan_only(hass):
+    """A nested virtual boiler must retain its own valid off command."""
+    hass.states.async_set(
+        "climate.virtual_boiler",
+        "off",
+        {"hvac_modes": ["off", "heat"], "temperature": 48},
+    )
+
+    defaults = _reference_entity_defaults(hass, ["climate.virtual_boiler"])
+
+    assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])["turn_off"] == [{
+        "action": "climate.set_hvac_mode",
+        "data": {"hvac_mode": "off"},
+        "target": {ATTR_ENTITY_ID: "climate.virtual_boiler"},
+    }]
 
 
 def test_climate_entity_form_uses_only_jinja_native_controls():

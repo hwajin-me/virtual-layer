@@ -443,6 +443,10 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
 
     def _refresh_supported_features(self) -> None:
         """Recalculate features after static or templated capabilities change."""
+        def has_dynamic_native_template(*names: str) -> bool:
+            """Avoid advertising a command when its active source has no value."""
+            return any(name in self._native_templates for name in names)
+
         features = ClimateEntityFeature(0)
         if any(mode != HVACMode.OFF for mode in self._attr_hvac_modes):
             features |= ClimateEntityFeature.TURN_ON
@@ -452,24 +456,46 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         target_temperature = self._attr_target_temperature
         target_temperature_high = self._attr_target_temperature_high
         target_temperature_low = self._attr_target_temperature_low
-        if target_humidity is not None or "set_humidity" in self._command_actions:
+        if target_humidity is not None or (
+            "set_humidity" in self._command_actions
+            and not has_dynamic_native_template(CONF_TARGET_HUMIDITY)
+        ):
             features |= ClimateEntityFeature.TARGET_HUMIDITY
         if target_temperature_high is not None and target_temperature_low is not None:
             features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
         elif (
             target_temperature is not None
-            or "set_temperature" in self._command_actions
+            or (
+                "set_temperature" in self._command_actions
+                and not has_dynamic_native_template(
+                    CONF_TARGET_TEMPERATURE,
+                    CONF_TARGET_TEMPERATURE_HIGH,
+                    CONF_TARGET_TEMPERATURE_LOW,
+                )
+            )
         ):
             features |= ClimateEntityFeature.TARGET_TEMPERATURE
-        if self._attr_fan_modes or "set_fan_mode" in self._command_actions:
+        if self._attr_fan_modes or (
+            "set_fan_mode" in self._command_actions
+            and not has_dynamic_native_template(CONF_FAN_MODES)
+        ):
             features |= ClimateEntityFeature.FAN_MODE
-        if self._attr_preset_modes or "set_preset_mode" in self._command_actions:
+        if self._attr_preset_modes or (
+            "set_preset_mode" in self._command_actions
+            and not has_dynamic_native_template(CONF_PRESET_MODES)
+        ):
             features |= ClimateEntityFeature.PRESET_MODE
-        if self._attr_swing_modes or "set_swing_mode" in self._command_actions:
+        if self._attr_swing_modes or (
+            "set_swing_mode" in self._command_actions
+            and not has_dynamic_native_template(CONF_SWING_MODES)
+        ):
             features |= ClimateEntityFeature.SWING_MODE
         if (
             self._attr_swing_horizontal_modes
-            or "set_swing_horizontal_mode" in self._command_actions
+            or (
+                "set_swing_horizontal_mode" in self._command_actions
+                and not has_dynamic_native_template(CONF_SWING_HORIZONTAL_MODES)
+            )
         ):
             features |= ClimateEntityFeature.SWING_HORIZONTAL_MODE
         self._attr_supported_features = features

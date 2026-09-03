@@ -4929,10 +4929,22 @@ def _boiler_air_conditioner_command_actions(
         for mode in air_conditioner_state.attributes.get("hvac_modes", ())
         if str(mode).strip().lower() not in {"", "off", "heat"}
     ]
+    boiler_modes = {
+        str(mode).strip().lower()
+        for mode in boiler_state.attributes.get("hvac_modes", ())
+        if str(mode).strip()
+    }
+    # A Virtual Layer boiler alias exposes only off/heat and translates its
+    # own off command to the raw boiler's fan_only hot-water mode.  Sending
+    # fan_only directly to that alias is therefore invalid.
+    off_hvac_mode = "fan_only" if "fan_only" in boiler_modes else "off"
     # A SiHAS-style boiler uses fan_only as hot-water-only mode.  Preserve
     # that service while room conditioning is delegated to the air conditioner.
     boiler_off = _boiler_mode_action_sequence(
-        boiler_entity_id, hot_water_switch_id, "off"
+        boiler_entity_id,
+        hot_water_switch_id,
+        "off",
+        off_hvac_mode=off_hvac_mode,
     )
     boiler_heat = _boiler_mode_action_sequence(
         boiler_entity_id, hot_water_switch_id, "heat"
@@ -5046,9 +5058,16 @@ def _boiler_air_conditioner_command_actions(
                 },
                 {
                     # A mode command may have completed locally before its
-                    # physical source publishes the new state.  Prefer that
-                    # virtual state over a stale active-source observation.
-                    "conditions": "{{ this is not none and this.state == 'heat' }}",
+                    # physical boiler source publishes the new state.  An
+                    # air conditioner which is *already* heating is different:
+                    # it owns the currently displayed room setpoint, even
+                    # though both appliances share the virtual ``heat`` mode.
+                    # Route only the stale-source case to the boiler.
+                    "conditions": (
+                        "{{ this is not none and this.state == 'heat' and states("
+                        + repr(air_conditioner_entity_id)
+                        + ") != 'heat' }}"
+                    ),
                     "sequence": [boiler_action],
                 },
                 {
@@ -5430,6 +5449,8 @@ def _boiler_mode_action_sequence(
     climate_entity_id: str,
     hot_water_switch_id: str | None,
     hvac_mode: str,
+    *,
+    off_hvac_mode: str = "fan_only",
 ) -> list[dict[str, Any]]:
     """Build the source actions for one boiler HVAC mode."""
     sequence = []
@@ -5439,8 +5460,8 @@ def _boiler_mode_action_sequence(
             "target": {ATTR_ENTITY_ID: hot_water_switch_id},
         })
     source_hvac_mode = (
-        "fan_only"
-        if hvac_mode == "off" and hot_water_switch_id
+        off_hvac_mode
+        if hvac_mode == "off"
         else hvac_mode
     )
     sequence.append({
@@ -5457,6 +5478,16 @@ def _boiler_command_actions(
     hot_water_switch_id: str | None,
 ) -> dict[str, Any]:
     """Build editable command actions for a heat/off boiler alias."""
+    boiler_modes = {
+        str(mode).strip().lower()
+        for mode in climate_state.attributes.get("hvac_modes", ())
+        if str(mode).strip()
+    }
+    # BCM reports fan_only for its heating-off / hot-water standby state.  A
+    # pre-existing virtual boiler, on the other hand, advertises only off and
+    # heat and already translates its own off action.  Never send fan_only to
+    # that alias.
+    off_hvac_mode = "fan_only" if "fan_only" in boiler_modes else "off"
     heat_sequence = _boiler_mode_action_sequence(
         climate_entity_id,
         hot_water_switch_id,
@@ -5466,6 +5497,7 @@ def _boiler_command_actions(
         climate_entity_id,
         hot_water_switch_id,
         "off",
+        off_hvac_mode=off_hvac_mode,
     )
     set_hvac_mode = [{
         "choose": [
