@@ -135,6 +135,22 @@ def test_korean_translation_covers_config_options_selectors_and_services():
     assert korean["services"]["set_attributes"]["name"] == "속성 설정"
 
 
+def test_virtual_climate_preserves_translated_source_preset_names():
+    """Common Samsung AC presets keep their localized labels when mirrored."""
+    english = _english_catalog()
+    korean = json.loads((TRANSLATIONS / "ko.json").read_text(encoding="utf-8"))
+    english_states = english["entity"]["climate"]["virtual"][
+        "state_attributes"
+    ]["preset_mode"]["state"]
+    korean_states = korean["entity"]["climate"]["virtual"][
+        "state_attributes"
+    ]["preset_mode"]["state"]
+
+    assert english_states["quiet"] == "Quiet"
+    assert korean_states["quiet"] == "저소음"
+    assert korean_states["wind_free"] == "무풍"
+
+
 def test_native_template_sections_are_translated_for_add_and_edit():
     for translation_file in (TRANSLATIONS / "en.json", TRANSLATIONS / "ko.json"):
         catalog = json.loads(translation_file.read_text(encoding="utf-8"))

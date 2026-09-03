@@ -388,6 +388,12 @@ async def async_setup_entry(
 class VirtualClimate(VirtualEntity, ClimateEntity):
     """Representation of a virtual climate device."""
 
+    # Provide a stable translation namespace for source-derived preset values.
+    # Home Assistant resolves attribute-state translations from the virtual
+    # entity's own platform, so source integration translations are otherwise
+    # not considered after a climate entity is mirrored.
+    _attr_translation_key = "virtual"
+
     def __init__(self, config, old_style: bool):
         super().__init__(config, PLATFORM_DOMAIN, old_style)
 

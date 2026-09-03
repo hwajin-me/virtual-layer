@@ -1894,5 +1894,24 @@
         }
       }
     }
+  },
+  "entity": {
+    "climate": {
+      "virtual": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "long_wind": "롱윈드",
+              "motion_direct": "직접 바람",
+              "motion_indirect": "간접 바람",
+              "quiet": "저소음",
+              "smart": "스마트 절전",
+              "wind_free": "무풍",
+              "wind_free_sleep": "무풍 취침"
+            }
+          }
+        }
+      }
+    }
   }
 }

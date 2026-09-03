@@ -454,6 +454,15 @@ def test_climate_power_features_follow_configured_hvac_modes(
     ) == expected_features
 
 
+def test_virtual_climate_has_a_translation_namespace_for_presets():
+    climate = VirtualClimate(
+        _config(CLIMATE_SCHEMA, "climate", "off", hvac_modes=["off", "cool"]),
+        False,
+    )
+
+    assert climate.translation_key == "virtual"
+
+
 async def test_climate_power_commands_never_create_unsupported_modes():
     off_only = VirtualClimate(
         _config(CLIMATE_SCHEMA, "climate", "off", hvac_modes=["off"]),

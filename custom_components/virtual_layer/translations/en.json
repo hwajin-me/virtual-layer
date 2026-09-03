@@ -1894,5 +1894,24 @@
         }
       }
     }
+  },
+  "entity": {
+    "climate": {
+      "virtual": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "long_wind": "Long wind",
+              "motion_direct": "Motion direct",
+              "motion_indirect": "Motion indirect",
+              "quiet": "Quiet",
+              "smart": "Smart saver",
+              "wind_free": "WindFree",
+              "wind_free_sleep": "WindFree sleep"
+            }
+          }
+        }
+      }
+    }
   }
 }
