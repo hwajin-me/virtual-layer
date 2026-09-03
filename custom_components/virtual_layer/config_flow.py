@@ -148,6 +148,9 @@ CONF_REFERENCE_ENTITY_ID = "reference_entity_id"
 CONF_TARGET_ENTITY_TYPE = "target_entity_type"
 CONF_HELPER_UPDATE_MODE = "helper_update_mode"
 CONF_USE_TEMPLATE_HELPER = "use_template_helper"
+CONF_MATTER_FAN_LOW_LEVEL = "matter_fan_low_level"
+CONF_MATTER_FAN_MEDIUM_LEVEL = "matter_fan_medium_level"
+CONF_MATTER_FAN_HIGH_LEVEL = "matter_fan_high_level"
 CONF_SOURCE_ENTITIES_TEXT = "source_entities_text"
 CONF_TEMPLATE_SOURCES_JSON = "template_sources_json"
 CONF_TARGET_DEVICE_NAME = "target_device_name"
@@ -1124,7 +1127,6 @@ _FORM_FIELD_EXAMPLES: dict[str, Any] = {
     CONF_DEVICE_SUGGESTED_AREA: "Living Room",
     CONF_ENTITY_NAME: "Air Purifier",
     ATTR_ENTITY_ID: "fan.living_room_air_purifier",
-    CONF_ICON: "mdi:air-purifier",
     CONF_SOURCE_ENTITIES_TEXT: "fan.air_purifier\nnumber.air_purifier_speed",
     CONF_INITIAL_VALUE: "off",
     CONF_VALUE_TEMPLATE: "{{ states('sensor.source') }}",
@@ -1311,6 +1313,16 @@ def _helper_usage_schema() -> vol.Schema:
             }
         )
     )
+
+
+def _matter_fan_level_schema(levels: tuple[int, ...]) -> vol.Schema:
+    """Select the source steps represented by Matter's three fan speeds."""
+    defaults = (levels[0], levels[len(levels) // 2], levels[-1])
+    return _complete_form_schema(vol.Schema({
+        vol.Required(CONF_MATTER_FAN_LOW_LEVEL, default=defaults[0]): vol.In(levels),
+        vol.Required(CONF_MATTER_FAN_MEDIUM_LEVEL, default=defaults[1]): vol.In(levels),
+        vol.Required(CONF_MATTER_FAN_HIGH_LEVEL, default=defaults[2]): vol.In(levels),
+    }))
 
 
 _SINGLE_SOURCE_TARGET_DOMAINS = {
@@ -4759,6 +4771,325 @@ def _boiler_source_profile(
     return None
 
 
+def _boiler_air_conditioner_profile(
+    entity_ids: list[str],
+    states: list,
+) -> tuple[int, int, str | None] | None:
+    """Identify a boiler plus cooling climate pair.
+
+    A boiler commonly reports ``fan_only`` while making hot water.  That is
+    not a room-conditioning mode, so it must not mask an active air
+    conditioner when the two appliances are exposed as one climate entity.
+    """
+    if len(entity_ids) not in {2, 3}:
+        return None
+    climate_indexes = [
+        index for index, entity_id in enumerate(entity_ids)
+        if entity_id.startswith("climate.")
+    ]
+    hot_water_switches = [
+        entity_id for entity_id in entity_ids if entity_id.startswith("switch.")
+    ]
+    if (
+        len(climate_indexes) != 2
+        or len(hot_water_switches) != len(entity_ids) - 2
+    ):
+        return None
+    boiler_indexes = [
+        index for index in climate_indexes if _heating_only_climate(states[index])
+    ]
+    if len(boiler_indexes) != 1:
+        return None
+    boiler_index = boiler_indexes[0]
+    air_conditioner_index = next(
+        index for index in climate_indexes if index != boiler_index
+    )
+    air_conditioner_modes = {
+        str(mode).strip().lower()
+        for mode in states[air_conditioner_index].attributes.get("hvac_modes", ())
+    }
+    if not air_conditioner_modes.intersection({"cool", "dry", "heat_cool"}):
+        return None
+    return boiler_index, air_conditioner_index, next(iter(hot_water_switches), None)
+
+
+def _boiler_air_conditioner_mode_template(
+    boiler_entity_id: str,
+    air_conditioner_entity_id: str,
+) -> str:
+    """Prefer active room conditioning over boiler hot-water operation."""
+    return (
+        "{% set air_conditioner = states("
+        + repr(air_conditioner_entity_id)
+        + ") %}{% set boiler = states("
+        + repr(boiler_entity_id)
+        + ") %}{{ air_conditioner if air_conditioner not in "
+        "['off', 'unknown', 'unavailable', 'none', ''] else "
+        "('heat' if boiler == 'heat' else 'off') }}"
+    )
+
+
+def _boiler_air_conditioner_hvac_modes_template(
+    air_conditioner_entity_id: str,
+    air_conditioner_state,
+) -> str:
+    """Expose heat for the boiler and the room-conditioning source modes."""
+    fallback_modes = [
+        str(mode).strip().lower()
+        for mode in air_conditioner_state.attributes.get("hvac_modes", ())
+        if str(mode).strip()
+    ]
+    return (
+        "{% set modes = state_attr("
+        + repr(air_conditioner_entity_id)
+        + ", 'hvac_modes') | default("
+        + repr(fallback_modes)
+        + ", true) %}{{ ['off'] + "
+        "(modes | select('in', ['cool', 'heat_cool', 'auto', 'dry', 'fan_only']) "
+        "| reject('in', ['off', 'heat']) | list if modes is list else []) + ['heat'] }}"
+    )
+
+
+def _boiler_air_conditioner_native_template(
+    property_name: str,
+    boiler_entity_id: str,
+    boiler_state,
+    air_conditioner_entity_id: str,
+    air_conditioner_state,
+) -> str:
+    """Read native values from the appliance currently conditioning the room."""
+    boiler_template = _native_source_template(
+        boiler_entity_id, boiler_state, property_name, "climate"
+    )
+    air_conditioner_template = _native_source_template(
+        air_conditioner_entity_id,
+        air_conditioner_state,
+        property_name,
+        "climate",
+    )
+    return (
+        "{% if states("
+        + repr(air_conditioner_entity_id)
+        + ") not in ['off', 'unknown', 'unavailable', 'none', ''] %}"
+        + air_conditioner_template
+        + "{% else %}"
+        + boiler_template
+        + "{% endif %}"
+    )
+
+
+def _climate_source_command_action(
+    command: str,
+    entity_id: str,
+    state,
+) -> dict[str, Any] | None:
+    """Build one climate command action when its source supports it."""
+    key = ("climate", command)
+    required_features = _SOURCE_COMMAND_FEATURES.get(key)
+    capability_attributes = _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES.get(key, ())
+    if required_features is not None and not _source_supports_command(
+        state, required_features, capability_attributes
+    ):
+        return None
+    service = VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES.get(key, command)
+    data = _source_command_data_template("climate", command, entity_id)
+    if data is None:
+        data = (
+            {"hvac_mode": "{{ hvac_mode }}"}
+            if command == "set_hvac_mode"
+            else "{{ command_data }}"
+        )
+    return {
+        "action": f"climate.{service}",
+        "target": {ATTR_ENTITY_ID: entity_id},
+        "data": data,
+    }
+
+
+def _boiler_air_conditioner_active_condition(
+    air_conditioner_entity_id: str,
+) -> str:
+    """Return an action condition selecting an active air conditioner."""
+    return (
+        "{{ states(" + repr(air_conditioner_entity_id) + ") not in "
+        "['off', 'unknown', 'unavailable', 'none', ''] }}"
+    )
+
+
+def _boiler_air_conditioner_command_actions(
+    boiler_entity_id: str,
+    air_conditioner_entity_id: str,
+    hot_water_switch_id: str | None,
+    boiler_state,
+    air_conditioner_state,
+) -> dict[str, Any]:
+    """Route HVAC modes only to the appliance that implements them."""
+    air_conditioner_modes = [
+        str(mode).strip().lower()
+        for mode in air_conditioner_state.attributes.get("hvac_modes", ())
+        if str(mode).strip().lower() not in {"", "off", "heat"}
+    ]
+    # A SiHAS-style boiler uses fan_only as hot-water-only mode.  Preserve
+    # that service while room conditioning is delegated to the air conditioner.
+    boiler_off = _boiler_mode_action_sequence(
+        boiler_entity_id, hot_water_switch_id, "off"
+    )
+    boiler_heat = _boiler_mode_action_sequence(
+        boiler_entity_id, hot_water_switch_id, "heat"
+    )
+    air_conditioner_off = {
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
+        "data": {"hvac_mode": "off"},
+    }
+    default_air_conditioner_mode = air_conditioner_modes[0]
+    turn_on = [
+        *boiler_off,
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
+            "data": {"hvac_mode": default_air_conditioner_mode},
+        },
+    ]
+    actions = {
+        "set_hvac_mode": [{
+            "choose": [
+                {
+                    "conditions": "{{ hvac_mode == 'heat' }}",
+                    "sequence": [
+                        air_conditioner_off,
+                        *boiler_heat,
+                    ],
+                },
+                {
+                    "conditions": "{{ hvac_mode in " + repr(air_conditioner_modes) + " }}",
+                    "sequence": [
+                        *boiler_off,
+                        {
+                            "action": "climate.set_hvac_mode",
+                            "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
+                            "data": {"hvac_mode": "{{ hvac_mode }}"},
+                        },
+                    ],
+                },
+            ],
+            "default": [*boiler_off, air_conditioner_off],
+        }],
+        # VirtualClimate.async_turn_on selects the first non-off advertised
+        # mode. Keep the source action aligned with that optimistic state.
+        "turn_on": turn_on,
+        "turn_off": [*boiler_off, air_conditioner_off],
+    }
+    active_air_conditioner = _boiler_air_conditioner_active_condition(
+        air_conditioner_entity_id
+    )
+    ac_only_commands = {
+        "set_fan_mode",
+        "set_preset_mode",
+        "set_swing_mode",
+        "set_swing_horizontal_mode",
+    }
+    for command in VIRTUAL_ENTITY_COMMANDS.get("climate", ()):
+        if command in actions or ("climate", command) in VIRTUAL_ENTITY_NON_SERVICE_COMMANDS:
+            continue
+        boiler_action = _climate_source_command_action(
+            command, boiler_entity_id, boiler_state
+        )
+        air_conditioner_action = _climate_source_command_action(
+            command, air_conditioner_entity_id, air_conditioner_state
+        )
+        if boiler_action is None or air_conditioner_action is None:
+            continue
+        if command in ac_only_commands:
+            # Fan, preset, and swing settings belong to the air conditioner;
+            # broadcasting them to a boiler can fail or change an unrelated
+            # appliance setting.
+            actions[command] = [air_conditioner_action]
+        elif command == "set_temperature":
+            # A Nest range request commonly carries ``hvac_mode=heat_cool``
+            # while the thermostat is currently off.  Source state alone
+            # would incorrectly route that request to the boiler, losing its
+            # target_temp_low/high range and never enabling Nest's range mode.
+            range_modes = [
+                mode for mode in air_conditioner_modes
+                if mode in {"heat_cool", "auto"}
+            ]
+            choose = []
+            if range_modes:
+                # Retain both range endpoints.  The source step-rounding
+                # template is intentionally bypassed for this branch because
+                # it only knows the single ``temperature`` argument.
+                range_action = dict(air_conditioner_action)
+                range_action["data"] = "{{ command_data }}"
+                choose.append({
+                    "conditions": (
+                        "{{ hvac_mode is defined and hvac_mode in "
+                        + repr(range_modes)
+                        + " }}"
+                    ),
+                    "sequence": [range_action],
+                })
+            choose.extend([
+                {
+                    "conditions": (
+                        "{{ hvac_mode is defined and hvac_mode in "
+                        + repr(air_conditioner_modes)
+                        + " }}"
+                    ),
+                    "sequence": [air_conditioner_action],
+                },
+                {
+                    "conditions": (
+                        "{{ hvac_mode is defined and hvac_mode == 'heat' }}"
+                    ),
+                    "sequence": [boiler_action],
+                },
+                {
+                    # A mode command may have completed locally before its
+                    # physical source publishes the new state.  Prefer that
+                    # virtual state over a stale active-source observation.
+                    "conditions": "{{ this is not none and this.state == 'heat' }}",
+                    "sequence": [boiler_action],
+                },
+                {
+                    "conditions": (
+                        "{{ this is not none and this.state in "
+                        + repr(air_conditioner_modes)
+                        + " }}"
+                    ),
+                    "sequence": [air_conditioner_action],
+                },
+                {
+                    "conditions": active_air_conditioner,
+                    "sequence": [air_conditioner_action],
+                },
+            ])
+            actions[command] = {
+                # The boiler's water/setpoint range (for example 0–80 °C) is
+                # intentionally wider than an active air conditioner's room
+                # range.  Do not run VirtualClimate's optimistic room-range
+                # validation after the source action: the source owns the
+                # authoritative clamp and will publish the resulting value.
+                "optimistic": False,
+                "sequence": [{
+                "choose": choose,
+                "default": [boiler_action],
+                }],
+            }
+        else:
+            # Temperature/humidity writes follow the appliance currently
+            # providing room conditioning, preserving the inactive one's set
+            # point for its next use.
+            actions[command] = [{
+                "choose": [{
+                    "conditions": active_air_conditioner,
+                    "sequence": [air_conditioner_action],
+                }],
+                "default": [boiler_action],
+            }]
+    return actions
+
+
 def _humidifier_component_profile(
     entity_ids: Collection[str],
 ) -> dict[str, int] | None:
@@ -5446,6 +5777,101 @@ def _source_command_actions(
     return actions
 
 
+def _matter_fan_source_levels(hass, entity_ids: Collection[str], platform: str) -> tuple[int, ...]:
+    """Return selectable non-zero fan percentage steps for Matter reduction."""
+    if platform != "fan" or len(entity_ids) != 1 or not entity_ids[0].startswith("fan."):
+        return ()
+    state = hass.states.get(entity_ids[0])
+    if state is None:
+        return ()
+    try:
+        step = float(state.attributes.get("percentage_step", 0))
+    except (TypeError, ValueError):
+        return ()
+    if not step.is_integer() or step <= 0 or step > 100:
+        return ()
+    values = tuple(range(int(step), 101, int(step)))
+    return values if len(values) > 3 and values[-1] == 100 else ()
+
+
+def _matter_fan_level_templates(
+    entity_id: str, low: int, medium: int, high: int
+) -> tuple[str, dict[str, Any]]:
+    """Build Jinja helpers translating a stepped fan into Matter's 3 speeds."""
+    # The reads use midpoint buckets so unselected source steps still have a
+    # stable Matter representation. Writes use the selected physical steps.
+    percentage = (
+        "{% set raw = state_attr(" + repr(entity_id) + ", 'percentage') | float(0) %}"
+        "{% if raw <= 0 %}0{% elif raw < " + str((low + medium) / 2)
+        + " %}33{% elif raw < " + str((medium + high) / 2)
+        + " %}67{% else %}100{% endif %}"
+    )
+    requested = (
+        "{% set requested = percentage | float(0) %}"
+        "{{ 0 if requested <= 0 else " + str(low)
+        + " if requested <= 50 else " + str(medium)
+        + " if requested <= 83 else " + str(high) + " }}"
+    )
+    actions = {
+        "set_percentage": [{
+            "action": "fan.set_percentage",
+            "target": {ATTR_ENTITY_ID: entity_id},
+            "data": {"percentage": requested},
+        }],
+    }
+    return percentage, actions
+
+
+def _matter_fan_turn_on_data_template(low: int, medium: int, high: int) -> str:
+    """Map an optional turn-on percentage without inventing one when absent."""
+    return (
+        "{% if command_data.get('percentage') is number %}"
+        "{% set requested = command_data.get('percentage') | float(0) %}"
+        "{{ dict(command_data, percentage=(0 if requested <= 0 else "
+        + str(low) + " if requested <= 50 else " + str(medium)
+        + " if requested <= 83 else " + str(high) + ")) }}"
+        "{% else %}{{ command_data }}{% endif %}"
+    )
+
+
+def _apply_matter_fan_level_helper(
+    defaults: Mapping[str, Any], entity_id: str, levels: tuple[int, int, int]
+) -> dict[str, Any]:
+    """Replace fan speed helpers with a selected Matter-compatible profile."""
+    low, medium, high = levels
+    if not 0 < low < medium < high <= 100:
+        raise vol.Invalid("Matter fan levels must be distinct and ascending")
+    result = dict(defaults)
+    percentage, actions = _matter_fan_level_templates(entity_id, low, medium, high)
+    native = _native_template_defaults("fan", result)
+    native.update({"speed_count": "{{ 3 }}", "percentage": percentage})
+    result[CONF_NATIVE_VALUE_TEMPLATES] = native
+    # Keep source power, preset, oscillation, and direction actions. The
+    # reduced mapping owns only percentage writes.
+    existing_actions = _parse_command_actions(
+        result.get(CONF_COMMAND_ACTIONS_JSON), "fan"
+    )
+    existing_actions.update(actions)
+    turn_on_data = _matter_fan_turn_on_data_template(low, medium, high)
+    turn_on = existing_actions.get("turn_on")
+    if isinstance(turn_on, list):
+        for action in turn_on:
+            if (
+                isinstance(action, dict)
+                and action.get("action") == "fan.turn_on"
+                and action.get("target") == {ATTR_ENTITY_ID: entity_id}
+            ):
+                action["data"] = turn_on_data
+    elif turn_on is None:
+        existing_actions["turn_on"] = [{
+            "action": "fan.turn_on",
+            "target": {ATTR_ENTITY_ID: entity_id},
+            "data": turn_on_data,
+        }]
+    result[CONF_COMMAND_ACTIONS_JSON] = _json_default(existing_actions)
+    return result
+
+
 def _reference_entity_defaults(
     hass,
     entity_ids,
@@ -5487,6 +5913,9 @@ def _reference_entity_defaults(
     all_enum = _all_source_domains(entity_ids, ENUM_SOURCE_DOMAINS)
     all_location = _all_source_domains(entity_ids, LOCATION_SOURCE_DOMAINS)
     boiler_profile = _boiler_source_profile(entity_ids, states)
+    boiler_air_conditioner_profile = _boiler_air_conditioner_profile(
+        entity_ids, states
+    )
     fan_number_profile = _xiaomi_fan_number_profile(entity_ids, states)
     humidifier_component_profile = _humidifier_component_profile(entity_ids)
     presence_or_motion_class = (
@@ -5495,7 +5924,7 @@ def _reference_entity_defaults(
     safety_boolean_sources = (
         _safety_boolean_sources(entity_ids, states) if all_boolean else False
     )
-    if boiler_profile is not None:
+    if boiler_profile is not None or boiler_air_conditioner_profile is not None:
         platform = "climate"
     elif fan_number_profile is not None:
         platform = "fan"
@@ -5539,6 +5968,16 @@ def _reference_entity_defaults(
         climate_index, _hot_water_switch_id = boiler_profile
         initial_value = (
             "heat" if states[climate_index].state == "heat" else "off"
+        )
+    elif boiler_air_conditioner_profile is not None:
+        boiler_index, air_conditioner_index, _hot_water_switch_id = (
+            boiler_air_conditioner_profile
+        )
+        air_conditioner_state = states[air_conditioner_index].state
+        initial_value = (
+            air_conditioner_state
+            if air_conditioner_state not in {"off", "unknown", "unavailable"}
+            else "heat" if states[boiler_index].state == "heat" else "off"
         )
     elif fan_number_profile is not None:
         initial_value = states[fan_number_profile[0]].state
@@ -5636,6 +6075,27 @@ def _reference_entity_defaults(
         defaults[CONF_AVAILABILITY_TEMPLATE] = _xiaomi_fan_availability_template(
             entity_ids[fan_index],
             entity_ids[number_index],
+        )
+    elif boiler_air_conditioner_profile is not None:
+        boiler_index, air_conditioner_index, hot_water_switch_id = (
+            boiler_air_conditioner_profile
+        )
+        # Either appliance can still provide useful room conditioning.  Do not
+        # make an active air conditioner unavailable merely because the boiler
+        # is temporarily offline (or vice versa).
+        boiler_available = (
+            "states(" + repr(entity_ids[boiler_index])
+            + ") not in ['unknown', 'unavailable']"
+        )
+        if hot_water_switch_id:
+            boiler_available += (
+                " and states(" + repr(hot_water_switch_id)
+                + ") not in ['unknown', 'unavailable']"
+            )
+        defaults[CONF_AVAILABILITY_TEMPLATE] = (
+            "{{ " + boiler_available + " or states("
+            + repr(entity_ids[air_conditioner_index])
+            + ") not in ['unknown', 'unavailable'] }}"
         )
     generated_entity_id = _default_virtual_entity_id_for_sources(
         platform,
@@ -5818,6 +6278,20 @@ def _reference_entity_defaults(
                 hot_water_switch_id,
             )
         )
+    elif boiler_air_conditioner_profile is not None:
+        boiler_index, air_conditioner_index, hot_water_switch_id = (
+            boiler_air_conditioner_profile
+        )
+        source_command_actions.update(
+            _boiler_air_conditioner_command_actions(
+                entity_ids[boiler_index],
+                entity_ids[air_conditioner_index],
+                hot_water_switch_id,
+                states[boiler_index],
+                states[air_conditioner_index],
+            )
+        )
+        defaults[CONF_COMMAND_ACTIONS_JSON] = _json_default(source_command_actions)
     elif platform == "binary_sensor" and presence_or_motion_class:
         defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(
             {
@@ -5973,6 +6447,29 @@ def _reference_entity_defaults(
         native_templates.update({
             "hvac_modes": "{{ ['off', 'heat'] }}",
             "hvac_mode": _boiler_mode_template(entity_ids[climate_index]),
+        })
+    elif boiler_air_conditioner_profile is not None:
+        boiler_index, air_conditioner_index, _hot_water_switch_id = (
+            boiler_air_conditioner_profile
+        )
+        native_templates = {
+            property_name: _boiler_air_conditioner_native_template(
+                property_name,
+                entity_ids[boiler_index],
+                states[boiler_index],
+                entity_ids[air_conditioner_index],
+                states[air_conditioner_index],
+            )
+            for property_name in CLIMATE_NATIVE_TEMPLATE_PROPERTIES
+            if property_name not in {"hvac_modes", "hvac_mode"}
+        }
+        native_templates.update({
+            "hvac_modes": _boiler_air_conditioner_hvac_modes_template(
+                entity_ids[air_conditioner_index], states[air_conditioner_index]
+            ),
+            "hvac_mode": _boiler_air_conditioner_mode_template(
+                entity_ids[boiler_index], entity_ids[air_conditioner_index]
+            ),
         })
     elif fan_number_profile is not None:
         fan_index, number_index = fan_number_profile
@@ -6877,6 +7374,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         self._reference_defaults: dict[str, Any] = {}
         self._source_entities: list[str] = []
         self._add_use_template_helper = True
+        self._matter_fan_levels: tuple[int, ...] = ()
 
     @staticmethod
     @callback
@@ -7058,11 +7556,41 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 if self._add_use_template_helper
                 else _without_template_helpers(self._reference_defaults)
             )
+            self._matter_fan_levels = _matter_fan_source_levels(
+                self.hass, self._source_entities,
+                self._reference_defaults.get(CONF_PLATFORM, ""),
+            ) if self._add_use_template_helper else ()
+            if self._matter_fan_levels:
+                return await self.async_step_matter_fan_levels()
             return await self.async_step_entity()
 
         return self.async_show_form(
             step_id="entity_helper",
             data_schema=_helper_usage_schema(),
+        )
+
+    async def async_step_matter_fan_levels(self, user_input=None):
+        """Choose the source speeds exposed as Matter low, medium and high."""
+        if not self._matter_fan_levels or not self._source_entities:
+            return await self.async_step_entity()
+        errors = _flow_errors(self, "matter_fan_levels")
+        if user_input is not None:
+            try:
+                selected = tuple(int(user_input[field]) for field in (
+                    CONF_MATTER_FAN_LOW_LEVEL,
+                    CONF_MATTER_FAN_MEDIUM_LEVEL,
+                    CONF_MATTER_FAN_HIGH_LEVEL,
+                ))
+                self._entity_defaults = _apply_matter_fan_level_helper(
+                    self._entity_defaults or {}, self._source_entities[0], selected,
+                )
+                return await self.async_step_entity()
+            except (TypeError, ValueError, vol.Invalid):
+                errors["base"] = "invalid_matter_fan_levels"
+        return self.async_show_form(
+            step_id="matter_fan_levels",
+            data_schema=_matter_fan_level_schema(self._matter_fan_levels),
+            errors=errors,
         )
 
     async def async_step_entity(self, user_input=None):
@@ -7170,6 +7698,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._add_target_device_name: str | None = None
         self._add_source_entities: list[str] = []
         self._add_use_template_helper = True
+        self._add_matter_fan_levels: tuple[int, ...] = ()
         self._edit_auto_helper_profile: dict[str, Any] | None = None
         self._edit_current_defaults: dict[str, Any] | None = None
         self._edit_original_platform: str | None = None
@@ -7180,6 +7709,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._edit_cross_domain_conversion = False
         self._edit_platform_changed = False
         self._edit_sources_changed = False
+        self._edit_matter_fan_levels: tuple[int, ...] = ()
 
     async def async_step_init(self, user_input=None):
         errors = _flow_errors(self, "init")
@@ -7364,11 +7894,41 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 self.config_entry.options,
                 self._add_target_device_name,
             )
+            self._add_matter_fan_levels = _matter_fan_source_levels(
+                self.hass, self._add_source_entities,
+                self._reference_defaults.get(CONF_PLATFORM, ""),
+            ) if self._add_use_template_helper else ()
+            if self._add_matter_fan_levels:
+                return await self.async_step_matter_fan_levels()
             return await self.async_step_entity()
 
         return self.async_show_form(
             step_id="entity_helper",
             data_schema=_helper_usage_schema(),
+        )
+
+    async def async_step_matter_fan_levels(self, user_input=None):
+        """Choose Matter's three exposed speeds for an added stepped fan."""
+        if not self._add_matter_fan_levels or not self._add_source_entities:
+            return await self.async_step_entity()
+        errors = _flow_errors(self, "matter_fan_levels")
+        if user_input is not None:
+            try:
+                selected = tuple(int(user_input[field]) for field in (
+                    CONF_MATTER_FAN_LOW_LEVEL,
+                    CONF_MATTER_FAN_MEDIUM_LEVEL,
+                    CONF_MATTER_FAN_HIGH_LEVEL,
+                ))
+                self._entity_defaults = _apply_matter_fan_level_helper(
+                    self._entity_defaults or {}, self._add_source_entities[0], selected,
+                )
+                return await self.async_step_entity()
+            except (TypeError, ValueError, vol.Invalid):
+                errors["base"] = "invalid_matter_fan_levels"
+        return self.async_show_form(
+            step_id="matter_fan_levels",
+            data_schema=_matter_fan_level_schema(self._add_matter_fan_levels),
+            errors=errors,
         )
 
     async def async_step_entity(self, user_input=None):
@@ -7717,6 +8277,12 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 self._prepare_edit_entity_defaults(
                     helper_update_mode=user_input[CONF_HELPER_UPDATE_MODE],
                 )
+                self._edit_matter_fan_levels = _matter_fan_source_levels(
+                    self.hass, self._edit_source_entities,
+                    self._reference_defaults.get(CONF_PLATFORM, ""),
+                ) if user_input[CONF_HELPER_UPDATE_MODE] != HELPER_UPDATE_KEEP else ()
+                if self._edit_matter_fan_levels:
+                    return await self.async_step_edit_matter_fan_levels()
                 return await self.async_step_edit_entity()
             except Exception:
                 # A damaged legacy helper must not make the entity impossible
@@ -7758,6 +8324,33 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="edit_entity_helper",
             data_schema=_helper_update_schema(),
+        )
+
+    async def async_step_edit_matter_fan_levels(self, user_input=None):
+        """Choose Matter fan levels while regenerating an edited helper."""
+        if not self._edit_matter_fan_levels or not self._edit_source_entities:
+            return await self.async_step_edit_entity()
+        errors = _flow_errors(self, "matter_fan_levels")
+        if user_input is not None:
+            try:
+                selected = tuple(int(user_input[field]) for field in (
+                    CONF_MATTER_FAN_LOW_LEVEL,
+                    CONF_MATTER_FAN_MEDIUM_LEVEL,
+                    CONF_MATTER_FAN_HIGH_LEVEL,
+                ))
+                self._entity_defaults = _apply_matter_fan_level_helper(
+                    self._entity_defaults or {}, self._edit_source_entities[0], selected,
+                )
+                self._edit_auto_helper_profile = _auto_helper_profile(
+                    self._entity_defaults,
+                )
+                return await self.async_step_edit_entity()
+            except (TypeError, ValueError, vol.Invalid):
+                errors["base"] = "invalid_matter_fan_levels"
+        return self.async_show_form(
+            step_id="matter_fan_levels",
+            data_schema=_matter_fan_level_schema(self._edit_matter_fan_levels),
+            errors=errors,
         )
 
     async def async_step_edit_entity(self, user_input=None):

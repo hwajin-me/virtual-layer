@@ -463,6 +463,17 @@ def test_virtual_climate_has_a_translation_namespace_for_presets():
     assert climate.translation_key == "virtual"
 
 
+def test_virtual_mode_entities_have_translation_namespaces():
+    fan = VirtualFan(_config(FAN_SCHEMA, "fan", "off"), False)
+    humidifier = VirtualHumidifier(
+        _config(HUMIDIFIER_SCHEMA, "humidifier", "off"),
+        False,
+    )
+
+    assert fan.translation_key == "virtual"
+    assert humidifier.translation_key == "virtual"
+
+
 async def test_climate_power_commands_never_create_unsupported_modes():
     off_only = VirtualClimate(
         _config(CLIMATE_SCHEMA, "climate", "off", hvac_modes=["off"]),

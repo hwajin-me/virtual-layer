@@ -188,10 +188,16 @@ async def _choose_add_template_helper(
         )
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "entity_helper"
-    return await hass.config_entries.options.async_configure(
+    result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {CONF_USE_TEMPLATE_HELPER: enabled},
     )
+    if result["step_id"] == "matter_fan_levels":
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            result["data_schema"]({}),
+        )
+    return result
 
 
 def _first_stored_entity(result):
@@ -1005,6 +1011,426 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
     with pytest.raises(ValueError, match="configured minimum and maximum"):
         await boiler.async_set_temperature(temperature=100)
     assert calls == []
+
+
+async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(hass):
+    """Keep BCM hot water intact while exposing the active room HVAC source."""
+    boiler_entity_id = "climate.sihas_thermostat"
+    hot_water_switch_id = "switch.bcm_onsu_modeu"
+    air_conditioner_entity_id = "climate.living_room_air_conditioner"
+    hass.states.async_set(
+        boiler_entity_id,
+        "fan_only",
+        {
+            "hvac_modes": ["off", "heat", "fan_only", "auto"],
+            "min_temp": 0,
+            "max_temp": 80,
+            "target_temp_step": 1,
+            "current_temperature": 31,
+            "temperature": 48,
+            "hvac_action": "idle",
+            "supported_features": int(ClimateEntityFeature.TARGET_TEMPERATURE),
+        },
+    )
+    hass.states.async_set(hot_water_switch_id, "on")
+    hass.states.async_set(
+        air_conditioner_entity_id,
+        "cool",
+        {
+            "hvac_modes": ["off", "cool", "dry", "fan_only"],
+            "min_temp": 18,
+            "max_temp": 30,
+            "target_temp_step": 1,
+            "current_temperature": 25,
+            "temperature": 24,
+            "fan_modes": ["medium", "high", "turbo", "auto"],
+            "fan_mode": "auto",
+            "supported_features": int(
+                ClimateEntityFeature.TARGET_TEMPERATURE
+                | ClimateEntityFeature.FAN_MODE
+            ),
+        },
+    )
+    defaults = _reference_entity_defaults(
+        hass,
+        [boiler_entity_id, hot_water_switch_id, air_conditioner_entity_id],
+    )
+    climate = VirtualClimate(
+        CLIMATE_SCHEMA({
+            CONF_NAME: "Combined climate",
+            ATTR_ENTITY_ID: "climate.combined",
+            CONF_INITIAL_VALUE: defaults[CONF_INITIAL_VALUE],
+            CONF_AVAILABILITY_TEMPLATE: defaults[CONF_AVAILABILITY_TEMPLATE],
+            CONF_NATIVE_TEMPLATES: defaults[CONF_NATIVE_VALUE_TEMPLATES],
+            CONF_COMMAND_ACTIONS: _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON]),
+        }),
+        False,
+    )
+    climate.hass = hass
+    climate._create_state(climate._config)
+    climate.async_write_ha_state = Mock()
+    climate.async_schedule_update_ha_state = Mock()
+    climate._apply_templates()
+
+    assert climate.hvac_modes == [HVACMode.OFF, HVACMode.COOL, HVACMode.DRY, HVACMode.FAN_ONLY, HVACMode.HEAT]
+    assert climate.hvac_mode is HVACMode.COOL
+    assert climate.current_temperature == 25
+    assert climate.target_temperature == 24
+    assert (climate.min_temp, climate.max_temp) == (18, 30)
+    assert climate.fan_modes == ["medium", "high", "turbo", "auto"]
+
+    calls = []
+
+    async def _capture(call):
+        calls.append((call.domain, call.service, dict(call.data)))
+
+    for domain, service in (
+        ("climate", "set_hvac_mode"),
+        ("climate", "set_temperature"),
+        ("climate", "set_fan_mode"),
+        ("switch", "turn_on"),
+    ):
+        hass.services.async_register(domain, service, _capture)
+
+    await climate.async_set_hvac_mode(HVACMode.COOL)
+    assert [(domain, service) for domain, service, _data in calls] == [
+        ("switch", "turn_on"),
+        ("climate", "set_hvac_mode"),
+        ("climate", "set_hvac_mode"),
+    ]
+    assert calls[1][2]["hvac_mode"] == "fan_only"
+    assert calls[2][2]["hvac_mode"] == "cool"
+    assert calls[0][2][ATTR_ENTITY_ID] == [hot_water_switch_id]
+    assert calls[1][2][ATTR_ENTITY_ID] == [boiler_entity_id]
+    assert calls[2][2][ATTR_ENTITY_ID] == [air_conditioner_entity_id]
+
+    for mode in (HVACMode.DRY, HVACMode.FAN_ONLY):
+        calls.clear()
+        await climate.async_set_hvac_mode(mode)
+        assert [(domain, service) for domain, service, _data in calls] == [
+            ("switch", "turn_on"),
+            ("climate", "set_hvac_mode"),
+            ("climate", "set_hvac_mode"),
+        ]
+        assert calls[1][2] == {
+            ATTR_ENTITY_ID: [boiler_entity_id],
+            "hvac_mode": "fan_only",
+        }
+        assert calls[2][2] == {
+            ATTR_ENTITY_ID: [air_conditioner_entity_id],
+            "hvac_mode": mode.value,
+        }
+
+    calls.clear()
+    await climate.async_set_hvac_mode(HVACMode.HEAT)
+    assert [(domain, service) for domain, service, _data in calls] == [
+        ("climate", "set_hvac_mode"),
+        ("switch", "turn_on"),
+        ("climate", "set_hvac_mode"),
+    ]
+    assert calls[0][2]["hvac_mode"] == "off"
+    assert calls[2][2]["hvac_mode"] == "heat"
+    assert calls[0][2][ATTR_ENTITY_ID] == [air_conditioner_entity_id]
+    assert calls[2][2][ATTR_ENTITY_ID] == [boiler_entity_id]
+
+    calls.clear()
+    await climate.async_set_hvac_mode(HVACMode.OFF)
+    assert [(domain, service) for domain, service, _data in calls] == [
+        ("switch", "turn_on"),
+        ("climate", "set_hvac_mode"),
+        ("climate", "set_hvac_mode"),
+    ]
+    assert calls[1][2]["hvac_mode"] == "fan_only"
+    assert calls[2][2]["hvac_mode"] == "off"
+    assert calls[1][2][ATTR_ENTITY_ID] == [boiler_entity_id]
+    assert calls[2][2][ATTR_ENTITY_ID] == [air_conditioner_entity_id]
+
+    calls.clear()
+    await climate.async_turn_on()
+    assert [(domain, service) for domain, service, _data in calls] == [
+        ("switch", "turn_on"),
+        ("climate", "set_hvac_mode"),
+        ("climate", "set_hvac_mode"),
+    ]
+    assert calls[1][2] == {
+        ATTR_ENTITY_ID: [boiler_entity_id],
+        "hvac_mode": "fan_only",
+    }
+    assert calls[2][2] == {
+        ATTR_ENTITY_ID: [air_conditioner_entity_id],
+        "hvac_mode": "cool",
+    }
+    assert climate.hvac_mode is HVACMode.COOL
+
+    calls.clear()
+    await climate.async_set_fan_mode("high")
+    assert [(domain, service) for domain, service, _data in calls] == [
+        ("climate", "set_fan_mode"),
+    ]
+    assert calls[0][2][ATTR_ENTITY_ID] == [air_conditioner_entity_id]
+    assert calls[0][2]["fan_mode"] == "high"
+
+    calls.clear()
+    await climate.async_set_temperature(temperature=26)
+    assert [(domain, service) for domain, service, _data in calls] == [
+        ("climate", "set_temperature"),
+    ]
+    assert calls[0][2][ATTR_ENTITY_ID] == [air_conditioner_entity_id]
+    assert calls[0][2]["temperature"] == 26
+
+    # Boiler setpoints are water temperatures and can legitimately exceed the
+    # active AC's 18–30 °C room range.  The command must reach the boiler
+    # without a later optimistic virtual-range validation failure.
+    calls.clear()
+    await climate.async_set_temperature(temperature=50, hvac_mode="heat")
+    assert calls == [(
+        "climate",
+        "set_temperature",
+        {
+            ATTR_ENTITY_ID: [boiler_entity_id],
+            "temperature": 50,
+            "hvac_mode": "heat",
+        },
+    )]
+    assert climate.target_temperature == 24
+
+    # A separate heat command writes the virtual state before SiHAS publishes
+    # its new source state.  A following high boiler setpoint must still avoid
+    # the stale cooling source.
+    hass.states.async_set("climate.combined", "heat")
+    calls.clear()
+    await climate.async_set_temperature(temperature=50)
+    assert calls == [(
+        "climate",
+        "set_temperature",
+        {
+            ATTR_ENTITY_ID: [boiler_entity_id],
+            "temperature": 50,
+        },
+    )]
+
+    hass.states.async_set(air_conditioner_entity_id, "off")
+    climate._apply_templates()
+    assert climate.hvac_mode is HVACMode.OFF
+    assert climate.target_temperature == 48
+    assert (climate.min_temp, climate.max_temp) == (0, 80)
+    calls.clear()
+    await climate.async_set_temperature(temperature=49)
+    assert [(domain, service) for domain, service, _data in calls] == [
+        ("climate", "set_temperature"),
+    ]
+    assert calls[0][2][ATTR_ENTITY_ID] == [boiler_entity_id]
+    assert calls[0][2]["temperature"] == 49
+
+
+async def test_boiler_nest_helper_routes_offline_range_request_to_nest(hass):
+    """A heat/cool range request must not fall through to the boiler."""
+    boiler_entity_id = "climate.boiler"
+    hot_water_switch_id = "switch.hot_water"
+    nest_entity_id = "climate.nest"
+    hass.states.async_set(
+        boiler_entity_id,
+        "fan_only",
+        {
+            "hvac_modes": ["off", "heat", "fan_only", "auto"],
+            "min_temp": 0,
+            "max_temp": 80,
+            "target_temp_step": 1,
+            "current_temperature": 31,
+            "temperature": 48,
+            "supported_features": int(ClimateEntityFeature.TARGET_TEMPERATURE),
+        },
+    )
+    hass.states.async_set(hot_water_switch_id, "on")
+    nest_attributes = {
+        "hvac_modes": ["off", "heat", "cool", "heat_cool"],
+        "min_temp": 10,
+        "max_temp": 32,
+        "target_temp_step": 0.5,
+        "current_temperature": 21,
+        "target_temp_low": 20,
+        "target_temp_high": 24,
+        "hvac_action": "heating",
+        "supported_features": int(
+            ClimateEntityFeature.TARGET_TEMPERATURE
+            | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+        ),
+    }
+    hass.states.async_set(nest_entity_id, "heat_cool", nest_attributes)
+    defaults = _reference_entity_defaults(
+        hass, [boiler_entity_id, hot_water_switch_id, nest_entity_id]
+    )
+    climate = VirtualClimate(
+        CLIMATE_SCHEMA({
+            CONF_NAME: "Combined Nest climate",
+            ATTR_ENTITY_ID: "climate.combined_nest",
+            CONF_INITIAL_VALUE: defaults[CONF_INITIAL_VALUE],
+            CONF_NATIVE_TEMPLATES: defaults[CONF_NATIVE_VALUE_TEMPLATES],
+            CONF_COMMAND_ACTIONS: _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON]),
+        }),
+        False,
+    )
+    climate.hass = hass
+    climate._create_state(climate._config)
+    climate.async_write_ha_state = Mock()
+    climate.async_schedule_update_ha_state = Mock()
+    climate._apply_templates()
+
+    assert climate.hvac_mode is HVACMode.HEAT_COOL
+    assert climate.target_temperature is None
+    assert climate.target_temperature_low == 20
+    assert climate.target_temperature_high == 24
+    assert ClimateEntityFeature.TARGET_TEMPERATURE_RANGE in climate.supported_features
+
+    calls = []
+
+    async def _capture(call):
+        calls.append((call.domain, call.service, dict(call.data)))
+
+    hass.services.async_register("climate", "set_temperature", _capture)
+    # Nest can be off when an automation asks it to enter range mode.  The
+    # requested HVAC mode, not its stale source state, selects the target.
+    hass.states.async_set(nest_entity_id, "off", nest_attributes)
+    climate._apply_templates()
+    await climate.async_set_temperature(
+        target_temp_low=20,
+        target_temp_high=24,
+        hvac_mode=HVACMode.HEAT_COOL,
+    )
+
+    assert calls == [(
+        "climate",
+        "set_temperature",
+        {
+            ATTR_ENTITY_ID: [nest_entity_id],
+            "target_temp_low": 20,
+            "target_temp_high": 24,
+            "hvac_mode": HVACMode.HEAT_COOL,
+        },
+    )]
+
+
+async def test_options_flow_persists_every_combined_climate_helper_template(hass):
+    """Compile, save, and execute every generated BCM plus Nest helper."""
+    boiler_entity_id = "climate.boiler"
+    hot_water_switch_id = "switch.hot_water"
+    nest_entity_id = "climate.nest"
+    hass.states.async_set(
+        boiler_entity_id,
+        "fan_only",
+        {
+            "friendly_name": "BCM",
+            "hvac_modes": ["off", "heat", "fan_only", "auto"],
+            "min_temp": 0,
+            "max_temp": 80,
+            "target_temp_step": 1,
+            "current_temperature": 31,
+            "temperature": 48,
+            "supported_features": int(ClimateEntityFeature.TARGET_TEMPERATURE),
+        },
+    )
+    hass.states.async_set(hot_water_switch_id, "on", {"friendly_name": "BCM 온수"})
+    hass.states.async_set(
+        nest_entity_id,
+        "heat_cool",
+        {
+            "friendly_name": "Nest",
+            "hvac_modes": ["off", "heat", "cool", "heat_cool"],
+            "min_temp": 10,
+            "max_temp": 32,
+            "target_temp_step": 0.5,
+            "current_temperature": 21,
+            "target_temp_low": 20,
+            "target_temp_high": 24,
+            "hvac_action": "heating",
+            "supported_features": int(
+                ClimateEntityFeature.TARGET_TEMPERATURE
+                | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+            ),
+        },
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: [boiler_entity_id, hot_water_switch_id, nest_entity_id]},
+    )
+    result = await _choose_add_template_helper(hass, result)
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+
+    assert set(defaults[CONF_NATIVE_VALUE_TEMPLATES]) == set(
+        CLIMATE_NATIVE_TEMPLATE_PROPERTIES
+    )
+    assert defaults[CONF_INITIAL_VALUE] == "heat_cool"
+    assert "average" not in defaults[CONF_NATIVE_VALUE_TEMPLATES][
+        "target_temperature_high"
+    ]
+    assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])["set_temperature"][
+        "optimistic"
+    ] is False
+
+    def assert_jinja_is_valid(value):
+        if isinstance(value, str):
+            if "{{" in value or "{%" in value:
+                Template(value, hass).ensure_valid()
+        elif isinstance(value, dict):
+            for item in value.values():
+                assert_jinja_is_valid(item)
+        elif isinstance(value, list):
+            for item in value:
+                assert_jinja_is_valid(item)
+
+    for field in (
+        CONF_VALUE_TEMPLATE,
+        CONF_AVAILABILITY_TEMPLATE,
+        CONF_ICON_TEMPLATE,
+    ):
+        assert_jinja_is_valid(defaults.get(field, ""))
+    assert_jinja_is_valid(_yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]))
+    assert_jinja_is_valid(defaults[CONF_NATIVE_VALUE_TEMPLATES])
+    assert_jinja_is_valid(_yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON]))
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **defaults,
+            CONF_DEVICE_NAME: "Combined HVAC",
+            CONF_ENTITY_NAME: "Combined HVAC",
+            ATTR_ENTITY_ID: "climate.combined_hvac",
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    stored = _first_stored_entity(result)
+    assert stored[CONF_NATIVE_TEMPLATES] == defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert stored[CONF_COMMAND_ACTIONS] == _yaml_value(
+        defaults[CONF_COMMAND_ACTIONS_JSON]
+    )
+    assert stored[CONF_SOURCE_ENTITIES] == [
+        boiler_entity_id,
+        hot_water_switch_id,
+        nest_entity_id,
+    ]
+
+    runtime_config = {
+        key: value
+        for key, value in stored.items()
+        if key not in {CONF_PLATFORM, ATTR_ENTITY_KEY, CONF_AUTO_HELPER}
+    }
+    climate = VirtualClimate(CLIMATE_SCHEMA(runtime_config), False)
+    climate.hass = hass
+    climate._create_state(climate._config)
+    climate.async_schedule_update_ha_state = Mock()
+    climate._apply_templates()
+    assert climate.hvac_mode is HVACMode.HEAT_COOL
+    assert climate.target_temperature_low == 20
+    assert climate.target_temperature_high == 24
 
 
 async def test_options_flow_rejects_invalid_jinja_before_saving(hass, caplog):
@@ -3631,7 +4057,7 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
 
     assert defaults[CONF_PLATFORM] == "fan"
     assert "source_available" in defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]
-    assert "percentage_step" in defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"]
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"] == "{{ 3 }}"
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -3658,7 +4084,7 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
     fan.async_schedule_update_ha_state = Mock()
     fan._apply_templates()
 
-    assert fan.percentage == 40
+    assert fan.percentage == 67
     assert fan.preset_modes == ["Manual", "Auto", "Sleep 1", "Sleep 2", "Sleep 3"]
     assert fan.preset_mode == "Manual"
     assert fan.oscillating is None

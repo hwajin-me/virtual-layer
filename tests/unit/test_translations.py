@@ -135,8 +135,8 @@ def test_korean_translation_covers_config_options_selectors_and_services():
     assert korean["services"]["set_attributes"]["name"] == "속성 설정"
 
 
-def test_virtual_climate_preserves_translated_source_preset_names():
-    """Common Samsung AC presets keep their localized labels when mirrored."""
+def test_virtual_entities_preserve_translated_source_mode_names():
+    """Common source preset/mode labels stay localized when mirrored."""
     english = _english_catalog()
     korean = json.loads((TRANSLATIONS / "ko.json").read_text(encoding="utf-8"))
     english_states = english["entity"]["climate"]["virtual"][
@@ -149,6 +149,26 @@ def test_virtual_climate_preserves_translated_source_preset_names():
     assert english_states["quiet"] == "Quiet"
     assert korean_states["quiet"] == "저소음"
     assert korean_states["wind_free"] == "무풍"
+    assert korean_states["ai_comfort"] == "AI 쾌적"
+    assert korean_states["Favorite"] == "즐겨찾기"
+    assert korean_states["Direct Mode"] == "직접 모드"
+    assert korean_states["Natural Wind"] == "자연 바람"
+
+    fan_states = korean["entity"]["fan"]["virtual"]["state_attributes"][
+        "preset_mode"
+    ]["state"]
+    humidifier_states = korean["entity"]["humidifier"]["virtual"][
+        "state_attributes"
+    ]["mode"]["state"]
+    assert fan_states["Fav"] == "즐겨찾기"
+    assert humidifier_states["Constant Humidity"] == "일정 습도"
+    expected_source_modes = {
+        "speed", "ai_comfort", "Favorite", "Fav", "Auto", "Sleep",
+        "Constant Humidity", "None", "Direct Mode", "Natural Mode",
+        "Sleep Mode", "Straight Wind", "Natural Wind", "Smart",
+    }
+    assert expected_source_modes <= set(fan_states)
+    assert expected_source_modes <= set(humidifier_states)
 
 
 def test_native_template_sections_are_translated_for_add_and_edit():

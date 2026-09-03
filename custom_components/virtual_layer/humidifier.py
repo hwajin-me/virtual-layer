@@ -169,6 +169,8 @@ async def async_setup_entry(
 class VirtualHumidifier(VirtualEntity, HumidifierEntity):
     """Representation of a virtual humidifier."""
 
+    _attr_translation_key = "virtual"
+
     def __init__(self, config, old_style: bool):
         super().__init__(config, PLATFORM_DOMAIN, old_style)
 

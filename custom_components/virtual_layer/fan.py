@@ -125,6 +125,8 @@ async def async_setup_entry(
 class VirtualFan(VirtualEntity, FanEntity):
     """A demonstration fan component."""
 
+    _attr_translation_key = "virtual"
+
     def __init__(self, config, old_style: bool):
         """Initialize the entity."""
         super().__init__(config, PLATFORM_DOMAIN, old_style)

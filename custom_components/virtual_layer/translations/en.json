@@ -573,6 +573,20 @@
         "data_description": {
           "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates."
         }
+      },
+      "matter_fan_levels": {
+        "title": "Choose Matter Fan Speeds",
+        "description": "This source exposes more than three speed steps. Choose which physical steps the generated helper will expose as low, medium, and high to Matter controllers.",
+        "data": {
+          "matter_fan_low_level": "Low source level",
+          "matter_fan_medium_level": "Medium source level",
+          "matter_fan_high_level": "High source level"
+        },
+        "data_description": {
+          "matter_fan_low_level": "The source percentage used when a controller requests low speed.",
+          "matter_fan_medium_level": "The source percentage used when a controller requests medium speed.",
+          "matter_fan_high_level": "The source percentage used when a controller requests high speed."
+        }
       }
     }
   },
@@ -583,6 +597,7 @@
       "invalid_entity_id": "Enter valid entity IDs.",
       "source_unavailable": "The selected source entity is no longer available. Go back and select it again.",
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
+      "invalid_matter_fan_levels": "Choose three different source levels in ascending order.",
       "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
       "invalid_domain_options": "Enter valid options for the selected entity domain.",
       "device_not_found": "The selected virtual device was not found.",
@@ -1214,6 +1229,20 @@
         },
         "data_description": {
           "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates."
+        }
+      },
+      "matter_fan_levels": {
+        "title": "Choose Matter Fan Speeds",
+        "description": "This source exposes more than three speed steps. Choose which physical steps the generated helper will expose as low, medium, and high to Matter controllers.",
+        "data": {
+          "matter_fan_low_level": "Low source level",
+          "matter_fan_medium_level": "Medium source level",
+          "matter_fan_high_level": "High source level"
+        },
+        "data_description": {
+          "matter_fan_low_level": "The source percentage used when a controller requests low speed.",
+          "matter_fan_medium_level": "The source percentage used when a controller requests medium speed.",
+          "matter_fan_high_level": "The source percentage used when a controller requests high speed."
         }
       },
       "entity": {
@@ -1905,9 +1934,111 @@
               "motion_direct": "Motion direct",
               "motion_indirect": "Motion indirect",
               "quiet": "Quiet",
+              "speed": "Speed",
               "smart": "Smart saver",
               "wind_free": "WindFree",
-              "wind_free_sleep": "WindFree sleep"
+              "wind_free_sleep": "WindFree sleep",
+              "ai_comfort": "AI comfort",
+              "Favorite": "Favorite",
+              "favorite": "Favorite",
+              "Fav": "Favorite",
+              "fav": "Favorite",
+              "Auto": "Auto",
+              "Sleep": "Sleep",
+              "Constant Humidity": "Constant humidity",
+              "constant_humidity": "Constant humidity",
+              "None": "None",
+              "Direct Mode": "Direct mode",
+              "direct_mode": "Direct mode",
+              "Natural Mode": "Natural mode",
+              "natural_mode": "Natural mode",
+              "Sleep Mode": "Sleep mode",
+              "sleep_mode": "Sleep mode",
+              "Straight Wind": "Straight wind",
+              "straight_wind": "Straight wind",
+              "Natural Wind": "Natural wind",
+              "natural_wind": "Natural wind",
+              "Smart": "Smart"
+            }
+          },
+          "fan_mode": {
+            "state": {
+              "speed": "Speed",
+              "Auto": "Auto",
+              "Direct Mode": "Direct mode",
+              "direct_mode": "Direct mode",
+              "Natural Mode": "Natural mode",
+              "natural_mode": "Natural mode",
+              "Straight Wind": "Straight wind",
+              "straight_wind": "Straight wind",
+              "Natural Wind": "Natural wind",
+              "natural_wind": "Natural wind"
+            }
+          }
+        }
+      }
+    },
+    "fan": {
+      "virtual": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "speed": "Speed",
+              "ai_comfort": "AI comfort",
+              "quiet": "Quiet",
+              "Favorite": "Favorite",
+              "favorite": "Favorite",
+              "Fav": "Favorite",
+              "fav": "Favorite",
+              "Auto": "Auto",
+              "Sleep": "Sleep",
+              "Constant Humidity": "Constant humidity",
+              "constant_humidity": "Constant humidity",
+              "None": "None",
+              "Direct Mode": "Direct mode",
+              "direct_mode": "Direct mode",
+              "Natural Mode": "Natural mode",
+              "natural_mode": "Natural mode",
+              "Sleep Mode": "Sleep mode",
+              "sleep_mode": "Sleep mode",
+              "Straight Wind": "Straight wind",
+              "straight_wind": "Straight wind",
+              "Natural Wind": "Natural wind",
+              "natural_wind": "Natural wind",
+              "Smart": "Smart"
+            }
+          }
+        }
+      }
+    },
+    "humidifier": {
+      "virtual": {
+        "state_attributes": {
+          "mode": {
+            "state": {
+              "Constant Humidity": "Constant humidity",
+              "constant_humidity": "Constant humidity",
+              "speed": "Speed",
+              "ai_comfort": "AI comfort",
+              "quiet": "Quiet",
+              "Favorite": "Favorite",
+              "favorite": "Favorite",
+              "Fav": "Favorite",
+              "fav": "Favorite",
+              "Auto": "Auto",
+              "Sleep": "Sleep",
+              "None": "None",
+              "Direct Mode": "Direct mode",
+              "direct_mode": "Direct mode",
+              "Natural Mode": "Natural mode",
+              "natural_mode": "Natural mode",
+              "Sleep Mode": "Sleep mode",
+              "sleep_mode": "Sleep mode",
+              "Straight Wind": "Straight wind",
+              "straight_wind": "Straight wind",
+              "Natural Wind": "Natural wind",
+              "natural_wind": "Natural wind",
+              "Smart": "Smart"
             }
           }
         }
