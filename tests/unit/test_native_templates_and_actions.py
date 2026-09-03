@@ -1174,6 +1174,80 @@ async def test_command_action_flattens_kwargs_for_climate_templates(hass):
     assert entity.target_temperature == 24
 
 
+async def test_legacy_climate_command_data_template_is_a_mapping(hass):
+    """Old auto-generated climate helpers remain valid on current Core."""
+    calls = []
+
+    async def _capture(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("virtual_test", "set_hvac_mode", _capture)
+    entity = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.legacy_action_target",
+                "off",
+                hvac_modes=["off", "cool"],
+                **{
+                    CONF_COMMAND_ACTIONS: {
+                        "set_hvac_mode": [{
+                            "action": "virtual_test.set_hvac_mode",
+                            "data": "{{ command_data }}",
+                        }]
+                    }
+                },
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    await entity.async_set_hvac_mode(HVACMode.COOL)
+
+    assert calls == [{"hvac_mode": HVACMode.COOL}]
+
+
+async def test_command_data_fixer_template_renders_per_invocation(hass):
+    """Generated source-grid fixers receive current command data, not a string."""
+    calls = []
+
+    async def _capture(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("virtual_test", "set_temperature", _capture)
+    entity = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.fixed_action_target",
+                "off",
+                hvac_modes=["off", "cool"],
+                **{
+                    CONF_COMMAND_ACTIONS: {
+                        "set_temperature": [{
+                            "action": "virtual_test.set_temperature",
+                            "data": (
+                                "{% set requested = command_data.get('temperature') %}"
+                                "{{ dict(command_data, temperature=requested + 1) }}"
+                            ),
+                        }]
+                    }
+                },
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    await entity.async_set_temperature(temperature=23)
+    await entity.async_set_temperature(temperature=25)
+
+    assert calls == [{"temperature": 24}, {"temperature": 26}]
+
+
 async def _exercise_source_proxy(hass, domain, entity, commands):
     calls = []
 
@@ -2371,6 +2445,29 @@ def test_light_number_and_vacuum_templates_use_native_types(hass):
     assert VacuumEntityFeature.FAN_SPEED in vacuum.supported_features
     vacuum._update_attributes()
     assert vacuum.extra_state_attributes["battery_level"] == 87
+
+
+def test_light_native_color_modes_can_reduce_matter_contract_to_onoff(hass):
+    """Do not reintroduce RGB clusters when a helper renders an on/off light."""
+    light = VirtualLight(
+        LIGHT_SCHEMA(
+            _base(
+                "light.onoff_helper",
+                "off",
+                matter_light_type="extended_color",
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "supported_color_modes": "{{ ['onoff'] }}",
+                    }
+                },
+            )
+        ),
+        False,
+    )
+
+    _render_native_templates(light, hass)
+
+    assert light.supported_color_modes == {ColorMode.ONOFF}
 
 
 @pytest.mark.parametrize(

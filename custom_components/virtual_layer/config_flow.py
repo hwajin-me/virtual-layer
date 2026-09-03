@@ -5430,10 +5430,18 @@ def _source_command_actions(
             target_entity_id = source_entities[0]
         else:
             target_entity_id = source_entities
+        # Home Assistant action data must be a mapping.  A whole-data template
+        # (``"{{ command_data }}"``) used to be accepted, but recent Core
+        # versions leave it as a string and reject the service call.  Climate
+        # HVAC mode is the most common generated pass-through action and has a
+        # single, stable argument, so emit a native data mapping for it.
+        command_data: dict[str, str] | str = "{{ command_data }}"
+        if (platform, command) == ("climate", "set_hvac_mode"):
+            command_data = {"hvac_mode": "{{ hvac_mode }}"}
         actions[command] = [{
             "action": f"{platform}.{service}",
             "target": {ATTR_ENTITY_ID: target_entity_id},
-            "data": "{{ command_data }}",
+            "data": command_data,
         }]
     return actions
 

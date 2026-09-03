@@ -4,6 +4,7 @@ This component provides support for a virtual sensor.
 This class adds persistence to an entity.
 """
 
+import copy
 import inspect
 import logging
 import math
@@ -977,19 +978,6 @@ class VirtualEntity(RestoreEntity):
         if not sequence:
             return optimistic
 
-        script = self._command_scripts.get(command)
-        if script is None:
-            script = Script(
-                self.hass,
-                cv.SCRIPT_SCHEMA(sequence),
-                f"{self.entity_id} {command}",
-                COMPONENT_DOMAIN,
-                logger=_LOGGER,
-                script_mode="parallel",
-                top_level=False,
-            )
-            self._command_scripts[command] = script
-
         signature = inspect.signature(method)
         bound = signature.bind_partial(self, *args, **kwargs)
         variables = {}
@@ -1010,6 +998,31 @@ class VirtualEntity(RestoreEntity):
             "entity_id": self.entity_id,
             "this": self.hass.states.get(self.entity_id),
         })
+        prepared_sequence = await self._render_command_data_templates(
+            sequence,
+            variables,
+        )
+        # Rendering complete command-data templates makes a sequence depend on
+        # the command arguments and source state. Recreate only those scripts
+        # rather than reusing a prior command's rendered payload.
+        uses_rendered_data = prepared_sequence is not sequence
+        script = None if uses_rendered_data else self._command_scripts.get(command)
+        if script is None:
+            # Core no longer converts a complete data template such as
+            # ``data: \"{{ command_data }}\"`` into a service-data mapping.
+            # Render that legacy/generated helper form before script validation
+            # so every domain's proxy action receives a real mapping.
+            script = Script(
+                self.hass,
+                cv.SCRIPT_SCHEMA(prepared_sequence),
+                f"{self.entity_id} {command}",
+                COMPONENT_DOMAIN,
+                logger=_LOGGER,
+                script_mode="parallel",
+                top_level=False,
+            )
+            if not uses_rendered_data:
+                self._command_scripts[command] = script
         context = self._context or Context()
         run_variables = ScriptRunVariables.create_top_level(variables)
         run_variables["context"] = context
@@ -1019,6 +1032,34 @@ class VirtualEntity(RestoreEntity):
         finally:
             _COMMAND_ACTION_CHAIN.reset(token)
         return optimistic
+
+    async def _render_command_data_templates(self, sequence, variables):
+        """Render whole-mapping data templates before action schema validation."""
+        changed = False
+
+        async def _walk(value):
+            nonlocal changed
+            if isinstance(value, list):
+                return [await _walk(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            result = {key: await _walk(item) for key, item in value.items()}
+            data = result.get("data")
+            if isinstance(data, str) and "command_data" in data:
+                if data.strip() == "{{ command_data }}":
+                    rendered = copy.deepcopy(variables["command_data"])
+                else:
+                    rendered = Template(data, self.hass).async_render(
+                        variables=variables,
+                        parse_result=True,
+                    )
+                if isinstance(rendered, dict):
+                    result["data"] = rendered
+                    changed = True
+            return result
+
+        rendered_sequence = await _walk(copy.deepcopy(sequence))
+        return rendered_sequence if changed else sequence
 
     def _command_service_data(self, command, method, args, kwargs) -> dict:
         """Build Home Assistant service data from native command arguments."""

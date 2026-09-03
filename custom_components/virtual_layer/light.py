@@ -537,9 +537,18 @@ class VirtualLight(VirtualEntity, LightEntity):
                 value = {ColorMode.ONOFF}
             if ColorMode.ONOFF in value and len(value) > 1:
                 value.discard(ColorMode.ONOFF)
-            value &= self._matter_color_modes
+            # ``matter_light_type`` is the maximum Matter contract selected in
+            # the editor, not a reason to invent capabilities at runtime. In
+            # particular, an extended-color source can temporarily (or
+            # permanently) render ``["onoff"]``. ``ONOFF`` is a valid subset
+            # for every light contract; intersecting it with the configured
+            # color modes used to produce an empty set and restored the full
+            # extended-color profile. Matter Bridge then saw RGB support even
+            # though Home Assistant was presenting an on/off control.
+            allowed_modes = self._matter_color_modes | {ColorMode.ONOFF}
+            value &= allowed_modes
             if not value:
-                value = set(self._matter_color_modes)
+                value = {ColorMode.ONOFF}
             current = self._attr_supported_color_modes
             if current == value:
                 return False

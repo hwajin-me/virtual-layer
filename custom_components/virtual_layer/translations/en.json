@@ -143,7 +143,7 @@
               "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
               "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
               "polygon_away_state": "State used when the selected GPS position is outside every polygon.",
-              "matter_light_type": "Select the Matter lighting contract. It strictly limits the entity to on/off, dimming, color temperature, or extended HS/XY color capabilities. Effects and flash are never exposed."
+              "matter_light_type": "Select the maximum Matter lighting capability: on/off, dimming, color temperature, or extended HS/XY color. A supported-color-modes template may safely expose a smaller subset. Effects and flash are never exposed."
             }
           },
           "native_value_templates": {

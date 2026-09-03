@@ -594,6 +594,35 @@ def test_source_command_helpers_cover_every_proxiable_domain_command(hass, platf
         assert sequence[0]["action"] == f"{platform}.{service}"
 
 
+@pytest.mark.parametrize("platform", sorted(VIRTUAL_ENTITY_COMMANDS))
+def test_source_command_helper_data_templates_render_to_mappings(hass, platform):
+    """Every generated source helper produces valid service data on current Core."""
+    entity_id = f"{platform}.source"
+    attributes = {"supported_features": (1 << 31) - 1}
+    for (domain, _command), capability_names in (
+        _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES.items()
+    ):
+        if domain == platform:
+            attributes.update({name: ["supported"] for name in capability_names})
+    hass.states.async_set(entity_id, "on", attributes)
+    state = hass.states.get(entity_id)
+    assert state is not None
+
+    actions = _source_command_actions(platform, [entity_id], [state])
+    command_data = {"percentage": 50, "value": 10, "hvac_mode": "cool"}
+    for sequence in actions.values():
+        for action in sequence:
+            data = action.get("data")
+            if data is None:
+                continue
+            if isinstance(data, str):
+                data = Template(data, hass).async_render(
+                    variables={"command_data": command_data},
+                    parse_result=True,
+                )
+            assert isinstance(data, dict)
+
+
 def test_native_value_template_sections_match_domain_properties():
     common_template_only_domains = {
         "infrared",
@@ -2459,6 +2488,11 @@ def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
     assert command_actions["set_fan_mode"] == [{
         "action": "climate.set_fan_mode",
         "data": "{{ command_data }}",
+        "target": {ATTR_ENTITY_ID: "climate.living_room"},
+    }]
+    assert command_actions["set_hvac_mode"] == [{
+        "action": "climate.set_hvac_mode",
+        "data": {"hvac_mode": "{{ hvac_mode }}"},
         "target": {ATTR_ENTITY_ID: "climate.living_room"},
     }]
     assert "set_swing_mode" not in command_actions

@@ -143,7 +143,7 @@
               "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
               "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
               "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다.",
-              "matter_light_type": "Matter 조명 계약을 선택합니다. 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상 기능으로 엄격히 제한하며 효과와 깜빡임은 노출하지 않습니다."
+              "matter_light_type": "Matter 조명의 최대 기능을 선택합니다. 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상이며, 지원 색상 모드 템플릿은 더 작은 부분 집합을 안전하게 노출할 수 있습니다. 효과와 깜빡임은 노출하지 않습니다."
             }
           },
           "native_value_templates": {
