@@ -1345,9 +1345,43 @@ async def test_boiler_nest_helper_routes_offline_range_request_to_nest(hass):
     async def _capture(call):
         calls.append((call.domain, call.service, dict(call.data)))
 
-    hass.services.async_register("climate", "set_temperature", _capture)
+    for domain, service in (
+        ("climate", "set_hvac_mode"),
+        ("climate", "set_temperature"),
+        ("switch", "turn_on"),
+    ):
+        hass.services.async_register(domain, service, _capture)
+
+    # ``heat_cool`` is the composite's simultaneous mode: it must keep BCM
+    # heating while a compatible Nest enters automatic heating/cooling.
+    await climate.async_set_hvac_mode(HVACMode.HEAT_COOL)
+    assert calls == [
+        (
+            "switch",
+            "turn_on",
+            {ATTR_ENTITY_ID: [hot_water_switch_id]},
+        ),
+        (
+            "climate",
+            "set_hvac_mode",
+            {
+                ATTR_ENTITY_ID: [boiler_entity_id],
+                "hvac_mode": "heat",
+            },
+        ),
+        (
+            "climate",
+            "set_hvac_mode",
+            {
+                ATTR_ENTITY_ID: [nest_entity_id],
+                "hvac_mode": "heat_cool",
+            },
+        ),
+    ]
+
     # Nest can be off when an automation asks it to enter range mode.  The
     # requested HVAC mode, not its stale source state, selects the target.
+    calls.clear()
     hass.states.async_set(nest_entity_id, "off", nest_attributes)
     climate._apply_templates()
     await climate.async_set_temperature(

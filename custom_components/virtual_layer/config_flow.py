@@ -166,6 +166,7 @@ NEW_DEVICE_TARGET = "__new_device__"
 HELPER_UPDATE_AUTO = "automatic"
 HELPER_UPDATE_KEEP = "keep_current"
 HELPER_UPDATE_FORCE = "force_helper"
+DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE = "{{ temperature | float(0) }}"
 NUMERIC_OUTLIER_THRESHOLD = 3
 _MISSING_NATIVE_DEFAULT = object()
 
@@ -939,6 +940,7 @@ _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_NATIVE_VALUE_TEMPLATES,
     CONF_COMMAND_ACTIONS_JSON,
     CONF_DOMAIN_OPTIONS_JSON,
+    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     *CLIMATE_FORM_FIELDS,
     *FAN_FORM_FIELDS,
     *HUMIDIFIER_FORM_FIELDS,
@@ -968,6 +970,7 @@ _AUTO_HELPER_INDEPENDENT_TEMPLATE_FIELDS = frozenset({
     CONF_AVAILABILITY_TEMPLATE,
     CONF_ICON,
     CONF_ICON_TEMPLATE,
+    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
 })
 
 _ATTRIBUTE_HELPER_METADATA_NAMES = frozenset(
@@ -1046,6 +1049,7 @@ _DOMAIN_OPTION_RESERVED_KEYS = {
     CONF_ATTRIBUTE_TEMPLATES,
     CONF_NATIVE_TEMPLATES,
     CONF_COMMAND_ACTIONS,
+    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     CONF_EVENT_HOOKS,
     CONF_POLYGONAL_ZONE,
     ATTR_DEVICE_ID,
@@ -1277,42 +1281,50 @@ def _reference_entity_schema(
     return _complete_form_schema(vol.Schema(schema))
 
 
-def _helper_update_schema() -> vol.Schema:
+def _helper_update_schema(
+    calibration_template: str | None = None,
+) -> vol.Schema:
     """Choose how generated templates are handled after source changes."""
-    return _complete_form_schema(
-        vol.Schema(
-            {
-                vol.Required(
-                    CONF_HELPER_UPDATE_MODE,
-                    default=HELPER_UPDATE_AUTO,
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=[
-                            HELPER_UPDATE_AUTO,
-                            HELPER_UPDATE_KEEP,
-                            HELPER_UPDATE_FORCE,
-                        ],
-                        translation_key="helper_update_mode",
-                        mode=selector.SelectSelectorMode.LIST,
-                    )
-                ),
-            }
-        )
-    )
+    schema = {
+        vol.Required(
+            CONF_HELPER_UPDATE_MODE,
+            default=HELPER_UPDATE_AUTO,
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    HELPER_UPDATE_AUTO,
+                    HELPER_UPDATE_KEEP,
+                    HELPER_UPDATE_FORCE,
+                ],
+                translation_key="helper_update_mode",
+                mode=selector.SelectSelectorMode.LIST,
+            )
+        ),
+    }
+    if calibration_template is not None:
+        schema[_editable_optional(
+            CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
+            calibration_template,
+        )] = TEMPLATE_SELECTOR
+    return _complete_form_schema(vol.Schema(schema))
 
 
-def _helper_usage_schema() -> vol.Schema:
-    """Choose whether source-based helpers populate a new entity form."""
-    return _complete_form_schema(
-        vol.Schema(
-            {
-                vol.Required(
-                    CONF_USE_TEMPLATE_HELPER,
-                    default=True,
-                ): selector.BooleanSelector(),
-            }
-        )
-    )
+def _helper_usage_schema(
+    calibration_template: str | None = None,
+) -> vol.Schema:
+    """Choose helper usage and, for a boiler, its room-to-water formula."""
+    schema = {
+        vol.Required(
+            CONF_USE_TEMPLATE_HELPER,
+            default=True,
+        ): selector.BooleanSelector(),
+    }
+    if calibration_template is not None:
+        schema[_editable_optional(
+            CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
+            calibration_template,
+        )] = TEMPLATE_SELECTOR
+    return _complete_form_schema(vol.Schema(schema))
 
 
 def _matter_fan_level_schema(levels: tuple[int, ...]) -> vol.Schema:
@@ -2713,6 +2725,19 @@ def _build_entity_config(
     if source_entities:
         entity[CONF_SOURCE_ENTITIES] = source_entities
 
+    if platform == "climate" and (
+        calibration_template := user_input.get(
+            CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+        )
+    ) is not None:
+        calibration_template = repair_legacy_enum_template(
+            _text_default(calibration_template)
+        ).strip()
+        if calibration_template:
+            entity[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] = (
+                calibration_template
+            )
+
     template_sources = _parse_template_sources(
         user_input.get(CONF_TEMPLATE_SOURCES_JSON),
     )
@@ -3055,6 +3080,7 @@ def _validate_entity_templates(hass, entity: Mapping) -> None:
         CONF_VALUE_TEMPLATE,
         CONF_AVAILABILITY_TEMPLATE,
         CONF_ICON_TEMPLATE,
+        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     ):
         _validate(entity.get(field_name), field_name)
 
@@ -4922,6 +4948,7 @@ def _boiler_air_conditioner_command_actions(
     hot_water_switch_id: str | None,
     boiler_state,
     air_conditioner_state,
+    boiler_temperature_calibration_template: str | None = None,
 ) -> dict[str, Any]:
     """Route HVAC modes only to the appliance that implements them."""
     air_conditioner_modes = [
@@ -4963,28 +4990,42 @@ def _boiler_air_conditioner_command_actions(
             "data": {"hvac_mode": default_air_conditioner_mode},
         },
     ]
-    actions = {
-        "set_hvac_mode": [{
-            "choose": [
+    mode_choices = [{
+        "conditions": "{{ hvac_mode == 'heat' }}",
+        "sequence": [
+            air_conditioner_off,
+            *boiler_heat,
+        ],
+    }]
+    if "heat_cool" in air_conditioner_modes:
+        # Treat heat_cool as an explicit simultaneous-operation request for
+        # this composite: keep the boiler heating while the compatible AC/Nest
+        # enters its own automatic heating/cooling mode.
+        mode_choices.append({
+            "conditions": "{{ hvac_mode == 'heat_cool' }}",
+            "sequence": [
+                *boiler_heat,
                 {
-                    "conditions": "{{ hvac_mode == 'heat' }}",
-                    "sequence": [
-                        air_conditioner_off,
-                        *boiler_heat,
-                    ],
-                },
-                {
-                    "conditions": "{{ hvac_mode in " + repr(air_conditioner_modes) + " }}",
-                    "sequence": [
-                        *boiler_off,
-                        {
-                            "action": "climate.set_hvac_mode",
-                            "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
-                            "data": {"hvac_mode": "{{ hvac_mode }}"},
-                        },
-                    ],
+                    "action": "climate.set_hvac_mode",
+                    "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
+                    "data": {"hvac_mode": "heat_cool"},
                 },
             ],
+        })
+    mode_choices.append({
+        "conditions": "{{ hvac_mode in " + repr(air_conditioner_modes) + " }}",
+        "sequence": [
+            *boiler_off,
+            {
+                "action": "climate.set_hvac_mode",
+                "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
+                "data": {"hvac_mode": "{{ hvac_mode }}"},
+            },
+        ],
+    })
+    actions = {
+        "set_hvac_mode": [{
+            "choose": mode_choices,
             "default": [*boiler_off, air_conditioner_off],
         }],
         # VirtualClimate.async_turn_on selects the first non-off advertised
@@ -5019,9 +5060,10 @@ def _boiler_air_conditioner_command_actions(
             actions[command] = [air_conditioner_action]
         elif command == "set_temperature":
             # A Nest range request commonly carries ``hvac_mode=heat_cool``
-            # while the thermostat is currently off.  Source state alone
-            # would incorrectly route that request to the boiler, losing its
-            # target_temp_low/high range and never enabling Nest's range mode.
+            # while the thermostat is currently off. Source state alone would
+            # incorrectly route that request to the boiler, losing its
+            # target_temp_low/high range. The HVAC-mode action separately
+            # enables simultaneous boiler + AC operation for this mode.
             range_modes = [
                 mode for mode in air_conditioner_modes
                 if mode in {"heat_cool", "auto"}
@@ -5106,7 +5148,58 @@ def _boiler_air_conditioner_command_actions(
                 }],
                 "default": [boiler_action],
             }]
+    if boiler_temperature_calibration_template:
+        _apply_boiler_temperature_calibration(
+            actions,
+            boiler_entity_id,
+            boiler_temperature_calibration_template,
+        )
     return actions
+
+
+def _apply_boiler_temperature_calibration(
+    actions: dict[str, Any],
+    boiler_entity_id: str,
+    calibration_template: str,
+) -> None:
+    """Map virtual room requests to boiler water setpoints before clamping."""
+    def apply_to_sequence(sequence: list[dict[str, Any]]) -> None:
+        index = 0
+        while index < len(sequence):
+            action = sequence[index]
+            if not isinstance(action, dict):
+                index += 1
+                continue
+            if (
+                action.get("action") == "climate.set_temperature"
+                and action.get("target", {}).get(ATTR_ENTITY_ID) == boiler_entity_id
+                and isinstance(action.get("data"), str)
+            ):
+                action["data"] = (
+                    "{% set boiler_calibrated_temperature %}"
+                    + calibration_template
+                    + "{% endset %}{% set command_data = dict(command_data, temperature="
+                    "(boiler_calibrated_temperature | float(command_data.get('temperature')))) %}"
+                    + action["data"]
+                )
+                index += 1
+                continue
+            for choice in action.get("choose", []):
+                if isinstance(choice, Mapping) and isinstance(
+                    choice.get("sequence"), list
+                ):
+                    apply_to_sequence(choice["sequence"])
+            if isinstance(action.get("default"), list):
+                apply_to_sequence(action["default"])
+            index += 1
+
+    specification = actions.get("set_temperature")
+    if isinstance(specification, dict):
+        sequence = specification.get("sequence")
+    else:
+        sequence = specification
+    if isinstance(sequence, list):
+        apply_to_sequence(sequence)
 
 
 def _humidifier_component_profile(
@@ -5476,6 +5569,7 @@ def _boiler_command_actions(
     climate_entity_id: str,
     climate_state,
     hot_water_switch_id: str | None,
+    boiler_temperature_calibration_template: str | None = None,
 ) -> dict[str, Any]:
     """Build editable command actions for a heat/off boiler alias."""
     boiler_modes = {
@@ -5524,24 +5618,38 @@ def _boiler_command_actions(
         maximum = (
             f"state_attr({climate_entity_id!r}, 'max_temp') | float(35)"
         )
+        temperature_condition = (
+            "{{ temperature is number }}"
+            if boiler_temperature_calibration_template
+            else (
+                "{{ temperature is number and temperature >= ("
+                + minimum
+                + ") and temperature <= ("
+                + maximum
+                + ") }}"
+            )
+        )
+        temperature_data = _source_command_data_template(
+            "climate", "set_temperature", climate_entity_id
+        ) or "{{ command_data }}"
         actions["set_temperature"] = [{
             "choose": [
                 {
-                    "conditions": (
-                        "{{ temperature is number and temperature >= ("
-                        + minimum
-                        + ") and temperature <= ("
-                        + maximum
-                        + ") }}"
-                    ),
+                    "conditions": temperature_condition,
                     "sequence": [{
                         "action": "climate.set_temperature",
                         "target": {ATTR_ENTITY_ID: climate_entity_id},
-                        "data": {"temperature": "{{ temperature }}"},
+                        "data": temperature_data,
                     }],
                 },
             ],
         }]
+    if boiler_temperature_calibration_template:
+        _apply_boiler_temperature_calibration(
+            actions,
+            climate_entity_id,
+            boiler_temperature_calibration_template,
+        )
     return actions
 
 
@@ -5909,6 +6017,7 @@ def _reference_entity_defaults(
     entity_ids,
     target_platform: str | None = None,
     additional_target_platforms: Collection[str] = (),
+    boiler_temperature_calibration_template: str | None = None,
 ) -> dict[str, Any]:
     entity_ids = _normalize_reference_entity_ids(entity_ids)
     if not entity_ids:
@@ -5947,6 +6056,11 @@ def _reference_entity_defaults(
     boiler_profile = _boiler_source_profile(entity_ids, states)
     boiler_air_conditioner_profile = _boiler_air_conditioner_profile(
         entity_ids, states
+    )
+    boiler_calibration_template = (
+        boiler_temperature_calibration_template
+        if boiler_temperature_calibration_template is not None
+        else DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
     )
     fan_number_profile = _xiaomi_fan_number_profile(entity_ids, states)
     humidifier_component_profile = _humidifier_component_profile(entity_ids)
@@ -6299,6 +6413,9 @@ def _reference_entity_defaults(
             source_command_actions,
         )
     if boiler_profile is not None:
+        defaults[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] = (
+            boiler_calibration_template
+        )
         climate_index, hot_water_switch_id = boiler_profile
         defaults[CONF_VALUE_TEMPLATE] = _boiler_mode_template(
             entity_ids[climate_index]
@@ -6308,9 +6425,13 @@ def _reference_entity_defaults(
                 entity_ids[climate_index],
                 states[climate_index],
                 hot_water_switch_id,
+                boiler_temperature_calibration_template,
             )
         )
     elif boiler_air_conditioner_profile is not None:
+        defaults[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] = (
+            boiler_calibration_template
+        )
         boiler_index, air_conditioner_index, hot_water_switch_id = (
             boiler_air_conditioner_profile
         )
@@ -6321,6 +6442,7 @@ def _reference_entity_defaults(
                 hot_water_switch_id,
                 states[boiler_index],
                 states[air_conditioner_index],
+                boiler_temperature_calibration_template,
             )
         )
         defaults[CONF_COMMAND_ACTIONS_JSON] = _json_default(source_command_actions)
@@ -7231,6 +7353,17 @@ def _entity_form_defaults(
             repair_legacy_template_data(entity.get(CONF_COMMAND_ACTIONS))
         ),
     }
+    if (
+        platform == "climate"
+        and CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE in entity
+    ):
+        defaults[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] = (
+            repair_legacy_enum_template(
+                _text_default(
+                    entity[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE]
+                )
+            )
+        )
     polygon = entity.get(CONF_POLYGONAL_ZONE)
     if not isinstance(polygon, Mapping):
         polygon = {}
@@ -7580,6 +7713,24 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             return await self.async_step_entity_source()
 
         if user_input is not None:
+            if (
+                CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                in self._reference_defaults
+            ):
+                self._reference_defaults = _reference_entity_defaults(
+                    self.hass,
+                    self._source_entities,
+                    self._reference_defaults.get(CONF_PLATFORM),
+                    boiler_temperature_calibration_template=(
+                        None
+                        if user_input.get(
+                            CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                        ) == DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                        else user_input.get(
+                            CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                        )
+                    ),
+                )
             self._add_use_template_helper = cv.boolean(
                 user_input[CONF_USE_TEMPLATE_HELPER],
             )
@@ -7598,7 +7749,11 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
 
         return self.async_show_form(
             step_id="entity_helper",
-            data_schema=_helper_usage_schema(),
+            data_schema=_helper_usage_schema(
+                self._reference_defaults.get(
+                    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                )
+            ),
         )
 
     async def async_step_matter_fan_levels(self, user_input=None):
@@ -7913,6 +8068,24 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             return await self.async_step_entity_source()
 
         if user_input is not None:
+            if (
+                CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                in self._reference_defaults
+            ):
+                self._reference_defaults = _reference_entity_defaults(
+                    self.hass,
+                    self._add_source_entities,
+                    self._reference_defaults.get(CONF_PLATFORM),
+                    boiler_temperature_calibration_template=(
+                        None
+                        if user_input.get(
+                            CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                        ) == DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                        else user_input.get(
+                            CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                        )
+                    ),
+                )
             self._add_use_template_helper = cv.boolean(
                 user_input[CONF_USE_TEMPLATE_HELPER],
             )
@@ -7936,7 +8109,11 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
         return self.async_show_form(
             step_id="entity_helper",
-            data_schema=_helper_usage_schema(),
+            data_schema=_helper_usage_schema(
+                self._reference_defaults.get(
+                    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                )
+            ),
         )
 
     async def async_step_matter_fan_levels(self, user_input=None):
@@ -8306,6 +8483,24 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
         if user_input is not None:
             try:
+                if (
+                    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                    in self._reference_defaults
+                ):
+                    submitted_calibration = user_input.get(
+                        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                    )
+                    self._reference_defaults = _reference_entity_defaults(
+                        self.hass,
+                        self._edit_source_entities,
+                        self._reference_defaults.get(CONF_PLATFORM),
+                        boiler_temperature_calibration_template=(
+                            None
+                            if submitted_calibration
+                            == DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                            else submitted_calibration
+                        ),
+                    )
                 self._prepare_edit_entity_defaults(
                     helper_update_mode=user_input[CONF_HELPER_UPDATE_MODE],
                 )
@@ -8355,7 +8550,17 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
         return self.async_show_form(
             step_id="edit_entity_helper",
-            data_schema=_helper_update_schema(),
+            data_schema=_helper_update_schema(
+                self._edit_current_defaults.get(
+                    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                )
+                if (
+                    self._edit_current_defaults
+                    and CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                    in self._reference_defaults
+                )
+                else None
+            ),
         )
 
     async def async_step_edit_matter_fan_levels(self, user_input=None):

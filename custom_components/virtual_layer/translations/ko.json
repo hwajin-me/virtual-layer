@@ -568,10 +568,12 @@
         "title": "템플릿 자동 생성 선택",
         "description": "선택한 원본 엔티티를 바탕으로 새 가상 엔티티의 Jinja 템플릿을 자동으로 채울지 선택하세요. 다음 화면에서 엔티티의 모든 설정과 템플릿을 확인하고 원하는 값으로 수정할 수 있습니다.",
         "data": {
-          "use_template_helper": "원본 기반 템플릿 자동 생성"
+          "use_template_helper": "원본 기반 템플릿 자동 생성",
+          "boiler_temperature_calibration_template": "보일러 온도 보정"
         },
         "data_description": {
-          "use_template_helper": "켜면 상태값, 사용 가능 여부, 아이콘, 속성 및 도메인별 고유 속성 템플릿을 자동 생성합니다. 끄면 선택한 원본 엔티티, 현재 상태와 메타데이터만 가져오고 템플릿은 생성하지 않습니다."
+          "use_template_helper": "켜면 상태값, 사용 가능 여부, 아이콘, 속성 및 도메인별 고유 속성 템플릿을 자동 생성합니다. 끄면 선택한 원본 엔티티, 현재 상태와 메타데이터만 가져오고 템플릿은 생성하지 않습니다.",
+          "boiler_temperature_calibration_template": "가상 climate에 요청한 temperature를 보일러 온수 설정값으로 바꾸는 Jinja 수식입니다. temperature를 요청값으로 사용합니다. 기본값은 물 온도를 직접 설정하는 기존 방식을 유지합니다. 보일러 1대가 약 10평을 담당한다면 시작 식 35 + ((temperature | float(0) - 18) * 2.5)는 24°C 요청을 약 50°C로 바꿉니다. 단열, 외기, 난방 배관에 따라 반드시 조정하세요. 식은 Jinja 구분자로 감싸야 하며, 계산 뒤 보일러 원본의 최소/최대/단계 제한이 적용됩니다."
         }
       },
       "matter_fan_levels": {
@@ -1225,10 +1227,12 @@
         "title": "템플릿 자동 생성 선택",
         "description": "선택한 원본 엔티티를 바탕으로 새 가상 엔티티의 Jinja 템플릿을 자동으로 채울지 선택하세요. 다음 화면에서 엔티티의 모든 설정과 템플릿을 확인하고 원하는 값으로 수정할 수 있습니다.",
         "data": {
-          "use_template_helper": "원본 기반 템플릿 자동 생성"
+          "use_template_helper": "원본 기반 템플릿 자동 생성",
+          "boiler_temperature_calibration_template": "보일러 온도 보정"
         },
         "data_description": {
-          "use_template_helper": "켜면 상태값, 사용 가능 여부, 아이콘, 속성 및 도메인별 고유 속성 템플릿을 자동 생성합니다. 끄면 선택한 원본 엔티티, 현재 상태와 메타데이터만 가져오고 템플릿은 생성하지 않습니다."
+          "use_template_helper": "켜면 상태값, 사용 가능 여부, 아이콘, 속성 및 도메인별 고유 속성 템플릿을 자동 생성합니다. 끄면 선택한 원본 엔티티, 현재 상태와 메타데이터만 가져오고 템플릿은 생성하지 않습니다.",
+          "boiler_temperature_calibration_template": "가상 climate에 요청한 temperature를 보일러 온수 설정값으로 바꾸는 Jinja 수식입니다. temperature를 요청값으로 사용합니다. 기본값은 물 온도를 직접 설정하는 기존 방식을 유지합니다. 보일러 1대가 약 10평을 담당한다면 시작 식 35 + ((temperature | float(0) - 18) * 2.5)는 24°C 요청을 약 50°C로 바꿉니다. 단열, 외기, 난방 배관에 따라 반드시 조정하세요. 식은 Jinja 구분자로 감싸야 하며, 계산 뒤 보일러 원본의 최소/최대/단계 제한이 적용됩니다."
         }
       },
       "matter_fan_levels": {
@@ -1934,45 +1938,54 @@
               "motion_direct": "직접 바람",
               "motion_indirect": "간접 바람",
               "quiet": "저소음",
-              "speed": "속도",
-              "smart": "스마트 절전",
+              "speed": "풍속",
+              "super": "터보",
+              "turbo": "터보",
+              "smart": "스마트",
               "wind_free": "무풍",
               "wind_free_sleep": "무풍 취침",
-              "ai_comfort": "AI 쾌적",
+              "ai_comfort": "스마트",
               "Favorite": "즐겨찾기",
               "favorite": "즐겨찾기",
               "Fav": "즐겨찾기",
               "fav": "즐겨찾기",
               "Auto": "자동",
               "Sleep": "수면",
-              "Constant Humidity": "일정 습도",
-              "constant_humidity": "일정 습도",
+              "Sleep 1": "수면",
+              "Sleep 2": "수면",
+              "Sleep 3": "수면",
+              "Constant Humidity": "항습",
+              "constant_humidity": "항습",
               "None": "없음",
-              "Direct Mode": "직접 모드",
-              "direct_mode": "직접 모드",
-              "Natural Mode": "자연 모드",
-              "natural_mode": "자연 모드",
-              "Sleep Mode": "수면 모드",
-              "sleep_mode": "수면 모드",
-              "Straight Wind": "직접 바람",
-              "straight_wind": "직접 바람",
-              "Natural Wind": "자연 바람",
-              "natural_wind": "자연 바람",
+              "Direct Mode": "직풍",
+              "direct_mode": "직풍",
+              "Natural Mode": "자연풍",
+              "natural_mode": "자연풍",
+              "Sleep Mode": "수면",
+              "sleep_mode": "수면",
+              "Straight Wind": "직풍",
+              "straight_wind": "직풍",
+              "Natural Wind": "자연풍",
+              "natural_wind": "자연풍",
               "Smart": "스마트"
             }
           },
           "fan_mode": {
             "state": {
-              "speed": "속도",
+              "speed": "풍속",
+              "super": "터보",
+              "turbo": "터보",
+              "Super": "터보",
+              "Turbo": "터보",
               "Auto": "자동",
-              "Direct Mode": "직접 모드",
-              "direct_mode": "직접 모드",
-              "Natural Mode": "자연 모드",
-              "natural_mode": "자연 모드",
-              "Straight Wind": "직접 바람",
-              "straight_wind": "직접 바람",
-              "Natural Wind": "자연 바람",
-              "natural_wind": "자연 바람"
+              "Direct Mode": "직풍",
+              "direct_mode": "직풍",
+              "Natural Mode": "자연풍",
+              "natural_mode": "자연풍",
+              "Straight Wind": "직풍",
+              "straight_wind": "직풍",
+              "Natural Wind": "자연풍",
+              "natural_wind": "자연풍"
             }
           }
         }
@@ -1983,8 +1996,12 @@
         "state_attributes": {
           "preset_mode": {
             "state": {
-              "speed": "속도",
-              "ai_comfort": "AI 쾌적",
+              "speed": "풍속",
+              "super": "터보",
+              "turbo": "터보",
+              "Super": "터보",
+              "Turbo": "터보",
+              "ai_comfort": "스마트",
               "quiet": "저소음",
               "Favorite": "즐겨찾기",
               "favorite": "즐겨찾기",
@@ -1992,19 +2009,22 @@
               "fav": "즐겨찾기",
               "Auto": "자동",
               "Sleep": "수면",
-              "Constant Humidity": "일정 습도",
-              "constant_humidity": "일정 습도",
+              "Sleep 1": "수면",
+              "Sleep 2": "수면",
+              "Sleep 3": "수면",
+              "Constant Humidity": "항습",
+              "constant_humidity": "항습",
               "None": "없음",
-              "Direct Mode": "직접 모드",
-              "direct_mode": "직접 모드",
-              "Natural Mode": "자연 모드",
-              "natural_mode": "자연 모드",
-              "Sleep Mode": "수면 모드",
-              "sleep_mode": "수면 모드",
-              "Straight Wind": "직접 바람",
-              "straight_wind": "직접 바람",
-              "Natural Wind": "자연 바람",
-              "natural_wind": "자연 바람",
+              "Direct Mode": "직풍",
+              "direct_mode": "직풍",
+              "Natural Mode": "자연풍",
+              "natural_mode": "자연풍",
+              "Sleep Mode": "수면",
+              "sleep_mode": "수면",
+              "Straight Wind": "직풍",
+              "straight_wind": "직풍",
+              "Natural Wind": "자연풍",
+              "natural_wind": "자연풍",
               "Smart": "스마트"
             }
           }
@@ -2016,10 +2036,10 @@
         "state_attributes": {
           "mode": {
             "state": {
-              "Constant Humidity": "일정 습도",
-              "constant_humidity": "일정 습도",
-              "speed": "속도",
-              "ai_comfort": "AI 쾌적",
+              "Constant Humidity": "항습",
+              "constant_humidity": "항습",
+              "speed": "풍속",
+              "ai_comfort": "스마트",
               "quiet": "저소음",
               "Favorite": "즐겨찾기",
               "favorite": "즐겨찾기",
@@ -2027,17 +2047,20 @@
               "fav": "즐겨찾기",
               "Auto": "자동",
               "Sleep": "수면",
+              "Sleep 1": "수면",
+              "Sleep 2": "수면",
+              "Sleep 3": "수면",
               "None": "없음",
-              "Direct Mode": "직접 모드",
-              "direct_mode": "직접 모드",
-              "Natural Mode": "자연 모드",
-              "natural_mode": "자연 모드",
-              "Sleep Mode": "수면 모드",
-              "sleep_mode": "수면 모드",
-              "Straight Wind": "직접 바람",
-              "straight_wind": "직접 바람",
-              "Natural Wind": "자연 바람",
-              "natural_wind": "자연 바람",
+              "Direct Mode": "직풍",
+              "direct_mode": "직풍",
+              "Natural Mode": "자연풍",
+              "natural_mode": "자연풍",
+              "Sleep Mode": "수면",
+              "sleep_mode": "수면",
+              "Straight Wind": "직풍",
+              "straight_wind": "직풍",
+              "Natural Wind": "자연풍",
+              "natural_wind": "자연풍",
               "Smart": "스마트"
             }
           }

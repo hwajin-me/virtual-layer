@@ -568,10 +568,12 @@
         "title": "Choose Template Generation",
         "description": "Choose whether to prefill the new virtual entity with Jinja templates generated from the selected source entities. You can review and customize all entity details and templates on the next screen.",
         "data": {
-          "use_template_helper": "Generate source-based templates"
+          "use_template_helper": "Generate source-based templates",
+          "boiler_temperature_calibration_template": "Boiler temperature calibration"
         },
         "data_description": {
-          "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates."
+          "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates.",
+          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual requested temperature into the boiler water setpoint. Use temperature as the requested value. The default preserves direct water-temperature control. For one boiler serving about 10 pyeong, a starting expression of 35 + ((temperature | float(0) - 18) * 2.5) maps 24°C to about 50°C; tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula."
         }
       },
       "matter_fan_levels": {
@@ -1225,10 +1227,12 @@
         "title": "Choose Template Generation",
         "description": "Choose whether to prefill the new virtual entity with Jinja templates generated from the selected source entities. You can review and customize all entity details and templates on the next screen.",
         "data": {
-          "use_template_helper": "Generate source-based templates"
+          "use_template_helper": "Generate source-based templates",
+          "boiler_temperature_calibration_template": "Boiler temperature calibration"
         },
         "data_description": {
-          "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates."
+          "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates.",
+          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual requested temperature into the boiler water setpoint. Use temperature as the requested value. The default preserves direct water-temperature control. For one boiler serving about 10 pyeong, a starting expression of 35 + ((temperature | float(0) - 18) * 2.5) maps 24°C to about 50°C; tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula."
         }
       },
       "matter_fan_levels": {
@@ -1935,16 +1939,21 @@
               "motion_indirect": "Motion indirect",
               "quiet": "Quiet",
               "speed": "Speed",
-              "smart": "Smart saver",
+              "super": "Turbo",
+              "turbo": "Turbo",
+              "smart": "Smart",
               "wind_free": "WindFree",
               "wind_free_sleep": "WindFree sleep",
-              "ai_comfort": "AI comfort",
+              "ai_comfort": "Smart",
               "Favorite": "Favorite",
               "favorite": "Favorite",
               "Fav": "Favorite",
               "fav": "Favorite",
               "Auto": "Auto",
               "Sleep": "Sleep",
+              "Sleep 1": "Sleep",
+              "Sleep 2": "Sleep",
+              "Sleep 3": "Sleep",
               "Constant Humidity": "Constant humidity",
               "constant_humidity": "Constant humidity",
               "None": "None",
@@ -1964,6 +1973,10 @@
           "fan_mode": {
             "state": {
               "speed": "Speed",
+              "super": "Turbo",
+              "turbo": "Turbo",
+              "Super": "Turbo",
+              "Turbo": "Turbo",
               "Auto": "Auto",
               "Direct Mode": "Direct mode",
               "direct_mode": "Direct mode",
@@ -1984,7 +1997,11 @@
           "preset_mode": {
             "state": {
               "speed": "Speed",
-              "ai_comfort": "AI comfort",
+              "super": "Turbo",
+              "turbo": "Turbo",
+              "Super": "Turbo",
+              "Turbo": "Turbo",
+              "ai_comfort": "Smart",
               "quiet": "Quiet",
               "Favorite": "Favorite",
               "favorite": "Favorite",
@@ -1992,6 +2009,9 @@
               "fav": "Favorite",
               "Auto": "Auto",
               "Sleep": "Sleep",
+              "Sleep 1": "Sleep",
+              "Sleep 2": "Sleep",
+              "Sleep 3": "Sleep",
               "Constant Humidity": "Constant humidity",
               "constant_humidity": "Constant humidity",
               "None": "None",
@@ -2019,7 +2039,7 @@
               "Constant Humidity": "Constant humidity",
               "constant_humidity": "Constant humidity",
               "speed": "Speed",
-              "ai_comfort": "AI comfort",
+              "ai_comfort": "Smart",
               "quiet": "Quiet",
               "Favorite": "Favorite",
               "favorite": "Favorite",
@@ -2027,6 +2047,9 @@
               "fav": "Favorite",
               "Auto": "Auto",
               "Sleep": "Sleep",
+              "Sleep 1": "Sleep",
+              "Sleep 2": "Sleep",
+              "Sleep 3": "Sleep",
               "None": "None",
               "Direct Mode": "Direct mode",
               "direct_mode": "Direct mode",

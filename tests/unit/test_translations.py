@@ -149,10 +149,14 @@ def test_virtual_entities_preserve_translated_source_mode_names():
     assert english_states["quiet"] == "Quiet"
     assert korean_states["quiet"] == "저소음"
     assert korean_states["wind_free"] == "무풍"
-    assert korean_states["ai_comfort"] == "AI 쾌적"
+    assert korean_states["ai_comfort"] == korean_states["Smart"] == "스마트"
     assert korean_states["Favorite"] == "즐겨찾기"
-    assert korean_states["Direct Mode"] == "직접 모드"
-    assert korean_states["Natural Wind"] == "자연 바람"
+    assert korean_states["Direct Mode"] == "직풍"
+    assert korean_states["Straight Wind"] == "직풍"
+    assert korean_states["Natural Mode"] == "자연풍"
+    assert korean_states["Natural Wind"] == "자연풍"
+    assert korean_states["Sleep"] == korean_states["Sleep Mode"] == "수면"
+    assert all(korean_states[f"Sleep {level}"] == "수면" for level in range(1, 4))
 
     fan_states = korean["entity"]["fan"]["virtual"]["state_attributes"][
         "preset_mode"
@@ -161,7 +165,7 @@ def test_virtual_entities_preserve_translated_source_mode_names():
         "state_attributes"
     ]["mode"]["state"]
     assert fan_states["Fav"] == "즐겨찾기"
-    assert humidifier_states["Constant Humidity"] == "일정 습도"
+    assert humidifier_states["Constant Humidity"] == "항습"
     expected_source_modes = {
         "speed", "ai_comfort", "Favorite", "Fav", "Auto", "Sleep",
         "Constant Humidity", "None", "Direct Mode", "Natural Mode",
@@ -169,6 +173,9 @@ def test_virtual_entities_preserve_translated_source_mode_names():
     }
     assert expected_source_modes <= set(fan_states)
     assert expected_source_modes <= set(humidifier_states)
+    assert {"super", "turbo", "Super", "Turbo"} <= set(fan_states)
+    assert fan_states["super"] == fan_states["turbo"] == "터보"
+    assert all(fan_states[f"Sleep {level}"] == "수면" for level in range(1, 4))
 
 
 def test_native_template_sections_are_translated_for_add_and_edit():

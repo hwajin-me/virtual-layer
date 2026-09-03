@@ -181,6 +181,7 @@ def _valid_mode_choice(restored, configured, available_modes):
 BASE_SCHEMA = virtual_schema(
     DEFAULT_CLIMATE_VALUE,
     {
+        vol.Optional(CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE): cv.template,
         vol.Optional(CONF_CURRENT_HUMIDITY): number_float,
         vol.Optional(CONF_CURRENT_TEMPERATURE): number_float,
         vol.Optional(CONF_FAN_MODE): cv.string,

@@ -33,6 +33,7 @@ from voluptuous_serialize import convert
 
 from custom_components.virtual_layer.config_flow import (
     CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
+    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     CONF_ADVANCED_SETTINGS,
     CONF_ATTRIBUTE_SOURCES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
@@ -2898,6 +2899,39 @@ def test_reference_heating_only_climate_builds_heat_off_boiler_helper(hass):
         for action in sequence
     )
     assert CONF_COMMAND_ACTIONS_JSON not in _without_template_helpers(defaults)
+
+
+def test_boiler_temperature_calibration_helper_maps_before_source_clamp(hass):
+    """The config-flow formula must alter only the boiler setpoint action."""
+    hass.states.async_set(
+        "climate.boiler",
+        "heat",
+        {
+            "hvac_modes": ["off", "heat", "fan_only"],
+            "min_temp": 0,
+            "max_temp": 80,
+            "target_temp_step": 1,
+            "temperature": 48,
+        },
+    )
+    calibration = "{{ 35 + ((temperature | float(0) - 18) * 3) }}"
+    defaults = _reference_entity_defaults(
+        hass,
+        ["climate.boiler"],
+        boiler_temperature_calibration_template=calibration,
+    )
+
+    assert defaults[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] == calibration
+    actions = _parse_command_actions(defaults[CONF_COMMAND_ACTIONS_JSON], "climate")
+    sequence = actions["set_temperature"][0]["choose"][0]["sequence"]
+    data_template = Template(sequence[0]["data"], hass)
+    assert data_template.async_render(
+        {
+            "temperature": 20,
+            "command_data": {"temperature": 20},
+        },
+        parse_result=True,
+    )["temperature"] == 41
 
 
 def test_reference_virtual_boiler_off_does_not_send_unsupported_fan_only(hass):
@@ -6490,3 +6524,30 @@ async def test_matter_fan_helper_delivers_power_preset_and_selected_speeds(hass)
         ("set_preset_mode", {"preset_mode": "eco", ATTR_ENTITY_ID: [source]}),
         ("turn_off", {ATTR_ENTITY_ID: [source]}),
     ]
+
+
+def test_matter_fan_helper_keeps_a_stale_source_percentage_off(hass):
+    """An off source must win over its last reported non-zero speed."""
+    source = "fan.stepped"
+    hass.states.async_set(source, "off", {"percentage": 60, "percentage_step": 20})
+    generated = _apply_matter_fan_level_helper(
+        _reference_entity_defaults(hass, [source]), source, (20, 60, 100)
+    )
+    entity = VirtualFan(FAN_SCHEMA({
+        CONF_NAME: "Matter fan",
+        ATTR_ENTITY_ID: "fan.matter_off",
+        ATTR_UNIQUE_ID: "matter-fan-off",
+        CONF_INITIAL_VALUE: "on",
+        CONF_SOURCE_ENTITIES: [source],
+        CONF_NATIVE_TEMPLATES: generated[CONF_NATIVE_VALUE_TEMPLATES],
+        CONF_COMMAND_ACTIONS: _parse_command_actions(
+            generated[CONF_COMMAND_ACTIONS_JSON], "fan"
+        ),
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._setup_templates()
+    entity._apply_templates()
+
+    assert entity.is_on is False
+    assert entity.percentage == 0
