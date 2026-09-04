@@ -5096,7 +5096,16 @@ def _boiler_air_conditioner_command_actions(
                     "conditions": (
                         "{{ hvac_mode is defined and hvac_mode == 'heat' }}"
                     ),
-                    "sequence": [boiler_action],
+                    # A combined mode-and-temperature request is how some
+                    # dashboards (and voice assistants) switch from AC auto
+                    # to heating.  Do the same hand-off as set_hvac_mode:
+                    # otherwise the AC can remain actively auto-conditioning
+                    # while the boiler receives only a setpoint write.
+                    "sequence": [
+                        air_conditioner_off,
+                        *boiler_heat,
+                        boiler_action,
+                    ],
                 },
                 {
                     # A mode command may have completed locally before its

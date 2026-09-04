@@ -1435,9 +1435,24 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     assert temperature_action["choose"][0]["sequence"][0]["target"] == {
         ATTR_ENTITY_ID: "climate.air_conditioner"
     }
-    assert temperature_action["choose"][1]["sequence"][0]["target"] == {
-        ATTR_ENTITY_ID: "climate.boiler"
-    }
+    # An explicit heat setpoint must also stop an active AC auto cycle and
+    # enable the boiler.  A temperature-only command is insufficient because
+    # Home Assistant callers commonly combine mode and target in one request.
+    heat_sequence = temperature_action["choose"][1]["sequence"]
+    assert heat_sequence[:3] == [{
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
+        "data": {"hvac_mode": "off"},
+    }, {
+        "action": "switch.turn_on",
+        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+    }, {
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: "climate.boiler"},
+        "data": {"hvac_mode": "heat"},
+    }]
+    assert heat_sequence[3]["action"] == "climate.set_temperature"
+    assert heat_sequence[3]["target"] == {ATTR_ENTITY_ID: "climate.boiler"}
     assert temperature_action["default"][0]["target"] == {
         ATTR_ENTITY_ID: "climate.boiler"
     }

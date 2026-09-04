@@ -1044,7 +1044,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
         air_conditioner_entity_id,
         "cool",
         {
-            "hvac_modes": ["off", "heat", "cool", "dry", "fan_only"],
+            "hvac_modes": ["off", "heat", "cool", "dry", "fan_only", "auto"],
             "min_temp": 18,
             "max_temp": 30,
             "target_temp_step": 1,
@@ -1085,7 +1085,14 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     climate.async_schedule_update_ha_state = Mock()
     climate._apply_templates()
 
-    assert climate.hvac_modes == [HVACMode.OFF, HVACMode.COOL, HVACMode.DRY, HVACMode.FAN_ONLY, HVACMode.HEAT]
+    assert climate.hvac_modes == [
+        HVACMode.OFF,
+        HVACMode.COOL,
+        HVACMode.DRY,
+        HVACMode.FAN_ONLY,
+        HVACMode.AUTO,
+        HVACMode.HEAT,
+    ]
     assert climate.hvac_mode is HVACMode.COOL
     assert climate.current_temperature == 25
     assert climate.target_temperature == 24
@@ -1110,6 +1117,13 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     ):
         hass.services.async_register(domain, service, _capture)
 
+    # Selecting a normal AC mode from auto hands control to the AC and puts
+    # the boiler into its standby/off alias.
+    hass.states.async_set(air_conditioner_entity_id, "auto", {
+        **hass.states.get(air_conditioner_entity_id).attributes,
+    })
+    climate._apply_templates()
+    assert climate.hvac_mode is HVACMode.AUTO
     await climate.async_set_hvac_mode(HVACMode.COOL)
     assert [(domain, service) for domain, service, _data in calls] == [
         ("switch", "turn_on"),
@@ -1139,6 +1153,13 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
             "hvac_mode": mode.value,
         }
 
+    # An explicit heat selection is the inverse hand-off: disable AC auto
+    # before enabling the boiler, never leaving both heat sources active.
+    hass.states.async_set(air_conditioner_entity_id, "auto", {
+        **hass.states.get(air_conditioner_entity_id).attributes,
+    })
+    climate._apply_templates()
+    assert climate.hvac_mode is HVACMode.AUTO
     calls.clear()
     await climate.async_set_hvac_mode(HVACMode.HEAT)
     assert [(domain, service) for domain, service, _data in calls] == [
@@ -1207,6 +1228,40 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     assert calls[0][2][ATTR_ENTITY_ID] == [air_conditioner_entity_id]
     assert calls[0][2]["temperature"] == 26
 
+    # ``auto`` is owned by the AC.  A caller can switch to heat and supply a
+    # boiler setpoint in one service call, so that request must stop auto
+    # first; otherwise both appliances can condition the room at once.
+    hass.states.async_set(air_conditioner_entity_id, "auto", {
+        **hass.states.get(air_conditioner_entity_id).attributes,
+        "temperature": 24,
+    })
+    climate._apply_templates()
+    assert climate.hvac_mode is HVACMode.AUTO
+    calls.clear()
+    await climate.async_set_temperature(temperature=50, hvac_mode="heat")
+    assert calls == [
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [air_conditioner_entity_id], "hvac_mode": "off"},
+        ),
+        ("switch", "turn_on", {ATTR_ENTITY_ID: [hot_water_switch_id]}),
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [boiler_entity_id], "hvac_mode": "heat"},
+        ),
+        (
+            "climate",
+            "set_temperature",
+            {
+                ATTR_ENTITY_ID: [boiler_entity_id],
+                "temperature": 50,
+                "hvac_mode": "heat",
+            },
+        ),
+    ]
+
     # A heat-pump AC and the boiler both use the virtual ``heat`` mode.  When
     # the AC is already heating, its displayed room setpoint must remain the
     # target for a plain temperature write; only an explicit ``hvac_mode=heat``
@@ -1235,15 +1290,28 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     # without a later optimistic virtual-range validation failure.
     calls.clear()
     await climate.async_set_temperature(temperature=50, hvac_mode="heat")
-    assert calls == [(
-        "climate",
-        "set_temperature",
-        {
-            ATTR_ENTITY_ID: [boiler_entity_id],
-            "temperature": 50,
-            "hvac_mode": "heat",
-        },
-    )]
+    assert calls == [
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [air_conditioner_entity_id], "hvac_mode": "off"},
+        ),
+        ("switch", "turn_on", {ATTR_ENTITY_ID: [hot_water_switch_id]}),
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [boiler_entity_id], "hvac_mode": "heat"},
+        ),
+        (
+            "climate",
+            "set_temperature",
+            {
+                ATTR_ENTITY_ID: [boiler_entity_id],
+                "temperature": 50,
+                "hvac_mode": "heat",
+            },
+        ),
+    ]
     assert climate.target_temperature == 23
 
     # A separate heat command writes the virtual state before SiHAS publishes
