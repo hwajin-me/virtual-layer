@@ -98,6 +98,10 @@ from custom_components.virtual_layer.config_flow import (
     CONF_ENTITY_NAME,
     CONF_HELPER_UPDATE_MODE,
     CONF_MANAGED_DEVICE_NAME,
+    CONF_MATTER_FAN_HIGH_LEVEL,
+    CONF_MATTER_FAN_LOW_LEVEL,
+    CONF_MATTER_FAN_MEDIUM_LEVEL,
+    CONF_USE_MATTER_FAN_LEVELS,
     CONF_NATIVE_TEMPLATES_JSON,
     CONF_NATIVE_VALUE_TEMPLATES,
     CONF_REFERENCE_ENTITY_ID,
@@ -4339,6 +4343,69 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
     assert "target_temp_low" not in state_attributes
 
 
+async def test_options_flow_edits_stepped_fan_with_matter_levels_in_place(hass):
+    """Matter level selection must replace the chosen entity, never append one."""
+    source = "fan.air_ventilator"
+    entity_id = "fan.air_ventilator_virtual"
+    hass.states.async_set(source, "on", {"percentage": 40, "percentage_step": 20})
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Air Ventilator": [{
+                    CONF_PLATFORM: "fan",
+                    CONF_NAME: "Air Ventilator",
+                    ATTR_ENTITY_ID: entity_id,
+                    ATTR_UNIQUE_ID: "air-ventilator-virtual",
+                    CONF_INITIAL_VALUE: "off",
+                    CONF_SOURCE_ENTITIES: [source],
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_ENTITY_KEY: _entity_key("Air Ventilator", 0)}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_REFERENCE_ENTITY_ID: [source]}
+    )
+    assert result["step_id"] == "edit_entity_type"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "fan"}
+    )
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_FORCE}
+    )
+    assert result["step_id"] == "matter_fan_levels"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {
+            CONF_USE_MATTER_FAN_LEVELS: True,
+            CONF_MATTER_FAN_LOW_LEVEL: 20,
+            CONF_MATTER_FAN_MEDIUM_LEVEL: 60,
+            CONF_MATTER_FAN_HIGH_LEVEL: 100,
+        }
+    )
+    assert result["step_id"] == "edit_entity"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], _flatten_entity_form_sections(result["data_schema"]({}))
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    devices = result["data"][ATTR_DEVICES]
+    assert list(devices) == ["Air Ventilator"]
+    assert len(devices["Air Ventilator"]) == 1
+    edited = devices["Air Ventilator"][0]
+    assert edited[ATTR_ENTITY_ID] == entity_id
+    assert edited[CONF_NATIVE_TEMPLATES]["speed_count"] == "{{ 3 }}"
+
+
 async def test_options_flow_copies_fan_without_duplicate_attribute_templates(hass):
     hass.states.async_set(
         "fan.air_ventilator",
@@ -4386,7 +4453,7 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = _first_stored_entity(result)
     assert "source_available" in entity[CONF_ATTRIBUTE_TEMPLATES]
-    assert entity["speed_count"] == 5
+    assert entity["speed_count"] == 3
 
     runtime_config = {
         key: value
@@ -4400,6 +4467,8 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
     fan._apply_templates()
 
     assert fan.percentage == 67
+    assert fan.speed_count == 3
+    assert fan.state_attributes["percentage_step"] == 100 / 3
     assert fan.preset_modes == ["Manual", "Auto", "Sleep 1", "Sleep 2", "Sleep 3"]
     assert fan.preset_mode == "Manual"
     assert fan.oscillating is None

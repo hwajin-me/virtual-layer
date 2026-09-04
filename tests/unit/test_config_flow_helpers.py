@@ -6492,6 +6492,10 @@ def test_matter_fan_helper_reduces_stepped_source_and_writes_selected_levels(has
 
     assert _matter_fan_source_levels(hass, ["fan.stepped"], "fan") == (20, 40, 60, 80, 100)
     assert not _matter_fan_source_levels(hass, ["fan.stepped"], "light")
+    hass.states.async_set("fan.continuous", "on", {"percentage_step": 1})
+    hass.states.async_set("fan.three_speed", "on", {"percentage_step": 50})
+    assert not _matter_fan_source_levels(hass, ["fan.continuous"], "fan")
+    assert not _matter_fan_source_levels(hass, ["fan.three_speed"], "fan")
 
     generated = _apply_matter_fan_level_helper(
         {
@@ -6509,6 +6513,7 @@ def test_matter_fan_helper_reduces_stepped_source_and_writes_selected_levels(has
     )
     native = generated[CONF_NATIVE_VALUE_TEMPLATES]
     assert native["speed_count"] == "{{ 3 }}"
+    assert generated["speed_count"] == 3
     assert Template(native["percentage"], hass).async_render() == 67
     actions = _parse_command_actions(generated[CONF_COMMAND_ACTIONS_JSON], "fan")
     assert actions["turn_off"][0]["action"] == "fan.turn_off"

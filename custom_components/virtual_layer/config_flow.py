@@ -151,6 +151,7 @@ CONF_USE_TEMPLATE_HELPER = "use_template_helper"
 CONF_MATTER_FAN_LOW_LEVEL = "matter_fan_low_level"
 CONF_MATTER_FAN_MEDIUM_LEVEL = "matter_fan_medium_level"
 CONF_MATTER_FAN_HIGH_LEVEL = "matter_fan_high_level"
+CONF_USE_MATTER_FAN_LEVELS = "use_matter_fan_levels"
 CONF_SOURCE_ENTITIES_TEXT = "source_entities_text"
 CONF_TEMPLATE_SOURCES_JSON = "template_sources_json"
 CONF_TARGET_DEVICE_NAME = "target_device_name"
@@ -1331,6 +1332,7 @@ def _matter_fan_level_schema(levels: tuple[int, ...]) -> vol.Schema:
     """Select the source steps represented by Matter's three fan speeds."""
     defaults = (levels[0], levels[len(levels) // 2], levels[-1])
     return _complete_form_schema(vol.Schema({
+        vol.Required(CONF_USE_MATTER_FAN_LEVELS, default=True): cv.boolean,
         vol.Required(CONF_MATTER_FAN_LOW_LEVEL, default=defaults[0]): vol.In(levels),
         vol.Required(CONF_MATTER_FAN_MEDIUM_LEVEL, default=defaults[1]): vol.In(levels),
         vol.Required(CONF_MATTER_FAN_HIGH_LEVEL, default=defaults[2]): vol.In(levels),
@@ -6016,7 +6018,10 @@ def _matter_fan_source_levels(hass, entity_ids: Collection[str], platform: str) 
     if not step.is_integer() or step <= 0 or step > 100:
         return ()
     values = tuple(range(int(step), 101, int(step)))
-    return values if len(values) > 3 and values[-1] == 100 else ()
+    # A one-percent or otherwise large range is a continuous/finely stepped
+    # fan, not a device whose physical controls are meaningfully low/medium/
+    # high. Do not present a lossy Matter reduction for it.
+    return values if 3 < len(values) <= 10 and values[-1] == 100 else ()
 
 
 def _matter_fan_level_templates(
@@ -6071,6 +6076,9 @@ def _apply_matter_fan_level_helper(
     native = _native_template_defaults("fan", result)
     native.update({"speed_count": "{{ 3 }}", "percentage": percentage})
     result[CONF_NATIVE_VALUE_TEMPLATES] = native
+    # Native templates are applied after setup, but the static value is also
+    # needed before the first render and by consumers that inspect config.
+    result["speed_count"] = 3
     # Keep source power, preset, oscillation, and direction actions. The
     # reduced mapping owns only percentage writes.
     existing_actions = _parse_command_actions(
@@ -7850,6 +7858,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         errors = _flow_errors(self, "matter_fan_levels")
         if user_input is not None:
             try:
+                if not cv.boolean(user_input[CONF_USE_MATTER_FAN_LEVELS]):
+                    return await self.async_step_entity()
                 selected = tuple(int(user_input[field]) for field in (
                     CONF_MATTER_FAN_LOW_LEVEL,
                     CONF_MATTER_FAN_MEDIUM_LEVEL,
@@ -8203,13 +8213,15 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             ),
         )
 
-    async def async_step_matter_fan_levels(self, user_input=None):
+    async def async_step_add_matter_fan_levels(self, user_input=None):
         """Choose Matter's three exposed speeds for an added stepped fan."""
         if not self._add_matter_fan_levels or not self._add_source_entities:
             return await self.async_step_entity()
         errors = _flow_errors(self, "matter_fan_levels")
         if user_input is not None:
             try:
+                if not cv.boolean(user_input[CONF_USE_MATTER_FAN_LEVELS]):
+                    return await self.async_step_entity()
                 selected = tuple(int(user_input[field]) for field in (
                     CONF_MATTER_FAN_LOW_LEVEL,
                     CONF_MATTER_FAN_MEDIUM_LEVEL,
@@ -8596,7 +8608,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     self._reference_defaults.get(CONF_PLATFORM, ""),
                 ) if user_input[CONF_HELPER_UPDATE_MODE] != HELPER_UPDATE_KEEP else ()
                 if self._edit_matter_fan_levels:
-                    return await self.async_step_edit_matter_fan_levels()
+                    return await self.async_step_matter_fan_levels()
                 return await self.async_step_edit_entity()
             except Exception:
                 # A damaged legacy helper must not make the entity impossible
@@ -8650,13 +8662,17 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             ),
         )
 
-    async def async_step_edit_matter_fan_levels(self, user_input=None):
-        """Choose Matter fan levels while regenerating an edited helper."""
-        if not self._edit_matter_fan_levels or not self._edit_source_entities:
+    async def async_step_matter_fan_levels(self, user_input=None):
+        """Choose Matter fan levels for either an added or edited entity."""
+        if not self._edit_matter_fan_levels:
+            return await self.async_step_add_matter_fan_levels(user_input)
+        if not self._edit_source_entities:
             return await self.async_step_edit_entity()
         errors = _flow_errors(self, "matter_fan_levels")
         if user_input is not None:
             try:
+                if not cv.boolean(user_input[CONF_USE_MATTER_FAN_LEVELS]):
+                    return await self.async_step_edit_entity()
                 selected = tuple(int(user_input[field]) for field in (
                     CONF_MATTER_FAN_LOW_LEVEL,
                     CONF_MATTER_FAN_MEDIUM_LEVEL,

@@ -580,11 +580,13 @@
         "title": "Choose Matter Fan Speeds",
         "description": "This source exposes more than three speed steps. Choose which physical steps the generated helper will expose as low, medium, and high to Matter controllers.",
         "data": {
+          "use_matter_fan_levels": "Use three Matter fan levels",
           "matter_fan_low_level": "Low source level",
           "matter_fan_medium_level": "Medium source level",
           "matter_fan_high_level": "High source level"
         },
         "data_description": {
+          "use_matter_fan_levels": "Turn this off to keep the source fan's original speed steps without reducing them to low, medium, and high.",
           "matter_fan_low_level": "The source percentage used when a controller requests low speed.",
           "matter_fan_medium_level": "The source percentage used when a controller requests medium speed.",
           "matter_fan_high_level": "The source percentage used when a controller requests high speed."
@@ -1239,11 +1241,13 @@
         "title": "Choose Matter Fan Speeds",
         "description": "This source exposes more than three speed steps. Choose which physical steps the generated helper will expose as low, medium, and high to Matter controllers.",
         "data": {
+          "use_matter_fan_levels": "Use three Matter fan levels",
           "matter_fan_low_level": "Low source level",
           "matter_fan_medium_level": "Medium source level",
           "matter_fan_high_level": "High source level"
         },
         "data_description": {
+          "use_matter_fan_levels": "Turn this off to keep the source fan's original speed steps without reducing them to low, medium, and high.",
           "matter_fan_low_level": "The source percentage used when a controller requests low speed.",
           "matter_fan_medium_level": "The source percentage used when a controller requests medium speed.",
           "matter_fan_high_level": "The source percentage used when a controller requests high speed."
