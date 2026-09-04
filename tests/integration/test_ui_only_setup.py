@@ -103,9 +103,12 @@ from custom_components.virtual_layer.config_flow import (
     CONF_HELPER_UPDATE_MODE,
     CONF_MANAGED_DEVICE_NAME,
     CONF_MATTER_FAN_HIGH_LEVEL,
+    CONF_MATTER_FAN_CONTROL_MODE,
     CONF_MATTER_FAN_LOW_LEVEL,
     CONF_MATTER_FAN_MEDIUM_LEVEL,
     CONF_USE_MATTER_FAN_LEVELS,
+    MATTER_FAN_CONTROL_PERCENTAGE,
+    MATTER_FAN_CONTROL_THREE_LEVELS,
     CONF_NATIVE_TEMPLATES_JSON,
     CONF_NATIVE_VALUE_TEMPLATES,
     CONF_REFERENCE_ENTITY_ID,
@@ -200,6 +203,12 @@ async def _choose_add_template_helper(
         result["flow_id"],
         {CONF_USE_TEMPLATE_HELPER: enabled},
     )
+    if result["step_id"] == "matter_fan_control_mode":
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {
+                CONF_MATTER_FAN_CONTROL_MODE: MATTER_FAN_CONTROL_PERCENTAGE,
+            },
+        )
     if result["step_id"] == "matter_fan_levels":
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
@@ -1496,6 +1505,81 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     with pytest.raises(ValueError, match="Unsupported HVAC mode"):
         await climate.async_set_hvac_mode(HVACMode.HEAT)
     assert calls == []
+
+
+async def test_combined_boiler_calibration_renders_service_data_as_mapping(hass):
+    """A calibrated BCM write must reach the script as valid service data."""
+    boiler_entity_id = "climate.boiler"
+    air_conditioner_entity_id = "climate.air_conditioner"
+    hass.states.async_set(
+        boiler_entity_id,
+        "fan_only",
+        {
+            "hvac_modes": ["off", "heat", "fan_only"],
+            "min_temp": 0,
+            "max_temp": 80,
+            "target_temp_step": 1,
+            "temperature": 48,
+            "supported_features": int(ClimateEntityFeature.TARGET_TEMPERATURE),
+        },
+    )
+    hass.states.async_set("switch.hot_water", "on")
+    hass.states.async_set(
+        air_conditioner_entity_id,
+        "auto",
+        {
+            "hvac_modes": ["off", "cool", "auto"],
+            "min_temp": 18,
+            "max_temp": 30,
+            "target_temp_step": 1,
+            "temperature": 24,
+            "supported_features": int(ClimateEntityFeature.TARGET_TEMPERATURE),
+        },
+    )
+    defaults = _reference_entity_defaults(
+        hass,
+        [boiler_entity_id, "switch.hot_water", air_conditioner_entity_id],
+        boiler_temperature_calibration_template=(
+            "{{ 35 + ((temperature | float(0) - 18) * 2.5) }}"
+        ),
+    )
+    climate = VirtualClimate(
+        CLIMATE_SCHEMA({
+            CONF_NAME: "Calibrated combined climate",
+            ATTR_ENTITY_ID: "climate.calibrated_combined",
+            CONF_INITIAL_VALUE: defaults[CONF_INITIAL_VALUE],
+            CONF_NATIVE_TEMPLATES: defaults[CONF_NATIVE_VALUE_TEMPLATES],
+            CONF_COMMAND_ACTIONS: _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON]),
+        }),
+        False,
+    )
+    climate.hass = hass
+    climate._create_state(climate._config)
+    climate.async_write_ha_state = Mock()
+    climate._apply_templates()
+    calls = []
+
+    async def _capture(call):
+        calls.append((call.domain, call.service, dict(call.data)))
+
+    for domain, service in (
+        ("climate", "set_hvac_mode"),
+        ("climate", "set_temperature"),
+        ("switch", "turn_on"),
+    ):
+        hass.services.async_register(domain, service, _capture)
+
+    await climate.async_set_temperature(temperature=24, hvac_mode=HVACMode.HEAT)
+
+    assert calls[-1] == (
+        "climate",
+        "set_temperature",
+        {
+            ATTR_ENTITY_ID: [boiler_entity_id],
+            "temperature": 50,
+            "hvac_mode": HVACMode.HEAT,
+        },
+    )
 
 
 async def test_boiler_nest_helper_routes_offline_range_request_to_nest(hass):
@@ -4393,6 +4477,12 @@ async def test_options_flow_combines_fans_and_routes_matter_speed_to_stepped_sou
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], role_input
     )
+    assert result["step_id"] == "matter_fan_control_mode"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {
+            CONF_MATTER_FAN_CONTROL_MODE: MATTER_FAN_CONTROL_THREE_LEVELS,
+        },
+    )
     assert result["step_id"] == "matter_fan_levels"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {
@@ -4457,6 +4547,12 @@ async def test_options_flow_edits_stepped_fan_with_matter_levels_in_place(hass):
     assert result["step_id"] == "edit_entity_helper"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_FORCE}
+    )
+    assert result["step_id"] == "matter_fan_control_mode"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {
+            CONF_MATTER_FAN_CONTROL_MODE: MATTER_FAN_CONTROL_THREE_LEVELS,
+        },
     )
     assert result["step_id"] == "matter_fan_levels"
     result = await hass.config_entries.options.async_configure(
@@ -4584,7 +4680,7 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
 
     assert defaults[CONF_PLATFORM] == "fan"
     assert "source_available" in defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]
-    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"] == "{{ 3 }}"
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"] == "{{ 100 }}"
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -4598,7 +4694,7 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = _first_stored_entity(result)
     assert "source_available" in entity[CONF_ATTRIBUTE_TEMPLATES]
-    assert entity["speed_count"] == 3
+    assert entity["speed_count"] == 100
 
     runtime_config = {
         key: value
@@ -4611,9 +4707,9 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
     fan.async_schedule_update_ha_state = Mock()
     fan._apply_templates()
 
-    assert fan.percentage == 67
-    assert fan.speed_count == 3
-    assert fan.state_attributes["percentage_step"] == 100 / 3
+    assert fan.percentage == 40
+    assert fan.speed_count == 100
+    assert fan.state_attributes["percentage_step"] == 1
     assert fan.preset_modes == ["Manual", "Auto", "Sleep 1", "Sleep 2", "Sleep 3"]
     assert fan.preset_mode == "Manual"
     assert fan.oscillating is None

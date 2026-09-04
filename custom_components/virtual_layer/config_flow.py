@@ -154,6 +154,9 @@ CONF_MATTER_FAN_MEDIUM_LEVEL = "matter_fan_medium_level"
 CONF_MATTER_FAN_HIGH_LEVEL = "matter_fan_high_level"
 CONF_USE_MATTER_FAN_LEVELS = "use_matter_fan_levels"
 CONF_MATTER_FAN_SPEED_SOURCE = "matter_fan_speed_source"
+CONF_MATTER_FAN_CONTROL_MODE = "matter_fan_control_mode"
+MATTER_FAN_CONTROL_THREE_LEVELS = "three_levels"
+MATTER_FAN_CONTROL_PERCENTAGE = "percentage"
 CONF_FAN_MAIN_SOURCE = "fan_main_source"
 CONF_FAN_SPEED_SOURCE = "fan_speed_source"
 CONF_FAN_PRESET_SOURCE = "fan_preset_source"
@@ -1362,6 +1365,25 @@ def _matter_fan_source_schema(source_ids: Collection[str]) -> vol.Schema:
     }))
 
 
+def _matter_fan_control_mode_schema() -> vol.Schema:
+    """Choose a compatibility profile for a stepped fan source."""
+    return _complete_form_schema(vol.Schema({
+        vol.Required(
+            CONF_MATTER_FAN_CONTROL_MODE,
+            default=MATTER_FAN_CONTROL_PERCENTAGE,
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    MATTER_FAN_CONTROL_PERCENTAGE,
+                    MATTER_FAN_CONTROL_THREE_LEVELS,
+                ],
+                translation_key="matter_fan_control_mode",
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        ),
+    }))
+
+
 def _fan_source_role_schema(
     choices: Mapping[str, Collection[str]], defaults: Mapping[str, str] | None = None
 ) -> vol.Schema:
@@ -1735,9 +1757,9 @@ def _climate_temperature_step_default(defaults: Mapping) -> str:
                 return "0.5"
         except (TypeError, ValueError, OverflowError):
             pass
-    # One degree is the common thermostat default and avoids silently creating
-    # the previous 0.1-degree increment for a new UI-only configuration.
-    return "1"
+    # Do not replace a source-generated or custom Jinja helper simply because
+    # the edit form was submitted without touching this new control.
+    return "source"
 
 
 def _native_template_defaults(
@@ -1992,7 +2014,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             default=_climate_temperature_step_default(defaults),
         )] = selector.SelectSelector(
             selector.SelectSelectorConfig(
-                options=["0.5", "1"],
+                options=["source", "0.5", "1"],
                 translation_key="climate_temperature_step",
                 mode=selector.SelectSelectorMode.DROPDOWN,
             )
@@ -2000,7 +2022,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     if domain_schema:
         schema[vol.Optional(CONF_DOMAIN_SETTINGS, default=dict)] = section(
             vol.Schema(domain_schema),
-            {"collapsed": platform != "light"},
+            {"collapsed": platform not in {"climate", "light"}},
         )
     native_template_properties = DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
     if native_template_properties:
@@ -2907,11 +2929,13 @@ def _build_entity_config(
             native_templates[property_name] = template_value
     if platform == "climate":
         temperature_step = user_input.get(CONF_CLIMATE_TEMPERATURE_STEP_INPUT)
-        if temperature_step not in {"0.5", "1"}:
-            raise InvalidDomainOptions
-        native_templates["target_temperature_step"] = _literal_template(
-            float(temperature_step)
-        )
+        if temperature_step is not None:
+            if temperature_step not in {"source", "0.5", "1"}:
+                raise InvalidDomainOptions
+            if temperature_step != "source":
+                native_templates["target_temperature_step"] = _literal_template(
+                    float(temperature_step)
+                )
     if native_templates:
         entity[CONF_NATIVE_TEMPLATES] = native_templates
 
@@ -5357,13 +5381,18 @@ def _apply_boiler_temperature_calibration(
                 and action.get("target", {}).get(ATTR_ENTITY_ID) == boiler_entity_id
                 and isinstance(action.get("data"), str)
             ):
-                action["data"] = (
+                # Render the calibrated mapping on the service action itself.
+                # A preceding ``variables`` action is scoped to that action
+                # rather than its following sibling in Home Assistant scripts,
+                # so it leaves this service with the original command_data.
+                calibrated_command_data = (
                     "{% set boiler_calibrated_temperature %}"
                     + calibration_template
                     + "{% endset %}{% set command_data = dict(command_data, temperature="
                     "(boiler_calibrated_temperature | float(command_data.get('temperature')))) %}"
-                    + action["data"]
+                    "{{ command_data }}"
                 )
+                action["data"] = calibrated_command_data
                 index += 1
                 continue
             for choice in action.get("choose", []):
@@ -6293,8 +6322,8 @@ def _matter_fan_level_templates(
     requested = (
         "{% set requested = percentage | float(0) %}"
         "{{ 0 if requested <= 0 else " + str(low)
-        + " if requested <= 50 else " + str(medium)
-        + " if requested <= 83 else " + str(high) + " }}"
+        + " if requested <= 33 else " + str(medium)
+        + " if requested <= 67 else " + str(high) + " }}"
     )
     actions = {
         "set_percentage": [{
@@ -6312,8 +6341,8 @@ def _matter_fan_turn_on_data_template(low: int, medium: int, high: int) -> str:
         "{% if command_data.get('percentage') is number %}"
         "{% set requested = command_data.get('percentage') | float(0) %}"
         "{{ dict(command_data, percentage=(0 if requested <= 0 else "
-        + str(low) + " if requested <= 50 else " + str(medium)
-        + " if requested <= 83 else " + str(high) + ")) }}"
+        + str(low) + " if requested <= 33 else " + str(medium)
+        + " if requested <= 67 else " + str(high) + ")) }}"
         "{% else %}{{ command_data }}{% endif %}"
     )
 
@@ -6323,6 +6352,54 @@ def _matter_fan_turn_on_without_percentage_template() -> str:
     return (
         "{{ dict(command_data | dictsort | rejectattr('0', 'eq', 'percentage')) }}"
     )
+
+
+def _apply_matter_fan_percentage_helper(
+    defaults: Mapping[str, Any], entity_id: str
+) -> dict[str, Any]:
+    """Expose a stepped source through Matter's native 0–100% control."""
+    result = dict(defaults)
+    native = _native_template_defaults("fan", result)
+    native.update({
+        "speed_count": "{{ 100 }}",
+        "percentage": (
+            "{{ state_attr(" + repr(entity_id) + ", 'percentage') | int(0) }}"
+        ),
+    })
+    result[CONF_NATIVE_VALUE_TEMPLATES] = native
+    result["speed_count"] = 100
+    percentage_action = {
+        "action": "fan.set_percentage",
+        "target": {ATTR_ENTITY_ID: entity_id},
+        "data": {"percentage": "{{ percentage }}"},
+    }
+    actions = _parse_command_actions(result.get(CONF_COMMAND_ACTIONS_JSON), "fan")
+    actions["set_percentage"] = [percentage_action]
+    turn_on = actions.get("turn_on")
+    if isinstance(turn_on, list):
+        if any(_action_targets_entity(action, entity_id) for action in turn_on):
+            for action in turn_on:
+                if isinstance(action, dict) and _action_targets_entity(action, entity_id):
+                    action["data"] = "{{ command_data }}"
+        else:
+            no_percentage = _matter_fan_turn_on_without_percentage_template()
+            for action in turn_on:
+                if isinstance(action, dict) and "action" in action:
+                    action["data"] = no_percentage
+            turn_on.append({
+                "choose": [{
+                    "conditions": "{{ command_data.get('percentage') is number }}",
+                    "sequence": [percentage_action],
+                }],
+            })
+    elif turn_on is None:
+        actions["turn_on"] = [{
+            "action": "fan.turn_on",
+            "target": {ATTR_ENTITY_ID: entity_id},
+            "data": "{{ command_data }}",
+        }]
+    result[CONF_COMMAND_ACTIONS_JSON] = _json_default(actions)
+    return result
 
 
 def _apply_matter_fan_level_helper(
@@ -8137,7 +8214,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 self._matter_fan_speed_source, self._matter_fan_levels = next(
                     iter(self._matter_fan_level_sources.items())
                 )
-                return await self.async_step_matter_fan_levels()
+                return await self.async_step_matter_fan_control_mode()
             return await self.async_step_entity()
 
         return self.async_show_form(
@@ -8199,13 +8276,13 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             self._matter_fan_speed_source, self._matter_fan_levels = next(
                 iter(self._matter_fan_level_sources.items())
             )
-            return await self.async_step_matter_fan_levels()
+            return await self.async_step_matter_fan_control_mode()
         if user_input is not None:
             source = user_input.get(CONF_MATTER_FAN_SPEED_SOURCE)
             if source in self._matter_fan_level_sources:
                 self._matter_fan_speed_source = source
                 self._matter_fan_levels = self._matter_fan_level_sources[source]
-                return await self.async_step_matter_fan_levels()
+                return await self.async_step_matter_fan_control_mode()
         return self.async_show_form(
             step_id="matter_fan_source",
             data_schema=_matter_fan_source_schema(self._matter_fan_level_sources),
@@ -8219,6 +8296,10 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         if user_input is not None:
             try:
                 if not cv.boolean(user_input[CONF_USE_MATTER_FAN_LEVELS]):
+                    self._entity_defaults = _apply_matter_fan_percentage_helper(
+                        self._entity_defaults or {},
+                        self._matter_fan_speed_source or self._source_entities[0],
+                    )
                     return await self.async_step_entity()
                 selected = tuple(int(user_input[field]) for field in (
                     CONF_MATTER_FAN_LOW_LEVEL,
@@ -8235,6 +8316,25 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             step_id="matter_fan_levels",
             data_schema=_matter_fan_level_schema(self._matter_fan_levels),
             errors=errors,
+        )
+
+    async def async_step_matter_fan_control_mode(self, user_input=None):
+        """Choose percentage control or the optional three-level profile."""
+        if not self._matter_fan_levels or not self._source_entities:
+            return await self.async_step_entity()
+        if user_input is not None:
+            mode = user_input.get(CONF_MATTER_FAN_CONTROL_MODE)
+            if mode == MATTER_FAN_CONTROL_PERCENTAGE:
+                self._entity_defaults = _apply_matter_fan_percentage_helper(
+                    self._entity_defaults or {},
+                    self._matter_fan_speed_source or self._source_entities[0],
+                )
+                return await self.async_step_entity()
+            if mode == MATTER_FAN_CONTROL_THREE_LEVELS:
+                return await self.async_step_matter_fan_levels()
+        return self.async_show_form(
+            step_id="matter_fan_control_mode",
+            data_schema=_matter_fan_control_mode_schema(),
         )
 
     async def async_step_entity(self, user_input=None):
@@ -8580,7 +8680,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 self._add_matter_fan_speed_source, self._add_matter_fan_levels = next(
                     iter(self._add_matter_fan_level_sources.items())
                 )
-                return await self.async_step_matter_fan_levels()
+                return await self.async_step_matter_fan_control_mode()
             return await self.async_step_entity()
 
         return self.async_show_form(
@@ -8672,7 +8772,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             else:
                 self._add_matter_fan_speed_source = source
                 self._add_matter_fan_levels = levels
-            return await self.async_step_matter_fan_levels()
+            return await self.async_step_matter_fan_control_mode()
         if user_input is not None:
             source = user_input.get(CONF_MATTER_FAN_SPEED_SOURCE)
             if source in source_options:
@@ -8682,7 +8782,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 else:
                     self._add_matter_fan_speed_source = source
                     self._add_matter_fan_levels = source_options[source]
-                return await self.async_step_matter_fan_levels()
+                return await self.async_step_matter_fan_control_mode()
         return self.async_show_form(
             step_id="matter_fan_source",
             data_schema=_matter_fan_source_schema(source_options),
@@ -9095,7 +9195,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     self._edit_matter_fan_speed_source, self._edit_matter_fan_levels = next(
                         iter(self._edit_matter_fan_level_sources.items())
                     )
-                    return await self.async_step_matter_fan_levels()
+                    return await self.async_step_matter_fan_control_mode()
                 return await self.async_step_edit_entity()
             except Exception:
                 # A damaged legacy helper must not make the entity impossible
@@ -9159,6 +9259,14 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         if user_input is not None:
             try:
                 if not cv.boolean(user_input[CONF_USE_MATTER_FAN_LEVELS]):
+                    self._entity_defaults = _apply_matter_fan_percentage_helper(
+                        self._entity_defaults or {},
+                        self._edit_matter_fan_speed_source
+                        or self._edit_source_entities[0],
+                    )
+                    self._edit_auto_helper_profile = _auto_helper_profile(
+                        self._entity_defaults,
+                    )
                     return await self.async_step_edit_entity()
                 selected = tuple(int(user_input[field]) for field in (
                     CONF_MATTER_FAN_LOW_LEVEL,
@@ -9178,6 +9286,42 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             step_id="matter_fan_levels",
             data_schema=_matter_fan_level_schema(self._edit_matter_fan_levels),
             errors=errors,
+        )
+
+    async def async_step_matter_fan_control_mode(self, user_input=None):
+        """Choose percentage control or the optional three-level profile."""
+        is_edit = self._edit_source_entities is not None
+        levels = (
+            self._edit_matter_fan_levels
+            if is_edit else self._add_matter_fan_levels
+        )
+        sources = self._edit_source_entities if is_edit else self._add_source_entities
+        speed_source = (
+            self._edit_matter_fan_speed_source
+            if is_edit else self._add_matter_fan_speed_source
+        )
+        if not levels or not sources:
+            return (
+                await self.async_step_edit_entity()
+                if is_edit else await self.async_step_entity()
+            )
+        if user_input is not None:
+            mode = user_input.get(CONF_MATTER_FAN_CONTROL_MODE)
+            if mode == MATTER_FAN_CONTROL_PERCENTAGE:
+                self._entity_defaults = _apply_matter_fan_percentage_helper(
+                    self._entity_defaults or {}, speed_source or sources[0],
+                )
+                if is_edit:
+                    self._edit_auto_helper_profile = _auto_helper_profile(
+                        self._entity_defaults
+                    )
+                    return await self.async_step_edit_entity()
+                return await self.async_step_entity()
+            if mode == MATTER_FAN_CONTROL_THREE_LEVELS:
+                return await self.async_step_matter_fan_levels()
+        return self.async_show_form(
+            step_id="matter_fan_control_mode",
+            data_schema=_matter_fan_control_mode_schema(),
         )
 
     async def async_step_edit_entity(self, user_input=None):

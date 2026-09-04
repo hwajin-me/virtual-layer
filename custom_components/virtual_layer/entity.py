@@ -1068,17 +1068,28 @@ class VirtualEntity(RestoreEntity):
                 return value
             result = {key: await _walk(item) for key, item in value.items()}
             data = result.get("data")
-            if isinstance(data, str) and "command_data" in data:
-                if data.strip() == "{{ command_data }}":
+            data_source = data.template if isinstance(data, Template) else data
+            # ``data`` is a whole service-data mapping when it is a Template
+            # object. Core validates that its result is a dict, but only after
+            # nested choose sequences have begun. Render it here so generated
+            # and user-authored mapping templates have the same safe path.
+            needs_mapping_render = isinstance(data, Template) or (
+                isinstance(data_source, str) and "command_data" in data_source
+            )
+            if needs_mapping_render:
+                if data_source.strip() == "{{ command_data }}":
                     rendered = copy.deepcopy(variables["command_data"])
                 else:
-                    rendered = Template(data, self.hass).async_render(
+                    rendered = Template(data_source, self.hass).async_render(
                         variables=variables,
                         parse_result=True,
                     )
-                if isinstance(rendered, dict):
-                    result["data"] = rendered
-                    changed = True
+                if not isinstance(rendered, dict):
+                    raise HomeAssistantError(
+                        "Command action data template must render a dictionary"
+                    )
+                result["data"] = rendered
+                changed = True
             return result
 
         rendered_sequence = await _walk(copy.deepcopy(sequence))
@@ -1086,6 +1097,18 @@ class VirtualEntity(RestoreEntity):
 
     def _command_service_data(self, command, method, args, kwargs) -> dict:
         """Build Home Assistant service data from native command arguments."""
+        def normalize(value):
+            """Keep command-data templates representable as native Jinja data."""
+            if isinstance(value, Enum):
+                return normalize(value.value)
+            if isinstance(value, dict):
+                return {key: normalize(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [normalize(item) for item in value]
+            if isinstance(value, tuple):
+                return tuple(normalize(item) for item in value)
+            return value
+
         signature = inspect.signature(method)
         bound = signature.bind_partial(self, *args, **kwargs)
         data = {}
@@ -1096,7 +1119,11 @@ class VirtualEntity(RestoreEntity):
                 data.update(value)
             else:
                 data[name] = value
-        data = {name: value for name, value in data.items() if value is not None}
+        data = {
+            name: normalize(value)
+            for name, value in data.items()
+            if value is not None
+        }
 
         key = (self._platform_domain, command)
         for old_name, new_name in VIRTUAL_ENTITY_PROXY_DATA_RENAMES.get(

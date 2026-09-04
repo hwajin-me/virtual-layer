@@ -961,7 +961,7 @@ async def test_command_action_receives_native_arguments_and_can_disable_optimism
 
     await entity.async_set_percentage(73)
 
-    assert calls == [{"requested": 67, "legacy_limit": 100}]
+    assert calls == [{"requested": 100, "legacy_limit": 100}]
     assert entity.percentage == 0
     entity.async_write_ha_state.assert_not_called()
 
@@ -989,9 +989,9 @@ async def test_command_action_defaults_to_optimistic_native_update(hass):
     entity._create_state(entity._config)
     entity.async_write_ha_state = Mock()
 
-    await entity.async_set_percentage(35)
+    await entity.async_set_percentage(34)
 
-    assert entity.percentage == 33
+    assert entity.percentage == 67
     entity.async_write_ha_state.assert_called_once()
 
 
@@ -1086,7 +1086,7 @@ async def test_command_actions_run_for_independent_concurrent_commands(hass):
     release.set()
     await asyncio.gather(*tasks)
 
-    assert sorted(calls) == [33, 67]
+    assert sorted(calls) == [33, 100]
     assert entity.percentage == 0
 
 

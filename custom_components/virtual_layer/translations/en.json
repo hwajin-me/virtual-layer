@@ -133,7 +133,8 @@
               "polygon_distance_meters": "Tracker grouping distance",
               "polygon_tracker_rules_json": "Tracker rules Jinja templates",
               "polygon_away_state": "Outside-zone state",
-              "matter_light_type": "Matter light device type"
+              "matter_light_type": "Matter light device type",
+              "climate_temperature_step": "Temperature adjustment step"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -143,7 +144,8 @@
               "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
               "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
               "polygon_away_state": "State used when the selected GPS position is outside every polygon.",
-              "matter_light_type": "Select the maximum Matter lighting capability: on/off, dimming, color temperature, or extended HS/XY color. A supported-color-modes template may safely expose a smaller subset. Effects and flash are never exposed."
+              "matter_light_type": "Select the maximum Matter lighting capability: on/off, dimming, color temperature, or extended HS/XY color. A supported-color-modes template may safely expose a smaller subset. Effects and flash are never exposed.",
+              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls."
             }
           },
           "native_value_templates": {
@@ -586,10 +588,20 @@
           "matter_fan_high_level": "High source level"
         },
         "data_description": {
-          "use_matter_fan_levels": "Turn this off to keep the source fan's original speed steps without reducing them to low, medium, and high.",
+          "use_matter_fan_levels": "Turn this off to use the Matter 0–100% percentage profile instead.",
           "matter_fan_low_level": "The source percentage used when a controller requests low speed.",
           "matter_fan_medium_level": "The source percentage used when a controller requests medium speed.",
           "matter_fan_high_level": "The source percentage used when a controller requests high speed."
+        }
+      },
+      "matter_fan_control_mode": {
+        "title": "Choose Matter Fan Control",
+        "description": "Matter natively uses a 0–100% fan speed. Select percentage control, or use the optional low/medium/high compatibility profile.",
+        "data": {
+          "matter_fan_control_mode": "Fan speed control"
+        },
+        "data_description": {
+          "matter_fan_control_mode": "Percentage exposes 0–100% to Matter controllers. Three levels maps low, medium, and high to selected physical source steps."
         }
       },
       "fan_source_roles": {
@@ -812,7 +824,8 @@
               "polygon_distance_meters": "Tracker grouping distance",
               "polygon_tracker_rules_json": "Tracker rules Jinja templates",
               "polygon_away_state": "Outside-zone state",
-              "matter_light_type": "Matter light device type"
+              "matter_light_type": "Matter light device type",
+              "climate_temperature_step": "Temperature adjustment step"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -822,7 +835,8 @@
               "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
               "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
               "polygon_away_state": "State used when the selected GPS position is outside every polygon.",
-              "matter_light_type": "Select the Matter lighting contract. It strictly limits the entity to on/off, dimming, color temperature, or extended HS/XY color capabilities. Effects and flash are never exposed."
+              "matter_light_type": "Select the Matter lighting contract. It strictly limits the entity to on/off, dimming, color temperature, or extended HS/XY color capabilities. Effects and flash are never exposed.",
+              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls."
             }
           },
           "native_value_templates": {
@@ -1275,10 +1289,20 @@
           "matter_fan_high_level": "High source level"
         },
         "data_description": {
-          "use_matter_fan_levels": "Turn this off to keep the source fan's original speed steps without reducing them to low, medium, and high.",
+          "use_matter_fan_levels": "Turn this off to use the Matter 0–100% percentage profile instead.",
           "matter_fan_low_level": "The source percentage used when a controller requests low speed.",
           "matter_fan_medium_level": "The source percentage used when a controller requests medium speed.",
           "matter_fan_high_level": "The source percentage used when a controller requests high speed."
+        }
+      },
+      "matter_fan_control_mode": {
+        "title": "Choose Matter Fan Control",
+        "description": "Matter natively uses a 0–100% fan speed. Select percentage control, or use the optional low/medium/high compatibility profile.",
+        "data": {
+          "matter_fan_control_mode": "Fan speed control"
+        },
+        "data_description": {
+          "matter_fan_control_mode": "Percentage exposes 0–100% to Matter controllers. Three levels maps low, medium, and high to selected physical source steps."
         }
       },
       "fan_source_roles": {
@@ -1404,7 +1428,8 @@
               "polygon_distance_meters": "Tracker grouping distance",
               "polygon_tracker_rules_json": "Tracker rules Jinja templates",
               "polygon_away_state": "Outside-zone state",
-              "matter_light_type": "Matter light device type"
+              "matter_light_type": "Matter light device type",
+              "climate_temperature_step": "Temperature adjustment step"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -1414,7 +1439,8 @@
               "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
               "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
               "polygon_away_state": "State used when the selected GPS position is outside every polygon.",
-              "matter_light_type": "Select the Matter lighting contract. It strictly limits the entity to on/off, dimming, color temperature, or extended HS/XY color capabilities. Effects and flash are never exposed."
+              "matter_light_type": "Select the Matter lighting contract. It strictly limits the entity to on/off, dimming, color temperature, or extended HS/XY color capabilities. Effects and flash are never exposed.",
+              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls."
             }
           },
           "native_value_templates": {
@@ -1871,9 +1897,22 @@
         "force_helper": "Apply template helper again"
       }
     },
+    "matter_fan_control_mode": {
+      "options": {
+        "percentage": "Matter percentage (0–100%)",
+        "three_levels": "Three levels (low / medium / high)"
+      }
+    },
     "fan_source_role": {
       "options": {
         "__virtual_layer_no_source__": "Not used"
+      }
+    },
+    "climate_temperature_step": {
+      "options": {
+        "source": "Source or dynamic template",
+        "0.5": "0.5 °C",
+        "1": "1 °C"
       }
     }
   },

@@ -33,6 +33,7 @@ from voluptuous_serialize import convert
 
 from custom_components.virtual_layer.config_flow import (
     CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
+    CONF_CLIMATE_TEMPERATURE_STEP_INPUT,
     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     CONF_ADVANCED_SETTINGS,
     CONF_ATTRIBUTE_SOURCES_JSON,
@@ -86,6 +87,7 @@ from custom_components.virtual_layer.config_flow import (
     _auto_helper_profile,
     _apply_fan_source_roles,
     _apply_matter_fan_level_helper,
+    _apply_matter_fan_percentage_helper,
     _build_device_config,
     _build_entity_config,
     _default_virtual_entity_id,
@@ -317,7 +319,7 @@ def test_entity_form_collapses_secondary_fields_and_flattens_submissions():
         CONF_NATIVE_VALUE_TEMPLATES,
     ):
         assert outer[section_name].options["collapsed"] is True
-    assert CONF_DOMAIN_SETTINGS not in outer
+    assert outer[CONF_DOMAIN_SETTINGS].options["collapsed"] is False
 
     flattened = _flatten_entity_form_sections(
         {
@@ -3004,13 +3006,14 @@ def test_boiler_temperature_calibration_helper_maps_before_source_clamp(hass):
     actions = _parse_command_actions(defaults[CONF_COMMAND_ACTIONS_JSON], "climate")
     sequence = actions["set_temperature"][0]["choose"][0]["sequence"]
     data_template = Template(sequence[0]["data"], hass)
-    assert data_template.async_render(
+    command_data = data_template.async_render(
         {
             "temperature": 20,
             "command_data": {"temperature": 20},
         },
         parse_result=True,
-    )["temperature"] == 41
+    )
+    assert command_data["temperature"] == 41
 
 
 def test_reference_virtual_boiler_off_does_not_send_unsupported_fan_only(hass):
@@ -3030,7 +3033,7 @@ def test_reference_virtual_boiler_off_does_not_send_unsupported_fan_only(hass):
     }]
 
 
-def test_climate_entity_form_uses_only_jinja_native_controls():
+def test_climate_entity_form_exposes_temperature_step_and_jinja_native_controls():
     schema = _entity_schema(
         {
             CONF_PLATFORM: "climate",
@@ -3046,16 +3049,35 @@ def test_climate_entity_form_uses_only_jinja_native_controls():
         }
     )
     outer = {marker.schema: validator for marker, validator in schema.schema.items()}
-    assert CONF_DOMAIN_SETTINGS not in outer
+    domain_validators = _section_validators(schema, CONF_DOMAIN_SETTINGS)
+    assert set(domain_validators) == {CONF_CLIMATE_TEMPERATURE_STEP_INPUT}
     validators = _section_validators(schema, CONF_NATIVE_VALUE_TEMPLATES)
     assert set(validators) == set(CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
     assert all(isinstance(value, selector.TemplateSelector) for value in validators.values())
 
     submitted = schema({})[CONF_NATIVE_VALUE_TEMPLATES]
+    assert schema({})[CONF_DOMAIN_SETTINGS][CONF_CLIMATE_TEMPERATURE_STEP_INPUT] == "source"
     assert submitted["hvac_modes"] == "{{ ['off', 'cool'] }}"
     assert submitted["fan_modes"] == "{{ ['auto', 'turbo'] }}"
     assert submitted["fan_mode"] == "{{ 'auto' }}"
     assert all(submitted[property_name] for property_name in CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
+
+
+@pytest.mark.parametrize(
+    ("temperature_step", "expected_template"),
+    [("0.5", "{{ 0.5 }}"), ("1", "{{ 1.0 }}")],
+)
+def test_climate_temperature_step_selection_updates_native_step_template(
+    temperature_step, expected_template
+):
+    form_values = _entity_schema({CONF_PLATFORM: "climate"})({})
+    form_values[CONF_DOMAIN_SETTINGS][CONF_CLIMATE_TEMPERATURE_STEP_INPUT] = (
+        temperature_step
+    )
+
+    _, entity = _build_entity_config(form_values)
+
+    assert entity[CONF_NATIVE_TEMPLATES]["target_temperature_step"] == expected_template
 
 
 def test_build_climate_config_uses_all_native_hvac_fields():
@@ -6523,8 +6545,14 @@ def test_matter_fan_helper_reduces_stepped_source_and_writes_selected_levels(has
         variables={"percentage": 33}, parse_result=True
     ) == 20
     assert Template(command_template, hass).async_render(
+        variables={"percentage": 34}, parse_result=True
+    ) == 60
+    assert Template(command_template, hass).async_render(
         variables={"percentage": 67}, parse_result=True
     ) == 60
+    assert Template(command_template, hass).async_render(
+        variables={"percentage": 68}, parse_result=True
+    ) == 100
     assert Template(command_template, hass).async_render(
         variables={"percentage": 100}, parse_result=True
     ) == 100
@@ -6533,11 +6561,114 @@ def test_matter_fan_helper_reduces_stepped_source_and_writes_selected_levels(has
         variables={"command_data": {"percentage": 67}}, parse_result=True
     ) == {"percentage": 60}
     assert Template(turn_on_template, hass).async_render(
+        variables={"command_data": {"percentage": 68}}, parse_result=True
+    ) == {"percentage": 100}
+    assert Template(turn_on_template, hass).async_render(
         variables={"command_data": {}}, parse_result=True
     ) == {}
 
     with pytest.raises(vol.Invalid):
         _apply_matter_fan_level_helper({}, "fan.stepped", (60, 20, 100))
+
+
+def test_matter_fan_percentage_helper_preserves_the_full_percentage_range(hass):
+    """The Matter profile must not quantize a stepped source to three values."""
+    source = "fan.xiaomi_speed"
+    hass.states.async_set(source, "on", {"percentage": 40, "percentage_step": 20})
+    generated = _apply_matter_fan_percentage_helper(
+        {
+            CONF_PLATFORM: "fan",
+            CONF_COMMAND_ACTIONS_JSON: _json_default({
+                "turn_on": [{
+                    "action": "fan.turn_on",
+                    "target": {ATTR_ENTITY_ID: "fan.miot_main"},
+                    "data": "{{ command_data }}",
+                }],
+            }),
+        },
+        source,
+    )
+
+    native = generated[CONF_NATIVE_VALUE_TEMPLATES]
+    assert native["speed_count"] == "{{ 100 }}"
+    assert generated["speed_count"] == 100
+    assert Template(native["percentage"], hass).async_render() == 40
+
+    actions = _parse_command_actions(generated[CONF_COMMAND_ACTIONS_JSON], "fan")
+    command_template = actions["set_percentage"][0]["data"]["percentage"]
+    assert Template(command_template, hass).async_render(
+        variables={"percentage": 1}, parse_result=True
+    ) == 1
+    assert Template(command_template, hass).async_render(
+        variables={"percentage": 34}, parse_result=True
+    ) == 34
+    assert Template(command_template, hass).async_render(
+        variables={"percentage": 100}, parse_result=True
+    ) == 100
+
+    # With distinct power and speed sources, never pass an unsupported
+    # percentage to the power source; issue it only to the speed source.
+    main_turn_on = actions["turn_on"][0]
+    assert Template(main_turn_on["data"], hass).async_render(
+        variables={"command_data": {"percentage": 34}}, parse_result=True
+    ) == {}
+    speed_choose = actions["turn_on"][1]["choose"][0]
+    assert speed_choose["sequence"][0]["target"] == {ATTR_ENTITY_ID: source}
+
+
+async def test_matter_percentage_helper_routes_full_values_to_separate_speed_source(hass):
+    """A composed fan must send power and speed commands to their own source."""
+    main = "fan.miot_main"
+    speed = "fan.xiaomi_speed"
+    hass.states.async_set(main, "off")
+    hass.states.async_set(speed, "off", {"percentage": 20})
+    generated = _apply_matter_fan_percentage_helper(
+        {
+            CONF_PLATFORM: "fan",
+            CONF_COMMAND_ACTIONS_JSON: _json_default({
+                "turn_on": [{
+                    "action": "fan.turn_on",
+                    "target": {ATTR_ENTITY_ID: main},
+                    "data": "{{ command_data }}",
+                }],
+            }),
+        },
+        speed,
+    )
+    calls = []
+
+    def register(service):
+        async def capture(call):
+            calls.append((service, dict(call.data)))
+        hass.services.async_register("fan", service, capture)
+
+    for service in ("turn_on", "set_percentage"):
+        register(service)
+    entity = VirtualFan(FAN_SCHEMA({
+        CONF_NAME: "Matter percentage fan",
+        ATTR_ENTITY_ID: "fan.matter_percentage",
+        ATTR_UNIQUE_ID: "matter-percentage-fan",
+        CONF_INITIAL_VALUE: "off",
+        CONF_SOURCE_ENTITIES: [main, speed],
+        CONF_NATIVE_TEMPLATES: generated[CONF_NATIVE_VALUE_TEMPLATES],
+        CONF_COMMAND_ACTIONS: _parse_command_actions(
+            generated[CONF_COMMAND_ACTIONS_JSON], "fan"
+        ),
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._setup_templates()
+    entity._apply_templates()
+    entity.async_write_ha_state = Mock()
+
+    await entity.async_turn_on(percentage=34)
+    await entity.async_set_percentage(67)
+
+    assert calls == [
+        ("turn_on", {ATTR_ENTITY_ID: [main]}),
+        ("set_percentage", {"percentage": 34, ATTR_ENTITY_ID: [speed]}),
+        ("set_percentage", {"percentage": 67, ATTR_ENTITY_ID: [speed]}),
+    ]
 
 
 async def test_matter_fan_helper_delivers_power_preset_and_selected_speeds(hass):
@@ -6598,12 +6729,16 @@ async def test_matter_fan_helper_delivers_power_preset_and_selected_speeds(hass)
     entity.async_write_ha_state = Mock()
 
     await entity.async_set_percentage(33)
+    await entity.async_set_percentage(34)
+    await entity.async_set_percentage(68)
     await entity.async_turn_on(percentage=67)
     await entity.async_set_preset_mode("eco")
     await entity.async_turn_off()
 
     assert calls == [
         ("set_percentage", {"percentage": 20, ATTR_ENTITY_ID: [source]}),
+        ("set_percentage", {"percentage": 60, ATTR_ENTITY_ID: [source]}),
+        ("set_percentage", {"percentage": 100, ATTR_ENTITY_ID: [source]}),
         ("turn_on", {"percentage": 60, ATTR_ENTITY_ID: [source]}),
         ("set_preset_mode", {"preset_mode": "eco", ATTR_ENTITY_ID: [source]}),
         ("turn_off", {ATTR_ENTITY_ID: [source]}),

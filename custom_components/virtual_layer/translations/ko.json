@@ -133,7 +133,8 @@
               "polygon_distance_meters": "Tracker 그룹 거리",
               "polygon_tracker_rules_json": "Tracker 규칙 Jinja 템플릿",
               "polygon_away_state": "영역 밖 상태",
-              "matter_light_type": "Matter 조명 장치 유형"
+              "matter_light_type": "Matter 조명 장치 유형",
+              "climate_temperature_step": "온도 조절 간격"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -143,7 +144,8 @@
               "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
               "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
               "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다.",
-              "matter_light_type": "Matter 조명의 최대 기능을 선택합니다. 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상이며, 지원 색상 모드 템플릿은 더 작은 부분 집합을 안전하게 노출할 수 있습니다. 효과와 깜빡임은 노출하지 않습니다."
+              "matter_light_type": "Matter 조명의 최대 기능을 선택합니다. 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상이며, 지원 색상 모드 템플릿은 더 작은 부분 집합을 안전하게 노출할 수 있습니다. 효과와 깜빡임은 노출하지 않습니다.",
+              "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다."
             }
           },
           "native_value_templates": {
@@ -586,10 +588,20 @@
           "matter_fan_high_level": "강 원본 단계"
         },
         "data_description": {
-          "use_matter_fan_levels": "끄면 원본 fan의 단계값을 그대로 유지하며 약·중·강 3단계로 축약하지 않습니다.",
+          "use_matter_fan_levels": "끄면 Matter 0~100% 백분율 프로필을 사용합니다.",
           "matter_fan_low_level": "컨트롤러가 약을 요청할 때 사용할 원본 백분율입니다.",
           "matter_fan_medium_level": "컨트롤러가 중을 요청할 때 사용할 원본 백분율입니다.",
           "matter_fan_high_level": "컨트롤러가 강을 요청할 때 사용할 원본 백분율입니다."
+        }
+      },
+      "matter_fan_control_mode": {
+        "title": "Matter Fan 제어 방식 선택",
+        "description": "Matter는 기본적으로 fan 속도를 0~100%로 제어합니다. Matter 백분율 제어를 선택하거나, 선택적 약/중/강 호환 프로필을 사용할 수 있습니다.",
+        "data": {
+          "matter_fan_control_mode": "Fan 속도 제어"
+        },
+        "data_description": {
+          "matter_fan_control_mode": "백분율은 Matter 컨트롤러에 0~100%를 노출합니다. 3단계는 약·중·강을 선택한 실제 원본 단계에 매핑합니다."
         }
       },
       "fan_source_roles": {
@@ -812,7 +824,8 @@
               "polygon_distance_meters": "Tracker 그룹 거리",
               "polygon_tracker_rules_json": "Tracker 규칙 Jinja 템플릿",
               "polygon_away_state": "영역 밖 상태",
-              "matter_light_type": "Matter 조명 장치 유형"
+              "matter_light_type": "Matter 조명 장치 유형",
+              "climate_temperature_step": "온도 조절 간격"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -822,7 +835,8 @@
               "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
               "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
               "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다.",
-              "matter_light_type": "Matter 조명 계약을 선택합니다. 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상 기능으로 엄격히 제한하며 효과와 깜빡임은 노출하지 않습니다."
+              "matter_light_type": "Matter 조명 계약을 선택합니다. 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상 기능으로 엄격히 제한하며 효과와 깜빡임은 노출하지 않습니다.",
+              "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다."
             }
           },
           "native_value_templates": {
@@ -1275,10 +1289,20 @@
           "matter_fan_high_level": "강 원본 단계"
         },
         "data_description": {
-          "use_matter_fan_levels": "끄면 원본 fan의 단계값을 그대로 유지하며 약·중·강 3단계로 축약하지 않습니다.",
+          "use_matter_fan_levels": "끄면 Matter 0~100% 백분율 프로필을 사용합니다.",
           "matter_fan_low_level": "컨트롤러가 약을 요청할 때 사용할 원본 백분율입니다.",
           "matter_fan_medium_level": "컨트롤러가 중을 요청할 때 사용할 원본 백분율입니다.",
           "matter_fan_high_level": "컨트롤러가 강을 요청할 때 사용할 원본 백분율입니다."
+        }
+      },
+      "matter_fan_control_mode": {
+        "title": "Matter Fan 제어 방식 선택",
+        "description": "Matter는 기본적으로 fan 속도를 0~100%로 제어합니다. Matter 백분율 제어를 선택하거나, 선택적 약/중/강 호환 프로필을 사용할 수 있습니다.",
+        "data": {
+          "matter_fan_control_mode": "Fan 속도 제어"
+        },
+        "data_description": {
+          "matter_fan_control_mode": "백분율은 Matter 컨트롤러에 0~100%를 노출합니다. 3단계는 약·중·강을 선택한 실제 원본 단계에 매핑합니다."
         }
       },
       "fan_source_roles": {
@@ -1404,7 +1428,8 @@
               "polygon_distance_meters": "Tracker 그룹 거리",
               "polygon_tracker_rules_json": "Tracker 규칙 Jinja 템플릿",
               "polygon_away_state": "영역 밖 상태",
-              "matter_light_type": "Matter 조명 장치 유형"
+              "matter_light_type": "Matter 조명 장치 유형",
+              "climate_temperature_step": "온도 조절 간격"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -1414,7 +1439,8 @@
               "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
               "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
               "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다.",
-              "matter_light_type": "Matter 조명 계약을 선택합니다. 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상 기능으로 엄격히 제한하며 효과와 깜빡임은 노출하지 않습니다."
+              "matter_light_type": "Matter 조명 계약을 선택합니다. 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상 기능으로 엄격히 제한하며 효과와 깜빡임은 노출하지 않습니다.",
+              "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다."
             }
           },
           "native_value_templates": {
@@ -1871,9 +1897,22 @@
         "force_helper": "템플릿 helper 다시 적용"
       }
     },
+    "matter_fan_control_mode": {
+      "options": {
+        "percentage": "Matter 백분율 (0~100%)",
+        "three_levels": "3단계 (약 / 중 / 강)"
+      }
+    },
     "fan_source_role": {
       "options": {
         "__virtual_layer_no_source__": "사용 안 함"
+      }
+    },
+    "climate_temperature_step": {
+      "options": {
+        "source": "소스 또는 동적 템플릿",
+        "0.5": "0.5 °C",
+        "1": "1 °C"
       }
     }
   },

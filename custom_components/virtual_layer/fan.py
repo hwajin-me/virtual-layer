@@ -268,9 +268,19 @@ class VirtualFan(VirtualEntity, FanEntity):
         return round(parsed)
 
     def _nearest_percentage(self, percentage: int) -> int:
-        """Snap a percentage to the nearest non-zero speed advertised to HA."""
+        """Snap a percentage to the speed interval advertised to HA."""
         if percentage == 0 or self._attr_speed_count <= 0:
             return percentage
+        if self._attr_speed_count == 3:
+            # Home Assistant's three visible fan levels are 33, 67 and 100.
+            # Treat them as intervals, not nearest mathematical points: a
+            # request just above 33 must select medium, and one just above 67
+            # must select high.
+            if percentage <= 33:
+                return 33
+            if percentage <= 67:
+                return 67
+            return 100
         speed_index = math.floor(
             ((percentage * self._attr_speed_count) / 100) + 0.5
         )
