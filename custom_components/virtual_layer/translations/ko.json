@@ -1870,6 +1870,11 @@
         "keep_current": "현재 템플릿 유지",
         "force_helper": "템플릿 helper 다시 적용"
       }
+    },
+    "fan_source_role": {
+      "options": {
+        "__virtual_layer_no_source__": "사용 안 함"
+      }
     }
   },
   "services": {

@@ -1870,6 +1870,11 @@
         "keep_current": "Keep current templates",
         "force_helper": "Apply template helper again"
       }
+    },
+    "fan_source_role": {
+      "options": {
+        "__virtual_layer_no_source__": "Not used"
+      }
     }
   },
   "services": {

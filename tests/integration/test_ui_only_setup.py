@@ -96,9 +96,8 @@ from custom_components.virtual_layer.config_flow import (
     CONF_ENTITY_KEY,
     CONF_ENTITY_KEYS,
     CONF_ENTITY_NAME,
-    CONF_FAN_DIRECTION_SOURCE,
+    FAN_ROLE_NONE,
     CONF_FAN_MAIN_SOURCE,
-    CONF_FAN_OSCILLATION_SOURCE,
     CONF_FAN_PRESET_SOURCE,
     CONF_FAN_SPEED_SOURCE,
     CONF_HELPER_UPDATE_MODE,
@@ -4389,14 +4388,10 @@ async def test_options_flow_combines_fans_and_routes_matter_speed_to_stepped_sou
     )
     result = await _choose_add_template_helper(hass, result)
     assert result["step_id"] == "fan_source_roles"
+    role_input = result["data_schema"]({})
+    role_input[CONF_FAN_SPEED_SOURCE] = xiaomi_home
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {
-            CONF_FAN_MAIN_SOURCE: miot,
-            CONF_FAN_SPEED_SOURCE: xiaomi_home,
-            CONF_FAN_PRESET_SOURCE: miot,
-            CONF_FAN_OSCILLATION_SOURCE: miot,
-            CONF_FAN_DIRECTION_SOURCE: miot,
-        }
+        result["flow_id"], role_input
     )
     assert result["step_id"] == "matter_fan_levels"
     result = await hass.config_entries.options.async_configure(
@@ -4490,7 +4485,12 @@ async def test_options_flow_edits_combined_fan_without_speed_reduction(hass):
     """Role selection during edit must return to edit, never add an entity."""
     main = "fan.main_control"
     preset = "fan.preset_control"
-    hass.states.async_set(main, "on", {"supported_features": int(FanEntityFeature.TURN_ON)})
+    hass.states.async_set(main, "on", {
+        "percentage": 50,
+        "supported_features": int(
+            FanEntityFeature.TURN_ON | FanEntityFeature.SET_SPEED
+        ),
+    })
     hass.states.async_set(
         preset,
         "on",
@@ -4536,14 +4536,12 @@ async def test_options_flow_edits_combined_fan_without_speed_reduction(hass):
         result["flow_id"], {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_FORCE}
     )
     assert result["step_id"] == "fan_source_roles"
+    role_input = result["data_schema"]({})
+    role_input[CONF_FAN_MAIN_SOURCE] = main
+    role_input[CONF_FAN_SPEED_SOURCE] = FAN_ROLE_NONE
+    role_input[CONF_FAN_PRESET_SOURCE] = preset
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {
-            CONF_FAN_MAIN_SOURCE: main,
-            CONF_FAN_SPEED_SOURCE: "",
-            CONF_FAN_PRESET_SOURCE: preset,
-            CONF_FAN_OSCILLATION_SOURCE: "",
-            CONF_FAN_DIRECTION_SOURCE: "",
-        }
+        result["flow_id"], role_input
     )
     assert result["step_id"] == "edit_entity"
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))

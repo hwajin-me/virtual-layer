@@ -158,6 +158,7 @@ CONF_FAN_SPEED_SOURCE = "fan_speed_source"
 CONF_FAN_PRESET_SOURCE = "fan_preset_source"
 CONF_FAN_OSCILLATION_SOURCE = "fan_oscillation_source"
 CONF_FAN_DIRECTION_SOURCE = "fan_direction_source"
+FAN_ROLE_NONE = "__virtual_layer_no_source__"
 FAN_SOURCE_ROLE_FIELDS = {
     "main": CONF_FAN_MAIN_SOURCE,
     "speed": CONF_FAN_SPEED_SOURCE,
@@ -1370,11 +1371,25 @@ def _fan_source_role_schema(
         options = tuple(choices.get(role, ()))
         if role == "main":
             default = defaults.get(role)
-            schema[vol.Required(field, default=default if default in options else options[0])] = vol.In(options)
-        else:
-            values = ("", *options)
+            schema[vol.Required(
+                field, default=default if default in options else options[0]
+            )] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(options),
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        elif options:
             default = defaults.get(role)
-            schema[vol.Required(field, default=default if default in values else (options[0] if options else ""))] = vol.In(values)
+            schema[vol.Required(
+                field, default=default if default in options else options[0]
+            )] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[FAN_ROLE_NONE, *options],
+                    translation_key="fan_source_role",
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
     return _complete_form_schema(vol.Schema(schema))
 
 
@@ -8097,7 +8112,10 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             return await self.async_step_entity()
         if user_input is not None:
             roles = {
-                role: user_input.get(field, "")
+                role: (
+                    "" if user_input.get(field) == FAN_ROLE_NONE
+                    else user_input.get(field, "")
+                )
                 for role, field in FAN_SOURCE_ROLE_FIELDS.items()
             }
             if (
@@ -8541,7 +8559,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             return await self.async_step_matter_fan_source()
         if user_input is not None:
             roles = {
-                role: user_input.get(field, "")
+                role: (
+                    "" if user_input.get(field) == FAN_ROLE_NONE
+                    else user_input.get(field, "")
+                )
                 for role, field in FAN_SOURCE_ROLE_FIELDS.items()
             }
             if (
