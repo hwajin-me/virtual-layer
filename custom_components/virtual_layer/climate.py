@@ -501,6 +501,17 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             features |= ClimateEntityFeature.SWING_HORIZONTAL_MODE
         self._attr_supported_features = features
 
+    def _preserve_optimistic_command_state(self, command, args, kwargs) -> bool:
+        """Keep an off request responsive until a slow source reports back."""
+        if command == "turn_off":
+            return True
+        if command == "set_hvac_mode":
+            mode = args[0] if args else kwargs.get("hvac_mode")
+            return _as_hvac_mode(mode) == HVACMode.OFF
+        if command == "set_temperature" and ATTR_HVAC_MODE in kwargs:
+            return _as_hvac_mode(kwargs.get(ATTR_HVAC_MODE)) == HVACMode.OFF
+        return False
+
     def _create_state(self, config):
         super()._create_state(config)
         configured_mode = _safe_hvac_mode(config.get(CONF_INITIAL_VALUE))
@@ -845,6 +856,27 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             self._attr_target_temperature_step,
         )
 
+    def _validate_humidity(self, humidity) -> float:
+        """Validate and align a requested target humidity."""
+        if isinstance(humidity, bool):
+            raise ValueError("Humidity must be numeric")
+        try:
+            humidity = float(humidity)
+        except (TypeError, ValueError, OverflowError) as err:
+            raise ValueError("Humidity must be numeric") from err
+        if not math.isfinite(humidity):
+            raise ValueError("Humidity must be finite")
+        if not self._attr_min_humidity <= humidity <= self._attr_max_humidity:
+            raise ValueError(
+                "Humidity must be within the configured minimum and maximum"
+            )
+        return nearest_step_value(
+            humidity,
+            self._attr_min_humidity,
+            self._attr_max_humidity,
+            self._attr_target_humidity_step,
+        )
+
     @staticmethod
     def _validate_choice(value: str, values: list[str], label: str) -> str:
         if value not in values:
@@ -853,6 +885,9 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
 
     def _validate_command_action(self, command, args, kwargs) -> None:
         """Reject invalid mode-selection commands before touching a source."""
+        if command == "set_humidity":
+            self._validate_humidity(args[0] if args else kwargs.get("humidity"))
+            return
         if command == "set_hvac_mode":
             hvac_mode = args[0] if args else kwargs.get("hvac_mode")
             hvac_mode = _as_hvac_mode(hvac_mode)
@@ -937,24 +972,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         self.async_write_ha_state()
 
     async def async_set_humidity(self, humidity: int) -> None:
-        if isinstance(humidity, bool):
-            raise ValueError("Humidity must be numeric")
-        try:
-            humidity = float(humidity)
-        except (TypeError, ValueError, OverflowError) as err:
-            raise ValueError("Humidity must be numeric") from err
-        if not math.isfinite(humidity):
-            raise ValueError("Humidity must be finite")
-        if not self._attr_min_humidity <= humidity <= self._attr_max_humidity:
-            raise ValueError(
-                "Humidity must be within the configured minimum and maximum"
-            )
-        self._attr_target_humidity = nearest_step_value(
-            humidity,
-            self._attr_min_humidity,
-            self._attr_max_humidity,
-            self._attr_target_humidity_step,
-        )
+        self._attr_target_humidity = self._validate_humidity(humidity)
         self._refresh_supported_features()
         self.async_write_ha_state()
 

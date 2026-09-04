@@ -286,6 +286,15 @@ class VirtualFan(VirtualEntity, FanEntity):
                 data["percentage"] = self._nearest_percentage(percentage)
         return data
 
+    def _preserve_optimistic_command_state(self, command, args, kwargs) -> bool:
+        """Keep fan-off responsive until the physical source reports back."""
+        if command == "turn_off":
+            return True
+        if command != "set_percentage":
+            return False
+        requested = kwargs.get("percentage", args[0] if args else None)
+        return self._safe_percentage(requested) == 0
+
     def _update_attributes(self):
         super()._update_attributes()
         feature_attributes = (

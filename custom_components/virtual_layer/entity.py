@@ -277,7 +277,13 @@ class VirtualEntity(RestoreEntity):
                 # can legitimately clamp, reject, or otherwise transform that
                 # request (for example, fan speed steps), so let the configured
                 # source/native templates win once the command has completed.
-                if self._source_entities:
+                # A domain can preserve an immediate optimistic state when its
+                # source is expected to report asynchronously (notably fan
+                # turn-off), in which case its source listener reconciles on
+                # the next state event.
+                if self._source_entities and not self._preserve_optimistic_command_state(
+                    __command, args, kwargs
+                ):
                     self._apply_templates()
                 return result
 
@@ -958,6 +964,10 @@ class VirtualEntity(RestoreEntity):
         if "sequence" in spec:
             return spec.get("sequence", []), bool(spec.get("optimistic", True))
         return [spec], True
+
+    def _preserve_optimistic_command_state(self, command, args, kwargs) -> bool:
+        """Return whether an optimistic command waits for source state events."""
+        return False
 
     async def _async_run_command_action(self, command, method, args, kwargs):
         """Run the configured HA action sequence before a native command."""

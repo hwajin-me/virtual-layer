@@ -123,6 +123,7 @@ CONF_ATTRIBUTES_JSON = "attributes_json"
 CONF_ATTRIBUTE_TEMPLATES_JSON = "attribute_templates_json"
 CONF_NATIVE_TEMPLATES_JSON = "native_templates_json"
 CONF_NATIVE_VALUE_TEMPLATES = "native_value_templates"
+CONF_CLIMATE_TEMPERATURE_STEP_INPUT = "climate_temperature_step"
 CONF_DEVICE_DETAILS = "device_details"
 CONF_ADVANCED_SETTINGS = "advanced_settings"
 CONF_DOMAIN_SETTINGS = "domain_settings"
@@ -1717,6 +1718,28 @@ def _literal_template(value: Any) -> str:
     return "{{ " + repr(_json_safe(_plain_options(value))) + " }}"
 
 
+def _climate_temperature_step_default(defaults: Mapping) -> str:
+    """Return the simple climate-step selection without discarding templates."""
+    template = _native_template_mapping(
+        defaults.get(CONF_NATIVE_VALUE_TEMPLATES)
+    ).get("target_temperature_step", "")
+    if isinstance(template, str):
+        match = re.fullmatch(r"\s*\{\{\s*(0\.5|1(?:\.0)?)\s*\}\}\s*", template)
+        if match:
+            return "0.5" if match.group(1) == "0.5" else "1"
+
+    value = defaults.get("target_temperature_step")
+    if not isinstance(value, bool):
+        try:
+            if float(value) == 0.5:
+                return "0.5"
+        except (TypeError, ValueError, OverflowError):
+            pass
+    # One degree is the common thermostat default and avoids silently creating
+    # the previous 0.1-degree increment for a new UI-only configuration.
+    return "1"
+
+
 def _native_template_defaults(
     platform: str,
     defaults: Mapping,
@@ -1960,6 +1983,17 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             selector.SelectSelectorConfig(
                 options=list(MATTER_LIGHT_TYPES),
                 translation_key="matter_light_type",
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
+    elif platform == "climate":
+        domain_schema[vol.Required(
+            CONF_CLIMATE_TEMPERATURE_STEP_INPUT,
+            default=_climate_temperature_step_default(defaults),
+        )] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=["0.5", "1"],
+                translation_key="climate_temperature_step",
                 mode=selector.SelectSelectorMode.DROPDOWN,
             )
         )
@@ -2871,6 +2905,13 @@ def _build_entity_config(
         template_value = repair_legacy_enum_template(template_value).strip()
         if template_value:
             native_templates[property_name] = template_value
+    if platform == "climate":
+        temperature_step = user_input.get(CONF_CLIMATE_TEMPERATURE_STEP_INPUT)
+        if temperature_step not in {"0.5", "1"}:
+            raise InvalidDomainOptions
+        native_templates["target_temperature_step"] = _literal_template(
+            float(temperature_step)
+        )
     if native_templates:
         entity[CONF_NATIVE_TEMPLATES] = native_templates
 
@@ -7741,6 +7782,9 @@ def _entity_form_defaults(
         if key not in _DOMAIN_OPTION_RESERVED_KEYS
     }
     if platform == "climate":
+        defaults[CONF_CLIMATE_TEMPERATURE_STEP_INPUT] = (
+            _climate_temperature_step_default(defaults)
+        )
         defaults.update(
             {
                 key: value

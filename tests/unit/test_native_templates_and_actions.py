@@ -1174,6 +1174,44 @@ async def test_command_action_flattens_kwargs_for_climate_templates(hass):
     assert entity.target_temperature == 24
 
 
+async def test_humidifier_rejects_invalid_values_before_source_actions(hass):
+    """Invalid humidifier commands must not reach physical source actions."""
+    calls = []
+
+    async def _capture(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("virtual_test", "capture", _capture)
+    humidifier = VirtualHumidifier(
+        HUMIDIFIER_SCHEMA(
+            _base(
+                "humidifier.preflight",
+                "off",
+                min_humidity=30,
+                max_humidity=70,
+                modes=["auto"],
+                **{
+                    CONF_COMMAND_ACTIONS: {
+                        "set_humidity": [{"action": "virtual_test.capture"}],
+                        "set_mode": [{"action": "virtual_test.capture"}],
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    humidifier.hass = hass
+    humidifier._create_state(humidifier._config)
+    humidifier.async_write_ha_state = Mock()
+
+    with pytest.raises(ValueError, match="configured minimum and maximum"):
+        await humidifier.async_set_humidity(71)
+    with pytest.raises(ValueError, match="Invalid humidifier mode"):
+        await humidifier.async_set_mode("sleep")
+
+    assert calls == []
+
+
 async def test_legacy_climate_command_data_template_is_a_mapping(hass):
     """Old auto-generated climate helpers remain valid on current Core."""
     calls = []
@@ -1519,6 +1557,117 @@ async def test_source_state_wins_over_optimistic_fan_command(hass):
     await entity.async_set_percentage(60)
 
     assert entity.percentage == 40
+
+
+async def test_fan_turn_off_stays_immediate_until_async_source_update(hass):
+    """A delayed physical fan report must not undo an optimistic turn-off."""
+    source = "fan.delayed_source"
+    hass.states.async_set(source, "on", {"percentage": 60})
+    calls = []
+
+    async def _turn_off(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("fan", "turn_off", _turn_off)
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            _base(
+                "fan.responsive_off",
+                "off",
+                speed_count=3,
+                **{
+                    CONF_SOURCE_ENTITIES: [source],
+                    CONF_VALUE_TEMPLATE: "{{ states('fan.delayed_source') }}",
+                    CONF_NATIVE_TEMPLATES: {
+                        "percentage": "{{ state_attr('fan.delayed_source', 'percentage') }}",
+                    },
+                    CONF_COMMAND_ACTIONS: {
+                        "turn_off": [{
+                            "action": "fan.turn_off",
+                            "target": {ATTR_ENTITY_ID: source},
+                        }],
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._update_attributes()
+    entity._setup_templates()
+    entity._apply_templates()
+    entity.async_write_ha_state = Mock()
+    assert entity.is_on is True
+
+    await entity.async_turn_off()
+
+    assert calls == [{ATTR_ENTITY_ID: [source]}]
+    assert entity.is_on is False
+    assert entity.percentage == 0
+
+    hass.states.async_set(source, "off", {"percentage": 0})
+    await hass.async_block_till_done()
+    assert entity.is_on is False
+
+
+async def test_climate_and_humidifier_turn_off_stay_immediate_until_source_update(hass):
+    """Slow source reports must not restore an on state after turn_off."""
+    hass.states.async_set("climate.delayed_source", "heat")
+    hass.states.async_set("humidifier.delayed_source", "on")
+    hass.services.async_register("virtual_test", "capture_off", Mock())
+    climate = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.responsive_off",
+                "off",
+                hvac_modes=["off", "heat"],
+                **{
+                    CONF_SOURCE_ENTITIES: ["climate.delayed_source"],
+                    CONF_VALUE_TEMPLATE: "{{ states('climate.delayed_source') }}",
+                    CONF_COMMAND_ACTIONS: {
+                        "turn_off": [{"action": "virtual_test.capture_off"}],
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    humidifier = VirtualHumidifier(
+        HUMIDIFIER_SCHEMA(
+            _base(
+                "humidifier.responsive_off",
+                "off",
+                **{
+                    CONF_SOURCE_ENTITIES: ["humidifier.delayed_source"],
+                    CONF_VALUE_TEMPLATE: "{{ states('humidifier.delayed_source') }}",
+                    CONF_COMMAND_ACTIONS: {
+                        "turn_off": [{"action": "virtual_test.capture_off"}],
+                    },
+                },
+            )
+        ),
+        False,
+    )
+    for entity in (climate, humidifier):
+        entity.hass = hass
+        entity._create_state(entity._config)
+        entity._update_attributes()
+        entity._setup_templates()
+        entity._apply_templates()
+        entity.async_write_ha_state = Mock()
+
+    await climate.async_turn_off()
+    await humidifier.async_turn_off()
+
+    assert climate.hvac_mode == HVACMode.OFF
+    assert humidifier.is_on is False
+
+    hass.states.async_set("climate.delayed_source", "off")
+    hass.states.async_set("humidifier.delayed_source", "off")
+    await hass.async_block_till_done()
+    assert climate.hvac_mode == HVACMode.OFF
+    assert humidifier.is_on is False
 
 
 async def test_source_state_wins_over_optimistic_switch_command(hass):

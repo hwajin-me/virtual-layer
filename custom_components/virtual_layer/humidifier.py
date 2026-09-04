@@ -275,6 +275,10 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             }
         )
 
+    def _preserve_optimistic_command_state(self, command, args, kwargs) -> bool:
+        """Keep an off command responsive while the source reports slowly."""
+        return command == "turn_off"
+
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name == "humidity":
             name = CONF_TARGET_HUMIDITY
@@ -353,7 +357,8 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         self._attr_action = HumidifierAction.OFF
         self.async_write_ha_state()
 
-    async def async_set_humidity(self, humidity: int) -> None:
+    def _validate_humidity(self, humidity) -> float:
+        """Validate a requested humidity before a source action runs."""
         if isinstance(humidity, bool):
             raise ValueError("Humidity must be numeric")
         try:
@@ -366,12 +371,24 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             raise ValueError(
                 "Humidity must be within the configured minimum and maximum"
             )
-        self._attr_target_humidity = nearest_step_value(
+        return nearest_step_value(
             humidity,
             self._attr_min_humidity,
             self._attr_max_humidity,
             self._attr_target_humidity_step,
         )
+
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        """Reject invalid values before a configured source action runs."""
+        if command == "set_humidity":
+            self._validate_humidity(args[0] if args else kwargs.get("humidity"))
+        elif command == "set_mode":
+            mode = args[0] if args else kwargs.get("mode")
+            if mode not in self._attr_available_modes:
+                raise ValueError(f"Invalid humidifier mode: {mode}")
+
+    async def async_set_humidity(self, humidity: int) -> None:
+        self._attr_target_humidity = self._validate_humidity(humidity)
         self.async_write_ha_state()
 
     async def async_set_mode(self, mode: str) -> None:
