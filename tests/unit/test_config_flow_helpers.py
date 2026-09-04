@@ -84,6 +84,7 @@ from custom_components.virtual_layer.config_flow import (
     InvalidTemplate,
     _append_ui_entity,
     _auto_helper_profile,
+    _apply_fan_source_roles,
     _apply_matter_fan_level_helper,
     _build_device_config,
     _build_entity_config,
@@ -6606,6 +6607,125 @@ async def test_matter_fan_helper_delivers_power_preset_and_selected_speeds(hass)
         ("turn_on", {"percentage": 60, ATTR_ENTITY_ID: [source]}),
         ("set_preset_mode", {"preset_mode": "eco", ATTR_ENTITY_ID: [source]}),
         ("turn_off", {ATTR_ENTITY_ID: [source]}),
+    ]
+
+
+async def test_fan_source_roles_route_each_command_to_its_selected_source(hass):
+    """Combined fan roles must affect runtime services, not only the form."""
+    main = "fan.miot"
+    speed = "fan.xiaomi_home"
+    hass.states.async_set(main, "on", {
+        "preset_mode": "auto",
+        "oscillating": False,
+        "current_direction": "forward",
+    })
+    hass.states.async_set(speed, "on", {"percentage": 40})
+    generated = _apply_fan_source_roles(
+        {
+            CONF_PLATFORM: "fan",
+            CONF_COMMAND_ACTIONS_JSON: _json_default({
+                "turn_on": [{"action": "fan.turn_on", "target": {ATTR_ENTITY_ID: main}}],
+                "turn_off": [{"action": "fan.turn_off", "target": {ATTR_ENTITY_ID: main}}],
+                "set_percentage": [{"action": "fan.set_percentage", "target": {ATTR_ENTITY_ID: speed}, "data": "{{ command_data }}"}],
+                "set_preset_mode": [{"action": "fan.set_preset_mode", "target": {ATTR_ENTITY_ID: main}, "data": "{{ command_data }}"}],
+                "oscillate": [{"action": "fan.oscillate", "target": {ATTR_ENTITY_ID: main}, "data": "{{ command_data }}"}],
+                "set_direction": [{"action": "fan.set_direction", "target": {ATTR_ENTITY_ID: main}, "data": "{{ command_data }}"}],
+            }),
+        },
+        {"main": main, "speed": speed, "preset": main, "oscillation": main, "direction": main},
+    )
+    calls = []
+
+    def register(service):
+        async def capture(call):
+            calls.append((service, dict(call.data)))
+        hass.services.async_register("fan", service, capture)
+
+    for service in ("turn_on", "turn_off", "set_percentage", "set_preset_mode", "oscillate", "set_direction"):
+        register(service)
+    entity = VirtualFan(FAN_SCHEMA({
+        CONF_NAME: "Combined fan",
+        ATTR_ENTITY_ID: "fan.combined",
+        ATTR_UNIQUE_ID: "combined-fan",
+        CONF_INITIAL_VALUE: "off",
+        CONF_SOURCE_ENTITIES: [main, speed],
+        CONF_NATIVE_TEMPLATES: {
+            **generated[CONF_NATIVE_VALUE_TEMPLATES],
+            "preset_modes": "{{ ['auto'] }}",
+        },
+        CONF_COMMAND_ACTIONS: _parse_command_actions(generated[CONF_COMMAND_ACTIONS_JSON], "fan"),
+        "modes": ["auto"],
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._setup_templates()
+    entity._apply_templates()
+    entity.async_write_ha_state = Mock()
+
+    await entity.async_turn_on()
+    await entity.async_set_percentage(60)
+    await entity.async_set_preset_mode("auto")
+    await entity.async_oscillate(True)
+    await entity.async_set_direction("reverse")
+    await entity.async_turn_off()
+
+    assert calls == [
+        ("turn_on", {ATTR_ENTITY_ID: [main]}),
+        ("set_percentage", {"percentage": 60, ATTR_ENTITY_ID: [speed]}),
+        ("set_preset_mode", {"preset_mode": "auto", ATTR_ENTITY_ID: [main]}),
+        ("oscillate", {"oscillating": True, ATTR_ENTITY_ID: [main]}),
+        ("set_direction", {"direction": "reverse", ATTR_ENTITY_ID: [main]}),
+        ("turn_off", {ATTR_ENTITY_ID: [main]}),
+    ]
+
+
+async def test_matter_turn_on_with_separate_speed_source_calls_both_sources(hass):
+    """A Matter turn-on percentage must not be sent to the power-only fan."""
+    main = "fan.miot"
+    speed = "fan.xiaomi_home"
+    hass.states.async_set(main, "off")
+    hass.states.async_set(speed, "off", {"percentage": 0, "percentage_step": 20})
+    role_defaults = _apply_fan_source_roles(
+        {
+            CONF_PLATFORM: "fan",
+            CONF_COMMAND_ACTIONS_JSON: _json_default({
+                "turn_on": [{"action": "fan.turn_on", "target": {ATTR_ENTITY_ID: main}}],
+                "turn_off": [{"action": "fan.turn_off", "target": {ATTR_ENTITY_ID: main}}],
+                "set_percentage": [{"action": "fan.set_percentage", "target": {ATTR_ENTITY_ID: speed}, "data": "{{ command_data }}"}],
+            }),
+        },
+        {"main": main, "speed": speed, "preset": "", "oscillation": "", "direction": ""},
+    )
+    generated = _apply_matter_fan_level_helper(role_defaults, speed, (20, 60, 100))
+    calls = []
+
+    def register(service):
+        async def capture(call):
+            calls.append((service, dict(call.data)))
+        hass.services.async_register("fan", service, capture)
+
+    register("turn_on")
+    register("set_percentage")
+    entity = VirtualFan(FAN_SCHEMA({
+        CONF_NAME: "Combined Matter fan",
+        ATTR_ENTITY_ID: "fan.combined_matter",
+        ATTR_UNIQUE_ID: "combined-matter-fan",
+        CONF_INITIAL_VALUE: "off",
+        CONF_SOURCE_ENTITIES: [main, speed],
+        CONF_NATIVE_TEMPLATES: generated[CONF_NATIVE_VALUE_TEMPLATES],
+        CONF_COMMAND_ACTIONS: _parse_command_actions(generated[CONF_COMMAND_ACTIONS_JSON], "fan"),
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._setup_templates()
+    entity._apply_templates()
+    entity.async_write_ha_state = Mock()
+
+    await entity.async_turn_on(percentage=67)
+
+    assert calls == [
+        ("turn_on", {ATTR_ENTITY_ID: [main]}),
+        ("set_percentage", {"percentage": 60, ATTR_ENTITY_ID: [speed]}),
     ]
 
 

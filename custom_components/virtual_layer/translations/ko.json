@@ -591,6 +591,34 @@
           "matter_fan_medium_level": "컨트롤러가 중을 요청할 때 사용할 원본 백분율입니다.",
           "matter_fan_high_level": "컨트롤러가 강을 요청할 때 사용할 원본 백분율입니다."
         }
+      },
+      "fan_source_roles": {
+        "title": "통합 Fan 역할 지정",
+        "description": "가상 fan의 기능별 원본을 선택합니다. 해당 기능을 지원한다고 보고한 원본만 선택지에 표시됩니다. 제어할 원본이 없는 선택 기능은 비워 두세요.",
+        "data": {
+          "fan_main_source": "주 전원 및 상태 원본",
+          "fan_speed_source": "속도 원본",
+          "fan_preset_source": "프리셋 원본",
+          "fan_oscillation_source": "회전 원본",
+          "fan_direction_source": "방향 원본"
+        },
+        "data_description": {
+          "fan_main_source": "켜기·끄기 명령을 받고 주 fan 상태를 제공하는 원본입니다.",
+          "fan_speed_source": "퍼센트 및 속도 단계 명령을 받는 원본입니다.",
+          "fan_preset_source": "자동·수면 등의 프리셋 모드 명령을 받는 원본입니다.",
+          "fan_oscillation_source": "회전 켜기·끄기 명령을 받는 원본입니다.",
+          "fan_direction_source": "정방향·역방향 명령을 받는 원본입니다."
+        }
+      },
+      "matter_fan_source": {
+        "title": "팬 속도 원본 선택",
+        "description": "여러 fan 원본에 단계 속도가 있습니다. 약·중·강 속도 명령을 실제로 받을 원본을 선택하세요.",
+        "data": {
+          "matter_fan_speed_source": "팬 속도 원본"
+        },
+        "data_description": {
+          "matter_fan_speed_source": "MIOT 상태·제어 fan이 아닌 Xiaomi Home fan처럼 실제 속도를 제어하는 fan 엔티티를 선택하세요."
+        }
       }
     }
   },
@@ -1251,6 +1279,34 @@
           "matter_fan_low_level": "컨트롤러가 약을 요청할 때 사용할 원본 백분율입니다.",
           "matter_fan_medium_level": "컨트롤러가 중을 요청할 때 사용할 원본 백분율입니다.",
           "matter_fan_high_level": "컨트롤러가 강을 요청할 때 사용할 원본 백분율입니다."
+        }
+      },
+      "fan_source_roles": {
+        "title": "통합 Fan 역할 지정",
+        "description": "가상 fan의 기능별 원본을 선택합니다. 해당 기능을 지원한다고 보고한 원본만 선택지에 표시됩니다. 제어할 원본이 없는 선택 기능은 비워 두세요.",
+        "data": {
+          "fan_main_source": "주 전원 및 상태 원본",
+          "fan_speed_source": "속도 원본",
+          "fan_preset_source": "프리셋 원본",
+          "fan_oscillation_source": "회전 원본",
+          "fan_direction_source": "방향 원본"
+        },
+        "data_description": {
+          "fan_main_source": "켜기·끄기 명령을 받고 주 fan 상태를 제공하는 원본입니다.",
+          "fan_speed_source": "퍼센트 및 속도 단계 명령을 받는 원본입니다.",
+          "fan_preset_source": "자동·수면 등의 프리셋 모드 명령을 받는 원본입니다.",
+          "fan_oscillation_source": "회전 켜기·끄기 명령을 받는 원본입니다.",
+          "fan_direction_source": "정방향·역방향 명령을 받는 원본입니다."
+        }
+      },
+      "matter_fan_source": {
+        "title": "팬 속도 원본 선택",
+        "description": "여러 fan 원본에 단계 속도가 있습니다. 약·중·강 속도 명령을 실제로 받을 원본을 선택하세요.",
+        "data": {
+          "matter_fan_speed_source": "팬 속도 원본"
+        },
+        "data_description": {
+          "matter_fan_speed_source": "MIOT 상태·제어 fan이 아닌 Xiaomi Home fan처럼 실제 속도를 제어하는 fan 엔티티를 선택하세요."
         }
       },
       "entity": {

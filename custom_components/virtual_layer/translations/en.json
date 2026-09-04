@@ -591,6 +591,34 @@
           "matter_fan_medium_level": "The source percentage used when a controller requests medium speed.",
           "matter_fan_high_level": "The source percentage used when a controller requests high speed."
         }
+      },
+      "fan_source_roles": {
+        "title": "Assign Combined Fan Roles",
+        "description": "Choose the source used for each virtual-fan capability. Only sources that report support for a capability are offered. Leave an optional capability empty when no source should control it.",
+        "data": {
+          "fan_main_source": "Main power and state source",
+          "fan_speed_source": "Speed source",
+          "fan_preset_source": "Preset source",
+          "fan_oscillation_source": "Oscillation source",
+          "fan_direction_source": "Direction source"
+        },
+        "data_description": {
+          "fan_main_source": "Receives turn on and turn off commands and supplies the primary fan state.",
+          "fan_speed_source": "Receives percentage and speed-level commands.",
+          "fan_preset_source": "Receives preset-mode commands, such as Auto or Sleep.",
+          "fan_oscillation_source": "Receives oscillation on/off commands.",
+          "fan_direction_source": "Receives forward/reverse direction commands."
+        }
+      },
+      "matter_fan_source": {
+        "title": "Choose Fan Speed Source",
+        "description": "Multiple combined fan sources have discrete speed steps. Choose the source that should receive the low, medium, and high speed commands.",
+        "data": {
+          "matter_fan_speed_source": "Fan speed source"
+        },
+        "data_description": {
+          "matter_fan_speed_source": "Use the fan entity that physically controls speed, such as the Xiaomi Home fan rather than the MIOT status/control fan."
+        }
       }
     }
   },
@@ -1251,6 +1279,34 @@
           "matter_fan_low_level": "The source percentage used when a controller requests low speed.",
           "matter_fan_medium_level": "The source percentage used when a controller requests medium speed.",
           "matter_fan_high_level": "The source percentage used when a controller requests high speed."
+        }
+      },
+      "fan_source_roles": {
+        "title": "Assign Combined Fan Roles",
+        "description": "Choose the source used for each virtual-fan capability. Only sources that report support for a capability are offered. Leave an optional capability empty when no source should control it.",
+        "data": {
+          "fan_main_source": "Main power and state source",
+          "fan_speed_source": "Speed source",
+          "fan_preset_source": "Preset source",
+          "fan_oscillation_source": "Oscillation source",
+          "fan_direction_source": "Direction source"
+        },
+        "data_description": {
+          "fan_main_source": "Receives turn on and turn off commands and supplies the primary fan state.",
+          "fan_speed_source": "Receives percentage and speed-level commands.",
+          "fan_preset_source": "Receives preset-mode commands, such as Auto or Sleep.",
+          "fan_oscillation_source": "Receives oscillation on/off commands.",
+          "fan_direction_source": "Receives forward/reverse direction commands."
+        }
+      },
+      "matter_fan_source": {
+        "title": "Choose Fan Speed Source",
+        "description": "Multiple combined fan sources have discrete speed steps. Choose the source that should receive the low, medium, and high speed commands.",
+        "data": {
+          "matter_fan_speed_source": "Fan speed source"
+        },
+        "data_description": {
+          "matter_fan_speed_source": "Use the fan entity that physically controls speed, such as the Xiaomi Home fan rather than the MIOT status/control fan."
         }
       },
       "entity": {

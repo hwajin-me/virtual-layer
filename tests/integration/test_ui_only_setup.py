@@ -96,6 +96,11 @@ from custom_components.virtual_layer.config_flow import (
     CONF_ENTITY_KEY,
     CONF_ENTITY_KEYS,
     CONF_ENTITY_NAME,
+    CONF_FAN_DIRECTION_SOURCE,
+    CONF_FAN_MAIN_SOURCE,
+    CONF_FAN_OSCILLATION_SOURCE,
+    CONF_FAN_PRESET_SOURCE,
+    CONF_FAN_SPEED_SOURCE,
     CONF_HELPER_UPDATE_MODE,
     CONF_MANAGED_DEVICE_NAME,
     CONF_MATTER_FAN_HIGH_LEVEL,
@@ -4343,6 +4348,81 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
     assert "target_temp_low" not in state_attributes
 
 
+async def test_options_flow_combines_fans_and_routes_matter_speed_to_stepped_source(hass):
+    """A MIOT control fan and Xiaomi Home speed fan can be composed safely."""
+    miot = "fan.miot_control"
+    xiaomi_home = "fan.xiaomi_home_speed"
+    hass.states.async_set(miot, "on", {
+        "percentage": 40,
+        "percentage_step": 25,
+        "preset_mode": "auto",
+        "preset_modes": ["auto", "sleep"],
+        "oscillating": False,
+        "current_direction": "forward",
+        "supported_features": int(
+            FanEntityFeature.TURN_ON
+            | FanEntityFeature.TURN_OFF
+            | FanEntityFeature.PRESET_MODE
+            | FanEntityFeature.OSCILLATE
+            | FanEntityFeature.DIRECTION
+        ),
+    })
+    hass.states.async_set(
+        xiaomi_home, "on", {
+            "percentage": 40,
+            "percentage_step": 20,
+            "supported_features": int(FanEntityFeature.SET_SPEED),
+        }
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_REFERENCE_ENTITY_ID: [miot, xiaomi_home]}
+    )
+    result = await _choose_add_template_helper(hass, result)
+    assert result["step_id"] == "fan_source_roles"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {
+            CONF_FAN_MAIN_SOURCE: miot,
+            CONF_FAN_SPEED_SOURCE: xiaomi_home,
+            CONF_FAN_PRESET_SOURCE: miot,
+            CONF_FAN_OSCILLATION_SOURCE: miot,
+            CONF_FAN_DIRECTION_SOURCE: miot,
+        }
+    )
+    assert result["step_id"] == "matter_fan_levels"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {
+            CONF_USE_MATTER_FAN_LEVELS: True,
+            CONF_MATTER_FAN_LOW_LEVEL: 20,
+            CONF_MATTER_FAN_MEDIUM_LEVEL: 60,
+            CONF_MATTER_FAN_HIGH_LEVEL: 100,
+        }
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
+    speed_action = actions["set_percentage"][0]
+    assert speed_action["target"] == {ATTR_ENTITY_ID: xiaomi_home}
+    assert actions["turn_on"][0]["target"] == {ATTR_ENTITY_ID: miot}
+    assert actions["set_preset_mode"][0]["target"] == {ATTR_ENTITY_ID: miot}
+    assert actions["oscillate"][0]["target"] == {ATTR_ENTITY_ID: miot}
+    assert actions["set_direction"][0]["target"] == {ATTR_ENTITY_ID: miot}
+    native = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert repr(miot) in native["is_on"]
+    assert repr(miot) in native["preset_mode"]
+    assert repr(miot) in native["oscillating"]
+    assert repr(miot) in native["current_direction"]
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"] == "{{ 3 }}"
+
+
 async def test_options_flow_edits_stepped_fan_with_matter_levels_in_place(hass):
     """Matter level selection must replace the chosen entity, never append one."""
     source = "fan.air_ventilator"
@@ -4404,6 +4484,73 @@ async def test_options_flow_edits_stepped_fan_with_matter_levels_in_place(hass):
     edited = devices["Air Ventilator"][0]
     assert edited[ATTR_ENTITY_ID] == entity_id
     assert edited[CONF_NATIVE_TEMPLATES]["speed_count"] == "{{ 3 }}"
+
+
+async def test_options_flow_edits_combined_fan_without_speed_reduction(hass):
+    """Role selection during edit must return to edit, never add an entity."""
+    main = "fan.main_control"
+    preset = "fan.preset_control"
+    hass.states.async_set(main, "on", {"supported_features": int(FanEntityFeature.TURN_ON)})
+    hass.states.async_set(
+        preset,
+        "on",
+        {
+            "preset_mode": "auto",
+            "preset_modes": ["auto", "sleep"],
+            "supported_features": int(FanEntityFeature.PRESET_MODE),
+        },
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Combined Fan": [{
+                    CONF_PLATFORM: "fan",
+                    CONF_NAME: "Combined Fan",
+                    ATTR_ENTITY_ID: "fan.combined_fan",
+                    ATTR_UNIQUE_ID: "combined-fan",
+                    CONF_INITIAL_VALUE: "off",
+                    CONF_SOURCE_ENTITIES: [main, preset],
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_ENTITY_KEY: _entity_key("Combined Fan", 0)}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_REFERENCE_ENTITY_ID: [main, preset]}
+    )
+    if result["step_id"] == "edit_entity_type":
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "fan"}
+        )
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_FORCE}
+    )
+    assert result["step_id"] == "fan_source_roles"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {
+            CONF_FAN_MAIN_SOURCE: main,
+            CONF_FAN_SPEED_SOURCE: "",
+            CONF_FAN_PRESET_SOURCE: preset,
+            CONF_FAN_OSCILLATION_SOURCE: "",
+            CONF_FAN_DIRECTION_SOURCE: "",
+        }
+    )
+    assert result["step_id"] == "edit_entity"
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
+    assert "set_percentage" not in actions
+    assert "oscillate" not in actions
+    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"] == "{{ 0 }}"
 
 
 async def test_options_flow_copies_fan_without_duplicate_attribute_templates(hass):

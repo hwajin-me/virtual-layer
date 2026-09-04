@@ -152,6 +152,19 @@ CONF_MATTER_FAN_LOW_LEVEL = "matter_fan_low_level"
 CONF_MATTER_FAN_MEDIUM_LEVEL = "matter_fan_medium_level"
 CONF_MATTER_FAN_HIGH_LEVEL = "matter_fan_high_level"
 CONF_USE_MATTER_FAN_LEVELS = "use_matter_fan_levels"
+CONF_MATTER_FAN_SPEED_SOURCE = "matter_fan_speed_source"
+CONF_FAN_MAIN_SOURCE = "fan_main_source"
+CONF_FAN_SPEED_SOURCE = "fan_speed_source"
+CONF_FAN_PRESET_SOURCE = "fan_preset_source"
+CONF_FAN_OSCILLATION_SOURCE = "fan_oscillation_source"
+CONF_FAN_DIRECTION_SOURCE = "fan_direction_source"
+FAN_SOURCE_ROLE_FIELDS = {
+    "main": CONF_FAN_MAIN_SOURCE,
+    "speed": CONF_FAN_SPEED_SOURCE,
+    "preset": CONF_FAN_PRESET_SOURCE,
+    "oscillation": CONF_FAN_OSCILLATION_SOURCE,
+    "direction": CONF_FAN_DIRECTION_SOURCE,
+}
 CONF_SOURCE_ENTITIES_TEXT = "source_entities_text"
 CONF_TEMPLATE_SOURCES_JSON = "template_sources_json"
 CONF_TARGET_DEVICE_NAME = "target_device_name"
@@ -1337,6 +1350,32 @@ def _matter_fan_level_schema(levels: tuple[int, ...]) -> vol.Schema:
         vol.Required(CONF_MATTER_FAN_MEDIUM_LEVEL, default=defaults[1]): vol.In(levels),
         vol.Required(CONF_MATTER_FAN_HIGH_LEVEL, default=defaults[2]): vol.In(levels),
     }))
+
+
+def _matter_fan_source_schema(source_ids: Collection[str]) -> vol.Schema:
+    """Choose which combined fan source owns the physical speed control."""
+    choices = tuple(source_ids)
+    return _complete_form_schema(vol.Schema({
+        vol.Required(CONF_MATTER_FAN_SPEED_SOURCE, default=choices[0]): vol.In(choices),
+    }))
+
+
+def _fan_source_role_schema(
+    choices: Mapping[str, Collection[str]], defaults: Mapping[str, str] | None = None
+) -> vol.Schema:
+    """Choose the source entity responsible for each combined fan role."""
+    defaults = defaults or {}
+    schema = {}
+    for role, field in FAN_SOURCE_ROLE_FIELDS.items():
+        options = tuple(choices.get(role, ()))
+        if role == "main":
+            default = defaults.get(role)
+            schema[vol.Required(field, default=default if default in options else options[0])] = vol.In(options)
+        else:
+            values = ("", *options)
+            default = defaults.get(role)
+            schema[vol.Required(field, default=default if default in values else (options[0] if options else ""))] = vol.In(values)
+    return _complete_form_schema(vol.Schema(schema))
 
 
 _SINGLE_SOURCE_TARGET_DOMAINS = {
@@ -6024,6 +6063,165 @@ def _matter_fan_source_levels(hass, entity_ids: Collection[str], platform: str) 
     return values if 3 < len(values) <= 10 and values[-1] == 100 else ()
 
 
+def _fan_source_role_choices(hass, entity_ids: Collection[str], platform: str) -> dict[str, tuple[str, ...]]:
+    """Return fan sources capable of each composable virtual-fan role."""
+    if platform != "fan":
+        return {}
+    fan_states = [
+        (entity_id, hass.states.get(entity_id))
+        for entity_id in entity_ids
+        if entity_id.startswith("fan.") and hass.states.get(entity_id) is not None
+    ]
+    if len(fan_states) < 2:
+        return {}
+
+    def supports(state, feature, *attributes):
+        raw_features = state.attributes.get("supported_features", 0)
+        try:
+            features = FanEntityFeature(int(raw_features))
+        except (TypeError, ValueError, OverflowError):
+            features = FanEntityFeature(0)
+        return feature in features or any(name in state.attributes for name in attributes)
+
+    return {
+        "main": tuple(entity_id for entity_id, _state in fan_states),
+        "speed": tuple(
+            entity_id for entity_id, state in fan_states
+            if supports(state, FanEntityFeature.SET_SPEED, "percentage", "percentage_step")
+        ),
+        "preset": tuple(
+            entity_id for entity_id, state in fan_states
+            if supports(state, FanEntityFeature.PRESET_MODE, "preset_mode", "preset_modes")
+        ),
+        "oscillation": tuple(
+            entity_id for entity_id, state in fan_states
+            if supports(state, FanEntityFeature.OSCILLATE, "oscillating")
+        ),
+        "direction": tuple(
+            entity_id for entity_id, state in fan_states
+            if supports(state, FanEntityFeature.DIRECTION, "current_direction", "direction")
+        ),
+    }
+
+
+def _action_targets_entity(action: Any, entity_id: str) -> bool:
+    """Return whether a generated action targets an entity directly."""
+    if not isinstance(action, Mapping):
+        return False
+    target = action.get("target")
+    if not isinstance(target, Mapping):
+        return False
+    target_ids = target.get(ATTR_ENTITY_ID)
+    return target_ids == entity_id or (
+        isinstance(target_ids, list) and entity_id in target_ids
+    )
+
+
+def _apply_fan_source_roles(defaults: Mapping[str, Any], roles: Mapping[str, str]) -> dict[str, Any]:
+    """Route generated fan commands to the sources selected for each role."""
+    result = dict(defaults)
+    actions = _parse_command_actions(result.get(CONF_COMMAND_ACTIONS_JSON), "fan")
+    command_roles = {
+        "turn_on": "main", "turn_off": "main", "set_percentage": "speed",
+        "set_preset_mode": "preset", "oscillate": "oscillation",
+        "set_direction": "direction",
+    }
+    for command, role in command_roles.items():
+        selected = roles.get(role)
+        sequence = actions.get(command)
+        # An empty optional role means this virtual fan must not expose a
+        # command that falls back to proxying every source entity.
+        if not selected:
+            actions.pop(command, None)
+            continue
+        if not isinstance(sequence, list):
+            continue
+        matching = [step for step in sequence if _action_targets_entity(step, selected)]
+        if matching:
+            actions[command] = matching
+        elif len(sequence) == 1 and isinstance(sequence[0], Mapping):
+            step = dict(sequence[0])
+            target = step.get("target")
+            if isinstance(target, Mapping):
+                step["target"] = {**target, ATTR_ENTITY_ID: selected}
+                actions[command] = [step]
+    result[CONF_COMMAND_ACTIONS_JSON] = _json_default(actions)
+    native = _native_template_defaults("fan", result)
+    if main := roles.get("main"):
+        native["is_on"] = "{{ is_state(" + repr(main) + ", 'on') }}"
+    if speed := roles.get("speed"):
+        native["percentage"] = (
+            "{{ state_attr(" + repr(speed) + ", 'percentage') | int(0) }}"
+        )
+    else:
+        native["speed_count"] = "{{ 0 }}"
+        native.pop("percentage", None)
+        result["speed_count"] = 0
+    if preset := roles.get("preset"):
+        native["preset_mode"] = (
+            "{{ state_attr(" + repr(preset) + ", 'preset_mode') or '' }}"
+        )
+    else:
+        native["preset_modes"] = "{{ [] }}"
+        native.pop("preset_mode", None)
+        result["modes"] = []
+    if oscillation := roles.get("oscillation"):
+        native["oscillating"] = (
+            "{{ state_attr(" + repr(oscillation) + ", 'oscillating') | bool(false) }}"
+        )
+    else:
+        native.pop("oscillating", None)
+        result["oscillate"] = False
+    if direction := roles.get("direction"):
+        native["current_direction"] = (
+            "{{ state_attr(" + repr(direction)
+            + ", 'current_direction') or 'forward' }}"
+        )
+    else:
+        native.pop("current_direction", None)
+        result["direction"] = False
+    result[CONF_NATIVE_VALUE_TEMPLATES] = native
+    return result
+
+
+def _fan_source_role_defaults(
+    defaults: Mapping[str, Any], choices: Mapping[str, Collection[str]]
+) -> dict[str, str]:
+    """Restore previously selected role targets from generated actions."""
+    actions = _parse_command_actions(defaults.get(CONF_COMMAND_ACTIONS_JSON), "fan")
+    role_commands = {
+        "main": "turn_on",
+        "speed": "set_percentage",
+        "preset": "set_preset_mode",
+        "oscillation": "oscillate",
+        "direction": "set_direction",
+    }
+    restored: dict[str, str] = {}
+    for role, command in role_commands.items():
+        for action in actions.get(command, []):
+            for candidate in choices.get(role, ()):
+                if _action_targets_entity(action, candidate):
+                    restored[role] = candidate
+                    break
+            if role in restored:
+                break
+    return restored
+
+
+def _matter_fan_source_level_options(
+    hass, entity_ids: Collection[str], platform: str
+) -> dict[str, tuple[int, ...]]:
+    """Return every combined fan source eligible for 3-level reduction."""
+    if platform != "fan":
+        return {}
+    return {
+        entity_id: levels
+        for entity_id in entity_ids
+        if entity_id.startswith("fan.")
+        if (levels := _matter_fan_source_levels(hass, [entity_id], platform))
+    }
+
+
 def _matter_fan_level_templates(
     entity_id: str, low: int, medium: int, high: int
 ) -> tuple[str, dict[str, Any]]:
@@ -6064,6 +6262,13 @@ def _matter_fan_turn_on_data_template(low: int, medium: int, high: int) -> str:
     )
 
 
+def _matter_fan_turn_on_without_percentage_template() -> str:
+    """Keep power actions from sending a speed to a different source fan."""
+    return (
+        "{{ dict(command_data | dictsort | rejectattr('0', 'eq', 'percentage')) }}"
+    )
+
+
 def _apply_matter_fan_level_helper(
     defaults: Mapping[str, Any], entity_id: str, levels: tuple[int, int, int]
 ) -> dict[str, Any]:
@@ -6088,13 +6293,31 @@ def _apply_matter_fan_level_helper(
     turn_on_data = _matter_fan_turn_on_data_template(low, medium, high)
     turn_on = existing_actions.get("turn_on")
     if isinstance(turn_on, list):
-        for action in turn_on:
-            if (
-                isinstance(action, dict)
-                and action.get("action") == "fan.turn_on"
-                and action.get("target") == {ATTR_ENTITY_ID: entity_id}
-            ):
-                action["data"] = turn_on_data
+        targets_speed_source = any(
+            _action_targets_entity(action, entity_id) for action in turn_on
+        )
+        if targets_speed_source:
+            for action in turn_on:
+                if (
+                    isinstance(action, dict)
+                    and action.get("action") == "fan.turn_on"
+                    and _action_targets_entity(action, entity_id)
+                ):
+                    action["data"] = turn_on_data
+        else:
+            # A combined fan may use a MIOT entity for power and a Xiaomi Home
+            # entity for speed. Turn the main source on without its unsupported
+            # percentage argument, then conditionally set the selected speed.
+            no_percentage = _matter_fan_turn_on_without_percentage_template()
+            for action in turn_on:
+                if isinstance(action, dict) and "action" in action:
+                    action["data"] = no_percentage
+            turn_on.append({
+                "choose": [{
+                    "conditions": "{{ command_data.get('percentage') is number }}",
+                    "sequence": actions["set_percentage"],
+                }],
+            })
     elif turn_on is None:
         existing_actions["turn_on"] = [{
             "action": "fan.turn_on",
@@ -7635,6 +7858,10 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         self._source_entities: list[str] = []
         self._add_use_template_helper = True
         self._matter_fan_levels: tuple[int, ...] = ()
+        self._matter_fan_level_sources: dict[str, tuple[int, ...]] = {}
+        self._matter_fan_speed_source: str | None = None
+        self._fan_source_role_choices: dict[str, tuple[str, ...]] = {}
+        self._fan_source_roles: dict[str, str] = {}
 
     @staticmethod
     @callback
@@ -7834,11 +8061,23 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 if self._add_use_template_helper
                 else _without_template_helpers(self._reference_defaults)
             )
-            self._matter_fan_levels = _matter_fan_source_levels(
+            self._fan_source_role_choices = _fan_source_role_choices(
+                self.hass,
+                self._source_entities,
+                self._reference_defaults.get(CONF_PLATFORM, ""),
+            ) if self._add_use_template_helper else {}
+            if self._fan_source_role_choices:
+                return await self.async_step_fan_source_roles()
+            self._matter_fan_level_sources = _matter_fan_source_level_options(
                 self.hass, self._source_entities,
                 self._reference_defaults.get(CONF_PLATFORM, ""),
-            ) if self._add_use_template_helper else ()
-            if self._matter_fan_levels:
+            ) if self._add_use_template_helper else {}
+            if len(self._matter_fan_level_sources) > 1:
+                return await self.async_step_matter_fan_source()
+            if self._matter_fan_level_sources:
+                self._matter_fan_speed_source, self._matter_fan_levels = next(
+                    iter(self._matter_fan_level_sources.items())
+                )
                 return await self.async_step_matter_fan_levels()
             return await self.async_step_entity()
 
@@ -7849,6 +8088,65 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
                 )
             ),
+        )
+
+    async def async_step_fan_source_roles(self, user_input=None):
+        """Assign main, speed, preset, oscillation, and direction fan sources."""
+        choices = self._fan_source_role_choices
+        if not choices:
+            return await self.async_step_entity()
+        if user_input is not None:
+            roles = {
+                role: user_input.get(field, "")
+                for role, field in FAN_SOURCE_ROLE_FIELDS.items()
+            }
+            if (
+                roles["main"] in choices["main"]
+                and all(
+                    not roles[role] or roles[role] in choices[role]
+                    for role in FAN_SOURCE_ROLE_FIELDS if role != "main"
+                )
+            ):
+                self._fan_source_roles = roles
+                self._entity_defaults = _apply_fan_source_roles(
+                    self._entity_defaults or {}, roles
+                )
+                available_levels = _matter_fan_source_level_options(
+                    self.hass, self._source_entities, "fan"
+                )
+                speed_source = roles.get("speed")
+                self._matter_fan_level_sources = (
+                    {speed_source: available_levels[speed_source]}
+                    if speed_source in available_levels
+                    else {}
+                )
+                return await self.async_step_matter_fan_source()
+        return self.async_show_form(
+            step_id="fan_source_roles",
+            data_schema=_fan_source_role_schema(
+                choices,
+                _fan_source_role_defaults(self._entity_defaults or {}, choices),
+            ),
+        )
+
+    async def async_step_matter_fan_source(self, user_input=None):
+        """Choose the speed-owning source of a combined virtual fan."""
+        if not self._matter_fan_level_sources:
+            return await self.async_step_entity()
+        if len(self._matter_fan_level_sources) == 1 and user_input is None:
+            self._matter_fan_speed_source, self._matter_fan_levels = next(
+                iter(self._matter_fan_level_sources.items())
+            )
+            return await self.async_step_matter_fan_levels()
+        if user_input is not None:
+            source = user_input.get(CONF_MATTER_FAN_SPEED_SOURCE)
+            if source in self._matter_fan_level_sources:
+                self._matter_fan_speed_source = source
+                self._matter_fan_levels = self._matter_fan_level_sources[source]
+                return await self.async_step_matter_fan_levels()
+        return self.async_show_form(
+            step_id="matter_fan_source",
+            data_schema=_matter_fan_source_schema(self._matter_fan_level_sources),
         )
 
     async def async_step_matter_fan_levels(self, user_input=None):
@@ -7866,7 +8164,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                     CONF_MATTER_FAN_HIGH_LEVEL,
                 ))
                 self._entity_defaults = _apply_matter_fan_level_helper(
-                    self._entity_defaults or {}, self._source_entities[0], selected,
+                    self._entity_defaults or {}, self._matter_fan_speed_source or self._source_entities[0], selected,
                 )
                 return await self.async_step_entity()
             except (TypeError, ValueError, vol.Invalid):
@@ -7983,6 +8281,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._add_source_entities: list[str] = []
         self._add_use_template_helper = True
         self._add_matter_fan_levels: tuple[int, ...] = ()
+        self._add_matter_fan_level_sources: dict[str, tuple[int, ...]] = {}
+        self._add_matter_fan_speed_source: str | None = None
+        self._add_fan_source_role_choices: dict[str, tuple[str, ...]] = {}
+        self._add_fan_source_roles: dict[str, str] = {}
         self._edit_auto_helper_profile: dict[str, Any] | None = None
         self._edit_current_defaults: dict[str, Any] | None = None
         self._edit_original_platform: str | None = None
@@ -7994,6 +8296,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._edit_platform_changed = False
         self._edit_sources_changed = False
         self._edit_matter_fan_levels: tuple[int, ...] = ()
+        self._edit_matter_fan_level_sources: dict[str, tuple[int, ...]] = {}
+        self._edit_matter_fan_speed_source: str | None = None
+        self._edit_fan_source_role_choices: dict[str, tuple[str, ...]] = {}
+        self._edit_fan_source_roles: dict[str, str] = {}
 
     async def async_step_init(self, user_input=None):
         errors = _flow_errors(self, "init")
@@ -8196,11 +8502,22 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 self.config_entry.options,
                 self._add_target_device_name,
             )
-            self._add_matter_fan_levels = _matter_fan_source_levels(
+            self._add_fan_source_role_choices = _fan_source_role_choices(
                 self.hass, self._add_source_entities,
                 self._reference_defaults.get(CONF_PLATFORM, ""),
-            ) if self._add_use_template_helper else ()
-            if self._add_matter_fan_levels:
+            ) if self._add_use_template_helper else {}
+            if self._add_fan_source_role_choices:
+                return await self.async_step_fan_source_roles()
+            self._add_matter_fan_level_sources = _matter_fan_source_level_options(
+                self.hass, self._add_source_entities,
+                self._reference_defaults.get(CONF_PLATFORM, ""),
+            ) if self._add_use_template_helper else {}
+            if len(self._add_matter_fan_level_sources) > 1:
+                return await self.async_step_matter_fan_source()
+            if self._add_matter_fan_level_sources:
+                self._add_matter_fan_speed_source, self._add_matter_fan_levels = next(
+                    iter(self._add_matter_fan_level_sources.items())
+                )
                 return await self.async_step_matter_fan_levels()
             return await self.async_step_entity()
 
@@ -8211,6 +8528,99 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
                 )
             ),
+        )
+
+    async def async_step_fan_source_roles(self, user_input=None):
+        """Assign the source responsible for each added or edited fan role."""
+        choices = (
+            self._edit_fan_source_role_choices
+            if self._edit_fan_source_role_choices
+            else self._add_fan_source_role_choices
+        )
+        if not choices:
+            return await self.async_step_matter_fan_source()
+        if user_input is not None:
+            roles = {
+                role: user_input.get(field, "")
+                for role, field in FAN_SOURCE_ROLE_FIELDS.items()
+            }
+            if (
+                roles["main"] in choices["main"]
+                and all(
+                    not roles[role] or roles[role] in choices[role]
+                    for role in FAN_SOURCE_ROLE_FIELDS
+                    if role != "main"
+                )
+            ):
+                self._entity_defaults = _apply_fan_source_roles(
+                    self._entity_defaults or {}, roles
+                )
+                if self._edit_fan_source_role_choices:
+                    self._edit_fan_source_roles = roles
+                    available_levels = _matter_fan_source_level_options(
+                        self.hass, self._edit_source_entities or (), "fan"
+                    )
+                    speed_source = roles.get("speed")
+                    self._edit_matter_fan_level_sources = (
+                        {speed_source: available_levels[speed_source]}
+                        if speed_source in available_levels
+                        else {}
+                    )
+                else:
+                    self._add_fan_source_roles = roles
+                    available_levels = _matter_fan_source_level_options(
+                        self.hass, self._add_source_entities, "fan"
+                    )
+                    speed_source = roles.get("speed")
+                    self._add_matter_fan_level_sources = (
+                        {speed_source: available_levels[speed_source]}
+                        if speed_source in available_levels
+                        else {}
+                    )
+                return await self.async_step_matter_fan_source()
+        return self.async_show_form(
+            step_id="fan_source_roles",
+            data_schema=_fan_source_role_schema(
+                choices,
+                _fan_source_role_defaults(self._entity_defaults or {}, choices),
+            ),
+        )
+
+    async def async_step_matter_fan_source(self, user_input=None):
+        """Choose the speed-owning source for an added or edited fan."""
+        source_options = (
+            self._edit_matter_fan_level_sources
+            if self._edit_matter_fan_level_sources
+            else self._add_matter_fan_level_sources
+        )
+        if not source_options:
+            return (
+                await self.async_step_edit_entity()
+                if self._edit_source_entities is not None
+                else await self.async_step_entity()
+            )
+        if len(source_options) == 1 and user_input is None:
+            source, levels = next(iter(source_options.items()))
+            if self._edit_matter_fan_level_sources:
+                self._edit_matter_fan_speed_source = source
+                self._edit_matter_fan_levels = levels
+            else:
+                self._add_matter_fan_speed_source = source
+                self._add_matter_fan_levels = levels
+            return await self.async_step_matter_fan_levels()
+        if user_input is not None:
+            source = user_input.get(CONF_MATTER_FAN_SPEED_SOURCE)
+            if source in source_options:
+                if self._edit_matter_fan_level_sources:
+                    self._edit_matter_fan_speed_source = source
+                    self._edit_matter_fan_levels = source_options[source]
+                else:
+                    self._add_matter_fan_speed_source = source
+                    self._add_matter_fan_levels = source_options[source]
+                return await self.async_step_matter_fan_levels()
+        return self.async_show_form(
+            step_id="matter_fan_source",
+            data_schema=_matter_fan_source_schema(source_options),
         )
 
     async def async_step_add_matter_fan_levels(self, user_input=None):
@@ -8228,7 +8638,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     CONF_MATTER_FAN_HIGH_LEVEL,
                 ))
                 self._entity_defaults = _apply_matter_fan_level_helper(
-                    self._entity_defaults or {}, self._add_source_entities[0], selected,
+                    self._entity_defaults or {}, self._add_matter_fan_speed_source or self._add_source_entities[0], selected,
                 )
                 return await self.async_step_entity()
             except (TypeError, ValueError, vol.Invalid):
@@ -8603,11 +9013,23 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 self._prepare_edit_entity_defaults(
                     helper_update_mode=user_input[CONF_HELPER_UPDATE_MODE],
                 )
-                self._edit_matter_fan_levels = _matter_fan_source_levels(
+                self._edit_fan_source_role_choices = _fan_source_role_choices(
+                    self.hass,
+                    self._edit_source_entities,
+                    self._reference_defaults.get(CONF_PLATFORM, ""),
+                ) if user_input[CONF_HELPER_UPDATE_MODE] != HELPER_UPDATE_KEEP else {}
+                if self._edit_fan_source_role_choices:
+                    return await self.async_step_fan_source_roles()
+                self._edit_matter_fan_level_sources = _matter_fan_source_level_options(
                     self.hass, self._edit_source_entities,
                     self._reference_defaults.get(CONF_PLATFORM, ""),
-                ) if user_input[CONF_HELPER_UPDATE_MODE] != HELPER_UPDATE_KEEP else ()
-                if self._edit_matter_fan_levels:
+                ) if user_input[CONF_HELPER_UPDATE_MODE] != HELPER_UPDATE_KEEP else {}
+                if len(self._edit_matter_fan_level_sources) > 1:
+                    return await self.async_step_matter_fan_source()
+                if self._edit_matter_fan_level_sources:
+                    self._edit_matter_fan_speed_source, self._edit_matter_fan_levels = next(
+                        iter(self._edit_matter_fan_level_sources.items())
+                    )
                     return await self.async_step_matter_fan_levels()
                 return await self.async_step_edit_entity()
             except Exception:
@@ -8679,7 +9101,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     CONF_MATTER_FAN_HIGH_LEVEL,
                 ))
                 self._entity_defaults = _apply_matter_fan_level_helper(
-                    self._entity_defaults or {}, self._edit_source_entities[0], selected,
+                    self._entity_defaults or {}, self._edit_matter_fan_speed_source or self._edit_source_entities[0], selected,
                 )
                 self._edit_auto_helper_profile = _auto_helper_profile(
                     self._entity_defaults,
