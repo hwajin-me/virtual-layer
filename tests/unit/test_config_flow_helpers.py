@@ -1362,7 +1362,7 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     hass.states.async_set("climate.air_conditioner", "cool")
     assert Template(templates["hvac_modes"], hass).async_render(
         parse_result=True
-    ) == ["off", "cool", "heat"]
+    ) == ["off", "cool", "heat_cool", "heat"]
     assert Template(templates["hvac_mode"], hass).async_render(
         parse_result=True
     ) == "cool"
@@ -1396,8 +1396,23 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     ) == command_actions
     set_hvac_mode = command_actions["set_hvac_mode"][0]
     assert set_hvac_mode["choose"][0]["conditions"] == "{{ hvac_mode == 'heat' }}"
-    assert set_hvac_mode["choose"][1]["conditions"] == "{{ hvac_mode in ['cool'] }}"
-    assert set_hvac_mode["choose"][1]["sequence"] == [{
+    simultaneous_choice = set_hvac_mode["choose"][1]
+    assert simultaneous_choice["conditions"] == "{{ hvac_mode == 'heat_cool' }}"
+    assert simultaneous_choice["sequence"] == [{
+        "action": "switch.turn_on",
+        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+    }, {
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: "climate.boiler"},
+        "data": {"hvac_mode": "heat"},
+    }, {
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
+        "data": {"hvac_mode": "cool"},
+    }]
+    cooling_choice = set_hvac_mode["choose"][2]
+    assert cooling_choice["conditions"] == "{{ hvac_mode in ['cool'] }}"
+    assert cooling_choice["sequence"] == [{
         "action": "switch.turn_on",
         "target": {ATTR_ENTITY_ID: "switch.hot_water"},
     }, {
@@ -1444,13 +1459,17 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     temperature_action = command_actions["set_temperature"]["sequence"][0]
     assert [choice["conditions"] for choice in temperature_action["choose"]] == [
         "{{ hvac_mode is defined and hvac_mode == 'off' }}",
+        "{{ hvac_mode is defined and hvac_mode == 'heat_cool' }}",
         "{{ hvac_mode is defined and hvac_mode in ['cool'] }}",
         "{{ hvac_mode is defined and hvac_mode == 'heat' }}",
         "{{ this is not none and this.state == 'heat' and states('climate.air_conditioner') != 'heat' }}",
         "{{ this is not none and this.state in ['cool'] }}",
         "{{ states('climate.air_conditioner') not in ['off', 'unknown', 'unavailable', 'none', ''] }}",
     ]
-    cool_sequence = temperature_action["choose"][1]["sequence"]
+    simultaneous_sequence = temperature_action["choose"][1]["sequence"]
+    assert simultaneous_sequence[1]["data"] == {"hvac_mode": "heat"}
+    assert simultaneous_sequence[2]["data"] == {"hvac_mode": "cool"}
+    cool_sequence = temperature_action["choose"][2]["sequence"]
     assert cool_sequence[0]["target"] == {ATTR_ENTITY_ID: "switch.hot_water"}
     assert cool_sequence[1]["target"] == {ATTR_ENTITY_ID: "climate.boiler"}
     assert cool_sequence[2]["target"] == {
@@ -1459,7 +1478,7 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     # An explicit heat setpoint must also stop an active AC auto cycle and
     # enable the boiler.  A temperature-only command is insufficient because
     # Home Assistant callers commonly combine mode and target in one request.
-    heat_sequence = temperature_action["choose"][2]["sequence"]
+    heat_sequence = temperature_action["choose"][3]["sequence"]
     assert heat_sequence[:3] == [{
         "action": "climate.set_hvac_mode",
         "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
@@ -1735,7 +1754,12 @@ def test_combined_climate_helper_turns_off_virtual_boiler_alias(hass):
         ],
     )
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
-    cooling_sequence = actions["set_hvac_mode"][0]["choose"][1]["sequence"]
+    cooling_choice = next(
+        choice
+        for choice in actions["set_hvac_mode"][0]["choose"]
+        if choice["conditions"] == "{{ hvac_mode in ['cool', 'dry', 'fan_only'] }}"
+    )
+    cooling_sequence = cooling_choice["sequence"]
 
     assert cooling_sequence[0] == {
         "action": "switch.turn_on",

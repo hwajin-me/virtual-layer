@@ -4997,10 +4997,12 @@ def _boiler_air_conditioner_hvac_modes_template(
         "{% set modes = state_attr("
         + repr(air_conditioner_entity_id)
         + ", 'hvac_modes') | default("
-        + repr(fallback_modes) + ", true) %}{{ ['off'] + "
-        "(modes | select('in', ['cool', 'heat_cool', 'auto', 'dry', 'fan_only']) "
-        "| reject('in', ['off', 'heat']) | list "
-        "if air_conditioner_available and modes is list else []) + "
+        + repr(fallback_modes) + ", true) %}{% set all_air_conditioner_modes = "
+        "(modes | select('in', ['cool', 'heat_cool', 'auto', 'dry', 'fan_only']) | list "
+        "if air_conditioner_available and modes is list else []) %}{% set "
+        "air_conditioner_modes = all_air_conditioner_modes | reject('eq', 'heat_cool') "
+        "| list %}{{ ['off'] + air_conditioner_modes + (['heat_cool'] if "
+        "boiler_available and all_air_conditioner_modes else []) + "
         "(['heat'] if boiler_available else []) }}"
     )
 
@@ -5111,6 +5113,17 @@ def _boiler_air_conditioner_command_actions(
         "data": {"hvac_mode": "off"},
     }
     default_air_conditioner_mode = air_conditioner_modes[0]
+    # ``heat_cool`` is the composite's explicit simultaneous-operation mode.
+    # A Nest can implement it natively, while a cooling-only AC implements the
+    # AC half with its most capable available room-conditioning mode.
+    simultaneous_air_conditioner_mode = next(
+        (
+            mode
+            for mode in ("heat_cool", "auto", "cool", "dry", "fan_only")
+            if mode in air_conditioner_modes
+        ),
+        None,
+    )
     turn_on_air_conditioner = {
         "action": "climate.set_hvac_mode",
         "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
@@ -5132,7 +5145,7 @@ def _boiler_air_conditioner_command_actions(
             *boiler_heat,
         ],
     }]
-    if "heat_cool" in air_conditioner_modes:
+    if simultaneous_air_conditioner_mode is not None:
         # Treat heat_cool as an explicit simultaneous-operation request for
         # this composite: keep the boiler heating while the compatible AC/Nest
         # enters its own automatic heating/cooling mode.
@@ -5143,7 +5156,7 @@ def _boiler_air_conditioner_command_actions(
                 {
                     "action": "climate.set_hvac_mode",
                     "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
-                    "data": {"hvac_mode": "heat_cool"},
+                    "data": {"hvac_mode": simultaneous_air_conditioner_mode},
                 },
             ],
         })
@@ -5246,7 +5259,7 @@ def _boiler_air_conditioner_command_actions(
                 "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
                 "data": {"hvac_mode": "{{ hvac_mode }}"},
             }
-            if "heat_cool" in air_conditioner_modes:
+            if simultaneous_air_conditioner_mode is not None:
                 choose.append({
                     "conditions": (
                         "{{ hvac_mode is defined and hvac_mode == 'heat_cool' }}"
@@ -5256,7 +5269,7 @@ def _boiler_air_conditioner_command_actions(
                         {
                             "action": "climate.set_hvac_mode",
                             "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
-                            "data": {"hvac_mode": "heat_cool"},
+                            "data": {"hvac_mode": simultaneous_air_conditioner_mode},
                         },
                         range_action,
                     ],
@@ -6893,6 +6906,13 @@ def _reference_entity_defaults(
                 states[air_conditioner_index],
                 boiler_temperature_calibration_template,
             )
+        )
+        # State and native HVAC mode must be the same safe composite value.
+        # Without this, a legacy generic value helper can pass ``unknown`` to
+        # VirtualClimate while a source is reconnecting, even though native
+        # templates correctly retain a valid HVAC mode.
+        defaults[CONF_VALUE_TEMPLATE] = _boiler_air_conditioner_mode_template(
+            entity_ids[boiler_index], entity_ids[air_conditioner_index]
         )
         defaults[CONF_COMMAND_ACTIONS_JSON] = _json_default(source_command_actions)
     elif platform == "binary_sensor" and presence_or_motion_class:

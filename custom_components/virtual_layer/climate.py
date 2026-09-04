@@ -1003,9 +1003,24 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         self.async_write_ha_state()
 
     def set_state(self, value) -> None:
+        # A disconnected source commonly renders ``unknown`` for legacy value
+        # templates.  Never let that transient state make a Climate entity
+        # invalid; retain the last valid mode (or off during initial setup).
+        if str(value).strip().lower() in {"", "none", "unknown", "unavailable"}:
+            if self._attr_hvac_mode not in self._attr_hvac_modes:
+                self._attr_hvac_mode = (
+                    HVACMode.OFF
+                    if HVACMode.OFF in self._attr_hvac_modes
+                    else self._attr_hvac_modes[0]
+                )
+            return
         mode = _as_hvac_mode(value)
         if mode not in self._attr_hvac_modes:
-            raise ValueError(f"Unsupported HVAC mode: {mode}")
+            # State/native templates can be evaluated in the same update while
+            # a source changes its advertised modes. Keep the last valid state
+            # until the native hvac_modes template catches up. Commands are
+            # validated separately before any source service is invoked.
+            return
         self._attr_hvac_mode = mode
         if mode == HVACMode.OFF:
             self._attr_hvac_action = HVACAction.OFF

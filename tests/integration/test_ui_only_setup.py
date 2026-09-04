@@ -1090,6 +1090,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
             CONF_NAME: "Combined climate",
             ATTR_ENTITY_ID: "climate.combined",
             CONF_INITIAL_VALUE: defaults[CONF_INITIAL_VALUE],
+            CONF_VALUE_TEMPLATE: defaults[CONF_VALUE_TEMPLATE],
             CONF_AVAILABILITY_TEMPLATE: defaults[CONF_AVAILABILITY_TEMPLATE],
             CONF_NATIVE_TEMPLATES: defaults[CONF_NATIVE_VALUE_TEMPLATES],
             CONF_COMMAND_ACTIONS: _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON]),
@@ -1108,6 +1109,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
         HVACMode.DRY,
         HVACMode.FAN_ONLY,
         HVACMode.AUTO,
+        HVACMode.HEAT_COOL,
         HVACMode.HEAT,
     ]
     assert climate.hvac_mode is HVACMode.COOL
@@ -1188,6 +1190,25 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     assert calls[2][2]["hvac_mode"] == "heat"
     assert calls[0][2][ATTR_ENTITY_ID] == [air_conditioner_entity_id]
     assert calls[2][2][ATTR_ENTITY_ID] == [boiler_entity_id]
+
+    # ``heat_cool`` deliberately means simultaneous operation for this
+    # composite.  Samsung-style cooling-only sources use their best automatic
+    # room-conditioning mode, while a Nest uses heat_cool directly.
+    calls.clear()
+    await climate.async_set_hvac_mode(HVACMode.HEAT_COOL)
+    assert calls == [
+        ("switch", "turn_on", {ATTR_ENTITY_ID: [hot_water_switch_id]}),
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [boiler_entity_id], "hvac_mode": "heat"},
+        ),
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [air_conditioner_entity_id], "hvac_mode": "auto"},
+        ),
+    ]
 
     calls.clear()
     await climate.async_set_hvac_mode(HVACMode.OFF)
@@ -1470,6 +1491,9 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     })
     climate._apply_templates()
     assert climate.hvac_modes == [HVACMode.OFF, HVACMode.HEAT]
+    # The source outage leaves the composite in a valid state rather than
+    # feeding a raw ``unknown`` into the Climate HVACMode conversion.
+    assert climate.hvac_mode in {HVACMode.OFF, HVACMode.HEAT}
     calls.clear()
     await climate.async_turn_on()
     assert calls == [
@@ -1505,6 +1529,20 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     with pytest.raises(ValueError, match="Unsupported HVAC mode"):
         await climate.async_set_hvac_mode(HVACMode.HEAT)
     assert calls == []
+
+    # Even if both integrations are reconnecting, the helper list retains
+    # ``off`` and the state helper returns a valid mode.  The unavailable
+    # entity itself deliberately retains its last properties for Home
+    # Assistant's availability contract.
+    hass.states.async_set(air_conditioner_entity_id, "unavailable")
+    assert Template(
+        defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_modes"], hass
+    ).async_render(parse_result=True) == ["off"]
+    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+        parse_result=True
+    ) == "off"
+    climate.set_state("unknown")
+    assert climate.hvac_mode is HVACMode.COOL
 
 
 async def test_combined_boiler_calibration_renders_service_data_as_mapping(hass):
