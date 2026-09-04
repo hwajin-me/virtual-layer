@@ -4856,23 +4856,31 @@ def _boiler_air_conditioner_mode_template(
 
 
 def _boiler_air_conditioner_hvac_modes_template(
+    boiler_entity_id: str,
     air_conditioner_entity_id: str,
     air_conditioner_state,
 ) -> str:
-    """Expose heat for the boiler and the room-conditioning source modes."""
+    """Expose modes implemented by sources that are currently reachable."""
     fallback_modes = [
         str(mode).strip().lower()
         for mode in air_conditioner_state.attributes.get("hvac_modes", ())
         if str(mode).strip()
     ]
     return (
+        "{% set air_conditioner_available = states("
+        + repr(air_conditioner_entity_id)
+        + ") not in ['unknown', 'unavailable', 'none', ''] %}"
+        "{% set boiler_available = states("
+        + repr(boiler_entity_id)
+        + ") not in ['unknown', 'unavailable', 'none', ''] %}"
         "{% set modes = state_attr("
         + repr(air_conditioner_entity_id)
         + ", 'hvac_modes') | default("
-        + repr(fallback_modes)
-        + ", true) %}{{ ['off'] + "
+        + repr(fallback_modes) + ", true) %}{{ ['off'] + "
         "(modes | select('in', ['cool', 'heat_cool', 'auto', 'dry', 'fan_only']) "
-        "| reject('in', ['off', 'heat']) | list if modes is list else []) + ['heat'] }}"
+        "| reject('in', ['off', 'heat']) | list "
+        "if air_conditioner_available and modes is list else []) + "
+        "(['heat'] if boiler_available else []) }}"
     )
 
 
@@ -4982,14 +4990,20 @@ def _boiler_air_conditioner_command_actions(
         "data": {"hvac_mode": "off"},
     }
     default_air_conditioner_mode = air_conditioner_modes[0]
-    turn_on = [
-        *boiler_off,
-        {
-            "action": "climate.set_hvac_mode",
-            "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
-            "data": {"hvac_mode": default_air_conditioner_mode},
-        },
-    ]
+    turn_on_air_conditioner = {
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
+        "data": {"hvac_mode": default_air_conditioner_mode},
+    }
+    # async_turn_on selects the first advertised non-off mode.  If that mode
+    # is heat_cool, it has the same explicit simultaneous-operation contract
+    # as async_set_hvac_mode(heat_cool); do not silently put the boiler into
+    # standby merely because an integration exposes no cooling-only mode.
+    turn_on = (
+        [*boiler_heat, turn_on_air_conditioner]
+        if default_air_conditioner_mode == "heat_cool"
+        else [*boiler_off, turn_on_air_conditioner]
+    )
     mode_choices = [{
         "conditions": "{{ hvac_mode == 'heat' }}",
         "sequence": [
@@ -5029,8 +5043,18 @@ def _boiler_air_conditioner_command_actions(
             "default": [*boiler_off, air_conditioner_off],
         }],
         # VirtualClimate.async_turn_on selects the first non-off advertised
-        # mode. Keep the source action aligned with that optimistic state.
-        "turn_on": turn_on,
+        # mode. If the AC is unavailable, the dynamic mode template exposes
+        # only heat; use the reachable boiler instead of a stale AC default.
+        "turn_on": [{
+            "choose": [{
+                "conditions": (
+                    "{{ states(" + repr(air_conditioner_entity_id) + ") not in "
+                    "['unknown', 'unavailable', 'none', ''] }}"
+                ),
+                "sequence": turn_on,
+            }],
+            "default": boiler_heat,
+        }],
         "turn_off": [*boiler_off, air_conditioner_off],
     }
     active_air_conditioner = _boiler_air_conditioner_active_condition(
@@ -5042,6 +5066,14 @@ def _boiler_air_conditioner_command_actions(
         "set_swing_mode",
         "set_swing_horizontal_mode",
     }
+    ac_only_command_values = {
+        "set_fan_mode": ("fan_mode", "fan_modes"),
+        "set_preset_mode": ("preset_mode", "preset_modes"),
+        "set_swing_mode": ("swing_mode", "swing_modes"),
+        "set_swing_horizontal_mode": (
+            "swing_horizontal_mode", "swing_horizontal_modes"
+        ),
+    }
     for command in VIRTUAL_ENTITY_COMMANDS.get("climate", ()):
         if command in actions or ("climate", command) in VIRTUAL_ENTITY_NON_SERVICE_COMMANDS:
             continue
@@ -5051,37 +5083,77 @@ def _boiler_air_conditioner_command_actions(
         air_conditioner_action = _climate_source_command_action(
             command, air_conditioner_entity_id, air_conditioner_state
         )
-        if boiler_action is None or air_conditioner_action is None:
-            continue
         if command in ac_only_commands:
             # Fan, preset, and swing settings belong to the air conditioner;
             # broadcasting them to a boiler can fail or change an unrelated
-            # appliance setting.
-            actions[command] = [air_conditioner_action]
+            # appliance setting. They must not require the boiler to expose
+            # the same capability, and direct service calls while the AC is
+            # inactive or with a stale choice must not wake or reconfigure it.
+            if air_conditioner_action is not None:
+                value_name, values_attribute = ac_only_command_values[command]
+                actions[command] = [{
+                    "choose": [{
+                        "conditions": (
+                            "{{ states(" + repr(air_conditioner_entity_id) + ") not in "
+                            "['off', 'unknown', 'unavailable', 'none', ''] and "
+                            + value_name
+                            + " in (state_attr("
+                            + repr(air_conditioner_entity_id)
+                            + ", " + repr(values_attribute) + ") or []) }}"
+                        ),
+                        "sequence": [air_conditioner_action],
+                    }],
+                }]
+            continue
+        if boiler_action is None or air_conditioner_action is None:
+            continue
         elif command == "set_temperature":
-            # A Nest range request commonly carries ``hvac_mode=heat_cool``
-            # while the thermostat is currently off. Source state alone would
-            # incorrectly route that request to the boiler, losing its
-            # target_temp_low/high range. The HVAC-mode action separately
-            # enables simultaneous boiler + AC operation for this mode.
-            range_modes = [
-                mode for mode in air_conditioner_modes
-                if mode in {"heat_cool", "auto"}
-            ]
-            choose = []
-            if range_modes:
-                # Retain both range endpoints.  The source step-rounding
-                # template is intentionally bypassed for this branch because
-                # it only knows the single ``temperature`` argument.
-                range_action = dict(air_conditioner_action)
-                range_action["data"] = "{{ command_data }}"
+            # Explicit HVAC mode plus temperature must perform a complete
+            # ownership hand-off.  Automations, dashboards, and Assist often
+            # send these together; routing only the setpoint can otherwise
+            # leave the previously active appliance conditioning the room.
+            # Keep Nest-style ranges intact by bypassing the single-value
+            # rounding helper only for their final set-temperature action.
+            choose = [{
+                "conditions": "{{ hvac_mode is defined and hvac_mode == 'off' }}",
+                "sequence": [*boiler_off, air_conditioner_off],
+            }]
+            range_action = dict(air_conditioner_action)
+            range_action["data"] = "{{ command_data }}"
+            air_conditioner_mode_action = {
+                "action": "climate.set_hvac_mode",
+                "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
+                "data": {"hvac_mode": "{{ hvac_mode }}"},
+            }
+            if "heat_cool" in air_conditioner_modes:
                 choose.append({
                     "conditions": (
-                        "{{ hvac_mode is defined and hvac_mode in "
-                        + repr(range_modes)
-                        + " }}"
+                        "{{ hvac_mode is defined and hvac_mode == 'heat_cool' }}"
                     ),
-                    "sequence": [range_action],
+                    "sequence": [
+                        *boiler_heat,
+                        {
+                            "action": "climate.set_hvac_mode",
+                            "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
+                            "data": {"hvac_mode": "heat_cool"},
+                        },
+                        range_action,
+                    ],
+                })
+            if "auto" in air_conditioner_modes:
+                choose.append({
+                    "conditions": (
+                        "{{ hvac_mode is defined and hvac_mode == 'auto' }}"
+                    ),
+                    "sequence": [
+                        *boiler_off,
+                        {
+                            "action": "climate.set_hvac_mode",
+                            "target": {ATTR_ENTITY_ID: air_conditioner_entity_id},
+                            "data": {"hvac_mode": "auto"},
+                        },
+                        range_action,
+                    ],
                 })
             choose.extend([
                 {
@@ -5090,7 +5162,11 @@ def _boiler_air_conditioner_command_actions(
                         + repr(air_conditioner_modes)
                         + " }}"
                     ),
-                    "sequence": [air_conditioner_action],
+                    "sequence": [
+                        *boiler_off,
+                        air_conditioner_mode_action,
+                        air_conditioner_action,
+                    ],
                 },
                 {
                     "conditions": (
@@ -6628,7 +6704,9 @@ def _reference_entity_defaults(
         }
         native_templates.update({
             "hvac_modes": _boiler_air_conditioner_hvac_modes_template(
-                entity_ids[air_conditioner_index], states[air_conditioner_index]
+                entity_ids[boiler_index],
+                entity_ids[air_conditioner_index],
+                states[air_conditioner_index],
             ),
             "hvac_mode": _boiler_air_conditioner_mode_template(
                 entity_ids[boiler_index], entity_ids[air_conditioner_index]

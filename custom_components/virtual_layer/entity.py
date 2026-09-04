@@ -961,6 +961,11 @@ class VirtualEntity(RestoreEntity):
 
     async def _async_run_command_action(self, command, method, args, kwargs):
         """Run the configured HA action sequence before a native command."""
+        # Native entities normally validate their arguments inside the method
+        # itself.  Configured source actions run before that method, so a
+        # domain may opt into a side-effect-free preflight validation to avoid
+        # forwarding an invalid virtual command to real hardware first.
+        self._validate_command_action(command, args, kwargs)
         action_spec = self._command_action_spec(command)
         action_key = (id(self), command)
         active_actions = _COMMAND_ACTION_CHAIN.get()
@@ -1032,6 +1037,14 @@ class VirtualEntity(RestoreEntity):
         finally:
             _COMMAND_ACTION_CHAIN.reset(token)
         return optimistic
+
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        """Validate a command before configured source actions run.
+
+        Most domains keep their existing native-method validation. Domains
+        with source-sensitive commands override this hook for values whose
+        invalidity is independent of source-side command execution.
+        """
 
     async def _render_command_data_templates(self, sequence, variables):
         """Render whole-mapping data templates before action schema validation."""

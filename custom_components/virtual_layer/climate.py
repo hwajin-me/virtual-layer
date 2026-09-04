@@ -851,6 +851,34 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             raise ValueError(f"Invalid {label}: {value}")
         return value
 
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        """Reject invalid mode-selection commands before touching a source."""
+        if command == "set_hvac_mode":
+            hvac_mode = args[0] if args else kwargs.get("hvac_mode")
+            hvac_mode = _as_hvac_mode(hvac_mode)
+            if hvac_mode not in self._attr_hvac_modes:
+                raise ValueError(f"Unsupported HVAC mode: {hvac_mode}")
+            return
+
+        command_choices = {
+            "set_fan_mode": ("fan_mode", self._attr_fan_modes, "fan mode"),
+            "set_preset_mode": (
+                "preset_mode", self._attr_preset_modes, "preset mode"
+            ),
+            "set_swing_mode": (
+                "swing_mode", self._attr_swing_modes, "swing mode"
+            ),
+            "set_swing_horizontal_mode": (
+                "swing_horizontal_mode",
+                self._attr_swing_horizontal_modes,
+                "horizontal swing mode",
+            ),
+        }
+        if choice := command_choices.get(command):
+            parameter, values, label = choice
+            value = args[0] if args else kwargs.get(parameter)
+            self._validate_choice(value, values, label)
+
     async def async_turn_on(self) -> None:
         next_mode = next(
             (mode for mode in self._attr_hvac_modes if mode != HVACMode.OFF),

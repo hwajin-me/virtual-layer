@@ -1262,10 +1262,67 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
         ),
     ]
 
+    # The reverse combined request must take the boiler out of room-heating
+    # before it enables and adjusts the AC.  This also covers callers that do
+    # not issue a separate set_hvac_mode service call.
+    hass.states.async_set(boiler_entity_id, "heat", {
+        **hass.states.get(boiler_entity_id).attributes,
+    })
+    hass.states.async_set(air_conditioner_entity_id, "off", {
+        **hass.states.get(air_conditioner_entity_id).attributes,
+    })
+    climate._apply_templates()
+    assert climate.hvac_mode is HVACMode.HEAT
+    calls.clear()
+    await climate.async_set_temperature(temperature=23, hvac_mode="cool")
+    assert calls == [
+        ("switch", "turn_on", {ATTR_ENTITY_ID: [hot_water_switch_id]}),
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [boiler_entity_id], "hvac_mode": "fan_only"},
+        ),
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [air_conditioner_entity_id], "hvac_mode": "cool"},
+        ),
+        (
+            "climate",
+            "set_temperature",
+            {
+                ATTR_ENTITY_ID: [air_conditioner_entity_id],
+                "temperature": 23,
+                "hvac_mode": "cool",
+            },
+        ),
+    ]
+
+    # An explicit off request embedded in a temperature service call is also
+    # a mode transition, not an AC-only setpoint write.
+    calls.clear()
+    await climate.async_set_temperature(temperature=23, hvac_mode="off")
+    assert calls == [
+        ("switch", "turn_on", {ATTR_ENTITY_ID: [hot_water_switch_id]}),
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [boiler_entity_id], "hvac_mode": "fan_only"},
+        ),
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [air_conditioner_entity_id], "hvac_mode": "off"},
+        ),
+    ]
+
     # A heat-pump AC and the boiler both use the virtual ``heat`` mode.  When
     # the AC is already heating, its displayed room setpoint must remain the
     # target for a plain temperature write; only an explicit ``hvac_mode=heat``
     # request selects the boiler's high water-temperature range.
+    hass.states.async_set(boiler_entity_id, "fan_only", {
+        **hass.states.get(boiler_entity_id).attributes,
+    })
     hass.states.async_set(air_conditioner_entity_id, "heat", {
         **hass.states.get(air_conditioner_entity_id).attributes,
         "temperature": 23,
@@ -1341,12 +1398,96 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     assert ClimateEntityFeature.FAN_MODE not in climate.supported_features
     assert ClimateEntityFeature.PRESET_MODE not in climate.supported_features
     calls.clear()
+    with pytest.raises(ValueError, match="Invalid fan mode"):
+        await climate.async_set_fan_mode("high")
+    assert calls == []
+    calls.clear()
     await climate.async_set_temperature(temperature=49)
     assert [(domain, service) for domain, service, _data in calls] == [
         ("climate", "set_temperature"),
     ]
     assert calls[0][2][ATTR_ENTITY_ID] == [boiler_entity_id]
     assert calls[0][2]["temperature"] == 49
+
+    # Fan and preset choices are AC-owned and can change with its active mode.
+    # Do not retain invalid Samsung choices from a previous cooling session or
+    # expose a boiler-side control that the BCM does not implement.
+    hass.states.async_set(air_conditioner_entity_id, "cool", {
+        **hass.states.get(air_conditioner_entity_id).attributes,
+        "fan_modes": ["low"],
+        "fan_mode": "low",
+        "preset_modes": [],
+        "preset_mode": None,
+    })
+    climate._apply_templates()
+    assert climate.hvac_mode is HVACMode.COOL
+    assert climate.fan_modes == ["low"]
+    assert climate.fan_mode == "low"
+    assert ClimateEntityFeature.FAN_MODE in climate.supported_features
+    assert not climate.preset_modes
+    assert climate.preset_mode is None
+    assert ClimateEntityFeature.PRESET_MODE not in climate.supported_features
+    calls.clear()
+    with pytest.raises(ValueError, match="Invalid fan mode"):
+        await climate.async_set_fan_mode("high")
+    with pytest.raises(ValueError, match="Invalid preset mode"):
+        await climate.async_set_preset_mode("quiet")
+    assert calls == []
+    calls.clear()
+    await climate.async_set_fan_mode("low")
+    assert calls == [(
+        "climate",
+        "set_fan_mode",
+        {
+            ATTR_ENTITY_ID: [air_conditioner_entity_id],
+            "fan_mode": "low",
+        },
+    )]
+
+    # Source availability also owns the advertised modes.  If the AC drops
+    # out, turn_on selects the remaining boiler heat mode and must not issue a
+    # stale cooling command to the unavailable source.
+    hass.states.async_set(air_conditioner_entity_id, "unavailable")
+    hass.states.async_set(boiler_entity_id, "fan_only", {
+        **hass.states.get(boiler_entity_id).attributes,
+    })
+    climate._apply_templates()
+    assert climate.hvac_modes == [HVACMode.OFF, HVACMode.HEAT]
+    calls.clear()
+    await climate.async_turn_on()
+    assert calls == [
+        ("switch", "turn_on", {ATTR_ENTITY_ID: [hot_water_switch_id]}),
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [boiler_entity_id], "hvac_mode": "heat"},
+        ),
+    ]
+
+    # Conversely, a failed boiler must not leave a selectable virtual heat
+    # mode while the AC is still usable.
+    hass.states.async_set(boiler_entity_id, "unavailable")
+    hass.states.async_set(air_conditioner_entity_id, "cool", {
+        "hvac_modes": ["off", "cool", "dry", "fan_only", "auto"],
+        "min_temp": 18,
+        "max_temp": 30,
+        "target_temp_step": 1,
+        "current_temperature": 25,
+        "temperature": 24,
+        "fan_modes": ["low"],
+        "fan_mode": "low",
+        "preset_modes": [],
+        "preset_mode": None,
+        "supported_features": int(
+            ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE
+        ),
+    })
+    climate._apply_templates()
+    assert HVACMode.HEAT not in climate.hvac_modes
+    calls.clear()
+    with pytest.raises(ValueError, match="Unsupported HVAC mode"):
+        await climate.async_set_hvac_mode(HVACMode.HEAT)
+    assert calls == []
 
 
 async def test_boiler_nest_helper_routes_offline_range_request_to_nest(hass):
@@ -1447,8 +1588,9 @@ async def test_boiler_nest_helper_routes_offline_range_request_to_nest(hass):
         ),
     ]
 
-    # Nest can be off when an automation asks it to enter range mode.  The
-    # requested HVAC mode, not its stale source state, selects the target.
+    # Nest can be off when an automation asks it to enter simultaneous range
+    # mode.  The request must start both sources as well as retain its range;
+    # routing only the target would leave the BCM in its previous state.
     calls.clear()
     hass.states.async_set(nest_entity_id, "off", nest_attributes)
     climate._apply_templates()
@@ -1458,16 +1600,29 @@ async def test_boiler_nest_helper_routes_offline_range_request_to_nest(hass):
         hvac_mode=HVACMode.HEAT_COOL,
     )
 
-    assert calls == [(
-        "climate",
-        "set_temperature",
-        {
-            ATTR_ENTITY_ID: [nest_entity_id],
-            "target_temp_low": 20,
-            "target_temp_high": 24,
-            "hvac_mode": HVACMode.HEAT_COOL,
-        },
-    )]
+    assert calls == [
+        ("switch", "turn_on", {ATTR_ENTITY_ID: [hot_water_switch_id]}),
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [boiler_entity_id], "hvac_mode": "heat"},
+        ),
+        (
+            "climate",
+            "set_hvac_mode",
+            {ATTR_ENTITY_ID: [nest_entity_id], "hvac_mode": "heat_cool"},
+        ),
+        (
+            "climate",
+            "set_temperature",
+            {
+                ATTR_ENTITY_ID: [nest_entity_id],
+                "target_temp_low": 20,
+                "target_temp_high": 24,
+                "hvac_mode": HVACMode.HEAT_COOL,
+            },
+        ),
+    ]
 
 
 async def test_options_flow_persists_every_combined_climate_helper_template(hass):

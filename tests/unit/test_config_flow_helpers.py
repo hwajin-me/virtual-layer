@@ -1406,7 +1406,12 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
         "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
         "data": {"hvac_mode": "{{ hvac_mode }}"},
     }]
-    assert command_actions["turn_on"] == [{
+    turn_on = command_actions["turn_on"][0]
+    assert turn_on["choose"][0]["conditions"] == (
+        "{{ states('climate.air_conditioner') not in "
+        "['unknown', 'unavailable', 'none', ''] }}"
+    )
+    assert turn_on["choose"][0]["sequence"] == [{
         "action": "switch.turn_on",
         "target": {ATTR_ENTITY_ID: "switch.hot_water"},
     }, {
@@ -1418,27 +1423,40 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
         "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
         "data": {"hvac_mode": "cool"},
     }]
-    assert command_actions["set_fan_mode"] == [{
-        "action": "climate.set_fan_mode",
-        "data": "{{ command_data }}",
-        "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
+    assert turn_on["default"][1]["data"] == {"hvac_mode": "heat"}
+    fan_action = command_actions["set_fan_mode"]
+    assert fan_action[0]["choose"] == [{
+        "conditions": (
+            "{{ states('climate.air_conditioner') not in "
+            "['off', 'unknown', 'unavailable', 'none', ''] and fan_mode in "
+            "(state_attr('climate.air_conditioner', 'fan_modes') or []) }}"
+        ),
+        "sequence": [{
+            "action": "climate.set_fan_mode",
+            "data": "{{ command_data }}",
+            "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
+        }],
     }]
     assert command_actions["set_temperature"]["optimistic"] is False
     temperature_action = command_actions["set_temperature"]["sequence"][0]
     assert [choice["conditions"] for choice in temperature_action["choose"]] == [
+        "{{ hvac_mode is defined and hvac_mode == 'off' }}",
         "{{ hvac_mode is defined and hvac_mode in ['cool'] }}",
         "{{ hvac_mode is defined and hvac_mode == 'heat' }}",
         "{{ this is not none and this.state == 'heat' and states('climate.air_conditioner') != 'heat' }}",
         "{{ this is not none and this.state in ['cool'] }}",
         "{{ states('climate.air_conditioner') not in ['off', 'unknown', 'unavailable', 'none', ''] }}",
     ]
-    assert temperature_action["choose"][0]["sequence"][0]["target"] == {
+    cool_sequence = temperature_action["choose"][1]["sequence"]
+    assert cool_sequence[0]["target"] == {ATTR_ENTITY_ID: "switch.hot_water"}
+    assert cool_sequence[1]["target"] == {ATTR_ENTITY_ID: "climate.boiler"}
+    assert cool_sequence[2]["target"] == {
         ATTR_ENTITY_ID: "climate.air_conditioner"
     }
     # An explicit heat setpoint must also stop an active AC auto cycle and
     # enable the boiler.  A temperature-only command is insufficient because
     # Home Assistant callers commonly combine mode and target in one request.
-    heat_sequence = temperature_action["choose"][1]["sequence"]
+    heat_sequence = temperature_action["choose"][2]["sequence"]
     assert heat_sequence[:3] == [{
         "action": "climate.set_hvac_mode",
         "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
@@ -1643,6 +1661,49 @@ def test_combined_climate_helper_covers_source_order_and_state_matrix(hass):
     assert availability_template.async_render(parse_result=True) is False
 
 
+def test_combined_climate_turn_on_honors_heat_cool_simultaneous_mode(hass):
+    """Turning on a heat_cool-only Nest must not silently disable the boiler."""
+    hass.states.async_set(
+        "climate.boiler",
+        "fan_only",
+        {"hvac_modes": ["off", "heat", "fan_only"]},
+    )
+    hass.states.async_set("switch.hot_water", "on")
+    hass.states.async_set(
+        "climate.nest",
+        "off",
+        {"hvac_modes": ["off", "heat_cool"]},
+    )
+
+    defaults = _reference_entity_defaults(
+        hass,
+        ["climate.boiler", "switch.hot_water", "climate.nest"],
+    )
+    actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
+
+    turn_on = actions["turn_on"][0]
+    assert turn_on["choose"][0]["sequence"] == [{
+        "action": "switch.turn_on",
+        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+    }, {
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: "climate.boiler"},
+        "data": {"hvac_mode": "heat"},
+    }, {
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: "climate.nest"},
+        "data": {"hvac_mode": "heat_cool"},
+    }]
+    assert turn_on["default"] == [{
+        "action": "switch.turn_on",
+        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+    }, {
+        "action": "climate.set_hvac_mode",
+        "target": {ATTR_ENTITY_ID: "climate.boiler"},
+        "data": {"hvac_mode": "heat"},
+    }]
+
+
 def test_combined_climate_helper_turns_off_virtual_boiler_alias(hass):
     """Do not send raw-only fan_only to an off/heat virtual boiler source."""
     hass.states.async_set(
@@ -1683,7 +1744,9 @@ def test_combined_climate_helper_turns_off_virtual_boiler_alias(hass):
         "data": {"hvac_mode": "off"},
     }
     assert actions["turn_off"][1]["data"] == {"hvac_mode": "off"}
-    assert actions["turn_on"][1]["data"] == {"hvac_mode": "off"}
+    assert actions["turn_on"][0]["choose"][0]["sequence"][1]["data"] == {
+        "hvac_mode": "off"
+    }
 
 
 def test_multiple_media_players_with_on_off_snapshots_use_state_helper(hass):
