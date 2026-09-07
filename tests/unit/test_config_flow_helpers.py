@@ -1418,7 +1418,7 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     }, {
         "action": "climate.set_hvac_mode",
         "target": {ATTR_ENTITY_ID: "climate.boiler"},
-        "data": {"hvac_mode": "auto"},
+        "data": {"hvac_mode": "fan_only"},
     }, {
         "action": "climate.set_hvac_mode",
         "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
@@ -1435,7 +1435,7 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     }, {
         "action": "climate.set_hvac_mode",
         "target": {ATTR_ENTITY_ID: "climate.boiler"},
-        "data": {"hvac_mode": "auto"},
+        "data": {"hvac_mode": "fan_only"},
     }, {
         "action": "climate.set_hvac_mode",
         "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
@@ -3002,7 +3002,7 @@ def test_reference_heating_only_climate_builds_heat_off_boiler_helper(hass):
     assert actions["turn_off"] == [
         {
             "action": "climate.set_hvac_mode",
-            "data": {"hvac_mode": "auto"},
+            "data": {"hvac_mode": "fan_only"},
             "target": {ATTR_ENTITY_ID: "climate.boiler"},
         }
     ]
@@ -3017,15 +3017,15 @@ def test_reference_heating_only_climate_builds_heat_off_boiler_helper(hass):
 @pytest.mark.parametrize(
     ("source_modes", "expected_standby_mode"),
     [
-        (["off", "heat", "fan_only", "auto"], "auto"),
+        (["off", "heat", "fan_only", "auto"], "fan_only"),
         (["off", "heat", "fan_only"], "fan_only"),
         (["off", "heat"], "off"),
     ],
 )
-def test_boiler_standby_helper_prefers_auto_with_safe_fallbacks(
+def test_boiler_standby_helper_prefers_fan_only_with_safe_fallbacks(
     hass, source_modes, expected_standby_mode
 ):
-    """Use auto for boiler standby without breaking older source contracts."""
+    """Use fan_only for boiler standby without breaking source contracts."""
     hass.states.async_set(
         "climate.boiler",
         "heat",
@@ -5031,7 +5031,7 @@ def test_auto_helper_refreshes_generated_boiler_actions_but_preserves_custom_act
             },
             {
                 "action": "climate.set_hvac_mode",
-                "data": {"hvac_mode": "auto"},
+                "data": {"hvac_mode": "fan_only"},
                 "target": {ATTR_ENTITY_ID: "climate.boiler"},
             },
         ],

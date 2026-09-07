@@ -1016,7 +1016,7 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
         },
         {
             "action": "climate.set_hvac_mode",
-            "data": {"hvac_mode": "auto"},
+            "data": {"hvac_mode": "fan_only"},
             "target": {ATTR_ENTITY_ID: "climate.boiler"},
         },
     ]
@@ -1031,6 +1031,10 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
             "target": {ATTR_ENTITY_ID: "climate.boiler"},
         },
     ]
+    assert generated_actions["set_temperature"][0]["choose"][0]["sequence"][0] == {
+        "action": "switch.turn_on",
+        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+    }
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -1077,7 +1081,7 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
         ("switch", "turn_on"),
         ("climate", "set_hvac_mode"),
     ]
-    assert calls[1][2]["hvac_mode"] == "auto"
+    assert calls[1][2]["hvac_mode"] == "fan_only"
     hass.states.async_set(
         "climate.boiler",
         "fan_only",
@@ -1097,9 +1101,10 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
     calls.clear()
     await boiler.async_set_temperature(temperature=27)
     assert [(domain, service) for domain, service, _data in calls] == [
+        ("switch", "turn_on"),
         ("climate", "set_temperature"),
     ]
-    assert calls[0][2]["temperature"] == 27
+    assert calls[1][2]["temperature"] == 27
 
     calls.clear()
     with pytest.raises(ValueError, match="Unsupported HVAC mode"):
@@ -1223,7 +1228,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
         ("climate", "set_hvac_mode"),
         ("climate", "set_hvac_mode"),
     ]
-    assert calls[1][2]["hvac_mode"] == "auto"
+    assert calls[1][2]["hvac_mode"] == "fan_only"
     assert calls[2][2]["hvac_mode"] == "cool"
     assert calls[0][2][ATTR_ENTITY_ID] == [hot_water_switch_id]
     assert calls[1][2][ATTR_ENTITY_ID] == [boiler_entity_id]
@@ -1239,7 +1244,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
         ]
         assert calls[1][2] == {
             ATTR_ENTITY_ID: [boiler_entity_id],
-            "hvac_mode": "auto",
+            "hvac_mode": "fan_only",
         }
         assert calls[2][2] == {
             ATTR_ENTITY_ID: [air_conditioner_entity_id],
@@ -1303,7 +1308,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
         ("climate", "set_hvac_mode"),
         ("climate", "set_hvac_mode"),
     ]
-    assert calls[1][2]["hvac_mode"] == "auto"
+    assert calls[1][2]["hvac_mode"] == "fan_only"
     assert calls[2][2]["hvac_mode"] == "off"
     assert calls[1][2][ATTR_ENTITY_ID] == [boiler_entity_id]
     assert calls[2][2][ATTR_ENTITY_ID] == [air_conditioner_entity_id]
@@ -1317,7 +1322,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     ]
     assert calls[1][2] == {
         ATTR_ENTITY_ID: [boiler_entity_id],
-        "hvac_mode": "auto",
+        "hvac_mode": "fan_only",
     }
     assert calls[2][2] == {
         ATTR_ENTITY_ID: [air_conditioner_entity_id],
@@ -1407,7 +1412,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
         (
             "climate",
             "set_hvac_mode",
-            {ATTR_ENTITY_ID: [boiler_entity_id], "hvac_mode": "auto"},
+            {ATTR_ENTITY_ID: [boiler_entity_id], "hvac_mode": "fan_only"},
         ),
         (
             "climate",
@@ -1434,7 +1439,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
         (
             "climate",
             "set_hvac_mode",
-            {ATTR_ENTITY_ID: [boiler_entity_id], "hvac_mode": "auto"},
+            {ATTR_ENTITY_ID: [boiler_entity_id], "hvac_mode": "fan_only"},
         ),
         (
             "climate",

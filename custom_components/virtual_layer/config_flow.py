@@ -5100,11 +5100,12 @@ def _boiler_air_conditioner_command_actions(
         for mode in boiler_state.attributes.get("hvac_modes", ())
         if str(mode).strip()
     }
-    # ``auto`` is the preferred boiler standby mode. Preserve compatibility
-    # with raw SiHAS devices that expose only fan_only for hot-water standby,
-    # and never send either raw-only mode to a virtual off/heat boiler alias.
+    # ``fan_only`` is the preferred raw-boiler standby mode: for SiHAS this
+    # keeps hot-water mode active without room heating.  Use auto only when a
+    # source does not expose fan_only, and never send either raw-only mode to
+    # a virtual off/heat boiler alias.
     off_hvac_mode = next(
-        (mode for mode in ("auto", "fan_only", "off") if mode in boiler_modes),
+        (mode for mode in ("fan_only", "auto", "off") if mode in boiler_modes),
         "off",
     )
     boiler_off = _boiler_mode_action_sequence(
@@ -5776,7 +5777,7 @@ def _boiler_mode_action_sequence(
     hot_water_switch_id: str | None,
     hvac_mode: str,
     *,
-    off_hvac_mode: str = "auto",
+    off_hvac_mode: str = "fan_only",
 ) -> list[dict[str, Any]]:
     """Build the source actions for one boiler HVAC mode."""
     sequence = []
@@ -5810,11 +5811,11 @@ def _boiler_command_actions(
         for mode in climate_state.attributes.get("hvac_modes", ())
         if str(mode).strip()
     }
-    # Prefer auto for a boiler's room-heating standby state. Older raw SiHAS
-    # devices may only provide fan_only, while a virtual boiler alias accepts
-    # just off/heat; both remain safe fallbacks.
+    # Prefer fan_only for a boiler's room-heating standby state.  If the raw
+    # integration lacks it, auto is the next safe choice; virtual boiler
+    # aliases that expose only off/heat retain their own off command.
     off_hvac_mode = next(
-        (mode for mode in ("auto", "fan_only", "off") if mode in boiler_modes),
+        (mode for mode in ("fan_only", "auto", "off") if mode in boiler_modes),
         "off",
     )
     heat_sequence = _boiler_mode_action_sequence(
@@ -5867,15 +5868,22 @@ def _boiler_command_actions(
         temperature_data = _source_command_data_template(
             "climate", "set_temperature", climate_entity_id
         ) or "{{ command_data }}"
+        temperature_sequence = []
+        if hot_water_switch_id:
+            temperature_sequence.append({
+                "action": "switch.turn_on",
+                "target": {ATTR_ENTITY_ID: hot_water_switch_id},
+            })
+        temperature_sequence.append({
+            "action": "climate.set_temperature",
+            "target": {ATTR_ENTITY_ID: climate_entity_id},
+            "data": temperature_data,
+        })
         actions["set_temperature"] = [{
             "choose": [
                 {
                     "conditions": temperature_condition,
-                    "sequence": [{
-                        "action": "climate.set_temperature",
-                        "target": {ATTR_ENTITY_ID: climate_entity_id},
-                        "data": temperature_data,
-                    }],
+                    "sequence": temperature_sequence,
                 },
             ],
         }]
