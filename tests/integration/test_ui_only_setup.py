@@ -26,7 +26,7 @@ from homeassistant.const import (
     CONF_PLATFORM,
     EVENT_HOMEASSISTANT_STARTED,
 )
-from homeassistant.core import Context, CoreState
+from homeassistant.core import Context, CoreState, State
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers.template import Template
@@ -38,6 +38,7 @@ from custom_components.virtual_layer import (
     CONFIG_SCHEMA,
     SERVICE_SET_ATTRIBUTES_SCHEMA,
     SERVICE_SET_STATE_SCHEMA,
+    _STATE_ONLY_RESTORE_WAITING_SOURCES_DATA,
     _async_apply_state_only_event_hook,
     _async_apply_state_only_templates,
     _async_delete_virtual_device_from_registry,
@@ -169,6 +170,7 @@ from custom_components.virtual_layer.const import (
     CONF_TEMPLATE_SOURCES,
     CONF_VALUE_TEMPLATE,
     CONF_VIA_DEVICE_ID,
+    STATE_ONLY_ENTITY_DOMAINS,
     TRANSIENT_SOURCE_ATTRIBUTE_NAMES,
 )
 from custom_components.virtual_layer.sensor import VirtualSensor
@@ -1633,6 +1635,89 @@ async def test_combined_boiler_calibration_renders_service_data_as_mapping(hass)
             "hvac_mode": HVACMode.HEAT,
         },
     )
+
+
+async def test_combined_climate_restores_until_startup_sources_are_ready(hass):
+    """Keep a restored composite state while Home Assistant starts sources."""
+    boiler_entity_id = "climate.boiler"
+    hot_water_switch_id = "switch.hot_water"
+    air_conditioner_entity_id = "climate.air_conditioner"
+    boiler_attributes = {
+        "hvac_modes": ["off", "heat", "fan_only"],
+        "min_temp": 0,
+        "max_temp": 80,
+        "temperature": 48,
+        "supported_features": int(ClimateEntityFeature.TARGET_TEMPERATURE),
+    }
+    air_conditioner_attributes = {
+        "hvac_modes": ["off", "cool", "auto"],
+        "min_temp": 18,
+        "max_temp": 30,
+        "temperature": 24,
+        "current_temperature": 22,
+        "supported_features": int(ClimateEntityFeature.TARGET_TEMPERATURE),
+    }
+    source_entities = [
+        boiler_entity_id,
+        hot_water_switch_id,
+        air_conditioner_entity_id,
+    ]
+    hass.states.async_set(boiler_entity_id, "heat", boiler_attributes)
+    hass.states.async_set(hot_water_switch_id, "on")
+    hass.states.async_set(
+        air_conditioner_entity_id, "cool", air_conditioner_attributes
+    )
+    defaults = _reference_entity_defaults(hass, source_entities)
+
+    # Simulate the integration setup order during a restart: the virtual
+    # entity is restored before any of its physical sources have published.
+    hass.states.async_set(boiler_entity_id, "unknown")
+    hass.states.async_set(hot_water_switch_id, "unavailable")
+    hass.states.async_set(air_conditioner_entity_id, "unknown")
+    climate = VirtualClimate(
+        CLIMATE_SCHEMA({
+            CONF_NAME: "Restored combined climate",
+            ATTR_ENTITY_ID: "climate.restored_combined",
+            CONF_INITIAL_VALUE: defaults[CONF_INITIAL_VALUE],
+            CONF_SOURCE_ENTITIES: source_entities,
+            CONF_VALUE_TEMPLATE: defaults[CONF_VALUE_TEMPLATE],
+            CONF_AVAILABILITY_TEMPLATE: defaults[CONF_AVAILABILITY_TEMPLATE],
+            CONF_NATIVE_TEMPLATES: defaults[CONF_NATIVE_VALUE_TEMPLATES],
+        }),
+        False,
+    )
+    climate.hass = hass
+    climate.async_get_last_state = AsyncMock(return_value=State(
+        climate.entity_id,
+        "heat_cool",
+        {
+            "hvac_action": "heating",
+            "temperature": 23,
+            "current_temperature": 21,
+        },
+    ))
+    climate.async_schedule_update_ha_state = Mock()
+    climate.async_write_ha_state = Mock()
+
+    await climate.async_added_to_hass()
+
+    assert climate.hvac_mode is HVACMode.HEAT_COOL
+    assert climate.target_temperature == 23
+    assert climate.current_temperature == 21
+    assert climate._restore_waiting_for_sources is True
+
+    hass.states.async_set(boiler_entity_id, "heat", boiler_attributes)
+    hass.states.async_set(hot_water_switch_id, "on")
+    hass.states.async_set(
+        air_conditioner_entity_id, "cool", air_conditioner_attributes
+    )
+    await hass.async_block_till_done()
+
+    assert climate._restore_waiting_for_sources is False
+    assert climate.hvac_mode is HVACMode.HEAT_COOL
+    assert climate.target_temperature == 24
+    assert climate.current_temperature == 22
+    await climate.async_will_remove_from_hass()
 
 
 async def test_boiler_nest_helper_routes_offline_range_request_to_nest(hass):
@@ -6991,6 +7076,33 @@ async def test_state_only_reload_removes_attributes_deleted_from_configuration(
         TRANSIENT_SOURCE_ATTRIBUTE_NAMES
     )
     assert restored.attributes[ATTR_VIRTUAL_ATTRIBUTES] == []
+
+
+def test_all_state_only_domains_preserve_restored_state_until_sources_ready(hass):
+    """State-only domains must receive the same startup hold as platforms."""
+    source_entity_id = "sensor.state_only_startup_source"
+    hass.states.async_set(source_entity_id, "unknown")
+
+    for domain in STATE_ONLY_ENTITY_DOMAINS:
+        entity_id = f"{domain}.restored_startup"
+        entity = {
+            ATTR_ENTITY_ID: entity_id,
+            CONF_INITIAL_VALUE: "configured",
+            CONF_SOURCE_ENTITIES: [source_entity_id],
+            CONF_VALUE_TEMPLATE: f"{{{{ states({source_entity_id!r}) }}}}",
+        }
+        hass.states.async_set(entity_id, "restored")
+        hass.data.setdefault(_STATE_ONLY_RESTORE_WAITING_SOURCES_DATA, set()).add(
+            entity_id
+        )
+
+        _async_apply_state_only_templates(hass, entity)
+        assert hass.states.get(entity_id).state == "restored"
+
+        hass.states.async_set(source_entity_id, "ready")
+        _async_apply_state_only_templates(hass, entity)
+        assert hass.states.get(entity_id).state == "ready"
+        hass.states.async_set(source_entity_id, "unknown")
 
 
 async def test_state_only_services_do_not_update_unmanaged_entities(hass):

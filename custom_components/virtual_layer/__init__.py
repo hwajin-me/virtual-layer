@@ -172,6 +172,9 @@ async def _async_verify_admin(hass: HomeAssistant, call) -> None:
 VIRTUAL_PLATFORMS = VIRTUAL_ENTITY_DOMAINS
 _STATE_ONLY_TEMPLATE_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_state_only_template_listeners"
 _STATE_ONLY_RESTORE_PROXIES_DATA = f"{COMPONENT_DOMAIN}_state_only_restore_proxies"
+_STATE_ONLY_RESTORE_WAITING_SOURCES_DATA = (
+    f"{COMPONENT_DOMAIN}_state_only_restore_waiting_sources"
+)
 _ENTITY_ID_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_entity_id_guard_listeners"
 _DEVICE_METADATA_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_device_metadata_guard_listeners"
 _GENERATED_NAME_SUFFIX = "_virtual_layer_generated_name_suffix"
@@ -1069,12 +1072,20 @@ def _async_setup_state_only_entities(hass, entry, entities) -> None:
             entity_id = _async_register_state_only_entity(hass, entry, entity)
             if entity_id is None:
                 continue
+            restored = (
+                entity.get(CONF_PERSISTENT, DEFAULT_PERSISTENT)
+                and entity_id in async_get_restore_state(hass).last_states
+            )
             state_value, attributes = _state_only_initial_state(hass, entity)
             hass.states.async_set(
                 entity_id,
                 state_value,
                 attributes,
             )
+            if restored and _state_only_restore_sources_pending(hass, entity):
+                hass.data.setdefault(
+                    _STATE_ONLY_RESTORE_WAITING_SOURCES_DATA, set()
+                ).add(entity_id)
             _async_register_state_only_restore_proxy(hass, entry.entry_id, entity)
             _async_setup_state_only_templates(hass, entry, entity)
 
@@ -1085,10 +1096,14 @@ def _async_unload_state_only_entities(hass, entry, entities) -> None:
     _async_remove_state_only_restore_proxies(hass, entry.entry_id)
     if not isinstance(entities, Mapping):
         return
+    waiting = hass.data.get(_STATE_ONLY_RESTORE_WAITING_SOURCES_DATA, set())
     for domain in STATE_ONLY_ENTITY_DOMAINS:
         for entity in entities.get(domain, []):
             if isinstance(entity, Mapping) and entity.get(ATTR_ENTITY_ID):
+                waiting.discard(entity[ATTR_ENTITY_ID])
                 hass.states.async_remove(entity[ATTR_ENTITY_ID])
+    if not waiting:
+        hass.data.pop(_STATE_ONLY_RESTORE_WAITING_SOURCES_DATA, None)
 
 
 def _state_only_initial_state(hass, entity) -> tuple[object, dict]:
@@ -1353,6 +1368,56 @@ def _state_only_hook_template_variables(hook, event) -> dict:
     }
 
 
+def _state_only_source_entities(entity) -> set[str]:
+    """Return explicit state/template sources used by a state-only entity."""
+    configured_sources = entity.get(CONF_SOURCE_ENTITIES, [])
+    if not isinstance(configured_sources, (list, tuple, set)):
+        configured_sources = []
+    source_entities = {
+        source_entity_id
+        for source_entity_id in configured_sources
+        if isinstance(source_entity_id, str)
+    }
+    for source_group in (CONF_ATTRIBUTE_SOURCES, CONF_TEMPLATE_SOURCES):
+        sources = entity.get(source_group, {})
+        if isinstance(sources, Mapping):
+            source_entities.update(
+                source.get(ATTR_ENTITY_ID)
+                for source in sources.values()
+                if isinstance(source, Mapping) and source.get(ATTR_ENTITY_ID)
+            )
+    source_entities.discard(entity.get(ATTR_ENTITY_ID))
+    return source_entities
+
+
+def _state_only_restore_sources_pending(hass, entity) -> bool:
+    """Hold a restored state-only entity until all declared sources are ready."""
+    for source_entity_id in _state_only_source_entities(entity):
+        source_state = hass.states.get(source_entity_id)
+        if source_state is None or str(source_state.state).strip().lower() in {
+            "",
+            "none",
+            "unknown",
+            STATE_UNAVAILABLE,
+        }:
+            return True
+    return False
+
+
+def _state_only_restore_waiting_for_sources(hass, entity) -> bool:
+    """Clear a state-only startup hold when its sources have all published."""
+    entity_id = entity.get(ATTR_ENTITY_ID)
+    waiting = hass.data.get(_STATE_ONLY_RESTORE_WAITING_SOURCES_DATA)
+    if not entity_id or not isinstance(waiting, set) or entity_id not in waiting:
+        return False
+    if _state_only_restore_sources_pending(hass, entity):
+        return True
+    waiting.discard(entity_id)
+    if not waiting:
+        hass.data.pop(_STATE_ONLY_RESTORE_WAITING_SOURCES_DATA, None)
+    return False
+
+
 @callback
 def _async_apply_state_only_templates(hass, entity) -> None:
     entity_id = entity.get(ATTR_ENTITY_ID)
@@ -1388,9 +1453,10 @@ def _async_apply_state_only_templates(hass, entity) -> None:
                 err,
             )
 
+    restore_waiting_for_sources = _state_only_restore_waiting_for_sources(hass, entity)
     apply_state_templates = not (
         availability_rendered and not attributes.get(ATTR_AVAILABLE, True)
-    )
+    ) and not restore_waiting_for_sources
 
     if entity.get(CONF_VALUE_TEMPLATE) and apply_state_templates:
         try:
@@ -1403,7 +1469,7 @@ def _async_apply_state_only_templates(hass, entity) -> None:
                 err,
             )
 
-    if entity.get(CONF_ICON_TEMPLATE):
+    if entity.get(CONF_ICON_TEMPLATE) and not restore_waiting_for_sources:
         try:
             rendered_icon = str(
                 _render_state_only_template(
@@ -1458,7 +1524,7 @@ def _async_apply_state_only_templates(hass, entity) -> None:
             attributes[name] = rendered
 
     attribute_templates = entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
-    if isinstance(attribute_templates, Mapping):
+    if not restore_waiting_for_sources and isinstance(attribute_templates, Mapping):
         for name, template in attribute_templates.items():
             if name in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
                 continue
@@ -1481,7 +1547,7 @@ def _async_apply_state_only_templates(hass, entity) -> None:
             attributes[name] = rendered
 
     attribute_sources = entity.get(CONF_ATTRIBUTE_SOURCES, {})
-    if isinstance(attribute_sources, Mapping):
+    if not restore_waiting_for_sources and isinstance(attribute_sources, Mapping):
         for name, source in attribute_sources.items():
             if name in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES or name in domain_options:
                 continue
@@ -1700,23 +1766,7 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
     entity_id = entity.get(ATTR_ENTITY_ID)
     if not entity_id:
         return
-    configured_sources = entity.get(CONF_SOURCE_ENTITIES, [])
-    if not isinstance(configured_sources, (list, tuple, set)):
-        configured_sources = []
-    source_entities = {
-        source_entity_id
-        for source_entity_id in configured_sources
-        if isinstance(source_entity_id, str)
-    }
-    for source_group in (CONF_ATTRIBUTE_SOURCES, CONF_TEMPLATE_SOURCES):
-        sources = entity.get(source_group, {})
-        if isinstance(sources, Mapping):
-            source_entities.update(
-                source.get(ATTR_ENTITY_ID)
-                for source in sources.values()
-                if isinstance(source, Mapping) and source.get(ATTR_ENTITY_ID)
-            )
-    source_entities.discard(entity_id)
+    source_entities = _state_only_source_entities(entity)
 
     listeners = hass.data.setdefault(
         _STATE_ONLY_TEMPLATE_LISTENERS_DATA, {}

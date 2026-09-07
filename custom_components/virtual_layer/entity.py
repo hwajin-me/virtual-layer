@@ -332,6 +332,10 @@ class VirtualEntity(RestoreEntity):
         self._command_scripts = {}
         self._pull_interval = config.get(CONF_PULL_INTERVAL, 0)
         self._source_entities = config.get(CONF_SOURCE_ENTITIES, [])
+        # A restored entity must not let a partially started source set replace
+        # its last valid state with a temporary fallback. This is cleared as
+        # soon as every configured source has published a usable state.
+        self._restore_waiting_for_sources = False
         self._template_sources = {
             name: self._normalize_template_source(source)
             for name, source in dict(config.get(CONF_TEMPLATE_SOURCES, {})).items()
@@ -477,13 +481,48 @@ class VirtualEntity(RestoreEntity):
         if not self._persistent or not state:
             self._create_state(self._config)
         else:
-            prerequisites_applied = self._apply_restore_prerequisite_templates()
+            self._restore_waiting_for_sources = self._sources_pending_startup()
+            prerequisites_applied = (
+                False
+                if self._restore_waiting_for_sources
+                else self._apply_restore_prerequisite_templates()
+            )
             self._restore_state(state, self._config)
             if prerequisites_applied:
                 self._native_templates_applied()
         self._update_attributes()
         self._setup_templates()
         self._apply_templates()
+
+    def _sources_pending_startup(self) -> bool:
+        """Return whether a restored source-backed entity lacks source state."""
+        source_entities = {
+            source
+            for source in self._source_entities
+            if isinstance(source, str) and source != self.entity_id
+        }
+        source_entities.update(
+            source[ATTR_ENTITY_ID]
+            for source in self._attribute_sources.values()
+            if source.get(ATTR_ENTITY_ID) and source[ATTR_ENTITY_ID] != self.entity_id
+        )
+        source_entities.update(
+            source[ATTR_ENTITY_ID]
+            for source in self._template_sources.values()
+            if source.get(ATTR_ENTITY_ID) and source[ATTR_ENTITY_ID] != self.entity_id
+        )
+        if not source_entities:
+            return False
+        for source in source_entities:
+            state = self.hass.states.get(source)
+            if state is None or str(state.state).strip().lower() in {
+                "",
+                "none",
+                "unknown",
+                STATE_UNAVAILABLE,
+            }:
+                return True
+        return False
 
     async def async_will_remove_from_hass(self) -> None:
         """Call when entity is being removed from hass."""
@@ -1268,6 +1307,9 @@ class VirtualEntity(RestoreEntity):
     def _apply_templates(self):
         changed = False
 
+        if self._restore_waiting_for_sources:
+            self._restore_waiting_for_sources = self._sources_pending_startup()
+
         availability_rendered = False
         if self._availability_template:
             try:
@@ -1285,7 +1327,7 @@ class VirtualEntity(RestoreEntity):
         # unavailable. Generic attributes may still be useful for diagnostics.
         apply_state_templates = not (
             availability_rendered and not self._attr_available
-        )
+        ) and not self._restore_waiting_for_sources
 
         if self._icon_template:
             try:
