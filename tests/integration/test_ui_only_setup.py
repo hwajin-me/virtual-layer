@@ -1210,6 +1210,18 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
         ),
     ]
 
+    # Source integrations report their own physical modes (for example BCM
+    # ``heat`` plus Samsung ``auto``).  That pair must remain the composite
+    # ``heat_cool`` state instead of visually falling back to the AC mode.
+    hass.states.async_set(boiler_entity_id, "heat", {
+        **hass.states.get(boiler_entity_id).attributes,
+    })
+    hass.states.async_set(air_conditioner_entity_id, "auto", {
+        **hass.states.get(air_conditioner_entity_id).attributes,
+    })
+    climate._apply_templates()
+    assert climate.hvac_mode is HVACMode.HEAT_COOL
+
     calls.clear()
     await climate.async_set_hvac_mode(HVACMode.OFF)
     assert [(domain, service) for domain, service, _data in calls] == [
@@ -1269,6 +1281,9 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
     # ``auto`` is owned by the AC.  A caller can switch to heat and supply a
     # boiler setpoint in one service call, so that request must stop auto
     # first; otherwise both appliances can condition the room at once.
+    hass.states.async_set(boiler_entity_id, "fan_only", {
+        **hass.states.get(boiler_entity_id).attributes,
+    })
     hass.states.async_set(air_conditioner_entity_id, "auto", {
         **hass.states.get(air_conditioner_entity_id).attributes,
         "temperature": 24,

@@ -4964,15 +4964,17 @@ def _boiler_air_conditioner_mode_template(
     boiler_entity_id: str,
     air_conditioner_entity_id: str,
 ) -> str:
-    """Prefer active room conditioning over boiler hot-water operation."""
+    """Represent an active boiler and AC as the composite simultaneous mode."""
     return (
         "{% set air_conditioner = states("
         + repr(air_conditioner_entity_id)
         + ") %}{% set boiler = states("
         + repr(boiler_entity_id)
-        + ") %}{{ air_conditioner if air_conditioner not in "
-        "['off', 'unknown', 'unavailable', 'none', ''] else "
-        "('heat' if boiler == 'heat' else 'off') }}"
+        + ") %}{% set air_conditioner_active = air_conditioner not in "
+        "['off', 'unknown', 'unavailable', 'none', ''] %}{{ 'heat_cool' "
+        "if boiler == 'heat' and air_conditioner_active else "
+        "(air_conditioner if air_conditioner_active else "
+        "('heat' if boiler == 'heat' else 'off')) }}"
     )
 
 

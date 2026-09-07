@@ -1632,7 +1632,12 @@ def test_combined_climate_helper_covers_source_order_and_state_matrix(hass):
         actions = _parse_command_actions(
             defaults[CONF_COMMAND_ACTIONS_JSON], "climate"
         )
-        cool_sequence = actions["set_hvac_mode"][0]["choose"][1]["sequence"]
+        cool_sequence = next(
+            choice["sequence"]
+            for choice in actions["set_hvac_mode"][0]["choose"]
+            if choice["conditions"]
+            == "{{ hvac_mode in ['cool', 'dry', 'fan_only', 'heat_cool', 'auto'] }}"
+        )
         assert cool_sequence[0]["target"] == {
             ATTR_ENTITY_ID: hot_water_switch_id
         }
@@ -1667,7 +1672,10 @@ def test_combined_climate_helper_covers_source_order_and_state_matrix(hass):
                 air_conditioner_attributes,
             )
             expected_mode = (
-                air_conditioner_state
+                "heat_cool"
+                if boiler_state == "heat"
+                and air_conditioner_state in active_air_conditioner_modes
+                else air_conditioner_state
                 if air_conditioner_state in active_air_conditioner_modes
                 else "heat" if boiler_state == "heat" else "off"
             )
