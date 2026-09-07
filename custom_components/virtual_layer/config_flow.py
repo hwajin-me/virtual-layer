@@ -5094,12 +5094,13 @@ def _boiler_air_conditioner_command_actions(
         for mode in boiler_state.attributes.get("hvac_modes", ())
         if str(mode).strip()
     }
-    # A Virtual Layer boiler alias exposes only off/heat and translates its
-    # own off command to the raw boiler's fan_only hot-water mode.  Sending
-    # fan_only directly to that alias is therefore invalid.
-    off_hvac_mode = "fan_only" if "fan_only" in boiler_modes else "off"
-    # A SiHAS-style boiler uses fan_only as hot-water-only mode.  Preserve
-    # that service while room conditioning is delegated to the air conditioner.
+    # ``auto`` is the preferred boiler standby mode. Preserve compatibility
+    # with raw SiHAS devices that expose only fan_only for hot-water standby,
+    # and never send either raw-only mode to a virtual off/heat boiler alias.
+    off_hvac_mode = next(
+        (mode for mode in ("auto", "fan_only", "off") if mode in boiler_modes),
+        "off",
+    )
     boiler_off = _boiler_mode_action_sequence(
         boiler_entity_id,
         hot_water_switch_id,
@@ -5769,7 +5770,7 @@ def _boiler_mode_action_sequence(
     hot_water_switch_id: str | None,
     hvac_mode: str,
     *,
-    off_hvac_mode: str = "fan_only",
+    off_hvac_mode: str = "auto",
 ) -> list[dict[str, Any]]:
     """Build the source actions for one boiler HVAC mode."""
     sequence = []
@@ -5803,11 +5804,13 @@ def _boiler_command_actions(
         for mode in climate_state.attributes.get("hvac_modes", ())
         if str(mode).strip()
     }
-    # BCM reports fan_only for its heating-off / hot-water standby state.  A
-    # pre-existing virtual boiler, on the other hand, advertises only off and
-    # heat and already translates its own off action.  Never send fan_only to
-    # that alias.
-    off_hvac_mode = "fan_only" if "fan_only" in boiler_modes else "off"
+    # Prefer auto for a boiler's room-heating standby state. Older raw SiHAS
+    # devices may only provide fan_only, while a virtual boiler alias accepts
+    # just off/heat; both remain safe fallbacks.
+    off_hvac_mode = next(
+        (mode for mode in ("auto", "fan_only", "off") if mode in boiler_modes),
+        "off",
+    )
     heat_sequence = _boiler_mode_action_sequence(
         climate_entity_id,
         hot_water_switch_id,
