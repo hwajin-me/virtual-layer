@@ -2703,6 +2703,9 @@ def test_camera_and_image_templates_update_backing_sources(hass):
                     CONF_NATIVE_TEMPLATES: {
                         "source_entity": "{{ 'camera.front_door' }}",
                         "stream_source": "{{ 'rtsp://example.test/live' }}",
+                        # Source cameras without streaming advertise ON_OFF
+                        # only. A direct H.264 source must still add STREAM.
+                        "supported_features": "{{ 1 }}",
                         "frame_interval": "{{ 0.5 }}",
                         "is_recording": "{{ true }}",
                         "motion_detection_enabled": "{{ true }}",
@@ -2736,6 +2739,7 @@ def test_camera_and_image_templates_update_backing_sources(hass):
 
     assert camera._source_entity == "camera.front_door"
     assert camera._stream_source == "rtsp://example.test/live"
+    assert CameraEntityFeature.STREAM in camera.supported_features
     assert camera.frame_interval == 0.5
     assert camera.is_recording is True
     assert camera.motion_detection_enabled is True

@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import mimetypes
 from collections.abc import Callable
 from contextvars import ContextVar
 
@@ -59,6 +60,9 @@ _CAMERA_WEBRTC_ALIAS_CHAIN: ContextVar[frozenset[int]] = ContextVar(
     "virtual_layer_camera_webrtc_alias_chain",
     default=frozenset(),
 )
+# Finish before Home Assistant's 10 second camera/snapshot deadline so a
+# last-known-good result can be returned instead of being cancelled outside.
+MEDIA_ALIAS_TIMEOUT = 8
 
 DEPENDENCIES = [COMPONENT_DOMAIN]
 
@@ -158,8 +162,13 @@ class VirtualCamera(VirtualEntity, Camera):
             self._attr_supported_features |= CameraEntityFeature.STREAM
 
         self._image_path = config.get(CONF_IMAGE_PATH)
+        self.content_type = (
+            mimetypes.guess_type(self._image_path or "")[0] or "image/jpeg"
+        )
         self._source_entity = config.get(CONF_SOURCE_ENTITY)
         self._stream_source = config.get(CONF_STREAM_SOURCE)
+        self._last_camera_image: bytes | None = None
+        self._last_stream_source: str | None = self._stream_source
         # Camera.__init__ sees the WebRTC proxy methods on this class. The
         # actual capability is source-dependent and is synchronized once the
         # source camera is available in the entity component.
@@ -172,6 +181,7 @@ class VirtualCamera(VirtualEntity, Camera):
 
     def _create_state(self, config):
         super()._create_state(config)
+        self._last_camera_image = None
         try:
             self._attr_is_on = _camera_state_is_on(
                 config.get(CONF_INITIAL_VALUE),
@@ -215,6 +225,23 @@ class VirtualCamera(VirtualEntity, Camera):
         data[CONF_IS_ON] = self._attr_is_on
         return data
 
+    @property
+    def available(self) -> bool:
+        """Keep configured availability independent from stream throughput."""
+        # Camera.available also considers the stream worker. A slow or
+        # reconnecting H.264 input must not hide an otherwise usable virtual
+        # camera or prevent its cached snapshot from being served.
+        return self._attr_available
+
+    @property
+    def use_stream_for_stills(self) -> bool:
+        """Use H.264 frames when no independent still-image source exists."""
+        return bool(
+            self._stream_source
+            and not self._image_path
+            and self._source_camera() is None
+        )
+
     async def async_camera_image(
         self,
         width: int | None = None,
@@ -230,13 +257,31 @@ class VirtualCamera(VirtualEntity, Camera):
                 return None
             token = _CAMERA_IMAGE_ALIAS_CHAIN.set(active_aliases | {marker})
             try:
-                return await source.async_camera_image(width=width, height=height)
+                async with asyncio.timeout(MEDIA_ALIAS_TIMEOUT):
+                    image = await source.async_camera_image(
+                        width=width,
+                        height=height,
+                    )
+                if image is not None:
+                    if not isinstance(image, (bytes, bytearray, memoryview)):
+                        raise TypeError("camera image must be bytes-like")
+                    if len(image) > MAX_LOCAL_MEDIA_BYTES:
+                        raise ValueError("camera image exceeds the media size limit")
+                    source_content_type = getattr(source, "content_type", None)
+                    if (
+                        isinstance(source_content_type, str)
+                        and source_content_type.startswith("image/")
+                    ):
+                        self.content_type = source_content_type
+                    self._last_camera_image = bytes(image)
+                return self._last_camera_image
             except (
                 asyncio.TimeoutError,
                 AttributeError,
                 ClientError,
                 HomeAssistantError,
                 OSError,
+                TypeError,
                 ValueError,
             ) as err:
                 _LOGGER.warning(
@@ -244,11 +289,11 @@ class VirtualCamera(VirtualEntity, Camera):
                     self._source_entity,
                     err,
                 )
-                return None
+                return self._last_camera_image
             finally:
                 _CAMERA_IMAGE_ALIAS_CHAIN.reset(token)
         if not self._image_path:
-            return None
+            return self._last_camera_image if self._source_entity else None
         image_path = await self.hass.async_add_executor_job(
             allowed_local_path,
             self.hass,
@@ -256,17 +301,18 @@ class VirtualCamera(VirtualEntity, Camera):
         )
         if image_path is None:
             _LOGGER.warning("Blocked disallowed image path for %s", self.entity_id)
-            return None
+            return self._last_camera_image
         try:
             async with aiofiles.open(image_path, "rb") as image_file:
                 image = await image_file.read(MAX_LOCAL_MEDIA_BYTES + 1)
         except OSError:
             _LOGGER.warning("Unable to read image for %s", self.entity_id)
-            return None
+            return self._last_camera_image
         if len(image) > MAX_LOCAL_MEDIA_BYTES:
             _LOGGER.warning("Local image is too large for %s", self.entity_id)
-            return None
-        return image
+            return self._last_camera_image
+        self._last_camera_image = bytes(image)
+        return self._last_camera_image
 
     async def stream_source(self) -> str | None:
         source = self._source_camera()
@@ -277,13 +323,18 @@ class VirtualCamera(VirtualEntity, Camera):
                 return None
             token = _CAMERA_STREAM_ALIAS_CHAIN.set(active_aliases | {marker})
             try:
-                return await source.stream_source()
+                async with asyncio.timeout(MEDIA_ALIAS_TIMEOUT):
+                    stream_source = await source.stream_source()
+                if isinstance(stream_source, str) and stream_source.strip():
+                    self._last_stream_source = stream_source.strip()
+                return self._last_stream_source
             except (
                 asyncio.TimeoutError,
                 AttributeError,
                 ClientError,
                 HomeAssistantError,
                 OSError,
+                TypeError,
                 ValueError,
             ) as err:
                 _LOGGER.warning(
@@ -291,10 +342,12 @@ class VirtualCamera(VirtualEntity, Camera):
                     self._source_entity,
                     err,
                 )
-                return None
+                return self._last_stream_source
             finally:
                 _CAMERA_STREAM_ALIAS_CHAIN.reset(token)
-        return self._stream_source
+        if self._stream_source:
+            self._last_stream_source = self._stream_source
+        return self._last_stream_source if self._source_entity else self._stream_source
 
     async def async_handle_async_webrtc_offer(
         self,
@@ -511,6 +564,13 @@ class VirtualCamera(VirtualEntity, Camera):
 
         if self._configured_supported_features is not None:
             features = self._configured_supported_features
+            # A direct stream_source is an explicit HLS-compatible input to
+            # Home Assistant's stream component. It must advertise STREAM even
+            # when a copied source camera supplied a stale ON_OFF-only feature
+            # template. Otherwise adding an H.264/RTSP URL in the config flow
+            # stores the URL but leaves the camera unable to play it.
+            if self._stream_source:
+                features |= CameraEntityFeature.STREAM
             if (
                 CameraEntityFeature.STREAM in features
                 and source is not None
@@ -572,6 +632,21 @@ class VirtualCamera(VirtualEntity, Camera):
             attribute = backing_fields[name]
             changed = getattr(self, attribute) != value
             setattr(self, attribute, value)
+            if name == CONF_IMAGE_PATH and changed:
+                self._last_camera_image = None
+                self.content_type = (
+                    mimetypes.guess_type(value or "")[0] or "image/jpeg"
+                )
+            elif name == CONF_STREAM_SOURCE and changed:
+                self._last_stream_source = value
+                current_stream = self.stream
+                if current_stream is not None:
+                    if value:
+                        current_stream.update_source(value)
+                    else:
+                        self.stream = None
+                        if self.hass is not None:
+                            self.hass.async_create_task(current_stream.stop())
             return changed
         if name == "supported_features":
             if isinstance(value, bool):

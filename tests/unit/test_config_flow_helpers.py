@@ -3123,6 +3123,28 @@ def test_climate_entity_form_exposes_temperature_step_and_jinja_native_controls(
     assert all(submitted[property_name] for property_name in CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
 
 
+def test_camera_entity_form_exposes_h264_stream_source_as_native_value():
+    """Expose the Home Assistant H.264/RTSP input where users expect it."""
+    schema = _entity_schema({CONF_PLATFORM: "camera"})
+    outer = {marker.schema: validator for marker, validator in schema.schema.items()}
+    native_section = outer[CONF_NATIVE_VALUE_TEMPLATES]
+    validators = _section_validators(schema, CONF_NATIVE_VALUE_TEMPLATES)
+
+    assert "stream_source" in validators
+    assert isinstance(validators["stream_source"], selector.TemplateSelector)
+    assert native_section.options["collapsed"] is False
+
+    form_values = schema({})
+    form_values[CONF_NATIVE_VALUE_TEMPLATES]["stream_source"] = (
+        "{{ 'rtsp://camera.example.test/h264' }}"
+    )
+    _, entity = _build_entity_config(form_values)
+
+    assert entity[CONF_NATIVE_TEMPLATES]["stream_source"] == (
+        "{{ 'rtsp://camera.example.test/h264' }}"
+    )
+
+
 @pytest.mark.parametrize(
     ("temperature_step", "expected_template"),
     [("0.5", "{{ 0.5 }}"), ("1", "{{ 1.0 }}")],

@@ -884,6 +884,78 @@ async def test_options_flow_camera_alias_tracks_native_camera_states(hass):
         assert camera.state is expected_state
 
 
+async def test_options_flow_adds_h264_camera_beside_non_streaming_camera(hass):
+    """Keep multiple Device entities and combine an image alias with H.264."""
+    source_entity_id = "camera.snapshot_only_source"
+    hass.states.async_set(
+        source_entity_id,
+        CameraState.IDLE,
+        {"friendly_name": "Snapshot Source", "supported_features": 1},
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Cameras": [{
+                    CONF_PLATFORM: "camera",
+                    CONF_NAME: "Snapshot Only",
+                    ATTR_ENTITY_ID: "camera.snapshot_only",
+                    CONF_INITIAL_VALUE: "on",
+                }],
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_REFERENCE_ENTITY_ID: [source_entity_id],
+            CONF_TARGET_DEVICE_NAME: "Cameras",
+        },
+    )
+    result = await _choose_add_template_helper(hass, result)
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults[CONF_ENTITY_NAME] = "Snapshot and H.264"
+    defaults[ATTR_ENTITY_ID] = "camera.snapshot_and_h264"
+    defaults[CONF_NATIVE_VALUE_TEMPLATES]["stream_source"] = (
+        "{{ 'rtsp://camera.example.test/h264' }}"
+    )
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], defaults,
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    stored_entities = result["data"][ATTR_DEVICES]["Cameras"]
+    assert len(stored_entities) == 2
+    stored = stored_entities[1]
+    assert stored[CAMERA_SOURCE_ENTITY] == source_entity_id
+    assert stored[CONF_NATIVE_TEMPLATES]["stream_source"] == (
+        "{{ 'rtsp://camera.example.test/h264' }}"
+    )
+
+    runtime_config = {
+        key: value
+        for key, value in stored.items()
+        if key not in {CONF_PLATFORM, ATTR_ENTITY_KEY, CONF_AUTO_HELPER}
+    }
+    camera = VirtualCamera(CAMERA_SCHEMA(runtime_config), False)
+    camera.hass = hass
+    camera.async_schedule_update_ha_state = Mock()
+    camera._create_state(camera._config)
+    camera._apply_templates()
+
+    assert await camera.stream_source() == "rtsp://camera.example.test/h264"
+    assert CameraEntityFeature.STREAM in camera.supported_features
+    assert camera.camera_capabilities.frontend_stream_types == {StreamType.HLS}
+
+
 async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass):
     hass.states.async_set(
         "climate.boiler",

@@ -47,6 +47,9 @@ _IMAGE_ALIAS_CHAIN: ContextVar[frozenset[int]] = ContextVar(
     "virtual_layer_image_alias_chain",
     default=frozenset(),
 )
+# Return a cached image before Home Assistant's 10 second proxy/snapshot
+# deadline cancels the request from outside this entity.
+MEDIA_ALIAS_TIMEOUT = 8
 
 DEPENDENCIES = [COMPONENT_DOMAIN]
 
@@ -117,6 +120,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
         self._polygon_config = config.get(CONF_POLYGONAL_ZONE)
         self._source_entity = config.get(CONF_SOURCE_ENTITY)
         configured_content_type = config.get(CONF_CONTENT_TYPE)
+        self._content_type_explicit = bool(configured_content_type)
         guessed_content_type = mimetypes.guess_type(
             self._image_path or self._image_url or "",
         )[0]
@@ -127,6 +131,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
         )
         self._attr_image_last_updated: datetime | None = None
         self._image_digest: bytes | None = None
+        self._last_image: bytes | None = None
         self._image_refresh_pending = False
         self._tracked_source_image: str | None = None
         self._source_image_remove_listener: Callable[[], None] | None = None
@@ -135,6 +140,18 @@ class VirtualImage(VirtualEntity, ImageEntity):
             self._attr_image_url = self._image_url
 
         _LOGGER.debug("VirtualImage: %s created", self.name)
+
+    def _sync_inferred_content_type(self) -> None:
+        """Keep MIME metadata aligned with a dynamic direct image source."""
+        if self._content_type_explicit:
+            return
+        self._attr_content_type = (
+            "image/svg+xml"
+            if self._inline_svg or self._polygon_config
+            else mimetypes.guess_type(self._image_path or self._image_url or "")[0]
+            or "image/jpeg"
+        )
+        self.__dict__.pop("content_type", None)
 
     @property
     def image_last_updated(self) -> datetime | None:
@@ -151,6 +168,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
         super()._create_state(config)
         self._attr_image_last_updated = None
         self._image_digest = None
+        self._last_image = None
         self._image_refresh_pending = False
         self._polygon_zones = []
 
@@ -161,6 +179,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
         except (TypeError, ValueError):
             self._attr_image_last_updated = None
         self._image_digest = None
+        self._last_image = None
         self._image_refresh_pending = False
         self._polygon_zones = []
 
@@ -237,6 +256,10 @@ class VirtualImage(VirtualEntity, ImageEntity):
 
     def _mark_updated(self, image: bytes) -> bool:
         """Update the image timestamp only when its bytes have changed."""
+        if not isinstance(image, (bytes, bytearray, memoryview)):
+            raise TypeError("image must be bytes-like")
+        image = bytes(image)
+        self._last_image = image
         digest = hashlib.sha256(image).digest()
         if digest == self._image_digest:
             self._image_refresh_pending = False
@@ -302,7 +325,15 @@ class VirtualImage(VirtualEntity, ImageEntity):
 
     async def async_image(self) -> bytes | None:
         """Return bytes from the configured source."""
-        source = self._source_image()
+        # Explicit media configured after copying an image is authoritative.
+        # The alias remains a fallback only when no direct source is present.
+        direct_media = bool(
+            self._inline_svg
+            or self._polygon_config
+            or self._image_path
+            or self._image_url
+        )
+        source = None if direct_media else self._source_image()
         if source is not None:
             marker = id(self)
             active_aliases = _IMAGE_ALIAS_CHAIN.get()
@@ -310,13 +341,15 @@ class VirtualImage(VirtualEntity, ImageEntity):
                 return None
             token = _IMAGE_ALIAS_CHAIN.set(active_aliases | {marker})
             try:
-                image = await source.async_image()
+                async with asyncio.timeout(MEDIA_ALIAS_TIMEOUT):
+                    image = await source.async_image()
             except (
                 asyncio.TimeoutError,
                 AttributeError,
                 ClientError,
                 HomeAssistantError,
                 OSError,
+                TypeError,
                 ValueError,
             ) as err:
                 _LOGGER.warning(
@@ -324,15 +357,35 @@ class VirtualImage(VirtualEntity, ImageEntity):
                     self._source_entity,
                     err,
                 )
-                return None
+                return self._last_image
             finally:
                 _IMAGE_ALIAS_CHAIN.reset(token)
             if image is not None:
+                if (
+                    not isinstance(image, (bytes, bytearray, memoryview))
+                    or len(image) > MAX_LOCAL_MEDIA_BYTES
+                ):
+                    _LOGGER.warning(
+                        "Invalid or oversized image payload from %s",
+                        self._source_entity,
+                    )
+                    return self._last_image
                 source_content_type = getattr(source, "content_type", None)
                 if isinstance(source_content_type, str) and source_content_type:
                     self._attr_content_type = source_content_type
-                self._mark_updated(image)
-            return image
+                    self.__dict__.pop("content_type", None)
+                try:
+                    self._mark_updated(image)
+                except (TypeError, ValueError) as err:
+                    _LOGGER.warning(
+                        "Invalid image payload from %s: %s",
+                        self._source_entity,
+                        err,
+                    )
+            return self._last_image
+
+        if self._source_entity and not direct_media:
+            return self._last_image
 
         if self._inline_svg:
             image = self._inline_svg.encode()
@@ -407,16 +460,16 @@ class VirtualImage(VirtualEntity, ImageEntity):
             )
             if image_path is None:
                 _LOGGER.warning("Blocked disallowed image path for %s", self.entity_id)
-                return None
+                return self._last_image
             try:
                 async with aiofiles.open(image_path, "rb") as image_file:
                     image = await image_file.read(MAX_LOCAL_MEDIA_BYTES + 1)
             except OSError:
                 _LOGGER.warning("Unable to read image for %s", self.entity_id)
-                return None
+                return self._last_image
             if len(image) > MAX_LOCAL_MEDIA_BYTES:
                 _LOGGER.warning("Local image is too large for %s", self.entity_id)
-                return None
+                return self._last_image
             self._mark_updated(image)
             return image
 
@@ -431,10 +484,15 @@ class VirtualImage(VirtualEntity, ImageEntity):
                 ValueError,
             ) as err:
                 _LOGGER.warning("Unable to fetch image for %s: %s", self.entity_id, err)
-                return None
+                return self._last_image
             if image is not None:
+                if len(image) > MAX_LOCAL_MEDIA_BYTES:
+                    _LOGGER.warning("Fetched image is too large for %s", self.entity_id)
+                    self._cached_image = None
+                    return self._last_image
                 self._mark_updated(image)
-            return image
+                self.__dict__.pop("content_type", None)
+            return self._last_image
         return None
 
     def _apply_native_template_value(self, name: str, value) -> bool:
@@ -453,6 +511,9 @@ class VirtualImage(VirtualEntity, ImageEntity):
             if changed:
                 self._cached_image = None
                 self._image_digest = None
+                self._last_image = None
+                if name in {CONF_IMAGE_PATH, CONF_SVG}:
+                    self._sync_inferred_content_type()
             return changed
         if name == CONF_IMAGE_URL:
             value = None if value is None or value == "" else cv.url(str(value))
@@ -460,13 +521,18 @@ class VirtualImage(VirtualEntity, ImageEntity):
             self._image_url = value
             self._attr_image_url = value
             if changed:
+                self.__dict__.pop("image_url", None)
                 self._cached_image = None
                 self._image_digest = None
+                self._last_image = None
+                self._sync_inferred_content_type()
             return changed
         if name == CONF_CONTENT_TYPE:
             value = str(value).strip()
             if not value.startswith("image/"):
                 raise ValueError("content_type must be an image MIME type")
+            self._content_type_explicit = True
+            self.__dict__.pop("content_type", None)
             name = "content_type"
         elif name == "image_last_updated":
             if value is None or value == "":

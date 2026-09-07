@@ -91,7 +91,12 @@ assert climate._command_actions["set_temperature"][0]["variables"] == {
     "legacy_limit": "{{ 100 }}",
 }
 assert int(vacuum.supported_features) >= 0
+# A copied, non-streaming source can contribute an ON_OFF-only mask before the
+# user adds a direct H.264 URL. The URL must remain authoritative for STREAM.
+camera._apply_native_template_value("supported_features", 1)
+camera._sync_stream_capabilities()
 assert CameraEntityFeature.STREAM in camera.supported_features
+assert camera.use_stream_for_stills
 assert light.supported_color_modes == {
     ColorMode.HS,
     ColorMode.XY,

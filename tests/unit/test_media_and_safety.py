@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from aiohttp import ClientConnectionError
-from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.camera import (
+    Camera,
+    CameraEntityFeature,
+    async_handle_snapshot_service,
+)
 from homeassistant.components.camera.const import StreamType
 from homeassistant.components.camera.webrtc import WebRTCClientConfiguration
 from homeassistant.components.image import ImageEntity
@@ -62,6 +66,27 @@ async def test_virtual_image_alias_returns_source_image(hass):
     assert entity.state_attributes["content_type"] == "image/png"
     source.async_image.assert_awaited_once_with()
     entity.async_write_ha_state.assert_called_once()
+
+
+async def test_camera_snapshot_preserves_source_content_type(hass):
+    source = Mock()
+    source.async_camera_image = AsyncMock(return_value=b"png-image")
+    source.content_type = "image/png"
+    camera_component = Mock()
+    camera_component.get_entity.return_value = source
+    hass.data["camera"] = camera_component
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "PNG Camera Alias",
+        ATTR_ENTITY_ID: "camera.png_alias",
+        ATTR_UNIQUE_ID: "png-camera-alias",
+        CONF_INITIAL_VALUE: "on",
+        "source_entity": "camera.png_source",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+
+    assert await entity.async_camera_image() == b"png-image"
+    assert entity.content_type == "image/png"
 
 
 async def test_virtual_image_reads_configured_file(hass, tmp_path):
@@ -362,7 +387,7 @@ async def test_virtual_camera_alias_keeps_hls_stream_type(hass):
     assert CameraEntityFeature.ON_OFF in entity.supported_features
 
 
-def test_virtual_camera_explicit_features_override_inferred_stream(hass):
+def test_virtual_camera_direct_stream_source_overrides_stale_feature_mask(hass):
     entity = VirtualCamera(CAMERA_SCHEMA({
         CONF_NAME: "Disabled Stream Alias",
         ATTR_ENTITY_ID: "camera.disabled_stream_alias",
@@ -376,8 +401,8 @@ def test_virtual_camera_explicit_features_override_inferred_stream(hass):
     assert entity._apply_native_template_value("supported_features", 0)
     entity._sync_stream_capabilities()
 
-    assert entity.supported_features == CameraEntityFeature(0)
-    assert entity.camera_capabilities.frontend_stream_types == set()
+    assert entity.supported_features == CameraEntityFeature.STREAM
+    assert entity.camera_capabilities.frontend_stream_types == {StreamType.HLS}
 
 
 async def test_virtual_camera_refreshes_capabilities_when_source_reloads(hass):
@@ -627,10 +652,16 @@ async def test_virtual_image_url_change_invalidates_download_cache(hass):
     entity.hass = hass
     entity._create_state(entity._config)
     entity.async_write_ha_state = Mock()
-    entity._async_load_image_from_url = AsyncMock(side_effect=[
-        Mock(content=b"one", content_type="image/jpeg"),
-        Mock(content=b"two", content_type="image/jpeg"),
-    ])
+    fetched_urls = []
+
+    async def load_url(url):
+        fetched_urls.append(url)
+        return Mock(
+            content=b"one" if url.endswith("one.jpg") else b"two",
+            content_type="image/jpeg",
+        )
+
+    entity._async_load_image_from_url = AsyncMock(side_effect=load_url)
 
     assert await entity.async_image() == b"one"
     assert await entity.async_image() == b"one"
@@ -642,6 +673,10 @@ async def test_virtual_image_url_change_invalidates_download_cache(hass):
     )
     assert await entity.async_image() == b"two"
     assert entity._async_load_image_from_url.await_count == 2
+    assert fetched_urls == [
+        "https://example.test/one.jpg",
+        "https://example.test/two.jpg",
+    ]
 
 
 def test_virtual_image_retargets_dynamic_source_listener(hass):
@@ -713,6 +748,206 @@ async def test_virtual_camera_alias_transport_errors_return_no_media(hass):
 
     assert await entity.async_camera_image() is None
     assert await entity.stream_source() is None
+
+
+async def test_slow_camera_alias_reuses_last_snapshot_and_stream_source(
+    hass,
+    monkeypatch,
+):
+    """Bound slow aliases and preserve the last usable camera media."""
+    class SlowCamera:
+        image_calls = 0
+        stream_calls = 0
+
+        async def async_camera_image(self, **_kwargs):
+            self.image_calls += 1
+            if self.image_calls == 1:
+                return b"last-snapshot"
+            await asyncio.Event().wait()
+
+        async def stream_source(self):
+            self.stream_calls += 1
+            if self.stream_calls == 1:
+                return "rtsp://camera/last-good"
+            await asyncio.Event().wait()
+
+    source = SlowCamera()
+    camera_component = Mock()
+    camera_component.get_entity.return_value = source
+    hass.data["camera"] = camera_component
+    monkeypatch.setattr(camera_platform, "MEDIA_ALIAS_TIMEOUT", 0.01)
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Slow Camera Alias",
+        ATTR_ENTITY_ID: "camera.slow_alias",
+        ATTR_UNIQUE_ID: "slow-camera-alias",
+        CONF_INITIAL_VALUE: "on",
+        "source_entity": "camera.slow",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+
+    assert await entity.async_camera_image() == b"last-snapshot"
+    assert await entity.stream_source() == "rtsp://camera/last-good"
+    assert await entity.async_camera_image() == b"last-snapshot"
+    assert await entity.stream_source() == "rtsp://camera/last-good"
+
+
+async def test_slow_image_alias_reuses_last_successful_image(hass, monkeypatch):
+    """Keep image snapshots available during a transient source timeout."""
+    class SlowImage:
+        calls = 0
+        content_type = "image/png"
+
+        async def async_image(self):
+            self.calls += 1
+            if self.calls == 1:
+                return b"last-image"
+            await asyncio.Event().wait()
+
+    source = SlowImage()
+    image_component = Mock()
+    image_component.get_entity.return_value = source
+    hass.data["image"] = image_component
+    monkeypatch.setattr(image_platform, "MEDIA_ALIAS_TIMEOUT", 0.01)
+    entity = VirtualImage(IMAGE_SCHEMA({
+        CONF_NAME: "Slow Image Alias",
+        ATTR_ENTITY_ID: "image.slow_alias",
+        ATTR_UNIQUE_ID: "slow-image-alias",
+        CONF_INITIAL_VALUE: "unknown",
+        "source_entity": "image.slow",
+    }), hass, False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+
+    assert await entity.async_image() == b"last-image"
+    assert await entity.async_image() == b"last-image"
+    assert entity.content_type == "image/png"
+
+
+async def test_explicit_image_url_overrides_copied_image_alias(hass):
+    """Honor a URL added after copying a source image entity."""
+    source = Mock()
+    source.async_image = AsyncMock(return_value=b"aliased-image")
+    image_component = Mock()
+    image_component.get_entity.return_value = source
+    hass.data["image"] = image_component
+    entity = VirtualImage(IMAGE_SCHEMA({
+        CONF_NAME: "URL Override",
+        ATTR_ENTITY_ID: "image.url_override",
+        ATTR_UNIQUE_ID: "url-override",
+        CONF_INITIAL_VALUE: "unknown",
+        "source_entity": "image.source",
+        "image_url": "https://example.test/current.png",
+    }), hass, False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    entity._async_load_image_from_url = AsyncMock(
+        return_value=Mock(content=b"url-image", content_type="image/png"),
+    )
+
+    assert await entity.async_image() == b"url-image"
+    source.async_image.assert_not_awaited()
+
+
+def test_slow_stream_does_not_override_virtual_camera_availability(hass):
+    """A reconnecting stream must not make snapshots and controls unavailable."""
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Slow H.264 Camera",
+        ATTR_ENTITY_ID: "camera.slow_h264",
+        ATTR_UNIQUE_ID: "slow-h264",
+        CONF_INITIAL_VALUE: "on",
+        "stream_source": "rtsp://camera/live",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.stream = Mock(available=False)
+
+    assert entity.available is True
+    entity._attr_available = False
+    assert entity.available is False
+
+
+async def test_h264_only_camera_uses_stream_frames_for_snapshots(hass, tmp_path):
+    """Route camera.snapshot through HA's stream for an H.264-only camera."""
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "H.264 Snapshot Camera",
+        ATTR_ENTITY_ID: "camera.h264_snapshot",
+        ATTR_UNIQUE_ID: "h264-snapshot",
+        CONF_INITIAL_VALUE: "on",
+        "stream_source": "rtsp://camera/live",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+
+    assert entity.use_stream_for_stills is True
+
+    stream = Mock(available=True)
+    stream.async_get_image = AsyncMock(return_value=b"h264-keyframe")
+    entity.stream = stream
+    snapshot_path = tmp_path / "snapshots" / "h264.jpg"
+    hass.config.allowlist_external_dirs.add(str(tmp_path))
+    service_call = Mock(data={"filename": Template(str(snapshot_path), hass)})
+
+    await async_handle_snapshot_service(entity, service_call)
+
+    assert snapshot_path.read_bytes() == b"h264-keyframe"
+    stream.async_get_image.assert_awaited_once_with(
+        width=None,
+        height=None,
+        wait_for_next_keyframe=True,
+    )
+
+    entity._image_path = "/config/www/fallback.jpg"
+    assert entity.use_stream_for_stills is False
+
+
+def test_dynamic_h264_url_updates_existing_home_assistant_stream(hass):
+    """Restart an existing HA stream worker with a changed template URL."""
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Dynamic H.264 Camera",
+        ATTR_ENTITY_ID: "camera.dynamic_h264",
+        ATTR_UNIQUE_ID: "dynamic-h264",
+        CONF_INITIAL_VALUE: "on",
+        "stream_source": "rtsp://camera/old",
+    }), False)
+    entity.hass = hass
+    current_stream = Mock()
+    entity.stream = current_stream
+
+    assert entity._apply_native_template_value(
+        "stream_source",
+        "rtsp://camera/new",
+    )
+    current_stream.update_source.assert_called_once_with("rtsp://camera/new")
+
+
+def test_dynamic_image_paths_update_inferred_content_types(hass):
+    camera = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Dynamic Camera Image",
+        ATTR_ENTITY_ID: "camera.dynamic_image",
+        ATTR_UNIQUE_ID: "dynamic-camera-image",
+        CONF_INITIAL_VALUE: "on",
+    }), False)
+    camera.hass = hass
+    assert camera._apply_native_template_value("image_path", "/config/image.png")
+    assert camera.content_type == "image/png"
+
+    image = VirtualImage(IMAGE_SCHEMA({
+        CONF_NAME: "Dynamic Image",
+        ATTR_ENTITY_ID: "image.dynamic_content_type",
+        ATTR_UNIQUE_ID: "dynamic-image-content-type",
+        CONF_INITIAL_VALUE: "unknown",
+    }), hass, False)
+    image.hass = hass
+    assert image._apply_native_template_value(
+        "image_url",
+        "https://example.test/image.webp",
+    )
+    assert image.content_type == "image/webp"
+    assert image._apply_native_template_value("svg", "<svg></svg>")
+    assert image.content_type == "image/svg+xml"
 
 
 def test_media_entities_cannot_be_merged(hass):

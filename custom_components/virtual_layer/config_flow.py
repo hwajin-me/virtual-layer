@@ -2039,7 +2039,13 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             )
         schema[vol.Optional(CONF_NATIVE_VALUE_TEMPLATES, default=dict)] = section(
             vol.Schema(template_schema),
-            {"collapsed": platform not in {"binary_sensor", "number", "sensor"}},
+            # A camera's H.264/RTSP URL is its stream_source native value.
+            # Keep this section open for cameras so users can configure a
+            # direct H.264 source without having to discover an advanced,
+            # generic-looking template group.
+            {"collapsed": platform not in {
+                "binary_sensor", "camera", "number", "sensor",
+            }},
         )
     return _complete_form_schema(vol.Schema(schema, extra=vol.ALLOW_EXTRA))
 
