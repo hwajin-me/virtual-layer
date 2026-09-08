@@ -784,12 +784,12 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 ATTR_DAWARICH_ERROR: None,
             })
             self._update_attributes()
-            self.async_schedule_update_ha_state()
+            self.hass.add_job(self.async_schedule_update_ha_state)
         except (asyncio.TimeoutError, ClientError, ValueError, TypeError, KeyError) as err:
             _LOGGER.warning("Unable to refresh Dawarich for %s: %s", self.entity_id, err)
             self._virtual_attributes[ATTR_DAWARICH_ERROR] = str(err)
             self._update_attributes()
-            self.async_schedule_update_ha_state()
+            self.hass.add_job(self.async_schedule_update_ha_state)
 
     async def _async_setup_polygon_tracking(self) -> None:
         """Load polygon definitions and start source aggregation."""
@@ -1062,7 +1062,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             ATTR_RADIUS: 0,
         }
         self._gps_accuracy = selected["gps_accuracy"]
-        self.async_schedule_update_ha_state()
+        self.hass.add_job(self.async_schedule_update_ha_state)
 
     @callback
     def _async_location_source_changed(self, _event) -> None:
