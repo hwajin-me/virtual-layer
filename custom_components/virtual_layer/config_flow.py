@@ -30,7 +30,9 @@ from homeassistant.components.lawn_mower import LawnMowerEntityFeature
 from homeassistant.components.lock import LockEntityFeature
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.components.siren import SirenEntityFeature
-from homeassistant.components.sensor.const import UNIT_CONVERTERS as SENSOR_UNIT_CONVERTERS
+from homeassistant.components.sensor.const import (
+    UNIT_CONVERTERS as SENSOR_UNIT_CONVERTERS,
+)
 from homeassistant.components.update import UpdateEntityFeature
 from homeassistant.components.vacuum import VacuumEntityFeature
 from homeassistant.components.valve import ValveEntityFeature
@@ -1721,8 +1723,10 @@ def _sensor_unit_conversion_transforms(
 
     normalized = tuple(str(unit).strip() if unit else "" for unit in units)
     converter = SENSOR_UNIT_CONVERTERS.get(device_class)
-    if not converter or not normalized or any(
-        unit not in converter.VALID_UNITS for unit in normalized
+    if (
+        not converter
+        or not normalized
+        or any(unit not in converter.VALID_UNITS for unit in normalized)
     ):
         return None
 
@@ -1828,7 +1832,9 @@ def _sensor_conversion_choices(
                         source_units.append(unit or None)
                     unit_profile = _sensor_unit_conversion_transforms(
                         source_units,
-                        str(source_classes[0]) if len(set(source_classes)) == 1 else None,
+                        str(source_classes[0])
+                        if len(set(source_classes)) == 1
+                        else None,
                     )
                     if len(set(source_classes)) != 1 or unit_profile is None:
                         # Different physical measurements cannot truthfully
@@ -1843,9 +1849,7 @@ def _sensor_conversion_choices(
                         device_class = None
                         unit_attribute = None
                         fallback_unit = None
-                        transforms = tuple(
-                            (1.0, 0.0) for _entity_id in entity_ids
-                        )
+                        transforms = tuple((1.0, 0.0) for _entity_id in entity_ids)
                     else:
                         device_class = source_classes[0]
                         fallback_unit, transforms = unit_profile
@@ -2009,6 +2013,10 @@ def _sensor_conversion_value_expression(
         numeric_value = f"(({numeric_value}) * {scale!r})"
     if offset != 0.0:
         numeric_value = f"(({numeric_value}) + {offset!r})"
+    if transform != (1.0, 0.0):
+        numeric_value = (
+            f"(({numeric_value}) if ({raw_numeric_value}) is not none else none)"
+        )
     if conversion == "brightness_percent":
         return (
             f"([0, ((({numeric_value}) / 255 * 100) | round(1)), 100] "
@@ -2167,9 +2175,7 @@ def _apply_sensor_conversion_defaults(
     )
     result[CONF_INITIAL_VALUE] = str(value) if value is not None else "unknown"
     expressions = [
-        _sensor_conversion_value_expression(
-            entity_id, attribute, conversion, transform
-        )
+        _sensor_conversion_value_expression(entity_id, attribute, conversion, transform)
         for entity_id, transform in zip(entity_ids, transforms, strict=True)
     ]
     raw_expressions = [

@@ -844,8 +844,47 @@ def test_multi_pollution_sensors_normalize_units_before_aggregation(
     assert options["state_class"] == "measurement"
 
 
+def test_scaled_multi_sensor_template_recovers_with_one_available_source(hass):
+    source_ids = ["sensor.pm25_micrograms", "sensor.pm25_milligrams"]
+    hass.states.async_set(
+        source_ids[0],
+        "25",
+        {"device_class": "pm25", "unit_of_measurement": "μg/m³"},
+    )
+    hass.states.async_set(
+        source_ids[1],
+        "0.03",
+        {"device_class": "pm25", "unit_of_measurement": "mg/m³"},
+    )
+    converted = _apply_sensor_conversion_defaults(
+        hass,
+        _reference_entity_defaults(hass, source_ids, "sensor"),
+        _sensor_conversion_choices(source_ids, hass)["state"],
+        "maximum",
+    )
+    value_template = Template(converted[CONF_VALUE_TEMPLATE], hass)
+    availability_template = Template(converted[CONF_AVAILABILITY_TEMPLATE], hass)
+
+    assert value_template.async_render(parse_result=True) == 30
+    hass.states.async_set(
+        source_ids[1],
+        "unavailable",
+        {"device_class": "pm25", "unit_of_measurement": "mg/m³"},
+    )
+
+    assert availability_template.async_render(parse_result=True) is True
+    assert value_template.async_render(parse_result=True) == 25
+
+
 @pytest.mark.parametrize(
-    ("device_class", "first_unit", "first_value", "second_unit", "second_value", "expected"),
+    (
+        "device_class",
+        "first_unit",
+        "first_value",
+        "second_unit",
+        "second_value",
+        "expected",
+    ),
     [
         ("temperature", "°C", "20", "°F", "68", 20),
         ("power", "W", "1000", "kW", "2", 1500),

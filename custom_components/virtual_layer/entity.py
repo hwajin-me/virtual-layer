@@ -9,13 +9,13 @@ import inspect
 import logging
 import math
 import re
-from asyncio import get_running_loop
 from contextvars import ContextVar
 from datetime import timedelta
 from enum import Enum
 from functools import wraps
 from math import isfinite
 from pathlib import Path
+from threading import get_ident
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -566,10 +566,7 @@ class VirtualEntity(RestoreEntity):
 
     def _schedule_state_update(self, force_refresh: bool = False) -> None:
         """Schedule a state update safely from loop or executor contexts."""
-        try:
-            on_hass_loop = self.hass is None or get_running_loop() is self.hass.loop
-        except RuntimeError:
-            on_hass_loop = False
+        on_hass_loop = self.hass is None or get_ident() == self.hass.loop_thread_id
         if on_hass_loop:
             self.async_schedule_update_ha_state(force_refresh=force_refresh)
         else:

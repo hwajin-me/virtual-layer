@@ -1,5 +1,6 @@
 """Integration tests for polygon virtual device trackers."""
 
+import asyncio
 import copy
 
 import homeassistant.helpers.entity_registry as er
@@ -53,20 +54,24 @@ pytestmark = pytest.mark.integration
 
 GEOJSON = {
     "type": "FeatureCollection",
-    "features": [{
-        "type": "Feature",
-        "properties": {"name": "Seoul Home", "priority": 1},
-        "geometry": {
-            "type": "Polygon",
-            "coordinates": [[
-                [126.9, 37.4],
-                [127.1, 37.4],
-                [127.1, 37.6],
-                [126.9, 37.6],
-                [126.9, 37.4],
-            ]],
-        },
-    }],
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {"name": "Seoul Home", "priority": 1},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [126.9, 37.4],
+                        [127.1, 37.4],
+                        [127.1, 37.6],
+                        [126.9, 37.6],
+                        [126.9, 37.4],
+                    ]
+                ],
+            },
+        }
+    ],
 }
 
 
@@ -118,22 +123,28 @@ async def test_combined_wifi_ble_and_gps_tracker_classifies_presence_in_hass(has
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "presence"},
         options={
-            ATTR_DEVICES: {"Presence": [{
-                CONF_PLATFORM: "device_tracker",
-                CONF_NAME: "Presence",
-                ATTR_ENTITY_ID: "device_tracker.presence",
-                CONF_INITIAL_VALUE: "not_home",
-                CONF_INITIAL_AVAILABILITY: True,
-                CONF_PERSISTENT: False,
-                CONF_SOURCE_ENTITIES: [
-                    "device_tracker.phone", "binary_sensor.phone_wifi", "sensor.phone_distance"
-                ],
-                CONF_LOCATION_HELPER: {
-                    "distance_threshold_meters": 300,
-                    "priority_window_seconds": 1800,
-                },
-                CONF_PRESENCE_CLASSIFICATION: True,
-            }]},
+            ATTR_DEVICES: {
+                "Presence": [
+                    {
+                        CONF_PLATFORM: "device_tracker",
+                        CONF_NAME: "Presence",
+                        ATTR_ENTITY_ID: "device_tracker.presence",
+                        CONF_INITIAL_VALUE: "not_home",
+                        CONF_INITIAL_AVAILABILITY: True,
+                        CONF_PERSISTENT: False,
+                        CONF_SOURCE_ENTITIES: [
+                            "device_tracker.phone",
+                            "binary_sensor.phone_wifi",
+                            "sensor.phone_distance",
+                        ],
+                        CONF_LOCATION_HELPER: {
+                            "distance_threshold_meters": 300,
+                            "priority_window_seconds": 1800,
+                        },
+                        CONF_PRESENCE_CLASSIFICATION: True,
+                    }
+                ]
+            },
             ATTR_DEVICE_ATTRIBUTES: {"Presence": {ATTR_DEVICE_ID: "presence"}},
         },
     )
@@ -159,23 +170,32 @@ async def test_polygon_tracker_triangulates_espresense_anchors_into_geojson_zone
         "sensor.esp_c_distance": {ATTR_LATITUDE: 37.5000, ATTR_LONGITUDE: 127.0001},
     }
     hass.states.async_set("sensor.esp_a_distance", "885", {"unit_of_measurement": "cm"})
-    hass.states.async_set("sensor.esp_b_distance", "1105", {"unit_of_measurement": "cm"})
+    hass.states.async_set(
+        "sensor.esp_b_distance", "1105", {"unit_of_measurement": "cm"}
+    )
     hass.states.async_set("sensor.esp_c_distance", "885", {"unit_of_measurement": "cm"})
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "espresense"},
         options={
-            ATTR_DEVICES: {"ESPresense": [{
-                CONF_PLATFORM: "device_tracker", CONF_NAME: "Room Position",
-                ATTR_ENTITY_ID: "device_tracker.room_position",
-                CONF_INITIAL_VALUE: "not_home", CONF_INITIAL_AVAILABILITY: True,
-                CONF_PERSISTENT: False, CONF_SOURCE_ENTITIES: list(anchors),
-                CONF_POLYGONAL_ZONE: {
-                    CONF_POLYGON_GEOJSON: GEOJSON,
-                    CONF_POLYGON_TRACKER_RULES: {},
-                    CONF_POLYGON_ESPRESENSE_ANCHORS: anchors,
-                },
-            }]},
+            ATTR_DEVICES: {
+                "ESPresense": [
+                    {
+                        CONF_PLATFORM: "device_tracker",
+                        CONF_NAME: "Room Position",
+                        ATTR_ENTITY_ID: "device_tracker.room_position",
+                        CONF_INITIAL_VALUE: "not_home",
+                        CONF_INITIAL_AVAILABILITY: True,
+                        CONF_PERSISTENT: False,
+                        CONF_SOURCE_ENTITIES: list(anchors),
+                        CONF_POLYGONAL_ZONE: {
+                            CONF_POLYGON_GEOJSON: GEOJSON,
+                            CONF_POLYGON_TRACKER_RULES: {},
+                            CONF_POLYGON_ESPRESENSE_ANCHORS: anchors,
+                        },
+                    }
+                ]
+            },
             ATTR_DEVICE_ATTRIBUTES: {"ESPresense": {ATTR_DEVICE_ID: "espresense"}},
         },
     )
@@ -230,30 +250,32 @@ async def test_polygon_tracker_zone_sensor_and_map_image_share_one_virtual_devic
         data={ATTR_GROUP_NAME: "family"},
         options={
             ATTR_DEVICES: {
-                "Family Location": [{
-                    CONF_PLATFORM: "device_tracker",
-                    CONF_NAME: "Family Polygon",
-                    ATTR_ENTITY_ID: "device_tracker.family_polygon",
-                    CONF_INITIAL_VALUE: "not_home",
-                    CONF_INITIAL_AVAILABILITY: True,
-                    CONF_PERSISTENT: False,
-                    CONF_SOURCE_ENTITIES: [
-                        "device_tracker.phone_a",
-                        "device_tracker.phone_b",
-                        "device_tracker.tablet",
-                    ],
-                    CONF_POLYGONAL_ZONE: {
-                        CONF_POLYGON_GEOJSON: GEOJSON,
-                        CONF_POLYGON_PERSON_ENTITY: "person.family",
-                        CONF_POLYGON_TRACKER_RULES: {
-                            "device_tracker.tablet": {
-                                "condition_template": (
-                                    "{{ source.attributes.include | default(true) }}"
-                                ),
+                "Family Location": [
+                    {
+                        CONF_PLATFORM: "device_tracker",
+                        CONF_NAME: "Family Polygon",
+                        ATTR_ENTITY_ID: "device_tracker.family_polygon",
+                        CONF_INITIAL_VALUE: "not_home",
+                        CONF_INITIAL_AVAILABILITY: True,
+                        CONF_PERSISTENT: False,
+                        CONF_SOURCE_ENTITIES: [
+                            "device_tracker.phone_a",
+                            "device_tracker.phone_b",
+                            "device_tracker.tablet",
+                        ],
+                        CONF_POLYGONAL_ZONE: {
+                            CONF_POLYGON_GEOJSON: GEOJSON,
+                            CONF_POLYGON_PERSON_ENTITY: "person.family",
+                            CONF_POLYGON_TRACKER_RULES: {
+                                "device_tracker.tablet": {
+                                    "condition_template": (
+                                        "{{ source.attributes.include | default(true) }}"
+                                    ),
+                                },
                             },
                         },
-                    },
-                }],
+                    }
+                ],
             },
             ATTR_DEVICE_ATTRIBUTES: {
                 "Family Location": {
@@ -287,7 +309,9 @@ async def test_polygon_tracker_zone_sensor_and_map_image_share_one_virtual_devic
 
     registry = er.async_get(hass)
     tracker_device_id = registry.async_get("device_tracker.family_polygon").device_id
-    assert registry.async_get("sensor.family_polygon_zone").device_id == tracker_device_id
+    assert (
+        registry.async_get("sensor.family_polygon_zone").device_id == tracker_device_id
+    )
     assert registry.async_get("image.family_polygon_map").device_id == tracker_device_id
     image_entity = hass.data["image"].get_entity("image.family_polygon_map")
     rendered = await image_entity.async_image()
@@ -325,19 +349,21 @@ async def test_person_only_polygon_tracker_tracks_person_coordinates(hass):
         data={ATTR_GROUP_NAME: "person-only"},
         options={
             ATTR_DEVICES: {
-                "Alex Location": [{
-                    CONF_PLATFORM: "device_tracker",
-                    CONF_NAME: "Alex Polygon",
-                    ATTR_ENTITY_ID: "device_tracker.alex_polygon",
-                    CONF_INITIAL_VALUE: "not_home",
-                    CONF_INITIAL_AVAILABILITY: True,
-                    CONF_PERSISTENT: False,
-                    CONF_POLYGONAL_ZONE: {
-                        CONF_POLYGON_GEOJSON: GEOJSON,
-                        CONF_POLYGON_PERSON_ENTITY: "person.alex",
-                        CONF_POLYGON_TRACKER_RULES: {},
-                    },
-                }],
+                "Alex Location": [
+                    {
+                        CONF_PLATFORM: "device_tracker",
+                        CONF_NAME: "Alex Polygon",
+                        ATTR_ENTITY_ID: "device_tracker.alex_polygon",
+                        CONF_INITIAL_VALUE: "not_home",
+                        CONF_INITIAL_AVAILABILITY: True,
+                        CONF_PERSISTENT: False,
+                        CONF_POLYGONAL_ZONE: {
+                            CONF_POLYGON_GEOJSON: GEOJSON,
+                            CONF_POLYGON_PERSON_ENTITY: "person.alex",
+                            CONF_POLYGON_TRACKER_RULES: {},
+                        },
+                    }
+                ],
             },
             ATTR_DEVICE_ATTRIBUTES: {
                 "Alex Location": {
@@ -365,6 +391,7 @@ async def test_person_only_polygon_tracker_tracks_person_coordinates(hass):
         "not_home",
         {ATTR_LATITUDE: 35.1796, ATTR_LONGITUDE: 129.0756, "gps_accuracy": 10},
     )
+    await asyncio.sleep(0.01)
     await hass.async_block_till_done()
 
     state = hass.states.get("device_tracker.alex_polygon")
