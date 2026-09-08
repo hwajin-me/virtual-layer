@@ -657,11 +657,19 @@ class VirtualEntity(RestoreEntity):
             # transition. Re-render after every integration has had its startup
             # opportunity, matching the state seen by a later reload.
             if self.hass.state is not CoreState.running:
+                fired = False
+                @callback
+                def _on_startup(_event):
+                    nonlocal fired
+                    fired = True
+                    self._apply_templates()
+
+                remove_func = self.hass.bus.async_listen_once(
+                    EVENT_HOMEASSISTANT_STARTED,
+                    _on_startup,
+                )
                 self._refresh_remove_listeners.append(
-                    self.hass.bus.async_listen_once(
-                        EVENT_HOMEASSISTANT_STARTED,
-                        lambda _event: self._apply_templates(),
-                    )
+                    lambda: remove_func() if not fired else None
                 )
             if self._availability_template:
                 self._schedule_startup_availability_retry()

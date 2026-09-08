@@ -1816,10 +1816,20 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
             lambda _event, _updates: _async_apply_state_only_templates(hass, entity),
         ).async_remove)
         if hass.state is not CoreState.running:
-            listeners.append(hass.bus.async_listen_once(
+            fired = False
+            @callback
+            def _on_startup(_event):
+                nonlocal fired
+                fired = True
+                _async_apply_state_only_templates(hass, entity)
+
+            remove_func = hass.bus.async_listen_once(
                 EVENT_HOMEASSISTANT_STARTED,
-                lambda _event: _async_apply_state_only_templates(hass, entity),
-            ))
+                _on_startup,
+            )
+            listeners.append(
+                lambda: remove_func() if not fired else None
+            )
         if entity.get(CONF_AVAILABILITY_TEMPLATE):
             _async_schedule_state_only_startup_availability_retry(
                 hass,
