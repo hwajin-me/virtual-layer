@@ -10,6 +10,7 @@
       "invalid_template": "Fix the Jinja template syntax. In YAML fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
       "invalid_entity_id": "Enter valid entity IDs.",
       "source_unavailable": "The selected source entity is no longer available. Go back and select it again.",
+      "incompatible_sensor_sources": "The selected sources do not use compatible device classes or units for one combined sensor measurement.",
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
       "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
       "invalid_domain_options": "Enter valid options for the selected entity domain.",
@@ -582,6 +583,18 @@
           "target_entity_type": "The generated state, native-property, and supported command helpers will use this entity type. Multiple control and sensor sources can also compose one native virtual entity, such as a Humidifier."
         }
       },
+      "sensor_conversion": {
+        "title": "Choose Sensor Measurement",
+        "description": "Choose a measurement from control, air-quality, or sensor entities. Virtual Layer creates the value template, device class, state class, and unit automatically, and normalizes compatible particulate, gas, and radon units before combining sources.",
+        "data": {
+          "sensor_conversion": "Source measurement",
+          "sensor_aggregation": "Combine multiple values"
+        },
+        "data_description": {
+          "sensor_conversion": "Supports native values such as temperature, humidity, PM0.1, PM2.5, PM10, AQI, ozone, CO, CO2, SO2, NO, and NO2, plus radon and other existing sensor states.",
+          "sensor_aggregation": "Average ignores unavailable and non-finite values and removes positive spikes above three times the median reference. Other modes ignore invalid values without removing valid extremes."
+        }
+      },
       "entity_helper": {
         "title": "Choose Template Generation",
         "description": "Choose whether to prefill the new virtual entity with Jinja templates generated from the selected source entities. You can review and customize all entity details and templates on the next screen.",
@@ -656,6 +669,7 @@
       "invalid_template": "Fix the Jinja template syntax. In YAML fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
       "invalid_entity_id": "Enter valid entity IDs.",
       "source_unavailable": "The selected source entity is no longer available. Go back and select it again.",
+      "incompatible_sensor_sources": "The selected sources do not use compatible device classes or units for one combined sensor measurement.",
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
       "invalid_matter_fan_levels": "Choose three different source levels in ascending order.",
       "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
@@ -1289,6 +1303,30 @@
           "target_entity_type": "Changing the type regenerates compatible state, native-property, and command helpers for the selected source composition according to the helper policy selected next."
         }
       },
+      "edit_sensor_conversion": {
+        "title": "Choose Sensor Measurement",
+        "description": "Choose a measurement from control, air-quality, or sensor entities. Virtual Layer creates the value template, device class, state class, and unit automatically, and normalizes compatible particulate, gas, and radon units before combining sources.",
+        "data": {
+          "sensor_conversion": "Source measurement",
+          "sensor_aggregation": "Combine multiple values"
+        },
+        "data_description": {
+          "sensor_conversion": "Supports native values such as temperature, humidity, PM0.1, PM2.5, PM10, AQI, ozone, CO, CO2, SO2, NO, and NO2, plus radon and other existing sensor states.",
+          "sensor_aggregation": "Average ignores unavailable and non-finite values and removes positive spikes above three times the median reference. Other modes ignore invalid values without removing valid extremes."
+        }
+      },
+      "sensor_conversion": {
+        "title": "Choose Sensor Measurement",
+        "description": "Choose a measurement from control, air-quality, or sensor entities. Virtual Layer creates the value template, device class, state class, and unit automatically, and normalizes compatible particulate, gas, and radon units before combining sources.",
+        "data": {
+          "sensor_conversion": "Source measurement",
+          "sensor_aggregation": "Combine multiple values"
+        },
+        "data_description": {
+          "sensor_conversion": "Supports native values such as temperature, humidity, PM0.1, PM2.5, PM10, AQI, ozone, CO, CO2, SO2, NO, and NO2, plus radon and other existing sensor states.",
+          "sensor_aggregation": "Average ignores unavailable and non-finite values and removes positive spikes above three times the median reference. Other modes ignore invalid values without removing valid extremes."
+        }
+      },
       "edit_entity_helper": {
         "title": "Choose Template Helper Usage",
         "description": "Choose whether to use the template helper for this edit. Automatic uses helpers only for fields that were not customized, Keep current does not apply helpers, and Force replaces all helper-capable fields. The next screen keeps every entity, ID, value, and template field editable.",
@@ -1912,6 +1950,16 @@
     }
   },
   "selector": {
+    "sensor_aggregation": {
+      "options": {
+        "average": "Robust average",
+        "median": "Median",
+        "minimum": "Minimum",
+        "maximum": "Maximum",
+        "sum": "Sum",
+        "first_available": "First available"
+      }
+    },
     "options_action": {
       "options": {
         "add_entity": "Add a virtual entity",

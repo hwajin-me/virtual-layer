@@ -22,6 +22,7 @@ from homeassistant.const import (
     CONF_ICON,
     CONF_NAME,
     CONF_PLATFORM,
+    CONF_UNIT_OF_MEASUREMENT,
 )
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import config_validation as cv
@@ -62,6 +63,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_POLYGON_ESPRESENSE_ANCHORS_JSON,
     CONF_POLYGON_TRACKER_RULES_JSON,
     CONF_REFERENCE_ENTITY_ID,
+    CONF_SENSOR_AGGREGATION,
     CONF_SOURCE_ENTITIES_TEXT,
     CONF_TEMPLATE_SOURCES_JSON,
     CONF_TARGET_ENTITY_TYPE,
@@ -103,6 +105,11 @@ from custom_components.virtual_layer.config_flow import (
     _entity_key_from_stable_key,
     _entity_schema,
     _entity_type_schema,
+    _apply_sensor_conversion_defaults,
+    _sensor_conversion_choices,
+    _sensor_conversion_schema,
+    _sensor_aggregation_from_defaults,
+    _sensor_unit_conversion_profile,
     _existing_auto_helper_profile,
     _fan_number_speed_kind,
     _find_entity_by_selection_key,
@@ -197,6 +204,7 @@ from custom_components.virtual_layer.const import (
     VIRTUAL_ENTITY_PROXY_SERVICE_OVERRIDES,
 )
 
+
 def _yaml_value(value):
     """Return either a YAML editor object or serialized YAML."""
     return yaml.safe_load(value) if isinstance(value, str) and value else value
@@ -282,24 +290,37 @@ def test_config_flow_builds_and_reopens_anchor_only_polygon_tracker():
     }
     geojson = {
         "type": "FeatureCollection",
-        "features": [{
-            "type": "Feature",
-            "properties": {"name": "Living Room"},
-            "geometry": {"type": "Polygon", "coordinates": [[
-                [126.999, 37.499], [127.001, 37.499],
-                [127.001, 37.501], [126.999, 37.499],
-            ]]},
-        }],
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"name": "Living Room"},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [
+                            [126.999, 37.499],
+                            [127.001, 37.499],
+                            [127.001, 37.501],
+                            [126.999, 37.499],
+                        ]
+                    ],
+                },
+            }
+        ],
     }
-    _device, entity = _build_entity_config(_entity_input({
-        CONF_PLATFORM: "device_tracker",
-        ATTR_ENTITY_ID: "device_tracker.indoor",
-        CONF_INITIAL_VALUE: "not_home",
-        CONF_DOMAIN_SETTINGS: {
-            CONF_POLYGON_GEOJSON_JSON: geojson,
-            CONF_POLYGON_ESPRESENSE_ANCHORS_JSON: anchors,
-        },
-    }))
+    _device, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "device_tracker",
+                ATTR_ENTITY_ID: "device_tracker.indoor",
+                CONF_INITIAL_VALUE: "not_home",
+                CONF_DOMAIN_SETTINGS: {
+                    CONF_POLYGON_GEOJSON_JSON: geojson,
+                    CONF_POLYGON_ESPRESENSE_ANCHORS_JSON: anchors,
+                },
+            }
+        )
+    )
     assert entity[CONF_POLYGONAL_ZONE][CONF_POLYGON_ESPRESENSE_ANCHORS] == anchors
     defaults = _entity_form_defaults("Indoor", entity)
     assert _yaml_value(defaults[CONF_POLYGON_ESPRESENSE_ANCHORS_JSON]) == anchors
@@ -323,13 +344,10 @@ def test_presence_classification_reopens_only_in_dedicated_control():
 
 
 def _section_validators(schema, section_name):
-    outer = {
-        marker.schema: validator for marker, validator in schema.schema.items()
-    }
+    outer = {marker.schema: validator for marker, validator in schema.schema.items()}
     section_schema = outer[section_name].schema
     return {
-        marker.schema: validator
-        for marker, validator in section_schema.schema.items()
+        marker.schema: validator for marker, validator in section_schema.schema.items()
     }
 
 
@@ -360,9 +378,7 @@ def test_reference_entity_parser_reports_malformed_payloads_as_field_errors(valu
 
 def test_entity_form_collapses_secondary_fields_and_flattens_submissions():
     schema = _entity_schema({CONF_PLATFORM: "climate"})
-    outer = {
-        marker.schema: validator for marker, validator in schema.schema.items()
-    }
+    outer = {marker.schema: validator for marker, validator in schema.schema.items()}
 
     for section_name in (
         CONF_DEVICE_DETAILS,
@@ -436,8 +452,7 @@ def test_structured_advanced_fields_use_visible_yaml_textareas():
     advanced = _section_validators(schema, CONF_ADVANCED_SETTINGS)
 
     assert all(
-        isinstance(validator, selector.TextSelector)
-        for validator in advanced.values()
+        isinstance(validator, selector.TextSelector) for validator in advanced.values()
     )
     defaults = schema({})
     assert defaults[CONF_ADVANCED_SETTINGS][CONF_ATTRIBUTES_JSON] == (
@@ -452,11 +467,13 @@ def test_structured_advanced_fields_use_visible_yaml_textareas():
 def test_all_config_flow_forms_are_frontend_serializable():
     options = {
         ATTR_DEVICES: {
-            "Laundry": [{
-                CONF_PLATFORM: "sensor",
-                CONF_NAME: "Washer Phase",
-                CONF_INITIAL_VALUE: "idle",
-            }],
+            "Laundry": [
+                {
+                    CONF_PLATFORM: "sensor",
+                    CONF_NAME: "Washer Phase",
+                    CONF_INITIAL_VALUE: "idle",
+                }
+            ],
         },
     }
     schemas = [
@@ -466,12 +483,31 @@ def test_all_config_flow_forms_are_frontend_serializable():
         ),
         ("setup", _setup_schema({})),
         ("options", _options_schema(options)),
-        ("reference", _reference_entity_schema(
-            device_options=[{"value": "Laundry", "label": "Laundry"}],
-        )),
+        (
+            "reference",
+            _reference_entity_schema(
+                device_options=[{"value": "Laundry", "label": "Laundry"}],
+            ),
+        ),
         ("helper_update", _helper_update_schema()),
         ("helper_usage", _helper_usage_schema()),
         ("entity_type", _entity_type_schema("switch.source", "switch")),
+        (
+            "sensor_conversion",
+            _sensor_conversion_schema(
+                {
+                    "climate.source:current_temperature": (
+                        ("climate.source",),
+                        "current_temperature",
+                        "temperature",
+                        "temperature_unit",
+                        "°C",
+                        "direct",
+                        (1.0,),
+                    ),
+                }
+            ),
+        ),
         ("device", _device_schema()),
         ("select_device", _select_device_schema(options)),
         ("select_entity", _select_entity_schema(options)),
@@ -498,18 +534,350 @@ def test_single_switch_source_can_target_fan_with_power_command_helpers(hass):
         "{{ states('switch.source') not in ['off', 'unknown', 'unavailable'] }}"
     )
     assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
-        "turn_off": [{
-            "action": "switch.turn_off",
-            "target": {ATTR_ENTITY_ID: "switch.source"},
-        }],
-        "turn_on": [{
-            "action": "switch.turn_on",
-            "target": {ATTR_ENTITY_ID: "switch.source"},
-        }],
+        "turn_off": [
+            {
+                "action": "switch.turn_off",
+                "target": {ATTR_ENTITY_ID: "switch.source"},
+            }
+        ],
+        "turn_on": [
+            {
+                "action": "switch.turn_on",
+                "target": {ATTR_ENTITY_ID: "switch.source"},
+            }
+        ],
     }
 
     type_schema = _entity_type_schema("switch.source", "switch")
     assert type_schema({})[CONF_TARGET_ENTITY_TYPE] == "switch"
+
+
+def test_climate_sensor_conversion_generates_typed_temperature_helper(hass):
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {"current_temperature": 21.5, "temperature_unit": "°F"},
+    )
+
+    defaults = _reference_entity_defaults(hass, ["climate.living_room"], "sensor")
+    choices = _sensor_conversion_choices(["climate.living_room"])
+    converted = _apply_sensor_conversion_defaults(
+        hass, defaults, choices["climate.living_room:current_temperature"]
+    )
+
+    assert converted[CONF_PLATFORM] == "sensor"
+    assert converted[CONF_INITIAL_VALUE] == "21.5"
+    assert converted[CONF_VALUE_TEMPLATE] == (
+        "{{ state_attr('climate.living_room', 'current_temperature') | float(none) }}"
+    )
+    assert _yaml_value(converted[CONF_DOMAIN_OPTIONS_JSON]) == {
+        "class": "temperature",
+        "state_class": "measurement",
+        "unit_of_measurement": "°F",
+    }
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "attributes", "choice_key", "expected_template", "expected_value"),
+    [
+        (
+            "water_heater.boiler",
+            {"current_temperature": 52, "temperature_unit": "°C"},
+            "water_heater.boiler:current_temperature",
+            "{{ state_attr('water_heater.boiler', 'current_temperature') | float(none) }}",
+            "52.0",
+        ),
+        (
+            "climate.bedroom",
+            {"temperature": 23, "temperature_unit": "°C"},
+            "climate.bedroom:temperature",
+            "{{ state_attr('climate.bedroom', 'temperature') | float(none) }}",
+            "23.0",
+        ),
+        (
+            "humidifier.bedroom",
+            {"humidity": 55},
+            "humidifier.bedroom:humidity",
+            None,
+            "55.0",
+        ),
+        (
+            "weather.home",
+            {"wind_speed": 4, "wind_speed_unit": "m/s"},
+            "weather.home:wind_speed",
+            "{{ state_attr('weather.home', 'wind_speed') | float(none) }}",
+            "4.0",
+        ),
+        (
+            "cover.blind",
+            {"current_position": 35},
+            "cover.blind:current_position",
+            None,
+            "35.0",
+        ),
+        (
+            "vacuum.robot",
+            {"battery_level": 80},
+            "vacuum.robot:battery_level",
+            None,
+            "80.0",
+        ),
+        ("light.desk", {"brightness": 128}, "light.desk:brightness", None, "50.2"),
+        (
+            "media_player.speaker",
+            {"volume_level": 0.5},
+            "media_player.speaker:volume_level",
+            None,
+            "50.0",
+        ),
+        (
+            "number.target",
+            {"device_class": "temperature", "unit_of_measurement": "°C"},
+            "number.target:state",
+            "{{ states('number.target') | float(none) }}",
+            "21.0",
+        ),
+    ],
+)
+def test_native_domains_offer_semantically_safe_sensor_conversions(
+    hass, entity_id, attributes, choice_key, expected_template, expected_value
+):
+    hass.states.async_set(
+        entity_id, "21" if entity_id == "number.target" else "on", attributes
+    )
+    defaults = _reference_entity_defaults(hass, [entity_id], "sensor")
+    converted = _apply_sensor_conversion_defaults(
+        hass, defaults, _sensor_conversion_choices([entity_id])[choice_key]
+    )
+
+    if expected_template is not None:
+        assert converted[CONF_VALUE_TEMPLATE] == expected_template
+    else:
+        assert "float(none)" in converted[CONF_VALUE_TEMPLATE]
+    assert converted[CONF_INITIAL_VALUE] == expected_value
+    assert float(
+        Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(parse_result=True)
+    ) == pytest.approx(float(expected_value))
+
+
+def test_multiple_climate_sources_convert_one_common_measurement_to_average_sensor(
+    hass,
+):
+    hass.states.async_set(
+        "climate.first", "heat", {"current_temperature": 20, "temperature_unit": "°C"}
+    )
+    hass.states.async_set(
+        "climate.second", "heat", {"current_temperature": 24, "temperature_unit": "°C"}
+    )
+    source_ids = ["climate.first", "climate.second"]
+    defaults = _reference_entity_defaults(hass, source_ids, "sensor")
+    choices = _sensor_conversion_choices(source_ids)
+    converted = _apply_sensor_conversion_defaults(
+        hass, defaults, choices["current_temperature"]
+    )
+
+    assert converted[CONF_INITIAL_VALUE] == "22.0"
+    assert (
+        "state_attr('climate.first', 'current_temperature')"
+        in converted[CONF_VALUE_TEMPLATE]
+    )
+    assert (
+        "state_attr('climate.second', 'current_temperature')"
+        in converted[CONF_VALUE_TEMPLATE]
+    )
+    assert (
+        Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(parse_result=True)
+        == 22
+    )
+
+
+@pytest.mark.parametrize(
+    ("aggregation", "expected"),
+    [
+        ("average", 15),
+        ("median", 20),
+        ("minimum", 10),
+        ("maximum", 1000),
+        ("sum", 1030),
+        ("first_available", 10),
+    ],
+)
+def test_multi_sensor_conversion_supports_selectable_aggregation(
+    hass, aggregation, expected
+):
+    source_ids = ["climate.first", "climate.second", "climate.outlier"]
+    for entity_id, temperature in zip(source_ids, (10, 20, 1000), strict=True):
+        hass.states.async_set(
+            entity_id,
+            "heat",
+            {"current_temperature": temperature, "temperature_unit": "°C"},
+        )
+    choices = _sensor_conversion_choices(source_ids, hass)
+    schema_defaults = _sensor_conversion_schema(choices)({})
+    assert schema_defaults[CONF_SENSOR_AGGREGATION] == "average"
+
+    defaults = _reference_entity_defaults(hass, source_ids, "sensor")
+    converted = _apply_sensor_conversion_defaults(
+        hass, defaults, choices["current_temperature"], aggregation
+    )
+
+    assert float(converted[CONF_INITIAL_VALUE]) == pytest.approx(expected)
+    assert float(
+        Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(parse_result=True)
+    ) == pytest.approx(expected)
+    assert _sensor_aggregation_from_defaults(converted) == aggregation
+
+
+def test_multi_sensor_conversion_rejects_incompatible_number_metadata(hass):
+    hass.states.async_set(
+        "number.temperature",
+        "20",
+        {"device_class": "temperature", "unit_of_measurement": "°C"},
+    )
+    hass.states.async_set(
+        "number.humidity",
+        "50",
+        {"device_class": "humidity", "unit_of_measurement": "%"},
+    )
+
+    assert (
+        _sensor_conversion_choices(["number.temperature", "number.humidity"], hass)
+        == {}
+    )
+
+
+@pytest.mark.parametrize(
+    ("units", "expected"),
+    [
+        (("µg/m³", "mg/m³"), ("μg/m³", (1.0, 1000.0))),
+        (("µg/m³", "µg/m³"), ("μg/m³", (1.0, 1.0))),
+        (("μg/m³", "ug/m3"), ("μg/m³", (1.0, 1.0))),
+        (("ppm", "ppb"), ("ppm", (1.0, 0.001))),
+        (("Bq/m³", "pCi/L"), ("Bq/m³", (1.0, 37.0))),
+        (("µg/m³", "ppm"), None),
+    ],
+)
+def test_sensor_unit_conversion_profile(units, expected):
+    assert _sensor_unit_conversion_profile(units) == expected
+
+
+@pytest.mark.parametrize(
+    (
+        "device_class",
+        "first_unit",
+        "first_value",
+        "second_unit",
+        "second_value",
+        "expected_unit",
+        "expected",
+    ),
+    [
+        ("pm25", "µg/m³", "10", "mg/m³", "0.02", "μg/m³", 15),
+        ("pm10", "μg/m³", "30", "ug/m3", "10", "μg/m³", 20),
+        ("carbon_dioxide", "ppm", "800", "ppb", "600000", "ppm", 700),
+        ("carbon_monoxide", "ppb", "1000", "ppm", "3", "ppm", 2),
+        (None, "Bq/m³", "37", "pCi/L", "1", "Bq/m³", 37),
+    ],
+)
+def test_multi_pollution_sensors_normalize_units_before_aggregation(
+    hass,
+    device_class,
+    first_unit,
+    first_value,
+    second_unit,
+    second_value,
+    expected_unit,
+    expected,
+):
+    source_ids = ["sensor.pollution_first", "sensor.pollution_second"]
+    for entity_id, value, unit in (
+        (source_ids[0], first_value, first_unit),
+        (source_ids[1], second_value, second_unit),
+    ):
+        attributes = {"unit_of_measurement": unit}
+        if device_class:
+            attributes["device_class"] = device_class
+        hass.states.async_set(entity_id, value, attributes)
+
+    choices = _sensor_conversion_choices(source_ids, hass)
+    converted = _apply_sensor_conversion_defaults(
+        hass,
+        _reference_entity_defaults(hass, source_ids, "sensor"),
+        choices["state"],
+    )
+
+    assert float(converted[CONF_INITIAL_VALUE]) == pytest.approx(expected)
+    assert Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(
+        parse_result=True
+    ) == pytest.approx(expected)
+    options = _yaml_value(converted[CONF_DOMAIN_OPTIONS_JSON])
+    assert options[CONF_UNIT_OF_MEASUREMENT] == expected_unit
+    assert options.get(CONF_CLASS) == device_class
+    assert options["state_class"] == "measurement"
+
+
+def test_air_quality_source_offers_pollutant_sensor_classes(hass):
+    hass.states.async_set(
+        "air_quality.home",
+        "good",
+        {
+            "particulate_matter_2_5": 12.5,
+            "particulate_matter_10": 28,
+            "carbon_dioxide": 720,
+            "carbon_monoxide": 0.8,
+            "unit_of_measurement": "µg/m³",
+        },
+    )
+
+    choices = _sensor_conversion_choices(["air_quality.home"], hass)
+    expected_classes = {
+        "particulate_matter_2_5": "pm25",
+        "particulate_matter_10": "pm10",
+        "carbon_dioxide": None,
+        "carbon_monoxide": "carbon_monoxide",
+    }
+    for attribute, device_class in expected_classes.items():
+        key = f"air_quality.home:{attribute}"
+        converted = _apply_sensor_conversion_defaults(
+            hass,
+            _reference_entity_defaults(hass, ["air_quality.home"], "sensor"),
+            choices[key],
+        )
+        assert _yaml_value(converted[CONF_DOMAIN_OPTIONS_JSON]).get(CONF_CLASS) == (
+            device_class
+        )
+        assert Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(
+            parse_result=True
+        ) == pytest.approx(hass.states.get("air_quality.home").attributes[attribute])
+
+
+def test_scaled_sensor_conversion_keeps_missing_attribute_unknown(hass):
+    hass.states.async_set("light.source", "on", {})
+    defaults = _reference_entity_defaults(hass, ["light.source"], "sensor")
+    converted = _apply_sensor_conversion_defaults(
+        hass,
+        defaults,
+        _sensor_conversion_choices(["light.source"], hass)["light.source:brightness"],
+    )
+
+    assert converted[CONF_INITIAL_VALUE] == "unknown"
+    assert (
+        Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(parse_result=True)
+        is None
+    )
+
+
+def test_multiple_boolean_sources_can_be_converted_to_binary_sensor(hass):
+    hass.states.async_set("switch.first", "on")
+    hass.states.async_set("light.second", "off")
+
+    defaults = _reference_entity_defaults(
+        hass, ["switch.first", "light.second"], "binary_sensor"
+    )
+
+    assert defaults[CONF_PLATFORM] == "binary_sensor"
+    assert "first | lower" in defaults[CONF_VALUE_TEMPLATE]
+    assert "second | lower" in defaults[CONF_VALUE_TEMPLATE]
 
 
 def test_three_espresense_distance_sources_infer_device_tracker(hass):
@@ -651,10 +1019,12 @@ def test_all_supported_cross_domain_power_helpers_are_valid(
     command_actions = entity[CONF_COMMAND_ACTIONS]
     assert set(command_actions) == {"turn_off", "turn_on"}
     for command, actions in command_actions.items():
-        assert actions == [{
-            "action": f"{source_platform}.{command}",
-            "target": {ATTR_ENTITY_ID: source_entity_id},
-        }]
+        assert actions == [
+            {
+                "action": f"{source_platform}.{command}",
+                "target": {ATTR_ENTITY_ID: source_entity_id},
+            }
+        ]
 
 
 @pytest.mark.parametrize("platform", sorted(VIRTUAL_ENTITY_COMMANDS))
@@ -662,9 +1032,10 @@ def test_source_command_helpers_cover_every_proxiable_domain_command(hass, platf
     """Every advertised service command gets a source propagation helper."""
     entity_id = f"{platform}.source"
     attributes = {"supported_features": (1 << 31) - 1}
-    for (domain, _command), capability_names in (
-        _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES.items()
-    ):
+    for (
+        domain,
+        _command,
+    ), capability_names in _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES.items():
         if domain == platform:
             attributes.update({name: ["supported"] for name in capability_names})
     hass.states.async_set(entity_id, "on", attributes)
@@ -691,9 +1062,10 @@ def test_source_command_helper_data_templates_render_to_mappings(hass, platform)
     """Every generated source helper produces valid service data on current Core."""
     entity_id = f"{platform}.source"
     attributes = {"supported_features": (1 << 31) - 1}
-    for (domain, _command), capability_names in (
-        _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES.items()
-    ):
+    for (
+        domain,
+        _command,
+    ), capability_names in _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES.items():
         if domain == platform:
             attributes.update({name: ["supported"] for name in capability_names})
     hass.states.async_set(entity_id, "on", attributes)
@@ -735,8 +1107,7 @@ def test_native_value_template_sections_match_domain_properties():
     ):
         schema = _entity_schema({CONF_PLATFORM: platform})
         validators = {
-            marker.schema: validator
-            for marker, validator in schema.schema.items()
+            marker.schema: validator for marker, validator in schema.schema.items()
         }
         native_section = validators[CONF_NATIVE_VALUE_TEMPLATES]
         template_validators = {
@@ -861,16 +1232,18 @@ def test_all_native_jinja_fields_have_renderable_source_helpers(hass):
         if platform == "device_tracker":
             assert CONF_NATIVE_VALUE_TEMPLATES not in defaults, platform
         else:
-            assert set(defaults[CONF_NATIVE_VALUE_TEMPLATES]) == set(properties), platform
+            assert set(defaults[CONF_NATIVE_VALUE_TEMPLATES]) == set(properties), (
+                platform
+            )
             for property_name in properties:
                 expected = _native_source_template(
                     source,
                     hass.states.get(source),
                     property_name,
                 )
-                assert defaults[CONF_NATIVE_VALUE_TEMPLATES][property_name] == expected, (
-                    f"{platform}.{property_name}"
-                )
+                assert (
+                    defaults[CONF_NATIVE_VALUE_TEMPLATES][property_name] == expected
+                ), f"{platform}.{property_name}"
 
         sources = [f"{platform}.helper_first", f"{platform}.helper_second"]
         for index, entity_id in enumerate(sources):
@@ -878,9 +1251,7 @@ def test_all_native_jinja_fields_have_renderable_source_helpers(hass):
                 entity_id,
                 "active",
                 {
-                    property_name: _native_helper_sample(
-                        platform, property_name, index
-                    )
+                    property_name: _native_helper_sample(platform, property_name, index)
                     for property_name in properties
                 },
             )
@@ -1034,18 +1405,24 @@ def test_reference_weather_uses_standard_native_attribute_aliases(hass):
         CONF_NATIVE_VALUE_TEMPLATES
     ]
 
-    assert Template(templates["native_temperature"], hass).async_render(
-        parse_result=True
-    ) == 23
-    assert Template(templates["native_temperature_unit"], hass).async_render(
-        parse_result=True
-    ) == "°C"
-    assert Template(templates["native_pressure"], hass).async_render(
-        parse_result=True
-    ) == 1012
-    assert Template(templates["native_wind_speed"], hass).async_render(
-        parse_result=True
-    ) == 5
+    assert (
+        Template(templates["native_temperature"], hass).async_render(parse_result=True)
+        == 23
+    )
+    assert (
+        Template(templates["native_temperature_unit"], hass).async_render(
+            parse_result=True
+        )
+        == "°C"
+    )
+    assert (
+        Template(templates["native_pressure"], hass).async_render(parse_result=True)
+        == 1012
+    )
+    assert (
+        Template(templates["native_wind_speed"], hass).async_render(parse_result=True)
+        == 5
+    )
 
 
 def test_reference_water_heater_maps_standard_away_mode_attribute(hass):
@@ -1197,17 +1574,18 @@ def test_reference_ignores_restored_and_media_access_attributes(
     attributes = _yaml_value(defaults[CONF_ATTRIBUTES_JSON])
     attribute_templates = _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
 
-    assert set(attributes).isdisjoint(
-        {ATTR_RESTORED, "access_token", "entity_picture"}
-    )
+    assert set(attributes).isdisjoint({ATTR_RESTORED, "access_token", "entity_picture"})
     assert set(attribute_templates).isdisjoint(
         {ATTR_RESTORED, "access_token", "entity_picture"}
     )
     assert attributes["vendor_status"] == "ready"
-    assert Template(
-        attribute_templates["vendor_status"],
-        hass,
-    ).async_render() == "ready"
+    assert (
+        Template(
+            attribute_templates["vendor_status"],
+            hass,
+        ).async_render()
+        == "ready"
+    )
     for template in defaults.get(CONF_NATIVE_VALUE_TEMPLATES, {}).values():
         Template(template, hass).ensure_valid()
         assert "secret" not in template
@@ -1256,9 +1634,10 @@ def test_multi_source_missing_native_values_use_safe_defaults(
         [hass.states.get(entity_id) for entity_id in entity_ids],
     )
 
-    assert Template(templates[property_name], hass).async_render(
-        parse_result=True
-    ) == expected
+    assert (
+        Template(templates[property_name], hass).async_render(parse_result=True)
+        == expected
+    )
 
 
 def test_sparse_native_attribute_tracks_all_selected_sources(hass):
@@ -1273,9 +1652,13 @@ def test_sparse_native_attribute_tracks_all_selected_sources(hass):
         [hass.states.get(first), hass.states.get(second)],
     )
 
-    assert Template(templates["brightness"], hass).async_render(parse_result=True) == 100
+    assert (
+        Template(templates["brightness"], hass).async_render(parse_result=True) == 100
+    )
     hass.states.async_set(second, "on", {"brightness": 200})
-    assert Template(templates["brightness"], hass).async_render(parse_result=True) == 150
+    assert (
+        Template(templates["brightness"], hass).async_render(parse_result=True) == 150
+    )
 
 
 def test_native_multi_source_helpers_use_property_semantics(hass):
@@ -1294,11 +1677,14 @@ def test_native_multi_source_helpers_use_property_semantics(hass):
         "2026-08-11"
     )
     assert render("native_value", ["10:00:00", "11:00:00"], "time") == "11:00:00"
-    assert render(
-        "native_value",
-        ["2026-08-10T12:00:00+00:00", "2026-08-11T12:00:00+00:00"],
-        "datetime",
-    ) == "2026-08-11T12:00:00+00:00"
+    assert (
+        render(
+            "native_value",
+            ["2026-08-10T12:00:00+00:00", "2026-08-11T12:00:00+00:00"],
+            "datetime",
+        )
+        == "2026-08-11T12:00:00+00:00"
+    )
     assert render("native_value", ["hello", " world"], "text") == "hello world"
     assert render("rgb_color", [[1, 2, 3], [4, 5, 6]]) == [1, 2, 3]
     assert render("options", [["eco", "boost"], ["boost", "turbo"]]) == [
@@ -1345,10 +1731,13 @@ def test_same_domain_state_helpers_select_first_known_value(hass):
         }
 
         assert defaults[CONF_PLATFORM] == platform
-        assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
-            variables=variables,
-            parse_result=False,
-        ) == "active", platform
+        assert (
+            Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+                variables=variables,
+                parse_result=False,
+            )
+            == "active"
+        ), platform
 
 
 def test_attribute_helpers_include_attributes_present_on_only_one_source(hass):
@@ -1435,101 +1824,120 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
 
     hass.states.async_set("climate.boiler", "fan_only")
     hass.states.async_set("climate.air_conditioner", "cool")
-    assert Template(templates["hvac_modes"], hass).async_render(
-        parse_result=True
-    ) == ["off", "cool", "heat_cool", "heat"]
-    assert Template(templates["hvac_mode"], hass).async_render(
-        parse_result=True
-    ) == "cool"
+    assert Template(templates["hvac_modes"], hass).async_render(parse_result=True) == [
+        "off",
+        "cool",
+        "heat_cool",
+        "heat",
+    ]
+    assert (
+        Template(templates["hvac_mode"], hass).async_render(parse_result=True) == "cool"
+    )
     # The boiler reports water values (31/48), so active cooling must expose
     # the air conditioner's room values rather than their numeric average.
-    assert Template(templates["current_temperature"], hass).async_render(
-        parse_result=True
-    ) == 25
-    assert Template(templates["target_temperature"], hass).async_render(
-        parse_result=True
-    ) == 24
-    assert Template(templates["min_temp"], hass).async_render(
-        parse_result=True
-    ) == 18
-    assert Template(templates["max_temp"], hass).async_render(
-        parse_result=True
-    ) == 30
+    assert (
+        Template(templates["current_temperature"], hass).async_render(parse_result=True)
+        == 25
+    )
+    assert (
+        Template(templates["target_temperature"], hass).async_render(parse_result=True)
+        == 24
+    )
+    assert Template(templates["min_temp"], hass).async_render(parse_result=True) == 18
+    assert Template(templates["max_temp"], hass).async_render(parse_result=True) == 30
     hass.states.async_set("climate.air_conditioner", "off")
-    assert Template(templates["hvac_mode"], hass).async_render(
-        parse_result=True
-    ) == "off"
-    assert Template(templates["target_temperature"], hass).async_render(
-        parse_result=True
-    ) == 48
+    assert (
+        Template(templates["hvac_mode"], hass).async_render(parse_result=True) == "off"
+    )
+    assert (
+        Template(templates["target_temperature"], hass).async_render(parse_result=True)
+        == 48
+    )
 
     command_actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     # Validate the generated choose/default sequences against Home Assistant's
     # action schema, not just their serialized shape.
-    assert _parse_command_actions(
-        defaults[CONF_COMMAND_ACTIONS_JSON], "climate"
-    ) == command_actions
+    assert (
+        _parse_command_actions(defaults[CONF_COMMAND_ACTIONS_JSON], "climate")
+        == command_actions
+    )
     set_hvac_mode = command_actions["set_hvac_mode"][0]
     assert set_hvac_mode["choose"][0]["conditions"] == "{{ hvac_mode == 'heat' }}"
     simultaneous_choice = set_hvac_mode["choose"][1]
     assert simultaneous_choice["conditions"] == "{{ hvac_mode == 'heat_cool' }}"
-    assert simultaneous_choice["sequence"] == [{
-        "action": "switch.turn_on",
-        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
-    }, {
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: "climate.boiler"},
-        "data": {"hvac_mode": "heat"},
-    }, {
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
-        "data": {"hvac_mode": "cool"},
-    }]
+    assert simultaneous_choice["sequence"] == [
+        {
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+        },
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: "climate.boiler"},
+            "data": {"hvac_mode": "heat"},
+        },
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
+            "data": {"hvac_mode": "cool"},
+        },
+    ]
     cooling_choice = set_hvac_mode["choose"][2]
     assert cooling_choice["conditions"] == "{{ hvac_mode in ['cool'] }}"
-    assert cooling_choice["sequence"] == [{
-        "action": "switch.turn_on",
-        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
-    }, {
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: "climate.boiler"},
-        "data": {"hvac_mode": "fan_only"},
-    }, {
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
-        "data": {"hvac_mode": "{{ hvac_mode }}"},
-    }]
+    assert cooling_choice["sequence"] == [
+        {
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+        },
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: "climate.boiler"},
+            "data": {"hvac_mode": "fan_only"},
+        },
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
+            "data": {"hvac_mode": "{{ hvac_mode }}"},
+        },
+    ]
     turn_on = command_actions["turn_on"][0]
     assert turn_on["choose"][0]["conditions"] == (
         "{{ states('climate.air_conditioner') not in "
         "['unknown', 'unavailable', 'none', ''] }}"
     )
-    assert turn_on["choose"][0]["sequence"] == [{
-        "action": "switch.turn_on",
-        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
-    }, {
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: "climate.boiler"},
-        "data": {"hvac_mode": "fan_only"},
-    }, {
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
-        "data": {"hvac_mode": "cool"},
-    }]
+    assert turn_on["choose"][0]["sequence"] == [
+        {
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+        },
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: "climate.boiler"},
+            "data": {"hvac_mode": "fan_only"},
+        },
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
+            "data": {"hvac_mode": "cool"},
+        },
+    ]
     assert turn_on["default"][1]["data"] == {"hvac_mode": "heat"}
     fan_action = command_actions["set_fan_mode"]
-    assert fan_action[0]["choose"] == [{
-        "conditions": (
-            "{{ states('climate.air_conditioner') not in "
-            "['off', 'unknown', 'unavailable', 'none', ''] and fan_mode in "
-            "(state_attr('climate.air_conditioner', 'fan_modes') or []) }}"
-        ),
-        "sequence": [{
-            "action": "climate.set_fan_mode",
-            "data": "{{ command_data }}",
-            "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
-        }],
-    }]
+    assert fan_action[0]["choose"] == [
+        {
+            "conditions": (
+                "{{ states('climate.air_conditioner') not in "
+                "['off', 'unknown', 'unavailable', 'none', ''] and fan_mode in "
+                "(state_attr('climate.air_conditioner', 'fan_modes') or []) }}"
+            ),
+            "sequence": [
+                {
+                    "action": "climate.set_fan_mode",
+                    "data": "{{ command_data }}",
+                    "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
+                }
+            ],
+        }
+    ]
     assert command_actions["set_temperature"]["optimistic"] is False
     temperature_action = command_actions["set_temperature"]["sequence"][0]
     assert [choice["conditions"] for choice in temperature_action["choose"]] == [
@@ -1547,25 +1955,27 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     cool_sequence = temperature_action["choose"][2]["sequence"]
     assert cool_sequence[0]["target"] == {ATTR_ENTITY_ID: "switch.hot_water"}
     assert cool_sequence[1]["target"] == {ATTR_ENTITY_ID: "climate.boiler"}
-    assert cool_sequence[2]["target"] == {
-        ATTR_ENTITY_ID: "climate.air_conditioner"
-    }
+    assert cool_sequence[2]["target"] == {ATTR_ENTITY_ID: "climate.air_conditioner"}
     # An explicit heat setpoint must also stop an active AC auto cycle and
     # enable the boiler.  A temperature-only command is insufficient because
     # Home Assistant callers commonly combine mode and target in one request.
     heat_sequence = temperature_action["choose"][3]["sequence"]
-    assert heat_sequence[:3] == [{
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
-        "data": {"hvac_mode": "off"},
-    }, {
-        "action": "switch.turn_on",
-        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
-    }, {
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: "climate.boiler"},
-        "data": {"hvac_mode": "heat"},
-    }]
+    assert heat_sequence[:3] == [
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: "climate.air_conditioner"},
+            "data": {"hvac_mode": "off"},
+        },
+        {
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+        },
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: "climate.boiler"},
+            "data": {"hvac_mode": "heat"},
+        },
+    ]
     assert heat_sequence[3]["action"] == "climate.set_temperature"
     assert heat_sequence[3]["target"] == {ATTR_ENTITY_ID: "climate.boiler"}
     assert temperature_action["default"][0]["target"] == {
@@ -1606,9 +2016,7 @@ def test_combined_climate_helper_refresh_preserves_custom_jinja_per_field(hass):
             "max_temp": 32,
             "target_temp_low": 20,
             "target_temp_high": 24,
-            "supported_features": int(
-                ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
-            ),
+            "supported_features": int(ClimateEntityFeature.TARGET_TEMPERATURE_RANGE),
         },
     )
     source_ids = [boiler_entity_id, "switch.hot_water", nest_entity_id]
@@ -1629,19 +2037,19 @@ def test_combined_climate_helper_refresh_preserves_custom_jinja_per_field(hass):
             "max_temp": 32,
             "target_temp_low": 19,
             "target_temp_high": 25,
-            "supported_features": int(
-                ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
-            ),
+            "supported_features": int(ClimateEntityFeature.TARGET_TEMPERATURE_RANGE),
         },
     )
     refreshed_reference = _reference_entity_defaults(hass, source_ids)
     refreshed = _reference_edit_defaults(current, refreshed_reference, profile)
 
-    assert refreshed[CONF_NATIVE_VALUE_TEMPLATES]["hvac_modes"] == (
-        refreshed_reference[CONF_NATIVE_VALUE_TEMPLATES]["hvac_modes"]
+    assert (
+        refreshed[CONF_NATIVE_VALUE_TEMPLATES]["hvac_modes"]
+        == (refreshed_reference[CONF_NATIVE_VALUE_TEMPLATES]["hvac_modes"])
     )
-    assert refreshed[CONF_NATIVE_VALUE_TEMPLATES]["hvac_mode"] == (
-        refreshed_reference[CONF_NATIVE_VALUE_TEMPLATES]["hvac_mode"]
+    assert (
+        refreshed[CONF_NATIVE_VALUE_TEMPLATES]["hvac_mode"]
+        == (refreshed_reference[CONF_NATIVE_VALUE_TEMPLATES]["hvac_mode"])
     )
     assert refreshed[CONF_NATIVE_VALUE_TEMPLATES]["target_temperature_high"] == (
         "{{ 26 }}"
@@ -1656,8 +2064,9 @@ def test_combined_climate_helper_refresh_preserves_custom_jinja_per_field(hass):
         profile,
         force_template_helper=True,
     )
-    assert forced[CONF_NATIVE_VALUE_TEMPLATES] == (
-        refreshed_reference[CONF_NATIVE_VALUE_TEMPLATES]
+    assert (
+        forced[CONF_NATIVE_VALUE_TEMPLATES]
+        == (refreshed_reference[CONF_NATIVE_VALUE_TEMPLATES])
     )
 
 
@@ -1674,9 +2083,7 @@ def test_combined_climate_helper_covers_source_order_and_state_matrix(hass):
         "supported_features": int(ClimateEntityFeature.TARGET_TEMPERATURE),
     }
     air_conditioner_attributes = {
-        "hvac_modes": [
-            "off", "cool", "dry", "fan_only", "heat_cool", "auto"
-        ],
+        "hvac_modes": ["off", "cool", "dry", "fan_only", "heat_cool", "auto"],
         "min_temp": 10,
         "max_temp": 32,
         "temperature": 24,
@@ -1689,9 +2096,7 @@ def test_combined_climate_helper_covers_source_order_and_state_matrix(hass):
     }
     hass.states.async_set(boiler_entity_id, "fan_only", boiler_attributes)
     hass.states.async_set(hot_water_switch_id, "on")
-    hass.states.async_set(
-        air_conditioner_entity_id, "cool", air_conditioner_attributes
-    )
+    hass.states.async_set(air_conditioner_entity_id, "cool", air_conditioner_attributes)
     source_ids = (boiler_entity_id, hot_water_switch_id, air_conditioner_entity_id)
 
     for ordered_source_ids in permutations(source_ids):
@@ -1699,36 +2104,29 @@ def test_combined_climate_helper_covers_source_order_and_state_matrix(hass):
         native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
         assert defaults[CONF_PLATFORM] == "climate"
         assert set(native_templates) == set(CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
-        assert Template(native_templates["hvac_mode"], hass).async_render(
-            parse_result=True
-        ) == "cool"
+        assert (
+            Template(native_templates["hvac_mode"], hass).async_render(
+                parse_result=True
+            )
+            == "cool"
+        )
         for template in native_templates.values():
             Template(template, hass).ensure_valid()
-        actions = _parse_command_actions(
-            defaults[CONF_COMMAND_ACTIONS_JSON], "climate"
-        )
+        actions = _parse_command_actions(defaults[CONF_COMMAND_ACTIONS_JSON], "climate")
         cool_sequence = next(
             choice["sequence"]
             for choice in actions["set_hvac_mode"][0]["choose"]
             if choice["conditions"]
             == "{{ hvac_mode in ['cool', 'dry', 'fan_only', 'heat_cool', 'auto'] }}"
         )
-        assert cool_sequence[0]["target"] == {
-            ATTR_ENTITY_ID: hot_water_switch_id
-        }
+        assert cool_sequence[0]["target"] == {ATTR_ENTITY_ID: hot_water_switch_id}
         assert cool_sequence[1]["target"] == {ATTR_ENTITY_ID: boiler_entity_id}
-        assert cool_sequence[2]["target"] == {
-            ATTR_ENTITY_ID: air_conditioner_entity_id
-        }
+        assert cool_sequence[2]["target"] == {ATTR_ENTITY_ID: air_conditioner_entity_id}
 
     defaults = _reference_entity_defaults(hass, list(source_ids))
-    mode_template = Template(
-        defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_mode"], hass
-    )
+    mode_template = Template(defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_mode"], hass)
     availability_template = Template(defaults[CONF_AVAILABILITY_TEMPLATE], hass)
-    active_air_conditioner_modes = {
-        "cool", "dry", "fan_only", "heat_cool", "auto"
-    }
+    active_air_conditioner_modes = {"cool", "dry", "fan_only", "heat_cool", "auto"}
     for boiler_state in ("heat", "fan_only", "off", "unknown", "unavailable"):
         for air_conditioner_state in (
             "cool",
@@ -1752,7 +2150,9 @@ def test_combined_climate_helper_covers_source_order_and_state_matrix(hass):
                 and air_conditioner_state in active_air_conditioner_modes
                 else air_conditioner_state
                 if air_conditioner_state in active_air_conditioner_modes
-                else "heat" if boiler_state == "heat" else "off"
+                else "heat"
+                if boiler_state == "heat"
+                else "off"
             )
             assert mode_template.async_render(parse_result=True) == expected_mode
             assert availability_template.async_render(parse_result=True) is (
@@ -1787,26 +2187,33 @@ def test_combined_climate_turn_on_honors_heat_cool_simultaneous_mode(hass):
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
 
     turn_on = actions["turn_on"][0]
-    assert turn_on["choose"][0]["sequence"] == [{
-        "action": "switch.turn_on",
-        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
-    }, {
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: "climate.boiler"},
-        "data": {"hvac_mode": "heat"},
-    }, {
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: "climate.nest"},
-        "data": {"hvac_mode": "heat_cool"},
-    }]
-    assert turn_on["default"] == [{
-        "action": "switch.turn_on",
-        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
-    }, {
-        "action": "climate.set_hvac_mode",
-        "target": {ATTR_ENTITY_ID: "climate.boiler"},
-        "data": {"hvac_mode": "heat"},
-    }]
+    assert turn_on["choose"][0]["sequence"] == [
+        {
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+        },
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: "climate.boiler"},
+            "data": {"hvac_mode": "heat"},
+        },
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: "climate.nest"},
+            "data": {"hvac_mode": "heat_cool"},
+        },
+    ]
+    assert turn_on["default"] == [
+        {
+            "action": "switch.turn_on",
+            "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+        },
+        {
+            "action": "climate.set_hvac_mode",
+            "target": {ATTR_ENTITY_ID: "climate.boiler"},
+            "data": {"hvac_mode": "heat"},
+        },
+    ]
 
 
 def test_combined_climate_helper_turns_off_virtual_boiler_alias(hass):
@@ -1870,9 +2277,12 @@ def test_multiple_media_players_with_on_off_snapshots_use_state_helper(hass):
 
     assert defaults[CONF_PLATFORM] == "media_player"
     assert "values[0]" in defaults[CONF_VALUE_TEMPLATE]
-    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
-        {"tv": "off", "apple_tv": "on"}
-    ) == "off"
+    assert (
+        Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+            {"tv": "off", "apple_tv": "on"}
+        )
+        == "off"
+    )
 
 
 def test_xiaomi_fan_uses_number_speed_only_for_favorite_and_manual_modes(hass):
@@ -1998,26 +2408,34 @@ def test_fan_speed_number_scale_is_detected_and_normalized(
 
     assert defaults[CONF_PLATFORM] == "fan"
     templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
-    assert Template(templates["percentage"], hass).async_render(
-        parse_result=True
-    ) == expected_percentage
-    assert Template(templates["speed_count"], hass).async_render(
-        parse_result=True
-    ) == expected_count
-    assert _fan_number_speed_kind(
-        number_entity_id,
-        hass.states.get(number_entity_id),
-    ) == expected_kind
+    assert (
+        Template(templates["percentage"], hass).async_render(parse_result=True)
+        == expected_percentage
+    )
+    assert (
+        Template(templates["speed_count"], hass).async_render(parse_result=True)
+        == expected_count
+    )
+    assert (
+        _fan_number_speed_kind(
+            number_entity_id,
+            hass.states.get(number_entity_id),
+        )
+        == expected_kind
+    )
 
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     speed_action = actions["set_percentage"][0]["choose"][0]["sequence"][0]
     assert speed_action["action"] == f"{number_entity_id.split('.', 1)[0]}.set_value"
     value_template = speed_action["data"]["value"]
     Template(value_template, hass).ensure_valid()
-    assert Template(value_template, hass).async_render(
-        {"percentage": expected_percentage},
-        parse_result=True,
-    ) == expected_source_value
+    assert (
+        Template(value_template, hass).async_render(
+            {"percentage": expected_percentage},
+            parse_result=True,
+        )
+        == expected_source_value
+    )
 
 
 def test_build_entity_config_supports_composite_templates_and_attributes():
@@ -2199,11 +2617,13 @@ def test_plain_options_isolates_recursive_and_excessively_deep_values():
     for _ in range(150):
         deeply_nested = [deeply_nested]
 
-    result = _plain_options({
-        "recursive": recursive,
-        "deep": deeply_nested,
-        "healthy": {"nested": True},
-    })
+    result = _plain_options(
+        {
+            "recursive": recursive,
+            "deep": deeply_nested,
+            "healthy": {"nested": True},
+        }
+    )
 
     assert result["recursive"] == {"self": None}
     assert result["healthy"] == {"nested": True}
@@ -2255,35 +2675,34 @@ def test_climate_source_helper_serializes_enum_snapshot_fallback(hass):
 
 
 def test_native_template_parser_repairs_legacy_enum_repr(hass):
-    templates = _parse_native_templates(json.dumps({
-        "hvac_action": "{{ <HVACAction.HEATING: 'heating'> }}",
-        "supported_features": (
-            "{{ <CameraEntityFeature.ON_OFF|STREAM: 3> }}"
-        ),
-        "vendor_label": (
-            "{{ \"<HVACAction.HEATING: 'heating'>\" }}"
-        ),
-    }))
+    templates = _parse_native_templates(
+        json.dumps(
+            {
+                "hvac_action": "{{ <HVACAction.HEATING: 'heating'> }}",
+                "supported_features": ("{{ <CameraEntityFeature.ON_OFF|STREAM: 3> }}"),
+                "vendor_label": ("{{ \"<HVACAction.HEATING: 'heating'>\" }}"),
+            }
+        )
+    )
 
     assert templates["hvac_action"] == "{{ 'heating' }}"
     assert templates["supported_features"] == "{{ 3 }}"
-    assert templates["vendor_label"] == (
-        "{{ \"<HVACAction.HEATING: 'heating'>\" }}"
+    assert templates["vendor_label"] == ("{{ \"<HVACAction.HEATING: 'heating'>\" }}")
+    assert (
+        Template(
+            templates["hvac_action"],
+            hass,
+        ).async_render(parse_result=True)
+        == "heating"
     )
-    assert Template(
-        templates["hvac_action"],
-        hass,
-    ).async_render(parse_result=True) == "heating"
 
 
 def test_attribute_template_parser_repairs_legacy_enum_repr(hass):
     templates = _normalize_attribute_mapping(
         {
-            "device_trackers": (
-                "{{ <DeviceTrackerSourceType.GPS: 'gps'> }}"
-            ),
+            "device_trackers": ("{{ <DeviceTrackerSourceType.GPS: 'gps'> }}"),
             "max": "{{ <LegacyLimit.MAX: 100> }}",
-            "vendor_label": "{{ \"<LegacyLimit.MAX: 100>\" }}",
+            "vendor_label": '{{ "<LegacyLimit.MAX: 100>" }}',
         },
         CONF_ATTRIBUTE_TEMPLATES_JSON,
         templates=True,
@@ -2291,23 +2710,27 @@ def test_attribute_template_parser_repairs_legacy_enum_repr(hass):
 
     assert templates["device_trackers"] == "{{ 'gps' }}"
     assert templates["max"] == "{{ 100 }}"
-    assert templates["vendor_label"] == "{{ \"<LegacyLimit.MAX: 100>\" }}"
+    assert templates["vendor_label"] == '{{ "<LegacyLimit.MAX: 100>" }}'
     assert Template(templates["device_trackers"], hass).async_render() == "gps"
     assert Template(templates["max"], hass).async_render() == 100
 
 
 def test_build_entity_config_repairs_legacy_enum_repr_attribute_template(hass):
     _, entity = _build_entity_config(
-        _entity_input({
-            CONF_PLATFORM: "device_tracker",
-            CONF_ATTRIBUTE_TEMPLATES_JSON: json.dumps({
-                "device_trackers": (
-                    "{{ [<TrackerSource.GPS: 'gps'>, "
-                    "<TrackerSource.ROUTER: 'router'>] }}"
+        _entity_input(
+            {
+                CONF_PLATFORM: "device_tracker",
+                CONF_ATTRIBUTE_TEMPLATES_JSON: json.dumps(
+                    {
+                        "device_trackers": (
+                            "{{ [<TrackerSource.GPS: 'gps'>, "
+                            "<TrackerSource.ROUTER: 'router'>] }}"
+                        ),
+                        "vendor_label": "{{ \"<TrackerSource.GPS: 'gps'>\" }}",
+                    }
                 ),
-                "vendor_label": "{{ \"<TrackerSource.GPS: 'gps'>\" }}",
-            }),
-        })
+            }
+        )
     )
 
     assert entity[CONF_ATTRIBUTE_TEMPLATES] == {
@@ -2324,24 +2747,34 @@ def test_build_entity_config_repairs_legacy_repr_in_nested_template_fields(hass)
     legacy_string = "{{ <LegacyMode.ACTIVE: 'active'> }}"
     legacy_number = "{{ <LegacyLimit.MAX: 100> }}"
     _, entity = _build_entity_config(
-        _entity_input({
-            CONF_PLATFORM: "switch",
-            CONF_VALUE_TEMPLATE: legacy_string,
-            CONF_AVAILABILITY_TEMPLATE: "{{ <LegacyFlag.YES: True> }}",
-            CONF_ICON_TEMPLATE: "{{ <LegacyIcon.HOME: 'mdi:home'> }}",
-            CONF_EVENT_HOOKS_JSON: json.dumps([{
-                "trigger": "event",
-                "event_type": "legacy_event",
+        _entity_input(
+            {
+                CONF_PLATFORM: "switch",
                 CONF_VALUE_TEMPLATE: legacy_string,
                 CONF_AVAILABILITY_TEMPLATE: "{{ <LegacyFlag.YES: True> }}",
-                CONF_ATTRIBUTE_TEMPLATES: {"limit": legacy_number},
-            }]),
-            CONF_COMMAND_ACTIONS_JSON: json.dumps({
-                "turn_on": [{
-                    "variables": {"limit": legacy_number},
-                }],
-            }),
-        })
+                CONF_ICON_TEMPLATE: "{{ <LegacyIcon.HOME: 'mdi:home'> }}",
+                CONF_EVENT_HOOKS_JSON: json.dumps(
+                    [
+                        {
+                            "trigger": "event",
+                            "event_type": "legacy_event",
+                            CONF_VALUE_TEMPLATE: legacy_string,
+                            CONF_AVAILABILITY_TEMPLATE: "{{ <LegacyFlag.YES: True> }}",
+                            CONF_ATTRIBUTE_TEMPLATES: {"limit": legacy_number},
+                        }
+                    ]
+                ),
+                CONF_COMMAND_ACTIONS_JSON: json.dumps(
+                    {
+                        "turn_on": [
+                            {
+                                "variables": {"limit": legacy_number},
+                            }
+                        ],
+                    }
+                ),
+            }
+        )
     )
 
     assert entity[CONF_VALUE_TEMPLATE] == "{{ 'active' }}"
@@ -2367,31 +2800,41 @@ def test_build_entity_config_repairs_legacy_repr_in_nested_template_fields(hass)
 
 def test_build_device_tracker_repairs_legacy_polygon_condition_template(hass):
     _, entity = _build_entity_config(
-        _entity_input({
-            CONF_PLATFORM: "device_tracker",
-            CONF_SOURCE_ENTITIES_TEXT: "device_tracker.phone",
-            CONF_POLYGON_GEOJSON_JSON: json.dumps({
-                "type": "FeatureCollection",
-                "features": [{
-                    "type": "Feature",
-                    "properties": {"name": "Home"},
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [[
-                            [126.9, 37.5],
-                            [127.0, 37.5],
-                            [127.0, 37.6],
-                            [126.9, 37.5],
-                        ]],
-                    },
-                }],
-            }),
-            CONF_POLYGON_TRACKER_RULES_JSON: json.dumps({
-                "device_tracker.phone": {
-                    "condition_template": "{{ <LegacyFlag.YES: True> }}",
-                },
-            }),
-        })
+        _entity_input(
+            {
+                CONF_PLATFORM: "device_tracker",
+                CONF_SOURCE_ENTITIES_TEXT: "device_tracker.phone",
+                CONF_POLYGON_GEOJSON_JSON: json.dumps(
+                    {
+                        "type": "FeatureCollection",
+                        "features": [
+                            {
+                                "type": "Feature",
+                                "properties": {"name": "Home"},
+                                "geometry": {
+                                    "type": "Polygon",
+                                    "coordinates": [
+                                        [
+                                            [126.9, 37.5],
+                                            [127.0, 37.5],
+                                            [127.0, 37.6],
+                                            [126.9, 37.5],
+                                        ]
+                                    ],
+                                },
+                            }
+                        ],
+                    }
+                ),
+                CONF_POLYGON_TRACKER_RULES_JSON: json.dumps(
+                    {
+                        "device_tracker.phone": {
+                            "condition_template": "{{ <LegacyFlag.YES: True> }}",
+                        },
+                    }
+                ),
+            }
+        )
     )
 
     template = entity[CONF_POLYGONAL_ZONE][CONF_POLYGON_TRACKER_RULES][
@@ -2412,18 +2855,22 @@ def test_edit_defaults_repair_legacy_enum_repr_for_every_entity_domain(platform)
         CONF_AVAILABILITY_TEMPLATE: legacy_template,
         CONF_ICON_TEMPLATE: legacy_template,
         CONF_ATTRIBUTE_TEMPLATES: {"legacy_attribute": legacy_template},
-        CONF_EVENT_HOOKS: [{
-            "trigger": "event",
-            "event_type": "legacy_event",
-            CONF_VALUE_TEMPLATE: legacy_template,
-            CONF_AVAILABILITY_TEMPLATE: legacy_template,
-            CONF_ATTRIBUTE_TEMPLATES: {"legacy_hook": legacy_template},
-        }],
+        CONF_EVENT_HOOKS: [
+            {
+                "trigger": "event",
+                "event_type": "legacy_event",
+                CONF_VALUE_TEMPLATE: legacy_template,
+                CONF_AVAILABILITY_TEMPLATE: legacy_template,
+                CONF_ATTRIBUTE_TEMPLATES: {"legacy_hook": legacy_template},
+            }
+        ],
         CONF_COMMAND_ACTIONS: {
             "legacy_command": {
-                "sequence": [{
-                    "variables": {"legacy_value": legacy_template},
-                }],
+                "sequence": [
+                    {
+                        "variables": {"legacy_value": legacy_template},
+                    }
+                ],
             },
         },
     }
@@ -2464,9 +2911,7 @@ def test_edit_defaults_repair_legacy_enum_repr_for_every_entity_domain(platform)
         )
     if platform == "device_tracker":
         rules = _yaml_value(defaults[CONF_POLYGON_TRACKER_RULES_JSON])
-        assert rules["device_tracker.phone"]["condition_template"] == (
-            "{{ 'active' }}"
-        )
+        assert rules["device_tracker.phone"]["condition_template"] == ("{{ 'active' }}")
 
 
 def test_json_default_sanitizes_values_that_cannot_be_saved_by_home_assistant():
@@ -2658,10 +3103,12 @@ def test_entity_template_validation_rejects_invalid_embedded_action_jinja(hass):
                 CONF_PLATFORM: "switch",
                 ATTR_ENTITY_ID: "switch.action_template",
                 CONF_COMMAND_ACTIONS: {
-                    "turn_on": [{
-                        "action": "switch.turn_on",
-                        "data": {"note": "{{ an_unclosed_expression"},
-                    }],
+                    "turn_on": [
+                        {
+                            "action": "switch.turn_on",
+                            "data": {"note": "{{ an_unclosed_expression"},
+                        }
+                    ],
                 },
             },
         )
@@ -2671,7 +3118,9 @@ def test_entity_template_validation_rejects_invalid_embedded_action_jinja(hass):
 
 
 @pytest.mark.parametrize("platform", VIRTUAL_ENTITY_DOMAINS)
-def test_every_entity_domain_rejects_invalid_common_and_native_templates(hass, platform):
+def test_every_entity_domain_rejects_invalid_common_and_native_templates(
+    hass, platform
+):
     """Every advertised domain uses the same pre-save Jinja validation path."""
     entity_id = f"{platform}.template_validation"
     with pytest.raises(InvalidTemplate) as common_error:
@@ -2735,9 +3184,7 @@ def test_build_entity_config_normalizes_attribute_names_and_rejects_bad_template
     _, cleaned = _build_entity_config(
         _entity_input(
             {
-                CONF_ATTRIBUTES_JSON: (
-                    '{"restored": true, "vendor": "kept"}'
-                ),
+                CONF_ATTRIBUTES_JSON: ('{"restored": true, "vendor": "kept"}'),
                 CONF_ATTRIBUTE_SOURCES_JSON: (
                     '{"access_token": "camera.source.access_token", '
                     '"battery": "sensor.source.battery_level"}'
@@ -2775,11 +3222,13 @@ def test_build_entity_config_rejects_non_string_event_attribute_templates():
             _entity_input(
                 {
                     CONF_EVENT_HOOKS_JSON: json.dumps(
-                        [{
-                            "trigger": "event",
-                            "event_type": "virtual_layer_update",
-                            "attribute_templates": {"value": {"not": "jinja"}},
-                        }]
+                        [
+                            {
+                                "trigger": "event",
+                                "event_type": "virtual_layer_update",
+                                "attribute_templates": {"value": {"not": "jinja"}},
+                            }
+                        ]
                     ),
                 }
             )
@@ -2845,10 +3294,13 @@ def test_reference_entity_defaults_avoids_jinja_reserved_source_variable_names(h
         variables=variables,
         parse_result=False,
     ) == "".join(f"value-{index}" for index in range(len(entity_ids)))
-    assert Template(defaults[CONF_AVAILABILITY_TEMPLATE], hass).async_render(
-        variables=variables,
-        parse_result=True,
-    ) is True
+    assert (
+        Template(defaults[CONF_AVAILABILITY_TEMPLATE], hass).async_render(
+            variables=variables,
+            parse_result=True,
+        )
+        is True
+    )
 
 
 def test_build_entity_config_preserves_domain_options_and_normalizes_climate_default():
@@ -3013,16 +3465,20 @@ def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
         "turn_off",
         "turn_on",
     }
-    assert command_actions["set_fan_mode"] == [{
-        "action": "climate.set_fan_mode",
-        "data": "{{ command_data }}",
-        "target": {ATTR_ENTITY_ID: "climate.living_room"},
-    }]
-    assert command_actions["set_hvac_mode"] == [{
-        "action": "climate.set_hvac_mode",
-        "data": {"hvac_mode": "{{ hvac_mode }}"},
-        "target": {ATTR_ENTITY_ID: "climate.living_room"},
-    }]
+    assert command_actions["set_fan_mode"] == [
+        {
+            "action": "climate.set_fan_mode",
+            "data": "{{ command_data }}",
+            "target": {ATTR_ENTITY_ID: "climate.living_room"},
+        }
+    ]
+    assert command_actions["set_hvac_mode"] == [
+        {
+            "action": "climate.set_hvac_mode",
+            "data": {"hvac_mode": "{{ hvac_mode }}"},
+            "target": {ATTR_ENTITY_ID: "climate.living_room"},
+        }
+    ]
     assert "set_swing_mode" not in command_actions
 
     _, entity = _build_entity_config(_entity_input(defaults))
@@ -3064,8 +3520,9 @@ def test_reference_heating_only_climate_builds_heat_off_boiler_helper(hass):
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_modes"] == (
         "{{ ['off', 'heat'] }}"
     )
-    assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_mode"] == (
-        defaults[CONF_VALUE_TEMPLATE]
+    assert (
+        defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_mode"]
+        == (defaults[CONF_VALUE_TEMPLATE])
     )
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     assert set(actions) == {
@@ -3110,11 +3567,13 @@ def test_boiler_standby_helper_prefers_fan_only_with_safe_fallbacks(
     defaults = _reference_entity_defaults(hass, ["climate.boiler"])
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
 
-    assert actions["turn_off"] == [{
-        "action": "climate.set_hvac_mode",
-        "data": {"hvac_mode": expected_standby_mode},
-        "target": {ATTR_ENTITY_ID: "climate.boiler"},
-    }]
+    assert actions["turn_off"] == [
+        {
+            "action": "climate.set_hvac_mode",
+            "data": {"hvac_mode": expected_standby_mode},
+            "target": {ATTR_ENTITY_ID: "climate.boiler"},
+        }
+    ]
 
 
 def test_boiler_temperature_calibration_helper_maps_before_source_clamp(hass):
@@ -3161,11 +3620,13 @@ def test_reference_virtual_boiler_off_does_not_send_unsupported_fan_only(hass):
 
     defaults = _reference_entity_defaults(hass, ["climate.virtual_boiler"])
 
-    assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])["turn_off"] == [{
-        "action": "climate.set_hvac_mode",
-        "data": {"hvac_mode": "off"},
-        "target": {ATTR_ENTITY_ID: "climate.virtual_boiler"},
-    }]
+    assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])["turn_off"] == [
+        {
+            "action": "climate.set_hvac_mode",
+            "data": {"hvac_mode": "off"},
+            "target": {ATTR_ENTITY_ID: "climate.virtual_boiler"},
+        }
+    ]
 
 
 def test_climate_entity_form_exposes_temperature_step_and_jinja_native_controls():
@@ -3188,14 +3649,21 @@ def test_climate_entity_form_exposes_temperature_step_and_jinja_native_controls(
     assert set(domain_validators) == {CONF_CLIMATE_TEMPERATURE_STEP_INPUT}
     validators = _section_validators(schema, CONF_NATIVE_VALUE_TEMPLATES)
     assert set(validators) == set(CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
-    assert all(isinstance(value, selector.TemplateSelector) for value in validators.values())
+    assert all(
+        isinstance(value, selector.TemplateSelector) for value in validators.values()
+    )
 
     submitted = schema({})[CONF_NATIVE_VALUE_TEMPLATES]
-    assert schema({})[CONF_DOMAIN_SETTINGS][CONF_CLIMATE_TEMPERATURE_STEP_INPUT] == "source"
+    assert (
+        schema({})[CONF_DOMAIN_SETTINGS][CONF_CLIMATE_TEMPERATURE_STEP_INPUT]
+        == "source"
+    )
     assert submitted["hvac_modes"] == "{{ ['off', 'cool'] }}"
     assert submitted["fan_modes"] == "{{ ['auto', 'turbo'] }}"
     assert submitted["fan_mode"] == "{{ 'auto' }}"
-    assert all(submitted[property_name] for property_name in CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
+    assert all(
+        submitted[property_name] for property_name in CLIMATE_NATIVE_TEMPLATE_PROPERTIES
+    )
 
 
 def test_camera_entity_form_exposes_h264_stream_source_as_native_value():
@@ -3569,10 +4037,13 @@ def test_fan_turn_on_source_fixer_preserves_optional_percentage(hass):
     helper = _source_command_data_template("fan", "turn_on", "fan.matter")
     template = Template(helper, hass)
 
-    assert template.async_render(
-        variables={"command_data": {}},
-        parse_result=True,
-    ) == {}
+    assert (
+        template.async_render(
+            variables={"command_data": {}},
+            parse_result=True,
+        )
+        == {}
+    )
     assert template.async_render(
         variables={"command_data": {"percentage": 51}},
         parse_result=True,
@@ -3624,9 +4095,7 @@ def test_fan_edit_form_migrates_legacy_native_attributes():
     assert defaults["oscillating"] is True
     assert defaults["direction"] is True
     assert defaults["current_direction"] == "reverse"
-    assert _yaml_value(defaults[CONF_ATTRIBUTES_JSON]) == {
-        "vendor": "preserved"
-    }
+    assert _yaml_value(defaults[CONF_ATTRIBUTES_JSON]) == {"vendor": "preserved"}
 
 
 def test_climate_edit_form_migrates_legacy_fan_attributes_over_empty_fields():
@@ -3726,36 +4195,38 @@ def test_mixed_humidifier_components_offer_type_and_generate_helpers(hass):
     assert defaults[CONF_PLATFORM] == "humidifier"
     assert defaults[CONF_INITIAL_VALUE] == "on"
     assert Template(templates["is_on"], hass).async_render(parse_result=True) is True
-    assert Template(templates["device_class"], hass).async_render(
-        parse_result=True
-    ) == "dehumidifier"
+    assert (
+        Template(templates["device_class"], hass).async_render(parse_result=True)
+        == "dehumidifier"
+    )
     assert Template(templates["available_modes"], hass).async_render(
         parse_result=True
     ) == ["Low", "Medium", "High"]
-    assert Template(templates["mode"], hass).async_render(
-        parse_result=True
-    ) == "Medium"
-    assert Template(templates["current_humidity"], hass).async_render(
-        parse_result=True
-    ) == 52
-    assert Template(templates["target_humidity"], hass).async_render(
-        parse_result=True
-    ) == 50
-    assert Template(templates["min_humidity"], hass).async_render(
-        parse_result=True
-    ) == 30
-    assert Template(templates["max_humidity"], hass).async_render(
-        parse_result=True
-    ) == 70
-    assert Template(templates["target_humidity_step"], hass).async_render(
-        parse_result=True
-    ) == 5
+    assert Template(templates["mode"], hass).async_render(parse_result=True) == "Medium"
+    assert (
+        Template(templates["current_humidity"], hass).async_render(parse_result=True)
+        == 52
+    )
+    assert (
+        Template(templates["target_humidity"], hass).async_render(parse_result=True)
+        == 50
+    )
+    assert (
+        Template(templates["min_humidity"], hass).async_render(parse_result=True) == 30
+    )
+    assert (
+        Template(templates["max_humidity"], hass).async_render(parse_result=True) == 70
+    )
+    assert (
+        Template(templates["target_humidity_step"], hass).async_render(
+            parse_result=True
+        )
+        == 5
+    )
     attribute_templates = _yaml_value(
         defaults.get(CONF_ATTRIBUTE_TEMPLATES_JSON, "{}") or "{}"
     )
-    assert not {"max", "min", "mode", "options", "step"} & set(
-        attribute_templates
-    )
+    assert not {"max", "min", "mode", "options", "step"} & set(attribute_templates)
     for template in attribute_templates.values():
         Template(template, hass).ensure_valid()
     availability = Template(defaults[CONF_AVAILABILITY_TEMPLATE], hass)
@@ -3763,24 +4234,32 @@ def test_mixed_humidifier_components_offer_type_and_generate_helpers(hass):
     hass.states.async_set(entity_ids[3], "unavailable")
     assert availability.async_render(parse_result=True) is False
     assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
-        "set_humidity": [{
-            "action": "number.set_value",
-            "data": {"value": "{{ humidity }}"},
-            "target": {ATTR_ENTITY_ID: entity_ids[0]},
-        }],
-        "set_mode": [{
-            "action": "select.select_option",
-            "data": {"option": "{{ mode }}"},
-            "target": {ATTR_ENTITY_ID: entity_ids[2]},
-        }],
-        "turn_off": [{
-            "action": "switch.turn_off",
-            "target": {ATTR_ENTITY_ID: entity_ids[1]},
-        }],
-        "turn_on": [{
-            "action": "switch.turn_on",
-            "target": {ATTR_ENTITY_ID: entity_ids[1]},
-        }],
+        "set_humidity": [
+            {
+                "action": "number.set_value",
+                "data": {"value": "{{ humidity }}"},
+                "target": {ATTR_ENTITY_ID: entity_ids[0]},
+            }
+        ],
+        "set_mode": [
+            {
+                "action": "select.select_option",
+                "data": {"option": "{{ mode }}"},
+                "target": {ATTR_ENTITY_ID: entity_ids[2]},
+            }
+        ],
+        "turn_off": [
+            {
+                "action": "switch.turn_off",
+                "target": {ATTR_ENTITY_ID: entity_ids[1]},
+            }
+        ],
+        "turn_on": [
+            {
+                "action": "switch.turn_on",
+                "target": {ATTR_ENTITY_ID: entity_ids[1]},
+            }
+        ],
     }
 
 
@@ -4010,7 +4489,9 @@ def test_reference_entity_defaults_combines_number_sources_with_average_template
     assert defaults[CONF_INITIAL_VALUE] == "22.0"
     assert "float(none)" in defaults[CONF_VALUE_TEMPLATE]
     assert "values | average" in defaults[CONF_VALUE_TEMPLATE]
-    assert f"set threshold = {NUMERIC_OUTLIER_THRESHOLD}" in defaults[CONF_VALUE_TEMPLATE]
+    assert (
+        f"set threshold = {NUMERIC_OUTLIER_THRESHOLD}" in defaults[CONF_VALUE_TEMPLATE]
+    )
 
 
 def test_legacy_numeric_helper_is_upgraded_to_the_spike_safe_template(hass):
@@ -4053,9 +4534,9 @@ def test_legacy_numeric_helper_is_upgraded_to_the_spike_safe_template(hass):
     assert profile is not None
     assert refreshed[CONF_VALUE_TEMPLATE] == reference[CONF_VALUE_TEMPLATE]
     assert "set threshold" in refreshed[CONF_VALUE_TEMPLATE]
-    assert refreshed[CONF_AVAILABILITY_TEMPLATE] == reference[
-        CONF_AVAILABILITY_TEMPLATE
-    ]
+    assert (
+        refreshed[CONF_AVAILABILITY_TEMPLATE] == reference[CONF_AVAILABILITY_TEMPLATE]
+    )
 
 
 def test_reference_entity_defaults_treats_zero_one_sensors_as_numbers(hass):
@@ -4092,10 +4573,13 @@ def test_number_helper_ignores_invalid_runtime_values(hass):
     defaults = _reference_entity_defaults(hass, ["sensor.first", "sensor.second"])
     template = Template(defaults[CONF_VALUE_TEMPLATE], hass)
 
-    assert template.async_render(
-        variables={"first": "bad", "second": "20"},
-        parse_result=True,
-    ) == 20.0
+    assert (
+        template.async_render(
+            variables={"first": "bad", "second": "20"},
+            parse_result=True,
+        )
+        == 20.0
+    )
     assert (
         template.async_render(
             variables={"first": "unknown", "second": "unavailable"},
@@ -4106,9 +4590,12 @@ def test_number_helper_ignores_invalid_runtime_values(hass):
 
     hass.states.async_set("sensor.first", "unknown")
     hass.states.async_set("sensor.second", "unavailable")
-    assert Template(
-        defaults[CONF_AVAILABILITY_TEMPLATE], hass
-    ).async_render(parse_result=True) is False
+    assert (
+        Template(defaults[CONF_AVAILABILITY_TEMPLATE], hass).async_render(
+            parse_result=True
+        )
+        is False
+    )
 
 
 def test_number_helper_is_generated_with_one_temporarily_invalid_sensor(hass):
@@ -4119,9 +4606,12 @@ def test_number_helper_is_generated_with_one_temporarily_invalid_sensor(hass):
 
     assert defaults[CONF_INITIAL_VALUE] == "20.0"
     assert "float(none)" in defaults[CONF_VALUE_TEMPLATE]
-    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
-        variables={"first": "unknown", "second": "20"}, parse_result=True
-    ) == 20.0
+    assert (
+        Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+            variables={"first": "unknown", "second": "20"}, parse_result=True
+        )
+        == 20.0
+    )
 
 
 def test_number_helper_rejects_non_finite_values(hass):
@@ -4135,14 +4625,17 @@ def test_number_helper_rejects_non_finite_values(hass):
     )
 
     assert defaults[CONF_INITIAL_VALUE] == "400.0"
-    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
-        variables={
-            "nan_reading": "nan",
-            "infinite_reading": "inf",
-            "valid_reading": "400",
-        },
-        parse_result=True,
-    ) == 400.0
+    assert (
+        Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+            variables={
+                "nan_reading": "nan",
+                "infinite_reading": "inf",
+                "valid_reading": "400",
+            },
+            parse_result=True,
+        )
+        == 400.0
+    )
 
 
 @pytest.mark.parametrize(
@@ -4169,9 +4662,12 @@ def test_number_helper_filters_positive_spikes(hass, states, expected):
         )
     }
 
-    assert Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
-        variables=variables, parse_result=True
-    ) == expected
+    assert (
+        Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
+            variables=variables, parse_result=True
+        )
+        == expected
+    )
     assert float(defaults[CONF_INITIAL_VALUE]) == expected
 
 
@@ -4243,10 +4739,13 @@ async def test_unhandled_config_flow_errors_include_traceback(caplog):
         async def async_step_entity(self, user_input=None):
             raise RuntimeError("source defaults exploded")
 
-    with caplog.at_level(
-        logging.ERROR,
-        logger="custom_components.virtual_layer.config_flow",
-    ), pytest.raises(RuntimeError, match="source defaults exploded"):
+    with (
+        caplog.at_level(
+            logging.ERROR,
+            logger="custom_components.virtual_layer.config_flow",
+        ),
+        pytest.raises(RuntimeError, match="source defaults exploded"),
+    ):
         await BrokenFlow().async_step_entity({"source_entities": []})
 
     record = next(
@@ -5133,10 +5632,12 @@ def test_auto_helper_refreshes_generated_boiler_actions_but_preserves_custom_act
 
     customized = {
         **generated,
-        CONF_COMMAND_ACTIONS_JSON: json.dumps({
-            "turn_on": old_generated_actions["turn_on"],
-            "turn_off": [{"action": "script.custom_boiler_off"}],
-        }),
+        CONF_COMMAND_ACTIONS_JSON: json.dumps(
+            {
+                "turn_on": old_generated_actions["turn_on"],
+                "turn_off": [{"action": "script.custom_boiler_off"}],
+            }
+        ),
     }
     refreshed_custom = _reference_edit_defaults(
         customized,
@@ -5154,9 +5655,7 @@ def test_auto_helper_refreshes_generated_boiler_actions_but_preserves_custom_act
         _auto_helper_profile(generated),
         force_template_helper=True,
     )
-    assert _yaml_value(forced[CONF_COMMAND_ACTIONS_JSON]) == (
-        current_generated_actions
-    )
+    assert _yaml_value(forced[CONF_COMMAND_ACTIONS_JSON]) == (current_generated_actions)
 
 
 def test_auto_helper_refreshes_native_jinja_per_field_and_preserves_custom_values():
@@ -5210,9 +5709,7 @@ def test_auto_helper_refreshes_native_jinja_per_field_and_preserves_custom_value
         _auto_helper_profile(generated),
         force_template_helper=True,
     )
-    assert forced[CONF_NATIVE_VALUE_TEMPLATES] == reference[
-        CONF_NATIVE_VALUE_TEMPLATES
-    ]
+    assert forced[CONF_NATIVE_VALUE_TEMPLATES] == reference[CONF_NATIVE_VALUE_TEMPLATES]
 
 
 def test_auto_helper_refreshes_icon_and_availability_per_field():
@@ -5261,9 +5758,7 @@ def test_auto_helper_refreshes_icon_and_availability_per_field():
         _auto_helper_profile(generated),
         force_template_helper=True,
     )
-    assert forced[CONF_AVAILABILITY_TEMPLATE] == reference[
-        CONF_AVAILABILITY_TEMPLATE
-    ]
+    assert forced[CONF_AVAILABILITY_TEMPLATE] == reference[CONF_AVAILABILITY_TEMPLATE]
     assert forced[CONF_ICON] == reference[CONF_ICON]
     assert forced[CONF_ICON_TEMPLATE] == reference[CONF_ICON_TEMPLATE]
 
@@ -6160,9 +6655,7 @@ def test_entity_form_defaults_round_trips_stored_entity_config():
             CONF_VALUE_TEMPLATE: "{{ trigger.data.value }}",
         }
     ]
-    assert _yaml_value(defaults[CONF_ATTRIBUTES_JSON]) == {
-        "source": "simulation"
-    }
+    assert _yaml_value(defaults[CONF_ATTRIBUTES_JSON]) == {"source": "simulation"}
     assert _yaml_value(defaults[CONF_ATTRIBUTE_SOURCES_JSON]) == {
         "battery": {
             CONF_ATTRIBUTE: "battery_level",
@@ -6233,10 +6726,10 @@ def test_entity_choices_keep_malformed_and_duplicate_stable_keys_removable():
         options,
         [_entity_key("Laundry", 2)],
     )
-    assert [
-        entity[CONF_NAME]
-        for entity in next_options[ATTR_DEVICES]["Laundry"]
-    ] == ["Malformed Key", "Duplicate One"]
+    assert [entity[CONF_NAME] for entity in next_options[ATTR_DEVICES]["Laundry"]] == [
+        "Malformed Key",
+        "Duplicate One",
+    ]
 
 
 def test_stable_selection_rejects_ambiguous_keys_and_boolean_indexes():
@@ -6406,9 +6899,7 @@ def test_entity_form_round_trips_native_templates_and_command_actions():
                 CONF_ENTITY_NAME: "Linked HVAC",
                 CONF_INITIAL_VALUE: "off",
                 CONF_NATIVE_TEMPLATES_JSON: defaults[CONF_NATIVE_TEMPLATES_JSON],
-                CONF_NATIVE_VALUE_TEMPLATES: defaults[
-                    CONF_NATIVE_VALUE_TEMPLATES
-                ],
+                CONF_NATIVE_VALUE_TEMPLATES: defaults[CONF_NATIVE_VALUE_TEMPLATES],
                 CONF_COMMAND_ACTIONS_JSON: defaults[CONF_COMMAND_ACTIONS_JSON],
             }
         )
@@ -6471,9 +6962,7 @@ def test_unstructured_domain_keeps_advanced_native_template_json_input():
     }
 
     advanced = validators[CONF_ADVANCED_SETTINGS]
-    advanced_fields = {
-        marker.schema for marker in advanced.schema.schema
-    }
+    advanced_fields = {marker.schema for marker in advanced.schema.schema}
     assert CONF_NATIVE_TEMPLATES_JSON in advanced_fields
 
 
@@ -6515,9 +7004,9 @@ def test_generated_helpers_are_editable_values_and_yaml_suggestions(hass):
     form_data = _flatten_entity_form_sections(schema({}))
     actions = form_data[CONF_COMMAND_ACTIONS_JSON]
     assert actions == _yaml_value(command_marker.description["suggested_value"])
-    assert actions["set_percentage"][0]["choose"][0]["sequence"][0][
-        "target"
-    ] == {ATTR_ENTITY_ID: number_entity_id}
+    assert actions["set_percentage"][0]["choose"][0]["sequence"][0]["target"] == {
+        ATTR_ENTITY_ID: number_entity_id
+    }
 
     native_section = outer[CONF_NATIVE_VALUE_TEMPLATES][1]
     percentage_marker = next(
@@ -6525,9 +7014,10 @@ def test_generated_helpers_are_editable_values_and_yaml_suggestions(hass):
         for marker in native_section.schema.schema
         if marker.schema == "percentage"
     )
-    assert percentage_marker.description["suggested_value"] == form_data[
-        CONF_NATIVE_VALUE_TEMPLATES
-    ]["percentage"]
+    assert (
+        percentage_marker.description["suggested_value"]
+        == form_data[CONF_NATIVE_VALUE_TEMPLATES]["percentage"]
+    )
 
 
 @pytest.mark.parametrize("platform", VIRTUAL_ENTITY_DOMAINS)
@@ -6595,9 +7085,9 @@ def test_entity_sections_carry_actual_values_and_every_marker_has_a_suggestion(h
     form = schema({})
 
     assert form[CONF_DEVICE_DETAILS][CONF_DEVICE_MODEL] == ""
-    assert _yaml_value(
-        form[CONF_ADVANCED_SETTINGS][CONF_COMMAND_ACTIONS_JSON]
-    )["set_percentage"]
+    assert _yaml_value(form[CONF_ADVANCED_SETTINGS][CONF_COMMAND_ACTIONS_JSON])[
+        "set_percentage"
+    ]
     assert (
         form[CONF_NATIVE_VALUE_TEMPLATES]["percentage"]
         == generated[CONF_NATIVE_VALUE_TEMPLATES]["percentage"]
@@ -6646,9 +7136,9 @@ set_preset_mode:
     parsed_json = _parse_command_actions(json.dumps(parsed_yaml), "fan")
 
     assert parsed_yaml == parsed_json
-    assert parsed_yaml["set_preset_mode"][0]["choose"][0]["sequence"][0][
-        "target"
-    ] == {ATTR_ENTITY_ID: "input_select.real_fan_mode"}
+    assert parsed_yaml["set_preset_mode"][0]["choose"][0]["sequence"][0]["target"] == {
+        ATTR_ENTITY_ID: "input_select.real_fan_mode"
+    }
 
 
 def test_vacuum_domain_selection_reopens_with_dedicated_jinja_fields():
@@ -6668,9 +7158,17 @@ def test_vacuum_domain_selection_reopens_with_dedicated_jinja_fields():
 
 
 def test_matter_fan_helper_reduces_stepped_source_and_writes_selected_levels(hass):
-    hass.states.async_set("fan.stepped", "on", {"percentage_step": 20, "percentage": 40})
+    hass.states.async_set(
+        "fan.stepped", "on", {"percentage_step": 20, "percentage": 40}
+    )
 
-    assert _matter_fan_source_levels(hass, ["fan.stepped"], "fan") == (20, 40, 60, 80, 100)
+    assert _matter_fan_source_levels(hass, ["fan.stepped"], "fan") == (
+        20,
+        40,
+        60,
+        80,
+        100,
+    )
     assert not _matter_fan_source_levels(hass, ["fan.stepped"], "light")
     hass.states.async_set("fan.continuous", "on", {"percentage_step": 1})
     hass.states.async_set("fan.three_speed", "on", {"percentage_step": 50})
@@ -6680,13 +7178,17 @@ def test_matter_fan_helper_reduces_stepped_source_and_writes_selected_levels(has
     generated = _apply_matter_fan_level_helper(
         {
             CONF_PLATFORM: "fan",
-            CONF_COMMAND_ACTIONS_JSON: _json_default({
-                "turn_off": [{
-                    "action": "fan.turn_off",
-                    "target": {ATTR_ENTITY_ID: "fan.stepped"},
-                }],
-                "set_percentage": [{"action": "fan.set_percentage"}],
-            }),
+            CONF_COMMAND_ACTIONS_JSON: _json_default(
+                {
+                    "turn_off": [
+                        {
+                            "action": "fan.turn_off",
+                            "target": {ATTR_ENTITY_ID: "fan.stepped"},
+                        }
+                    ],
+                    "set_percentage": [{"action": "fan.set_percentage"}],
+                }
+            ),
         },
         "fan.stepped",
         (20, 60, 100),
@@ -6698,21 +7200,36 @@ def test_matter_fan_helper_reduces_stepped_source_and_writes_selected_levels(has
     actions = _parse_command_actions(generated[CONF_COMMAND_ACTIONS_JSON], "fan")
     assert actions["turn_off"][0]["action"] == "fan.turn_off"
     command_template = actions["set_percentage"][0]["data"]["percentage"]
-    assert Template(command_template, hass).async_render(
-        variables={"percentage": 33}, parse_result=True
-    ) == 20
-    assert Template(command_template, hass).async_render(
-        variables={"percentage": 34}, parse_result=True
-    ) == 60
-    assert Template(command_template, hass).async_render(
-        variables={"percentage": 67}, parse_result=True
-    ) == 60
-    assert Template(command_template, hass).async_render(
-        variables={"percentage": 68}, parse_result=True
-    ) == 100
-    assert Template(command_template, hass).async_render(
-        variables={"percentage": 100}, parse_result=True
-    ) == 100
+    assert (
+        Template(command_template, hass).async_render(
+            variables={"percentage": 33}, parse_result=True
+        )
+        == 20
+    )
+    assert (
+        Template(command_template, hass).async_render(
+            variables={"percentage": 34}, parse_result=True
+        )
+        == 60
+    )
+    assert (
+        Template(command_template, hass).async_render(
+            variables={"percentage": 67}, parse_result=True
+        )
+        == 60
+    )
+    assert (
+        Template(command_template, hass).async_render(
+            variables={"percentage": 68}, parse_result=True
+        )
+        == 100
+    )
+    assert (
+        Template(command_template, hass).async_render(
+            variables={"percentage": 100}, parse_result=True
+        )
+        == 100
+    )
     turn_on_template = actions["turn_on"][0]["data"]
     assert Template(turn_on_template, hass).async_render(
         variables={"command_data": {"percentage": 67}}, parse_result=True
@@ -6720,9 +7237,12 @@ def test_matter_fan_helper_reduces_stepped_source_and_writes_selected_levels(has
     assert Template(turn_on_template, hass).async_render(
         variables={"command_data": {"percentage": 68}}, parse_result=True
     ) == {"percentage": 100}
-    assert Template(turn_on_template, hass).async_render(
-        variables={"command_data": {}}, parse_result=True
-    ) == {}
+    assert (
+        Template(turn_on_template, hass).async_render(
+            variables={"command_data": {}}, parse_result=True
+        )
+        == {}
+    )
 
     with pytest.raises(vol.Invalid):
         _apply_matter_fan_level_helper({}, "fan.stepped", (60, 20, 100))
@@ -6735,13 +7255,17 @@ def test_matter_fan_percentage_helper_preserves_the_full_percentage_range(hass):
     generated = _apply_matter_fan_percentage_helper(
         {
             CONF_PLATFORM: "fan",
-            CONF_COMMAND_ACTIONS_JSON: _json_default({
-                "turn_on": [{
-                    "action": "fan.turn_on",
-                    "target": {ATTR_ENTITY_ID: "fan.miot_main"},
-                    "data": "{{ command_data }}",
-                }],
-            }),
+            CONF_COMMAND_ACTIONS_JSON: _json_default(
+                {
+                    "turn_on": [
+                        {
+                            "action": "fan.turn_on",
+                            "target": {ATTR_ENTITY_ID: "fan.miot_main"},
+                            "data": "{{ command_data }}",
+                        }
+                    ],
+                }
+            ),
         },
         source,
     )
@@ -6753,27 +7277,41 @@ def test_matter_fan_percentage_helper_preserves_the_full_percentage_range(hass):
 
     actions = _parse_command_actions(generated[CONF_COMMAND_ACTIONS_JSON], "fan")
     command_template = actions["set_percentage"][0]["data"]["percentage"]
-    assert Template(command_template, hass).async_render(
-        variables={"percentage": 1}, parse_result=True
-    ) == 1
-    assert Template(command_template, hass).async_render(
-        variables={"percentage": 34}, parse_result=True
-    ) == 34
-    assert Template(command_template, hass).async_render(
-        variables={"percentage": 100}, parse_result=True
-    ) == 100
+    assert (
+        Template(command_template, hass).async_render(
+            variables={"percentage": 1}, parse_result=True
+        )
+        == 1
+    )
+    assert (
+        Template(command_template, hass).async_render(
+            variables={"percentage": 34}, parse_result=True
+        )
+        == 34
+    )
+    assert (
+        Template(command_template, hass).async_render(
+            variables={"percentage": 100}, parse_result=True
+        )
+        == 100
+    )
 
     # With distinct power and speed sources, never pass an unsupported
     # percentage to the power source; issue it only to the speed source.
     main_turn_on = actions["turn_on"][0]
-    assert Template(main_turn_on["data"], hass).async_render(
-        variables={"command_data": {"percentage": 34}}, parse_result=True
-    ) == {}
+    assert (
+        Template(main_turn_on["data"], hass).async_render(
+            variables={"command_data": {"percentage": 34}}, parse_result=True
+        )
+        == {}
+    )
     speed_choose = actions["turn_on"][1]["choose"][0]
     assert speed_choose["sequence"][0]["target"] == {ATTR_ENTITY_ID: source}
 
 
-async def test_matter_percentage_helper_routes_full_values_to_separate_speed_source(hass):
+async def test_matter_percentage_helper_routes_full_values_to_separate_speed_source(
+    hass,
+):
     """A composed fan must send power and speed commands to their own source."""
     main = "fan.miot_main"
     speed = "fan.xiaomi_speed"
@@ -6782,13 +7320,17 @@ async def test_matter_percentage_helper_routes_full_values_to_separate_speed_sou
     generated = _apply_matter_fan_percentage_helper(
         {
             CONF_PLATFORM: "fan",
-            CONF_COMMAND_ACTIONS_JSON: _json_default({
-                "turn_on": [{
-                    "action": "fan.turn_on",
-                    "target": {ATTR_ENTITY_ID: main},
-                    "data": "{{ command_data }}",
-                }],
-            }),
+            CONF_COMMAND_ACTIONS_JSON: _json_default(
+                {
+                    "turn_on": [
+                        {
+                            "action": "fan.turn_on",
+                            "target": {ATTR_ENTITY_ID: main},
+                            "data": "{{ command_data }}",
+                        }
+                    ],
+                }
+            ),
         },
         speed,
     )
@@ -6797,21 +7339,27 @@ async def test_matter_percentage_helper_routes_full_values_to_separate_speed_sou
     def register(service):
         async def capture(call):
             calls.append((service, dict(call.data)))
+
         hass.services.async_register("fan", service, capture)
 
     for service in ("turn_on", "set_percentage"):
         register(service)
-    entity = VirtualFan(FAN_SCHEMA({
-        CONF_NAME: "Matter percentage fan",
-        ATTR_ENTITY_ID: "fan.matter_percentage",
-        ATTR_UNIQUE_ID: "matter-percentage-fan",
-        CONF_INITIAL_VALUE: "off",
-        CONF_SOURCE_ENTITIES: [main, speed],
-        CONF_NATIVE_TEMPLATES: generated[CONF_NATIVE_VALUE_TEMPLATES],
-        CONF_COMMAND_ACTIONS: _parse_command_actions(
-            generated[CONF_COMMAND_ACTIONS_JSON], "fan"
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            {
+                CONF_NAME: "Matter percentage fan",
+                ATTR_ENTITY_ID: "fan.matter_percentage",
+                ATTR_UNIQUE_ID: "matter-percentage-fan",
+                CONF_INITIAL_VALUE: "off",
+                CONF_SOURCE_ENTITIES: [main, speed],
+                CONF_NATIVE_TEMPLATES: generated[CONF_NATIVE_VALUE_TEMPLATES],
+                CONF_COMMAND_ACTIONS: _parse_command_actions(
+                    generated[CONF_COMMAND_ACTIONS_JSON], "fan"
+                ),
+            }
         ),
-    }), False)
+        False,
+    )
     entity.hass = hass
     entity._create_state(entity._config)
     entity._setup_templates()
@@ -6839,17 +7387,23 @@ async def test_matter_fan_helper_delivers_power_preset_and_selected_speeds(hass)
     generated = _apply_matter_fan_level_helper(
         {
             CONF_PLATFORM: "fan",
-            CONF_COMMAND_ACTIONS_JSON: _json_default({
-                "turn_off": [{
-                    "action": "fan.turn_off",
-                    "target": {ATTR_ENTITY_ID: source},
-                }],
-                "set_preset_mode": [{
-                    "action": "fan.set_preset_mode",
-                    "target": {ATTR_ENTITY_ID: source},
-                    "data": "{{ command_data }}",
-                }],
-            }),
+            CONF_COMMAND_ACTIONS_JSON: _json_default(
+                {
+                    "turn_off": [
+                        {
+                            "action": "fan.turn_off",
+                            "target": {ATTR_ENTITY_ID: source},
+                        }
+                    ],
+                    "set_preset_mode": [
+                        {
+                            "action": "fan.set_preset_mode",
+                            "target": {ATTR_ENTITY_ID: source},
+                            "data": "{{ command_data }}",
+                        }
+                    ],
+                }
+            ),
         },
         source,
         (20, 60, 100),
@@ -6859,6 +7413,7 @@ async def test_matter_fan_helper_delivers_power_preset_and_selected_speeds(hass)
     def register(service):
         async def capture(call):
             calls.append((service, dict(call.data)))
+
         hass.services.async_register("fan", service, capture)
 
     for service in ("turn_off", "turn_on", "set_percentage", "set_preset_mode"):
@@ -6867,18 +7422,23 @@ async def test_matter_fan_helper_delivers_power_preset_and_selected_speeds(hass)
         **generated[CONF_NATIVE_VALUE_TEMPLATES],
         "preset_modes": "{{ ['eco'] }}",
     }
-    entity = VirtualFan(FAN_SCHEMA({
-        CONF_NAME: "Matter fan",
-        ATTR_ENTITY_ID: "fan.matter",
-        ATTR_UNIQUE_ID: "matter-fan",
-        CONF_INITIAL_VALUE: "off",
-        CONF_SOURCE_ENTITIES: [source],
-        CONF_NATIVE_TEMPLATES: native_templates,
-        CONF_COMMAND_ACTIONS: _parse_command_actions(
-            generated[CONF_COMMAND_ACTIONS_JSON], "fan"
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            {
+                CONF_NAME: "Matter fan",
+                ATTR_ENTITY_ID: "fan.matter",
+                ATTR_UNIQUE_ID: "matter-fan",
+                CONF_INITIAL_VALUE: "off",
+                CONF_SOURCE_ENTITIES: [source],
+                CONF_NATIVE_TEMPLATES: native_templates,
+                CONF_COMMAND_ACTIONS: _parse_command_actions(
+                    generated[CONF_COMMAND_ACTIONS_JSON], "fan"
+                ),
+                "modes": ["eco"],
+            }
         ),
-        "modes": ["eco"],
-    }), False)
+        False,
+    )
     entity.hass = hass
     entity._create_state(entity._config)
     entity._setup_templates()
@@ -6906,48 +7466,103 @@ async def test_fan_source_roles_route_each_command_to_its_selected_source(hass):
     """Combined fan roles must affect runtime services, not only the form."""
     main = "fan.miot"
     speed = "fan.xiaomi_home"
-    hass.states.async_set(main, "on", {
-        "preset_mode": "auto",
-        "oscillating": False,
-        "current_direction": "forward",
-    })
+    hass.states.async_set(
+        main,
+        "on",
+        {
+            "preset_mode": "auto",
+            "oscillating": False,
+            "current_direction": "forward",
+        },
+    )
     hass.states.async_set(speed, "on", {"percentage": 40})
     generated = _apply_fan_source_roles(
         {
             CONF_PLATFORM: "fan",
-            CONF_COMMAND_ACTIONS_JSON: _json_default({
-                "turn_on": [{"action": "fan.turn_on", "target": {ATTR_ENTITY_ID: main}}],
-                "turn_off": [{"action": "fan.turn_off", "target": {ATTR_ENTITY_ID: main}}],
-                "set_percentage": [{"action": "fan.set_percentage", "target": {ATTR_ENTITY_ID: speed}, "data": "{{ command_data }}"}],
-                "set_preset_mode": [{"action": "fan.set_preset_mode", "target": {ATTR_ENTITY_ID: main}, "data": "{{ command_data }}"}],
-                "oscillate": [{"action": "fan.oscillate", "target": {ATTR_ENTITY_ID: main}, "data": "{{ command_data }}"}],
-                "set_direction": [{"action": "fan.set_direction", "target": {ATTR_ENTITY_ID: main}, "data": "{{ command_data }}"}],
-            }),
+            CONF_COMMAND_ACTIONS_JSON: _json_default(
+                {
+                    "turn_on": [
+                        {"action": "fan.turn_on", "target": {ATTR_ENTITY_ID: main}}
+                    ],
+                    "turn_off": [
+                        {"action": "fan.turn_off", "target": {ATTR_ENTITY_ID: main}}
+                    ],
+                    "set_percentage": [
+                        {
+                            "action": "fan.set_percentage",
+                            "target": {ATTR_ENTITY_ID: speed},
+                            "data": "{{ command_data }}",
+                        }
+                    ],
+                    "set_preset_mode": [
+                        {
+                            "action": "fan.set_preset_mode",
+                            "target": {ATTR_ENTITY_ID: main},
+                            "data": "{{ command_data }}",
+                        }
+                    ],
+                    "oscillate": [
+                        {
+                            "action": "fan.oscillate",
+                            "target": {ATTR_ENTITY_ID: main},
+                            "data": "{{ command_data }}",
+                        }
+                    ],
+                    "set_direction": [
+                        {
+                            "action": "fan.set_direction",
+                            "target": {ATTR_ENTITY_ID: main},
+                            "data": "{{ command_data }}",
+                        }
+                    ],
+                }
+            ),
         },
-        {"main": main, "speed": speed, "preset": main, "oscillation": main, "direction": main},
+        {
+            "main": main,
+            "speed": speed,
+            "preset": main,
+            "oscillation": main,
+            "direction": main,
+        },
     )
     calls = []
 
     def register(service):
         async def capture(call):
             calls.append((service, dict(call.data)))
+
         hass.services.async_register("fan", service, capture)
 
-    for service in ("turn_on", "turn_off", "set_percentage", "set_preset_mode", "oscillate", "set_direction"):
+    for service in (
+        "turn_on",
+        "turn_off",
+        "set_percentage",
+        "set_preset_mode",
+        "oscillate",
+        "set_direction",
+    ):
         register(service)
-    entity = VirtualFan(FAN_SCHEMA({
-        CONF_NAME: "Combined fan",
-        ATTR_ENTITY_ID: "fan.combined",
-        ATTR_UNIQUE_ID: "combined-fan",
-        CONF_INITIAL_VALUE: "off",
-        CONF_SOURCE_ENTITIES: [main, speed],
-        CONF_NATIVE_TEMPLATES: {
-            **generated[CONF_NATIVE_VALUE_TEMPLATES],
-            "preset_modes": "{{ ['auto'] }}",
-        },
-        CONF_COMMAND_ACTIONS: _parse_command_actions(generated[CONF_COMMAND_ACTIONS_JSON], "fan"),
-        "modes": ["auto"],
-    }), False)
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            {
+                CONF_NAME: "Combined fan",
+                ATTR_ENTITY_ID: "fan.combined",
+                ATTR_UNIQUE_ID: "combined-fan",
+                CONF_INITIAL_VALUE: "off",
+                CONF_SOURCE_ENTITIES: [main, speed],
+                CONF_NATIVE_TEMPLATES: {
+                    **generated[CONF_NATIVE_VALUE_TEMPLATES],
+                    "preset_modes": "{{ ['auto'] }}",
+                },
+                CONF_COMMAND_ACTIONS: _parse_command_actions(
+                    generated[CONF_COMMAND_ACTIONS_JSON], "fan"
+                ),
+                "modes": ["auto"],
+            }
+        ),
+        False,
+    )
     entity.hass = hass
     entity._create_state(entity._config)
     entity._setup_templates()
@@ -6980,13 +7595,31 @@ async def test_matter_turn_on_with_separate_speed_source_calls_both_sources(hass
     role_defaults = _apply_fan_source_roles(
         {
             CONF_PLATFORM: "fan",
-            CONF_COMMAND_ACTIONS_JSON: _json_default({
-                "turn_on": [{"action": "fan.turn_on", "target": {ATTR_ENTITY_ID: main}}],
-                "turn_off": [{"action": "fan.turn_off", "target": {ATTR_ENTITY_ID: main}}],
-                "set_percentage": [{"action": "fan.set_percentage", "target": {ATTR_ENTITY_ID: speed}, "data": "{{ command_data }}"}],
-            }),
+            CONF_COMMAND_ACTIONS_JSON: _json_default(
+                {
+                    "turn_on": [
+                        {"action": "fan.turn_on", "target": {ATTR_ENTITY_ID: main}}
+                    ],
+                    "turn_off": [
+                        {"action": "fan.turn_off", "target": {ATTR_ENTITY_ID: main}}
+                    ],
+                    "set_percentage": [
+                        {
+                            "action": "fan.set_percentage",
+                            "target": {ATTR_ENTITY_ID: speed},
+                            "data": "{{ command_data }}",
+                        }
+                    ],
+                }
+            ),
         },
-        {"main": main, "speed": speed, "preset": "", "oscillation": "", "direction": ""},
+        {
+            "main": main,
+            "speed": speed,
+            "preset": "",
+            "oscillation": "",
+            "direction": "",
+        },
     )
     generated = _apply_matter_fan_level_helper(role_defaults, speed, (20, 60, 100))
     calls = []
@@ -6994,19 +7627,27 @@ async def test_matter_turn_on_with_separate_speed_source_calls_both_sources(hass
     def register(service):
         async def capture(call):
             calls.append((service, dict(call.data)))
+
         hass.services.async_register("fan", service, capture)
 
     register("turn_on")
     register("set_percentage")
-    entity = VirtualFan(FAN_SCHEMA({
-        CONF_NAME: "Combined Matter fan",
-        ATTR_ENTITY_ID: "fan.combined_matter",
-        ATTR_UNIQUE_ID: "combined-matter-fan",
-        CONF_INITIAL_VALUE: "off",
-        CONF_SOURCE_ENTITIES: [main, speed],
-        CONF_NATIVE_TEMPLATES: generated[CONF_NATIVE_VALUE_TEMPLATES],
-        CONF_COMMAND_ACTIONS: _parse_command_actions(generated[CONF_COMMAND_ACTIONS_JSON], "fan"),
-    }), False)
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            {
+                CONF_NAME: "Combined Matter fan",
+                ATTR_ENTITY_ID: "fan.combined_matter",
+                ATTR_UNIQUE_ID: "combined-matter-fan",
+                CONF_INITIAL_VALUE: "off",
+                CONF_SOURCE_ENTITIES: [main, speed],
+                CONF_NATIVE_TEMPLATES: generated[CONF_NATIVE_VALUE_TEMPLATES],
+                CONF_COMMAND_ACTIONS: _parse_command_actions(
+                    generated[CONF_COMMAND_ACTIONS_JSON], "fan"
+                ),
+            }
+        ),
+        False,
+    )
     entity.hass = hass
     entity._create_state(entity._config)
     entity._setup_templates()
@@ -7028,17 +7669,22 @@ def test_matter_fan_helper_keeps_a_stale_source_percentage_off(hass):
     generated = _apply_matter_fan_level_helper(
         _reference_entity_defaults(hass, [source]), source, (20, 60, 100)
     )
-    entity = VirtualFan(FAN_SCHEMA({
-        CONF_NAME: "Matter fan",
-        ATTR_ENTITY_ID: "fan.matter_off",
-        ATTR_UNIQUE_ID: "matter-fan-off",
-        CONF_INITIAL_VALUE: "on",
-        CONF_SOURCE_ENTITIES: [source],
-        CONF_NATIVE_TEMPLATES: generated[CONF_NATIVE_VALUE_TEMPLATES],
-        CONF_COMMAND_ACTIONS: _parse_command_actions(
-            generated[CONF_COMMAND_ACTIONS_JSON], "fan"
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            {
+                CONF_NAME: "Matter fan",
+                ATTR_ENTITY_ID: "fan.matter_off",
+                ATTR_UNIQUE_ID: "matter-fan-off",
+                CONF_INITIAL_VALUE: "on",
+                CONF_SOURCE_ENTITIES: [source],
+                CONF_NATIVE_TEMPLATES: generated[CONF_NATIVE_VALUE_TEMPLATES],
+                CONF_COMMAND_ACTIONS: _parse_command_actions(
+                    generated[CONF_COMMAND_ACTIONS_JSON], "fan"
+                ),
+            }
         ),
-    }), False)
+        False,
+    )
     entity.hass = hass
     entity._create_state(entity._config)
     entity._setup_templates()
