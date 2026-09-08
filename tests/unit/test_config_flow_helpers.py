@@ -59,6 +59,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_NATIVE_TEMPLATES_JSON,
     CONF_NATIVE_VALUE_TEMPLATES,
     CONF_POLYGON_GEOJSON_JSON,
+    CONF_POLYGON_ESPRESENSE_ANCHORS_JSON,
     CONF_POLYGON_TRACKER_RULES_JSON,
     CONF_REFERENCE_ENTITY_ID,
     CONF_SOURCE_ENTITIES_TEXT,
@@ -174,11 +175,13 @@ from custom_components.virtual_layer.const import (
     CONF_MODEL,
     CONF_NATIVE_TEMPLATES,
     CONF_PERSISTENT,
+    CONF_PRESENCE_CLASSIFICATION,
     CONF_POLYGON_AWAY_STATE,
     CONF_POLYGON_DISTANCE_METERS,
     CONF_POLYGON_FILES,
     CONF_POLYGON_STRATEGY,
     CONF_POLYGON_TRACKER_RULES,
+    CONF_POLYGON_ESPRESENSE_ANCHORS,
     CONF_POLYGONAL_ZONE,
     CONF_PULL_INTERVAL,
     CONF_SERIAL_NUMBER,
@@ -269,6 +272,54 @@ def _entity_input(overrides=None):
     }
     data.update(overrides or {})
     return data
+
+
+def test_config_flow_builds_and_reopens_anchor_only_polygon_tracker():
+    anchors = {
+        "sensor.esp_a": {"latitude": 37.5, "longitude": 126.9999},
+        "sensor.esp_b": {"latitude": 37.5001, "longitude": 127.0},
+        "sensor.esp_c": {"latitude": 37.5, "longitude": 127.0001},
+    }
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {"name": "Living Room"},
+            "geometry": {"type": "Polygon", "coordinates": [[
+                [126.999, 37.499], [127.001, 37.499],
+                [127.001, 37.501], [126.999, 37.499],
+            ]]},
+        }],
+    }
+    _device, entity = _build_entity_config(_entity_input({
+        CONF_PLATFORM: "device_tracker",
+        ATTR_ENTITY_ID: "device_tracker.indoor",
+        CONF_INITIAL_VALUE: "not_home",
+        CONF_DOMAIN_SETTINGS: {
+            CONF_POLYGON_GEOJSON_JSON: geojson,
+            CONF_POLYGON_ESPRESENSE_ANCHORS_JSON: anchors,
+        },
+    }))
+    assert entity[CONF_POLYGONAL_ZONE][CONF_POLYGON_ESPRESENSE_ANCHORS] == anchors
+    defaults = _entity_form_defaults("Indoor", entity)
+    assert _yaml_value(defaults[CONF_POLYGON_ESPRESENSE_ANCHORS_JSON]) == anchors
+
+
+def test_presence_classification_reopens_only_in_dedicated_control():
+    defaults = _entity_form_defaults(
+        "Presence",
+        {
+            CONF_PLATFORM: "device_tracker",
+            CONF_NAME: "Family",
+            CONF_INITIAL_VALUE: "home",
+            CONF_PRESENCE_CLASSIFICATION: True,
+        },
+    )
+
+    assert defaults[CONF_PRESENCE_CLASSIFICATION] is True
+    assert CONF_PRESENCE_CLASSIFICATION not in _yaml_value(
+        defaults[CONF_DOMAIN_OPTIONS_JSON]
+    )
 
 
 def _section_validators(schema, section_name):
@@ -459,6 +510,30 @@ def test_single_switch_source_can_target_fan_with_power_command_helpers(hass):
 
     type_schema = _entity_type_schema("switch.source", "switch")
     assert type_schema({})[CONF_TARGET_ENTITY_TYPE] == "switch"
+
+
+def test_three_espresense_distance_sources_infer_device_tracker(hass):
+    source_ids = [
+        "sensor.espresense_kitchen_distance",
+        "sensor.espresense_hall_distance",
+        "sensor.espresense_bedroom_distance",
+    ]
+    for index, entity_id in enumerate(source_ids, start=1):
+        hass.states.async_set(
+            entity_id,
+            str(index),
+            {"device_class": "distance", "unit_of_measurement": "m"},
+        )
+
+    defaults = _reference_entity_defaults(hass, source_ids)
+
+    assert defaults[CONF_PLATFORM] == "device_tracker"
+    assert defaults[CONF_INITIAL_VALUE] == "not_home"
+    assert defaults[CONF_VALUE_TEMPLATE] == ""
+    assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON])["location_helper"] == {
+        "distance_threshold_meters": 300,
+        "priority_window_seconds": 1800,
+    }
 
 
 def test_cross_domain_command_helper_is_limited_to_supported_power_commands(hass):

@@ -180,6 +180,13 @@ CONF_POLYGON_STRATEGY_INPUT = "polygon_strategy"
 CONF_POLYGON_DISTANCE_INPUT = "polygon_distance_meters"
 CONF_POLYGON_TRACKER_RULES_JSON = "polygon_tracker_rules_json"
 CONF_POLYGON_AWAY_STATE_INPUT = "polygon_away_state"
+CONF_POLYGON_ESPRESENSE_ANCHORS_JSON = "polygon_espresense_anchors_json"
+CONF_DAWARICH_URL_INPUT = "dawarich_url"
+CONF_DAWARICH_API_KEY_INPUT = "dawarich_api_key"
+CONF_DAWARICH_AUTH_MODE_INPUT = "dawarich_auth_mode"
+CONF_DAWARICH_POLL_INTERVAL_INPUT = "dawarich_poll_interval"
+CONF_DAWARICH_HISTORY_LIMIT_INPUT = "dawarich_history_limit"
+CONF_DAWARICH_PERSON_INPUT = "dawarich_person"
 CAMERA_SOURCE_ENTITY_OPTION = "source_entity"
 NEW_DEVICE_TARGET = "__new_device__"
 HELPER_UPDATE_AUTO = "automatic"
@@ -1071,6 +1078,8 @@ _DOMAIN_OPTION_RESERVED_KEYS = {
     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     CONF_EVENT_HOOKS,
     CONF_POLYGONAL_ZONE,
+    CONF_DAWARICH,
+    CONF_PRESENCE_CLASSIFICATION,
     ATTR_DEVICE_ID,
     CONF_MANUFACTURER,
     CONF_MODEL,
@@ -1442,6 +1451,13 @@ def _source_target_domains(
         configured = _SINGLE_SOURCE_TARGET_DOMAINS.get(source_domain, ())
     elif _humidifier_component_profile(entity_ids) is not None:
         configured = ("humidifier",)
+    elif (
+        any(entity_id.split(".", 1)[0] in LOCATION_SOURCE_DOMAINS for entity_id in entity_ids)
+        and any(entity_id.split(".", 1)[0] in BOOLEAN_SOURCE_DOMAINS for entity_id in entity_ids)
+    ):
+        # GPS/iCloud trackers and local presence (Wi-Fi, ESPresense, BLE) are
+        # intentionally composable into one tracker.
+        configured = ("device_tracker",)
     preserved = (
         (preserved_platform,)
         if preserved_platform in VIRTUAL_ENTITY_DOMAINS
@@ -1727,6 +1743,7 @@ def _flatten_entity_form_sections(user_input: Mapping | None) -> dict[str, Any]:
         CONF_DOMAIN_OPTIONS_JSON,
         CONF_POLYGON_GEOJSON_JSON,
         CONF_POLYGON_TRACKER_RULES_JSON,
+        CONF_POLYGON_ESPRESENSE_ANCHORS_JSON,
     ):
         if field_name in section_values:
             section_values[field_name] = _yaml_editor_default(
@@ -1953,6 +1970,35 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     if platform == "device_tracker":
         domain_schema.update(
             {
+                vol.Optional(
+                    CONF_DAWARICH_URL_INPUT,
+                    default=defaults.get(CONF_DAWARICH_URL_INPUT, ""),
+                ): str,
+                vol.Optional(
+                    CONF_DAWARICH_API_KEY_INPUT,
+                    default=defaults.get(CONF_DAWARICH_API_KEY_INPUT, ""),
+                ): str,
+                vol.Optional(
+                    CONF_DAWARICH_AUTH_MODE_INPUT,
+                    default=defaults.get(CONF_DAWARICH_AUTH_MODE_INPUT, "bearer"),
+                ): selector.SelectSelector(selector.SelectSelectorConfig(
+                    options=["bearer", "query"], translation_key="dawarich_auth_mode",
+                )),
+                vol.Optional(
+                    CONF_DAWARICH_POLL_INTERVAL_INPUT,
+                    default=defaults.get(CONF_DAWARICH_POLL_INTERVAL_INPUT, 60),
+                ): PULL_INTERVAL_SELECTOR,
+                vol.Optional(
+                    CONF_DAWARICH_HISTORY_LIMIT_INPUT,
+                    default=defaults.get(CONF_DAWARICH_HISTORY_LIMIT_INPUT, 10),
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+                vol.Optional(
+                    CONF_PRESENCE_CLASSIFICATION,
+                    default=defaults.get(CONF_PRESENCE_CLASSIFICATION, False),
+                ): cv.boolean,
+                vol.Optional(CONF_DAWARICH_PERSON_INPUT): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="person")
+                ),
                 _editable_optional(
                     CONF_POLYGON_GEOJSON_JSON,
                     _yaml_text_editor_default(defaults.get(CONF_POLYGON_GEOJSON_JSON)),
@@ -1979,6 +2025,10 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     _yaml_text_editor_default(
                         defaults.get(CONF_POLYGON_TRACKER_RULES_JSON)
                     ),
+                ): YAML_TEXT_SELECTOR,
+                _editable_optional(
+                    CONF_POLYGON_ESPRESENSE_ANCHORS_JSON,
+                    _yaml_text_editor_default(defaults.get(CONF_POLYGON_ESPRESENSE_ANCHORS_JSON)),
                 ): YAML_TEXT_SELECTOR,
                 vol.Optional(
                     CONF_POLYGON_AWAY_STATE_INPUT,
@@ -2061,7 +2111,10 @@ def _needs_domain_specific_form(user_input) -> bool:
     ):
         return True
     if platform == "device_tracker":
-        return CONF_POLYGON_STRATEGY_INPUT not in user_input
+        return (
+            CONF_POLYGON_STRATEGY_INPUT not in user_input
+            or CONF_DAWARICH_AUTH_MODE_INPUT not in user_input
+        )
     if platform == "light":
         return CONF_MATTER_LIGHT_TYPE not in user_input
     return False
@@ -3042,7 +3095,8 @@ def _build_entity_config(
         if not polygon_person.startswith("person."):
             raise InvalidEntityReference(CONF_POLYGON_PERSON)
     polygon_rules_value = user_input.get(CONF_POLYGON_TRACKER_RULES_JSON)
-    if any((polygon_geojson_value, polygon_files, polygon_person, polygon_rules_value)):
+    polygon_anchors_value = user_input.get(CONF_POLYGON_ESPRESENSE_ANCHORS_JSON)
+    if any((polygon_geojson_value, polygon_files, polygon_person, polygon_rules_value, polygon_anchors_value)):
         if platform != "device_tracker":
             raise InvalidDomainOptions
         try:
@@ -3084,16 +3138,51 @@ def _build_entity_config(
                 raise InvalidJson(CONF_POLYGON_GEOJSON_JSON) from err
         if polygon_person:
             polygon[CONF_POLYGON_PERSON_ENTITY] = polygon_person
-        if not source_entities and not polygon_person:
+        if polygon_anchors_value:
+            polygon[CONF_POLYGON_ESPRESENSE_ANCHORS] = _parse_json_object(
+                polygon_anchors_value, CONF_POLYGON_ESPRESENSE_ANCHORS_JSON
+            )
+        anchors = polygon.get(CONF_POLYGON_ESPRESENSE_ANCHORS, {})
+        if not source_entities and not polygon_person and not anchors:
             raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
         if any(
             not source_entity_id.startswith("device_tracker.")
+            and source_entity_id not in anchors
             for source_entity_id in source_entities
         ):
             raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
         if set(polygon[CONF_POLYGON_TRACKER_RULES]) - set(source_entities):
             raise InvalidEntityReference(CONF_POLYGON_TRACKER_RULES_JSON)
         entity[CONF_POLYGONAL_ZONE] = polygon
+
+    dawarich_url = _text_default(user_input.get(CONF_DAWARICH_URL_INPUT)).strip()
+    dawarich_api_key = _text_default(user_input.get(CONF_DAWARICH_API_KEY_INPUT)).strip()
+    if dawarich_url or dawarich_api_key:
+        if platform != "device_tracker":
+            raise InvalidDomainOptions
+        try:
+            dawarich_poll_interval = nonnegative_int(
+                user_input.get(CONF_DAWARICH_POLL_INTERVAL_INPUT, 60)
+            )
+            dawarich_history_limit = int(
+                user_input.get(CONF_DAWARICH_HISTORY_LIMIT_INPUT, 10)
+            )
+        except (vol.Invalid, TypeError, ValueError, OverflowError) as err:
+            raise InvalidDomainOptions from err
+        entity[CONF_DAWARICH] = {
+            CONF_DAWARICH_URL: dawarich_url,
+            CONF_DAWARICH_API_KEY: dawarich_api_key,
+            CONF_DAWARICH_AUTH_MODE: user_input.get(
+                CONF_DAWARICH_AUTH_MODE_INPUT, "bearer"
+            ),
+            CONF_DAWARICH_POLL_INTERVAL: dawarich_poll_interval,
+            CONF_DAWARICH_HISTORY_LIMIT: dawarich_history_limit,
+            CONF_DAWARICH_PERSON_ENTITY: _text_default(
+                user_input.get(CONF_DAWARICH_PERSON_INPUT)
+            ).strip(),
+        }
+    if platform == "device_tracker" and user_input.get(CONF_PRESENCE_CLASSIFICATION):
+        entity[CONF_PRESENCE_CLASSIFICATION] = True
     _validate_entity_references(entity)
 
     # Number entities require a native range. Keep a practical default for the
@@ -4211,6 +4300,20 @@ def _source_state_is_number(entity_id: str, state) -> bool:
     except (TypeError, ValueError, OverflowError):
         return False
     return math.isfinite(value)
+
+
+def _source_is_presence_distance(entity_id: str, state) -> bool:
+    """Recognize ESPresense/BLE distance sensors without matching arbitrary numbers."""
+    if not entity_id.startswith("sensor.") or not _source_state_is_number(entity_id, state):
+        return False
+    object_id = entity_id.split(".", 1)[1].casefold()
+    device_class = str(state.attributes.get("device_class", "")).casefold()
+    unit = str(state.attributes.get(CONF_UNIT_OF_MEASUREMENT, "")).casefold()
+    return (
+        device_class == "distance"
+        or "distance" in object_id
+        or ("espresense" in object_id and unit in {"m", "cm", "mm", "ft"})
+    )
 
 
 def _source_state_as_float(state) -> float | None:
@@ -6534,6 +6637,14 @@ def _reference_entity_defaults(
     all_time = _all_source_domains(entity_ids, TIME_SOURCE_DOMAINS)
     all_enum = _all_source_domains(entity_ids, ENUM_SOURCE_DOMAINS)
     all_location = _all_source_domains(entity_ids, LOCATION_SOURCE_DOMAINS)
+    mixed_location_presence = (
+        any(domain in LOCATION_SOURCE_DOMAINS for domain in source_domains)
+        and any(domain in BOOLEAN_SOURCE_DOMAINS for domain in source_domains)
+    )
+    all_presence_distance = len(entity_ids) >= 3 and all(
+        _source_is_presence_distance(entity_id, state)
+        for entity_id, state in zip(entity_ids, states, strict=True)
+    )
     boiler_profile = _boiler_source_profile(entity_ids, states)
     boiler_air_conditioner_profile = _boiler_air_conditioner_profile(
         entity_ids, states
@@ -6555,14 +6666,16 @@ def _reference_entity_defaults(
         platform = "climate"
     elif fan_number_profile is not None:
         platform = "fan"
-    elif len(entity_ids) > 1 and all_location:
+    elif len(entity_ids) > 1 and (
+        all_location or mixed_location_presence or all_presence_distance
+    ):
         platform = "device_tracker"
     elif (
         len(set(source_domains)) == 1
         and source_domains[0] in VIRTUAL_ENTITY_DOMAINS
     ):
         platform = source_domains[0]
-    elif all_location:
+    elif all_location or mixed_location_presence or all_presence_distance:
         platform = "device_tracker"
     elif all_boolean:
         platform = "binary_sensor"
@@ -6626,6 +6739,8 @@ def _reference_entity_defaults(
             initial_value = (
                 "on" if all(_source_state_is_true(state) for state in states) else "off"
             )
+    elif platform == "device_tracker" and all_presence_distance:
+        initial_value = "not_home"
     elif len(states) == 1:
         initial_value = first_state.state
     elif all_number:
@@ -6946,7 +7061,9 @@ def _reference_entity_defaults(
         )
     elif platform == "binary_sensor" and safety_boolean_sources:
         defaults[CONF_VALUE_TEMPLATE] = _safety_boolean_helper_template(variable_names)
-    elif all_location and platform == "device_tracker":
+    elif (
+        all_location or mixed_location_presence or all_presence_distance
+    ) and platform == "device_tracker":
         # Device tracker coordinates need stateful priority retention after an
         # outlying device reaches its destination. The platform helper performs
         # that calculation and keeps this policy visible/editable in the UI.
@@ -6958,6 +7075,8 @@ def _reference_entity_defaults(
                 },
             }
         )
+        if mixed_location_presence:
+            defaults[CONF_PRESENCE_CLASSIFICATION] = True
         defaults[CONF_VALUE_TEMPLATE] = ""
     elif fan_number_profile is not None:
         defaults[CONF_VALUE_TEMPLATE] = (
@@ -7890,8 +8009,31 @@ def _entity_form_defaults(
                 _text_default(polygon.get(CONF_POLYGON_AWAY_STATE), "not_home")
                 or "not_home"
             ),
+            CONF_POLYGON_ESPRESENSE_ANCHORS_JSON: _json_default(
+                polygon.get(CONF_POLYGON_ESPRESENSE_ANCHORS)
+            ),
         }
     )
+    dawarich = entity.get(CONF_DAWARICH)
+    if not isinstance(dawarich, Mapping):
+        dawarich = {}
+    defaults.update({
+        CONF_DAWARICH_URL_INPUT: _text_default(dawarich.get(CONF_DAWARICH_URL)),
+        CONF_DAWARICH_API_KEY_INPUT: _text_default(dawarich.get(CONF_DAWARICH_API_KEY)),
+        CONF_DAWARICH_AUTH_MODE_INPUT: dawarich.get(CONF_DAWARICH_AUTH_MODE, "bearer"),
+        CONF_DAWARICH_POLL_INTERVAL_INPUT: _nonnegative_int_default(
+            dawarich.get(CONF_DAWARICH_POLL_INTERVAL) or 60
+        ),
+        CONF_DAWARICH_HISTORY_LIMIT_INPUT: _nonnegative_int_default(
+            dawarich.get(CONF_DAWARICH_HISTORY_LIMIT) or 10
+        ),
+        CONF_DAWARICH_PERSON_INPUT: _text_default(
+            dawarich.get(CONF_DAWARICH_PERSON_ENTITY)
+        ),
+        CONF_PRESENCE_CLASSIFICATION: _boolean_default(
+            entity.get(CONF_PRESENCE_CLASSIFICATION), False
+        ),
+    })
     domain_options = {
         key: value
         for key, value in entity.items()

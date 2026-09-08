@@ -23,6 +23,13 @@ from custom_components.virtual_layer.const import (
     CONF_NAME,
     CONF_PERSISTENT,
     CONF_SOURCE_ENTITIES,
+    CONF_PRESENCE_CLASSIFICATION,
+    CONF_DAWARICH,
+    CONF_DAWARICH_API_KEY,
+    CONF_DAWARICH_AUTH_MODE,
+    CONF_DAWARICH_HISTORY_LIMIT,
+    CONF_DAWARICH_POLL_INTERVAL,
+    CONF_DAWARICH_URL,
 )
 from custom_components.virtual_layer.device_tracker import (
     ATTR_LOCATION_MEDIAN_LATITUDE,
@@ -30,10 +37,14 @@ from custom_components.virtual_layer.device_tracker import (
     ATTR_LOCATION_PRIORITY_SOURCE,
     ATTR_LOCATION_SOURCE_LAST_MOVED,
     ATTR_LOCATION_SOURCE_POSITIONS,
+    ATTR_LOCATION_CLASSIFICATION,
+    ATTR_LOCATION_BLE_DISTANCE,
     CONF_GPS,
     SERVICE_SCHEMA,
     VirtualDeviceTracker,
+    validate_domain_options,
 )
+from custom_components.virtual_layer import device_tracker as tracker_platform
 
 pytestmark = pytest.mark.unit
 
@@ -82,6 +93,170 @@ def _set_zone(hass, entity_id, name, latitude, longitude):
             ATTR_LONGITUDE: longitude,
         },
     )
+
+
+def test_presence_classification_prioritizes_wifi_ble_near_and_far_states(hass):
+    tracker = _helper_tracker(hass)
+    tracker._config[CONF_PRESENCE_CLASSIFICATION] = True
+    tracker._presence_classification = True
+    tracker._source_entities.extend(["binary_sensor.phone_wifi", "sensor.phone_distance"])
+    _set_zone(hass, "zone.home", "Home", 37.5000, 127.0000)
+    _set_position(hass, "device_tracker.first_phone", 37.5000, 127.0000)
+    _set_position(hass, "device_tracker.second_phone", 37.5000, 127.0000)
+    _set_position(hass, "device_tracker.travel_phone", 37.5000, 127.0000)
+    hass.states.async_set("binary_sensor.phone_wifi", "off")
+    hass.states.async_set("sensor.phone_distance", "5")
+
+    tracker._update_location_from_sources()
+    assert tracker.state == "front_door"
+    assert tracker.extra_state_attributes[ATTR_LOCATION_CLASSIFICATION] == "front_door"
+    assert tracker.extra_state_attributes[ATTR_LOCATION_BLE_DISTANCE] == 5
+
+    hass.states.async_set("sensor.phone_distance", "unknown")
+    _set_position(hass, "device_tracker.first_phone", 37.5050, 127.0000)
+    _set_position(hass, "device_tracker.second_phone", 37.5050, 127.0000)
+    _set_position(hass, "device_tracker.travel_phone", 37.5050, 127.0000)
+    tracker._update_location_from_sources()
+    assert tracker.state == "near_home"
+
+    _set_position(hass, "device_tracker.first_phone", 37.5200, 127.0000)
+    _set_position(hass, "device_tracker.second_phone", 37.5200, 127.0000)
+    _set_position(hass, "device_tracker.travel_phone", 37.5200, 127.0000)
+    tracker._update_location_from_sources()
+    assert tracker.state == "away"
+
+    _set_position(hass, "device_tracker.first_phone", 37.6000, 127.0000)
+    _set_position(hass, "device_tracker.second_phone", 37.6000, 127.0000)
+    _set_position(hass, "device_tracker.travel_phone", 37.6000, 127.0000)
+    tracker._update_location_from_sources()
+    assert tracker.state == "far_away"
+
+    hass.states.async_set("binary_sensor.phone_wifi", "on")
+    tracker._update_location_from_sources()
+    assert tracker.state == "home"
+
+
+def test_dawarich_configuration_requires_safe_url_credentials_and_bounds():
+    valid = {
+        CONF_DAWARICH: {
+            CONF_DAWARICH_URL: "https://dawarich.example",
+            CONF_DAWARICH_API_KEY: "secret",
+            CONF_DAWARICH_AUTH_MODE: "bearer",
+            CONF_DAWARICH_POLL_INTERVAL: 60,
+            CONF_DAWARICH_HISTORY_LIMIT: 10,
+        }
+    }
+    validate_domain_options(valid)
+    for key, value in ((CONF_DAWARICH_URL, "ftp://bad"), (CONF_DAWARICH_API_KEY, ""),
+                       (CONF_DAWARICH_POLL_INTERVAL, 1), (CONF_DAWARICH_HISTORY_LIMIT, 101)):
+        invalid = {CONF_DAWARICH: dict(valid[CONF_DAWARICH], **{key: value})}
+        with pytest.raises(vol.Invalid):
+            validate_domain_options(invalid)
+
+
+@pytest.mark.parametrize(
+    "anchors",
+    [
+        {
+            "sensor.a": {"latitude": 37.5, "longitude": 127.0},
+            "sensor.b": {"latitude": 37.5, "longitude": 127.0001},
+        },
+        {
+            "sensor.a": {"latitude": 37.5, "longitude": 127.0},
+            "sensor.b": {"latitude": 37.5, "longitude": 127.0001},
+            "sensor.c": {"latitude": 37.5, "longitude": 127.0002},
+        },
+    ],
+)
+def test_polygon_rejects_insufficient_or_collinear_espresense_anchors(anchors):
+    with pytest.raises(vol.Invalid):
+        validate_domain_options({
+            "polygonal_zone": {
+                "geojson": {
+                    "type": "FeatureCollection",
+                    "features": [{
+                        "type": "Feature", "properties": {"name": "Room"},
+                        "geometry": {"type": "Polygon", "coordinates": [[
+                            [126.9, 37.4], [127.1, 37.4], [127.1, 37.6],
+                            [126.9, 37.4],
+                        ]]},
+                    }],
+                },
+                "espresense_anchors": anchors,
+            }
+        })
+
+
+def test_dawarich_point_envelopes_and_family_member_matching():
+    points = VirtualDeviceTracker._dawarich_points({"data": [{"latitude": 37.5, "longitude": 127.0}]})
+    assert points == [{"latitude": 37.5, "longitude": 127.0}]
+    assert VirtualDeviceTracker._dawarich_family_point(
+        {"locations": [{"name": "Alex", "location": {"lat": 37.5, "lon": 127.0}}]}, "alex"
+    ) == {"lat": 37.5, "lon": 127.0}
+
+
+@pytest.mark.asyncio
+async def test_dawarich_refresh_updates_tracker_and_never_puts_api_key_in_state(
+    hass, monkeypatch
+):
+    config = {
+        CONF_NAME: "Dawarich",
+        ATTR_ENTITY_ID: "device_tracker.dawarich",
+        ATTR_UNIQUE_ID: "dawarich",
+        ATTR_DEVICE_ID: "dawarich",
+        CONF_INITIAL_VALUE: "not_home",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: False,
+        CONF_DAWARICH: {
+            CONF_DAWARICH_URL: "https://dawarich.example",
+            CONF_DAWARICH_API_KEY: "not-in-state",
+            CONF_DAWARICH_AUTH_MODE: "query",
+            CONF_DAWARICH_POLL_INTERVAL: 60,
+            CONF_DAWARICH_HISTORY_LIMIT: 2,
+        },
+    }
+    tracker = VirtualDeviceTracker(config)
+    tracker.hass = hass
+    tracker.async_schedule_update_ha_state = Mock()
+    tracker._create_state(config)
+
+    requests = []
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+            self.status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        async def json(self, **_kwargs):
+            return self.payload
+
+    class Session:
+        def get(self, url, **kwargs):
+            requests.append((url, kwargs))
+            if url.endswith("/visits"):
+                return Response({"visits": [{"place_name": "Office"}]})
+            return Response({"points": [
+                {"lat": 37.5, "lon": 127.0, "timestamp": 9},
+                {"lat": 37.6, "lon": 127.1, "timestamp": 10, "speed": 4.2},
+            ]})
+
+    monkeypatch.setattr(tracker_platform, "async_get_clientsession", lambda _hass: Session())
+    await tracker._async_refresh_dawarich()
+
+    assert (tracker.latitude, tracker.longitude) == (37.6, 127.1)
+    assert tracker.extra_state_attributes["dawarich_point"]["speed"] == 4.2
+    assert tracker.extra_state_attributes["dawarich_visit"]["place_name"] == "Office"
+    assert requests[0][1]["params"]["api_key"] == "not-in-state"
+    assert "not-in-state" not in repr(tracker.extra_state_attributes)
 
 
 @pytest.mark.parametrize(

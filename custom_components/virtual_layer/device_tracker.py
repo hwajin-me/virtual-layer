@@ -36,6 +36,7 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
 )
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.template import Template, TemplateError
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
@@ -69,6 +70,9 @@ DEFAULT_DEVICE_TRACKER_VALUE = 'home'
 DEFAULT_LOCATION = 'home'
 DEFAULT_LOCATION_HELPER_DISTANCE_METERS = 300
 DEFAULT_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS = 30 * 60
+FRONT_DOOR_DISTANCE_METERS = 20
+NEAR_HOME_DISTANCE_METERS = 1_000
+FAR_AWAY_DISTANCE_METERS = 5_000
 POLYGON_FILE_RELOAD_INTERVAL = timedelta(minutes=5)
 LOCATION_CHANGE_DISTANCE_METERS = 1
 ATTR_LOCATION_MEDIAN_LATITUDE = "location_median_latitude"
@@ -84,6 +88,20 @@ ATTR_POLYGON_SELECTION_REASON = "polygon_selection_reason"
 ATTR_POLYGON_SELECTED_SOURCE = "polygon_selected_source"
 ATTR_POLYGON_SELECTED_MEMBERS = "polygon_selected_members"
 ATTR_POLYGON_LOAD_ERROR = "polygon_load_error"
+ATTR_ESPRESENSE_POSITION = "espresense_position"
+ATTR_ESPRESENSE_SOURCES = "espresense_sources"
+ATTR_ESPRESENSE_ACCURACY = "espresense_accuracy"
+ATTR_DAWARICH_LAST_UPDATED = "dawarich_last_updated"
+ATTR_DAWARICH_POINT = "dawarich_point"
+ATTR_DAWARICH_HISTORY = "dawarich_history"
+ATTR_DAWARICH_VISIT = "dawarich_visit"
+ATTR_DAWARICH_ERROR = "dawarich_error"
+ATTR_LOCATION_PRESENCE_SOURCES = "location_presence_sources"
+ATTR_LOCATION_CLASSIFICATION = "location_classification"
+ATTR_LOCATION_HOME_DISTANCE = "location_home_distance"
+ATTR_LOCATION_BLE_DISTANCE = "location_ble_distance"
+DEFAULT_DAWARICH_POLL_INTERVAL = 60
+DEFAULT_DAWARICH_HISTORY_LIMIT = 10
 POLYGON_STRATEGIES = {"majority", "priority", "latest", "median"}
 POLYGON_RULE_KEYS = {
     "condition_template",
@@ -94,6 +112,14 @@ POLYGON_RULE_KEYS = {
     "priority",
     "weight",
 }
+ESPRESENSE_ANCHOR_KEYS = {
+    ATTR_LATITUDE,
+    ATTR_LONGITUDE,
+    "max_age_seconds",
+    "distance_scale",
+    "distance_offset",
+}
+DEFAULT_ESPRESENSE_MAX_AGE_SECONDS = 30
 
 
 def _safe_gps_accuracy(value) -> float | None:
@@ -116,7 +142,9 @@ DEVICE_TRACKER_SCHEMA = vol.Schema(virtual_schema(DEFAULT_DEVICE_TRACKER_VALUE, 
     # Keep the helper flexible so older stored data with an invalid setting can
     # still load and be edited or removed through the UI.
     vol.Optional(CONF_LOCATION_HELPER): object,
+    vol.Optional(CONF_PRESENCE_CLASSIFICATION): bool,
     vol.Optional(CONF_POLYGONAL_ZONE): object,
+    vol.Optional(CONF_DAWARICH): object,
 }))
 
 
@@ -155,6 +183,42 @@ def validate_domain_options(config) -> None:
         if not isfinite(distance_threshold) or distance_threshold <= 0 or priority_window <= 0:
             raise vol.Invalid("location_helper options must be positive")
 
+    if CONF_PRESENCE_CLASSIFICATION in config and not isinstance(
+        config[CONF_PRESENCE_CLASSIFICATION], bool
+    ):
+        raise vol.Invalid("presence_classification must be a boolean")
+
+    dawarich = config.get(CONF_DAWARICH)
+    if dawarich is not None:
+        if not isinstance(dawarich, dict):
+            raise vol.Invalid("dawarich must be an object")
+        allowed = {CONF_DAWARICH_URL, CONF_DAWARICH_API_KEY,
+                   CONF_DAWARICH_AUTH_MODE, CONF_DAWARICH_POLL_INTERVAL,
+                   CONF_DAWARICH_HISTORY_LIMIT, CONF_DAWARICH_PERSON_ENTITY}
+        if set(dawarich) - allowed or not isinstance(dawarich.get(CONF_DAWARICH_URL), str):
+            raise vol.Invalid("invalid Dawarich configuration")
+        if not dawarich[CONF_DAWARICH_URL].rstrip("/").startswith(("http://", "https://")):
+            raise vol.Invalid("invalid Dawarich URL")
+        if not isinstance(dawarich.get(CONF_DAWARICH_API_KEY), str) or not dawarich[CONF_DAWARICH_API_KEY].strip():
+            raise vol.Invalid("Dawarich API key is required")
+        if dawarich.get(CONF_DAWARICH_AUTH_MODE, "bearer") not in {"bearer", "query"}:
+            raise vol.Invalid("invalid Dawarich authentication mode")
+        try:
+            poll = int(dawarich.get(CONF_DAWARICH_POLL_INTERVAL, DEFAULT_DAWARICH_POLL_INTERVAL))
+            limit = int(dawarich.get(CONF_DAWARICH_HISTORY_LIMIT, DEFAULT_DAWARICH_HISTORY_LIMIT))
+        except (TypeError, ValueError, OverflowError) as err:
+            raise vol.Invalid("invalid Dawarich interval") from err
+        if not 15 <= poll <= 3600 or not 1 <= limit <= 100:
+            raise vol.Invalid("invalid Dawarich interval")
+        person = dawarich.get(CONF_DAWARICH_PERSON_ENTITY, "")
+        if person:
+            try:
+                cv.entity_id(person)
+            except vol.Invalid as err:
+                raise vol.Invalid("invalid Dawarich person") from err
+            if not person.startswith("person."):
+                raise vol.Invalid("invalid Dawarich person")
+
     polygon = config.get(CONF_POLYGONAL_ZONE)
     if polygon is None:
         return
@@ -168,6 +232,7 @@ def validate_domain_options(config) -> None:
         CONF_POLYGON_PERSON_ENTITY,
         CONF_POLYGON_STRATEGY,
         CONF_POLYGON_TRACKER_RULES,
+        CONF_POLYGON_ESPRESENSE_ANCHORS,
     }
     if set(polygon) - allowed:
         raise vol.Invalid("unknown polygonal_zone option")
@@ -206,6 +271,43 @@ def validate_domain_options(config) -> None:
     if not isfinite(distance) or distance <= 0:
         raise vol.Invalid("polygon distance threshold must be positive")
     rules = polygon.get(CONF_POLYGON_TRACKER_RULES, {})
+    anchors = polygon.get(CONF_POLYGON_ESPRESENSE_ANCHORS, {})
+    if not isinstance(anchors, dict):
+        raise vol.Invalid("polygon ESPresense anchors must be an object")
+    if anchors and len(anchors) < 3:
+        raise vol.Invalid("polygon ESPresense triangulation needs at least three anchors")
+    anchor_positions = []
+    for entity_id, anchor in anchors.items():
+        if not isinstance(entity_id, str) or not entity_id.startswith("sensor.") or not isinstance(anchor, dict):
+            raise vol.Invalid("invalid ESPresense anchor")
+        if set(anchor) - ESPRESENSE_ANCHOR_KEYS:
+            raise vol.Invalid("unknown ESPresense anchor option")
+        try:
+            latitude, longitude = float(anchor[ATTR_LATITUDE]), float(anchor[ATTR_LONGITUDE])
+        except (KeyError, TypeError, ValueError, OverflowError) as err:
+            raise vol.Invalid("invalid ESPresense anchor coordinates") from err
+        if not isfinite(latitude) or not isfinite(longitude) or not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
+            raise vol.Invalid("invalid ESPresense anchor coordinates")
+        anchor_positions.append((latitude, longitude))
+        for key, default in (("max_age_seconds", DEFAULT_ESPRESENSE_MAX_AGE_SECONDS), ("distance_scale", 1), ("distance_offset", 0)):
+            raw = anchor.get(key, default)
+            if isinstance(raw, bool):
+                raise vol.Invalid(f"invalid ESPresense anchor {key}")
+            try:
+                parsed = float(raw)
+            except (TypeError, ValueError, OverflowError) as err:
+                raise vol.Invalid(f"invalid ESPresense anchor {key}") from err
+            if not isfinite(parsed) or (key != "distance_offset" and parsed <= 0):
+                raise vol.Invalid(f"invalid ESPresense anchor {key}")
+    if anchor_positions:
+        origin = anchor_positions[0]
+        if not any(
+            abs((first[1] - origin[1]) * (second[0] - origin[0]) -
+                (second[1] - origin[1]) * (first[0] - origin[0])) > 1e-12
+            for index, first in enumerate(anchor_positions[1:])
+            for second in anchor_positions[index + 2:]
+        ):
+            raise vol.Invalid("ESPresense anchors must not be collinear")
     _validate_polygon_rules(rules)
     if CONF_SOURCE_ENTITIES in config:
         source_entities = config.get(CONF_SOURCE_ENTITIES, [])
@@ -213,10 +315,13 @@ def validate_domain_options(config) -> None:
             raise vol.Invalid("polygon sources must be a list")
         if any(
             not isinstance(entity_id, str)
-            or not entity_id.startswith("device_tracker.")
+            or (
+                not entity_id.startswith("device_tracker.")
+                and entity_id not in anchors
+            )
             for entity_id in source_entities
         ):
-            raise vol.Invalid("polygon sources must be device_tracker entities")
+            raise vol.Invalid("polygon sources must be device_tracker entities or configured ESPresense anchors")
         if set(rules) - set(source_entities):
             raise vol.Invalid("polygon tracker rules must reference selected sources")
 
@@ -350,11 +455,15 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         self._location_helper = self._normalize_location_helper(
             config.get(CONF_LOCATION_HELPER),
         )
+        self._presence_classification = bool(
+            config.get(CONF_PRESENCE_CLASSIFICATION, False)
+        )
         self._polygon_config = self._normalize_polygon_config(
             config.get(CONF_POLYGONAL_ZONE),
             config.get(CONF_SOURCE_ENTITIES),
         )
         self._polygon_zones = []
+        self._dawarich_config = self._normalize_dawarich_config(config.get(CONF_DAWARICH))
         self._priority_source = None
         self._source_positions = {}
         self._source_last_moved = {}
@@ -388,6 +497,25 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             self._coords = {}
             self._gps_accuracy = 0
         self._restore_location_helper_attributes()
+
+    @staticmethod
+    def _normalize_dawarich_config(value):
+        """Return a safe Dawarich configuration from stored UI options."""
+        if not isinstance(value, dict):
+            return None
+        try:
+            validate_domain_options({CONF_DAWARICH: value})
+        except vol.Invalid as err:
+            _LOGGER.warning("Ignoring invalid Dawarich configuration: %s", err)
+            return None
+        return {
+            CONF_DAWARICH_URL: value[CONF_DAWARICH_URL].rstrip("/"),
+            CONF_DAWARICH_API_KEY: value[CONF_DAWARICH_API_KEY].strip(),
+            CONF_DAWARICH_AUTH_MODE: value.get(CONF_DAWARICH_AUTH_MODE, "bearer"),
+            CONF_DAWARICH_POLL_INTERVAL: int(value.get(CONF_DAWARICH_POLL_INTERVAL, DEFAULT_DAWARICH_POLL_INTERVAL)),
+            CONF_DAWARICH_HISTORY_LIMIT: int(value.get(CONF_DAWARICH_HISTORY_LIMIT, DEFAULT_DAWARICH_HISTORY_LIMIT)),
+            CONF_DAWARICH_PERSON_ENTITY: value.get(CONF_DAWARICH_PERSON_ENTITY, ""),
+        }
 
     @staticmethod
     def _normalize_location_helper(value):
@@ -451,6 +579,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         )
         normalized.setdefault(CONF_POLYGON_TRACKER_RULES, {})
         normalized.setdefault(CONF_POLYGON_FILES, [])
+        normalized.setdefault(CONF_POLYGON_ESPRESENSE_ANCHORS, {})
         return normalized
 
     def _restore_location_helper_attributes(self):
@@ -493,6 +622,13 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
     async def async_added_to_hass(self) -> None:
         """Start aggregate GPS tracking after normal virtual setup."""
         await super().async_added_to_hass()
+        if self._dawarich_config:
+            self._refresh_remove_listeners.append(async_track_time_interval(
+                self.hass,
+                self._async_refresh_dawarich,
+                timedelta(seconds=self._dawarich_config[CONF_DAWARICH_POLL_INTERVAL]),
+            ))
+            await self._async_refresh_dawarich()
         if self._polygon_config:
             await self._async_setup_polygon_tracking()
             return
@@ -514,6 +650,146 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             timedelta(minutes=1),
         ))
         self._update_location_from_sources()
+
+    @staticmethod
+    def _dawarich_points(payload):
+        """Return point records from documented and older Dawarich envelopes."""
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+        for key in ("points", "data", "locations", "results", "visits"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return [payload] if any(key in payload for key in ("latitude", "lat", "longitude", "lon")) else []
+
+    def _dawarich_person_name(self):
+        """Return Home Assistant's selected Person label for family matching."""
+        person_id = self._dawarich_config.get(CONF_DAWARICH_PERSON_ENTITY, "")
+        person = self.hass.states.get(person_id) if person_id else None
+        return str(person.name if person else "").strip().casefold()
+
+    @staticmethod
+    def _dawarich_family_point(payload, person_name):
+        """Find a selected family member in version-tolerant API envelopes."""
+        members = VirtualDeviceTracker._dawarich_points(payload)
+        for member in members:
+            user = member.get("user")
+            if not isinstance(user, dict):
+                user = member.get("member") if isinstance(member.get("member"), dict) else {}
+            candidate = str(
+                member.get("name", member.get("user_name", member.get("email", user.get("name", user.get("email", "")))))
+            ).strip().casefold()
+            if candidate == person_name:
+                location = member.get("location")
+                return location if isinstance(location, dict) else member
+        return None
+
+    @staticmethod
+    def _dawarich_coordinate(point, *names):
+        for name in names:
+            value = point.get(name)
+            if value is not None:
+                return value
+        return None
+
+    @classmethod
+    def _dawarich_point_timestamp(cls, point):
+        """Return a sortable timestamp for ISO and Unix point payloads."""
+        raw = cls._dawarich_coordinate(
+            point, "timestamp", "recorded_at", "datetime", "created_at", "updated_at"
+        )
+        if isinstance(raw, bool) or raw is None:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if isinstance(raw, (int, float)):
+            try:
+                return datetime.fromtimestamp(raw, tz=timezone.utc)
+            except (OSError, OverflowError, ValueError):
+                return datetime.min.replace(tzinfo=timezone.utc)
+        if isinstance(raw, str):
+            parsed = dt_util.parse_datetime(raw)
+            if parsed is not None:
+                return dt_util.as_utc(parsed)
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+    @classmethod
+    def _dawarich_point_summary(cls, point):
+        """Keep useful location/history metadata without exposing arbitrary API data."""
+        keys = ("id", "timestamp", "recorded_at", "datetime", "created_at", "updated_at",
+                "altitude", "speed", "velocity", "bearing", "course", "accuracy",
+                "horizontal_accuracy", "activity", "address", "city", "country",
+                "place_name", "place", "arrival_at", "departure_at")
+        return {key: point[key] for key in keys if key in point and isinstance(
+            point[key], (str, int, float, bool, type(None)))}
+
+    async def _async_dawarich_latest_visit(self, session, headers, params):
+        """Fetch a visit opportunistically; locations remain usable without it."""
+        try:
+            async with asyncio.timeout(15):
+                async with session.get(
+                    self._dawarich_config[CONF_DAWARICH_URL] + "/api/v1/visits",
+                    headers=headers,
+                    params={**params, "per_page": 1},
+                ) as response:
+                    if response.status != 200:
+                        return None
+                    payload = await response.json(content_type=None)
+            visits = self._dawarich_points(payload)
+            return self._dawarich_point_summary(visits[0]) if visits else None
+        except (asyncio.TimeoutError, ClientError, ValueError, TypeError):
+            return None
+
+    async def _async_refresh_dawarich(self, _now=None) -> None:
+        """Fetch latest Dawarich points without blocking Home Assistant's loop."""
+        config = self._dawarich_config
+        if not config:
+            return
+        headers = {"Accept": "application/json"}
+        params = {"per_page": config[CONF_DAWARICH_HISTORY_LIMIT]}
+        if config[CONF_DAWARICH_AUTH_MODE] == "query":
+            params["api_key"] = config[CONF_DAWARICH_API_KEY]
+        else:
+            headers["Authorization"] = "Bearer " + config[CONF_DAWARICH_API_KEY]
+        try:
+            session = async_get_clientsession(self.hass)
+            async with asyncio.timeout(15):
+                endpoint = "/api/v1/families/locations" if config.get(CONF_DAWARICH_PERSON_ENTITY) else "/api/v1/points"
+                async with session.get(config[CONF_DAWARICH_URL] + endpoint, headers=headers, params=params) as response:
+                    response.raise_for_status()
+                    payload = await response.json(content_type=None)
+            family_point = self._dawarich_family_point(payload, self._dawarich_person_name()) if config.get(CONF_DAWARICH_PERSON_ENTITY) else None
+            points = [family_point] if family_point else self._dawarich_points(payload)
+            if not points:
+                raise ValueError("Dawarich returned no location points")
+            # Point API ordering is not guaranteed across Dawarich versions.
+            point = max(points, key=self._dawarich_point_timestamp)
+            latitude = self._dawarich_coordinate(point, "latitude", "lat")
+            longitude = self._dawarich_coordinate(point, "longitude", "lon", "lng")
+            latitude, longitude = self._validated_coordinates(latitude, longitude)
+            accuracy = _safe_gps_accuracy(self._dawarich_coordinate(
+                point, "accuracy", "horizontal_accuracy", "gps_accuracy")) or 0
+            visit = (
+                None if config.get(CONF_DAWARICH_PERSON_ENTITY)
+                else await self._async_dawarich_latest_visit(session, headers, params)
+            )
+            self._location = None
+            self._coords = {ATTR_LATITUDE: latitude, ATTR_LONGITUDE: longitude, ATTR_RADIUS: 0}
+            self._gps_accuracy = accuracy
+            self._virtual_attributes.update({
+                ATTR_DAWARICH_LAST_UPDATED: dt_util.utcnow().isoformat(),
+                ATTR_DAWARICH_POINT: self._dawarich_point_summary(point),
+                ATTR_DAWARICH_HISTORY: [self._dawarich_point_summary(item) for item in points],
+                ATTR_DAWARICH_VISIT: visit,
+                ATTR_DAWARICH_ERROR: None,
+            })
+            self._update_attributes()
+            self.async_schedule_update_ha_state()
+        except (asyncio.TimeoutError, ClientError, ValueError, TypeError, KeyError) as err:
+            _LOGGER.warning("Unable to refresh Dawarich for %s: %s", self.entity_id, err)
+            self._virtual_attributes[ATTR_DAWARICH_ERROR] = str(err)
+            self._update_attributes()
+            self.async_schedule_update_ha_state()
 
     async def _async_setup_polygon_tracking(self) -> None:
         """Load polygon definitions and start source aggregation."""
@@ -574,9 +850,81 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         """Return explicit trackers, falling back to the configured person."""
         source_entities = self._location_source_entities()
         if source_entities:
-            return source_entities
+            return list(dict.fromkeys(
+                source_entities + list(self._polygon_config.get(CONF_POLYGON_ESPRESENSE_ANCHORS, {}))
+            ))
         person = self._polygon_config.get(CONF_POLYGON_PERSON_ENTITY)
-        return [person] if person and person != self.entity_id else []
+        sources = [person] if person and person != self.entity_id else []
+        return sources + list(self._polygon_config.get(CONF_POLYGON_ESPRESENSE_ANCHORS, {}))
+
+    def _espresense_position(self):
+        """Triangulate GPS coordinates from three or more anchor distances."""
+        anchors = self._polygon_config.get(CONF_POLYGON_ESPRESENSE_ANCHORS, {})
+        samples = []
+        now = dt_util.utcnow()
+        for entity_id, anchor in anchors.items():
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
+                continue
+            max_age = float(anchor.get("max_age_seconds", DEFAULT_ESPRESENSE_MAX_AGE_SECONDS))
+            if now - state.last_updated > timedelta(seconds=max_age):
+                continue
+            raw = state.attributes.get("distance", state.attributes.get("distance_meters", state.state))
+            try:
+                distance = float(raw)
+                latitude, longitude = self._validated_coordinates(anchor[ATTR_LATITUDE], anchor[ATTR_LONGITUDE])
+            except (TypeError, ValueError, OverflowError, KeyError):
+                continue
+            unit = str(state.attributes.get("unit_of_measurement", "m")).lower()
+            unit_scale = {"m": 1, "cm": 0.01, "mm": 0.001, "ft": 0.3048}.get(unit)
+            if unit_scale is None:
+                continue
+            distance = (
+                distance * unit_scale * float(anchor.get("distance_scale", 1))
+                + float(anchor.get("distance_offset", 0))
+            )
+            if isfinite(distance) and distance >= 0:
+                samples.append((entity_id, latitude, longitude, distance, state.last_updated))
+        if len(samples) < 3:
+            return None
+        origin_lat, origin_lon = samples[0][1:3]
+        scale_x = 111_320 * cos(radians(origin_lat))
+        scale_y = 110_540
+        if abs(scale_x) < 1e-6:
+            return None
+        d1 = samples[0][3]
+        rows = []
+        for _entity_id, latitude, longitude, distance, _updated in samples[1:]:
+            x = (longitude - origin_lon) * scale_x
+            y = (latitude - origin_lat) * scale_y
+            rows.append((2 * x, 2 * y, x * x + y * y + d1 * d1 - distance * distance))
+        a = sum(x * x for x, _y, _b in rows)
+        b = sum(x * y for x, y, _b in rows)
+        c = sum(y * y for _x, y, _b in rows)
+        dx = sum(x * value for x, _y, value in rows)
+        dy = sum(y * value for _x, y, value in rows)
+        determinant = a * c - b * b
+        if abs(determinant) < 1e-6:
+            return None
+        x = (dx * c - b * dy) / determinant
+        y = (a * dy - b * dx) / determinant
+        try:
+            position = self._validated_coordinates(
+                origin_lat + y / scale_y, origin_lon + x / scale_x
+            )
+        except ValueError:
+            return None
+        residuals = []
+        for _entity_id, latitude, longitude, distance, _updated in samples:
+            anchor_x = (longitude - origin_lon) * scale_x
+            anchor_y = (latitude - origin_lat) * scale_y
+            residuals.append(abs(sqrt((x - anchor_x) ** 2 + (y - anchor_y) ** 2) - distance))
+        accuracy = max(1.0, sqrt(sum(value * value for value in residuals) / len(residuals)))
+        return {
+            "position": position,
+            "accuracy": accuracy,
+            "sources": [sample[0] for sample in samples],
+        }
 
     @callback
     def _async_polygon_source_changed(self, _event) -> None:
@@ -661,6 +1009,23 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 })
             except (TypeError, ValueError, OverflowError):
                 continue
+
+        espresense = self._espresense_position()
+        self._virtual_attributes.update({
+            ATTR_ESPRESENSE_POSITION: (
+                list(espresense["position"]) if espresense else None
+            ),
+            ATTR_ESPRESENSE_SOURCES: espresense["sources"] if espresense else [],
+            ATTR_ESPRESENSE_ACCURACY: espresense["accuracy"] if espresense else None,
+        })
+        if espresense is not None:
+            position = espresense["position"]
+            samples.append({
+                "entity_id": "espresense_triangulated",
+                "latitude": position[0], "longitude": position[1],
+                "gps_accuracy": espresense["accuracy"], "last_updated": dt_util.utcnow(),
+                "dominant": True, "priority": -1, "weight": 1,
+            })
 
         selected = select_tracker_position(
             samples,
@@ -815,6 +1180,60 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             seconds=self._location_helper[CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS],
         )
 
+    @classmethod
+    def _is_local_presence_source(cls, entity_id, state) -> bool:
+        """Recognize affirmative Wi-Fi/ESPresense-style presence states."""
+        if state is None or state.state in {STATE_UNAVAILABLE, STATE_UNKNOWN}:
+            return False
+        domain = entity_id.split(".", 1)[0]
+        if domain in {"binary_sensor", "switch", "input_boolean"}:
+            return str(state.state).lower() in {"on", "home", "true", "present"}
+        # Plain device_tracker state is intentionally not treated as a radio
+        # proof: it may be a named-zone iCloud/GPS report. Wi-Fi and
+        # ESPresense integrations conventionally expose a binary sensor or a
+        # switch; those are unambiguous and therefore safe to prioritize.
+        return False
+
+    @staticmethod
+    def _ble_distance_meters(source_entities, source_states) -> float | None:
+        """Return the nearest finite ESPresense/BLE distance from configured sources."""
+        distances = []
+        for entity_id in source_entities:
+            state = source_states.get(entity_id)
+            if state is None or entity_id.split(".", 1)[0] != "sensor":
+                continue
+            value = state.attributes.get("distance", state.attributes.get("distance_meters"))
+            if value is None:
+                value = state.state
+            if isinstance(value, bool):
+                continue
+            try:
+                distance = float(value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if isfinite(distance) and distance >= 0:
+                distances.append(distance)
+        return min(distances) if distances else None
+
+    def _classify_presence_location(self, position, ble_distance):
+        """Classify an opted-in aggregate without sacrificing GPS attributes."""
+        home = self._coordinates_from_location_state(self.hass, "home")
+        home_distance = self._distance_meters(position, home) if home else None
+        if ble_distance is not None and ble_distance <= FRONT_DOOR_DISTANCE_METERS:
+            classification = "front_door"
+        elif home_distance is not None and home_distance <= NEAR_HOME_DISTANCE_METERS:
+            classification = "near_home"
+        elif home_distance is not None and home_distance >= FAR_AWAY_DISTANCE_METERS:
+            classification = "far_away"
+        else:
+            classification = "away"
+        self._virtual_attributes.update({
+            ATTR_LOCATION_CLASSIFICATION: classification,
+            ATTR_LOCATION_HOME_DISTANCE: home_distance,
+            ATTR_LOCATION_BLE_DISTANCE: ble_distance,
+        })
+        return classification
+
     @callback
     def _update_location_from_sources(self) -> None:
         """Track a recent outlier, otherwise use the sources' median position."""
@@ -827,6 +1246,11 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             entity_id: self.hass.states.get(entity_id)
             for entity_id in source_entities
         }
+        local_presence = [
+            entity_id for entity_id, state in source_states.items()
+            if self._is_local_presence_source(entity_id, state)
+        ]
+        ble_distance = self._ble_distance_meters(source_entities, source_states)
         positions = {
             entity_id: coordinates
             for entity_id, state in source_states.items()
@@ -845,7 +1269,27 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 for entity_id, last_moved in self._source_last_moved.items()
                 if entity_id in source_entities
             },
+            ATTR_LOCATION_PRESENCE_SOURCES: local_presence,
+            ATTR_LOCATION_BLE_DISTANCE: ble_distance,
         })
+        # Local radio/network presence is a direct proof of occupancy. It
+        # outranks GPS: a phone may report an older off-site coordinate while
+        # it is already associated with home Wi-Fi or detected by ESPresense.
+        if local_presence:
+            self._priority_source = local_presence[0]
+            self._virtual_attributes.update({
+                ATTR_LOCATION_MEDIAN_LATITUDE: None,
+                ATTR_LOCATION_MEDIAN_LONGITUDE: None,
+                ATTR_LOCATION_PRIORITY_SOURCE: local_presence[0],
+            })
+            if self._presence_classification:
+                self._virtual_attributes.update({
+                    ATTR_LOCATION_CLASSIFICATION: "home",
+                    ATTR_LOCATION_HOME_DISTANCE: 0,
+                })
+            self._update_attributes()
+            self.move_to_location("home")
+            return
         if not positions:
             known_states = [
                 state.state for state in source_states.values() if state is not None
@@ -856,6 +1300,11 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 ATTR_LOCATION_MEDIAN_LONGITUDE: None,
                 ATTR_LOCATION_PRIORITY_SOURCE: None,
             })
+            if self._presence_classification:
+                self._virtual_attributes.update({
+                    ATTR_LOCATION_CLASSIFICATION: "away",
+                    ATTR_LOCATION_HOME_DISTANCE: None,
+                })
             self._update_attributes()
             self.move_to_location(
                 "home" if known_states and all(value == "home" for value in known_states) else "not_home",
@@ -897,8 +1346,22 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
 
         self._priority_source = selected
         self._virtual_attributes[ATTR_LOCATION_PRIORITY_SOURCE] = selected
-        self._update_attributes()
         latitude, longitude = positions[selected] if selected else median
+        if self._presence_classification:
+            classification = self._classify_presence_location(
+                (latitude, longitude), ble_distance
+            )
+            self._location = classification
+            self._coords = {
+                ATTR_LATITUDE: latitude,
+                ATTR_LONGITUDE: longitude,
+                ATTR_RADIUS: 0,
+            }
+            self._gps_accuracy = 0
+            self._update_attributes()
+            self.async_schedule_update_ha_state()
+            return
+        self._update_attributes()
         self.move_to_coords({
             ATTR_LATITUDE: latitude,
             ATTR_LONGITUDE: longitude,

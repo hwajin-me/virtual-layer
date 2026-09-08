@@ -356,9 +356,10 @@ and sets the camera-specific `source_entity` option. The virtual camera proxies
 the source image and stream while keeping its own entity name, id, device, and
 other virtual-layer settings.
 
-Camera creation also supports direct UI configuration through **Domain options
-JSON**, which is the UI-only equivalent of camera YAML options. A camera can
-use a local image, a stream URL, or both without an original entity:
+Camera creation also supports dedicated **Native values** inputs. A camera can
+use a local image, an H.264 stream URL, or both without an original entity.
+Standard properties should use these inputs; **Domain options JSON** remains
+available for integration-specific extensions:
 
 ```json
 {
@@ -377,6 +378,31 @@ the proxied image or stream):
   "source_entity": "camera.front_door"
 }
 ```
+
+Apple Home cameras must be paired separately. Home Assistant intentionally
+excludes every camera from a normal HomeKit bridge, even when that bridge's
+entity filter includes the camera. In **Settings > Devices & services > Add
+integration > HomeKit Bridge**, select the virtual camera and create an
+**Accessory mode** entry, then pair the new QR/PIN in Apple Home. Create one
+HomeKit accessory entry per camera. An existing normal bridge does not begin
+advertising a newly created camera automatically.
+
+### Matter Bridge
+
+Matter 1.5 defines a camera device type, but its live-video transport is a
+WebRTC camera session rather than Home Assistant's H.264/RTSP
+`stream_source`. Virtual Layer therefore cannot turn a camera into a Matter
+camera by publishing more state attributes. The bridge must implement the
+Matter camera clusters, WebRTC negotiation, and media relay itself.
+
+As of September 2026, the widely used `matterbridge-hass` plugin does not
+support Home Assistant `camera` entities. The actively maintained Home
+Assistant Matter Hub fork lists its WebRTC camera feature as experimental and
+SmartThings-only, not Apple Home. Use the separate HomeKit accessory-mode
+entry above for Apple Home cameras. If a Matter bridge later adds verified
+Apple Home camera support, it must be configured with the virtual camera's
+own H.264 source; the camera already exposes the normal Home Assistant stream
+capability for that purpose.
 
 ## Direct Domain Settings
 

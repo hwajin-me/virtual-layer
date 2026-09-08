@@ -792,6 +792,13 @@ def _diagnostic_source_entities(entity):
     source_entity_id = entity.get("source_entity")
     if isinstance(source_entity_id, str):
         sources.append(source_entity_id)
+    polygon = entity.get(CONF_POLYGONAL_ZONE)
+    if isinstance(polygon, Mapping):
+        anchors = polygon.get(CONF_POLYGON_ESPRESENSE_ANCHORS)
+        if isinstance(anchors, Mapping):
+            sources.extend(
+                entity_id for entity_id in anchors if isinstance(entity_id, str)
+            )
     event_hooks = entity.get(CONF_EVENT_HOOKS, [])
     if isinstance(event_hooks, list):
         for hook in event_hooks:
@@ -840,6 +847,9 @@ def _diagnostic_configuration(entity, platform):
             CONF_POLYGON_AWAY_STATE: polygon.get(CONF_POLYGON_AWAY_STATE, "not_home"),
             CONF_POLYGON_TRACKER_RULES: copy.deepcopy(
                 polygon.get(CONF_POLYGON_TRACKER_RULES, {}),
+            ),
+            CONF_POLYGON_ESPRESENSE_ANCHORS: copy.deepcopy(
+                polygon.get(CONF_POLYGON_ESPRESENSE_ANCHORS, {}),
             ),
         }
     return configuration

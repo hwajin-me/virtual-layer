@@ -18,6 +18,8 @@ from custom_components.virtual_layer.config_flow import (
     ACTION_ADD_ENTITY,
     CONF_ACTION,
     CONF_DOMAIN_SETTINGS,
+    CONF_DAWARICH_AUTH_MODE_INPUT,
+    CONF_DAWARICH_URL_INPUT,
     CONF_POLYGON_GEOJSON_JSON,
     CONF_POLYGON_STRATEGY_INPUT,
     CONF_REFERENCE_ENTITY_ID,
@@ -35,6 +37,9 @@ from custom_components.virtual_layer.const import (
     CONF_POLYGON_PERSON_ENTITY,
     CONF_POLYGON_TRACKER_RULES,
     CONF_POLYGONAL_ZONE,
+    CONF_POLYGON_ESPRESENSE_ANCHORS,
+    CONF_PRESENCE_CLASSIFICATION,
+    CONF_LOCATION_HELPER,
     CONF_SOURCE_ENTITIES,
 )
 from custom_components.virtual_layer.device_tracker import (
@@ -97,6 +102,104 @@ async def test_selecting_device_tracker_reopens_form_with_polygon_fields(hass):
     polygon_defaults = polygon_defaults[CONF_DOMAIN_SETTINGS]
     assert CONF_POLYGON_GEOJSON_JSON in polygon_defaults
     assert polygon_defaults[CONF_POLYGON_STRATEGY_INPUT] == "majority"
+    assert polygon_defaults[CONF_DAWARICH_URL_INPUT] == ""
+    assert polygon_defaults[CONF_DAWARICH_AUTH_MODE_INPUT] == "bearer"
+    assert polygon_defaults[CONF_PRESENCE_CLASSIFICATION] is False
+
+
+async def test_combined_wifi_ble_and_gps_tracker_classifies_presence_in_hass(hass):
+    """The integration publishes the classified state and GPS on a real setup."""
+    hass.states.async_set(
+        "device_tracker.phone", "not_home", {ATTR_LATITUDE: 37.5, ATTR_LONGITUDE: 127.0}
+    )
+    hass.states.async_set("binary_sensor.phone_wifi", "on")
+    hass.states.async_set("sensor.phone_distance", "4")
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "presence"},
+        options={
+            ATTR_DEVICES: {"Presence": [{
+                CONF_PLATFORM: "device_tracker",
+                CONF_NAME: "Presence",
+                ATTR_ENTITY_ID: "device_tracker.presence",
+                CONF_INITIAL_VALUE: "not_home",
+                CONF_INITIAL_AVAILABILITY: True,
+                CONF_PERSISTENT: False,
+                CONF_SOURCE_ENTITIES: [
+                    "device_tracker.phone", "binary_sensor.phone_wifi", "sensor.phone_distance"
+                ],
+                CONF_LOCATION_HELPER: {
+                    "distance_threshold_meters": 300,
+                    "priority_window_seconds": 1800,
+                },
+                CONF_PRESENCE_CLASSIFICATION: True,
+            }]},
+            ATTR_DEVICE_ATTRIBUTES: {"Presence": {ATTR_DEVICE_ID: "presence"}},
+        },
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("device_tracker.presence")
+    assert state.state == "home"
+    assert state.attributes["location_classification"] == "home"
+
+    hass.states.async_set("binary_sensor.phone_wifi", "off")
+    await hass.async_block_till_done()
+    state = hass.states.get("device_tracker.presence")
+    assert state.state == "front_door"
+    assert state.attributes[ATTR_LATITUDE] == 37.5
+
+
+async def test_polygon_tracker_triangulates_espresense_anchors_into_geojson_zone(hass):
+    anchors = {
+        "sensor.esp_a_distance": {ATTR_LATITUDE: 37.5000, ATTR_LONGITUDE: 126.9999},
+        "sensor.esp_b_distance": {ATTR_LATITUDE: 37.5001, ATTR_LONGITUDE: 127.0000},
+        "sensor.esp_c_distance": {ATTR_LATITUDE: 37.5000, ATTR_LONGITUDE: 127.0001},
+    }
+    hass.states.async_set("sensor.esp_a_distance", "885", {"unit_of_measurement": "cm"})
+    hass.states.async_set("sensor.esp_b_distance", "1105", {"unit_of_measurement": "cm"})
+    hass.states.async_set("sensor.esp_c_distance", "885", {"unit_of_measurement": "cm"})
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "espresense"},
+        options={
+            ATTR_DEVICES: {"ESPresense": [{
+                CONF_PLATFORM: "device_tracker", CONF_NAME: "Room Position",
+                ATTR_ENTITY_ID: "device_tracker.room_position",
+                CONF_INITIAL_VALUE: "not_home", CONF_INITIAL_AVAILABILITY: True,
+                CONF_PERSISTENT: False, CONF_SOURCE_ENTITIES: list(anchors),
+                CONF_POLYGONAL_ZONE: {
+                    CONF_POLYGON_GEOJSON: GEOJSON,
+                    CONF_POLYGON_TRACKER_RULES: {},
+                    CONF_POLYGON_ESPRESENSE_ANCHORS: anchors,
+                },
+            }]},
+            ATTR_DEVICE_ATTRIBUTES: {"ESPresense": {ATTR_DEVICE_ID: "espresense"}},
+        },
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    state = hass.states.get("device_tracker.room_position")
+    assert state.state == "Seoul Home"
+    assert state.attributes[ATTR_LATITUDE] == pytest.approx(37.5, abs=0.00003)
+    assert state.attributes[ATTR_LONGITUDE] == pytest.approx(127.0, abs=0.00003)
+    assert state.attributes["espresense_sources"] == list(anchors)
+    assert state.attributes["espresense_accuracy"] >= 1
+    info = hass.states.get("sensor.room_position_info")
+    assert info.attributes["configuration"]["source_entities"] == list(anchors)
+    assert (
+        info.attributes["configuration"]["polygonal_zone"][
+            CONF_POLYGON_ESPRESENSE_ANCHORS
+        ]
+        == anchors
+    )
+    for index, entity_id in enumerate(anchors, start=1):
+        debug = hass.states.get(f"sensor.room_position_debug{index}")
+        assert debug is not None
+        assert debug.attributes["source_entity_id"] == entity_id
 
 
 async def test_polygon_tracker_zone_sensor_and_map_image_share_one_virtual_device(hass):
