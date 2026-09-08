@@ -87,6 +87,7 @@ from custom_components.virtual_layer.config_flow import (
     InvalidJson,
     InvalidTemplate,
     _append_ui_entity,
+    _async_build_entity_config,
     _auto_helper_profile,
     _apply_fan_source_roles,
     _apply_matter_fan_level_helper,
@@ -728,7 +729,7 @@ def test_multi_sensor_conversion_supports_selectable_aggregation(
     assert _sensor_aggregation_from_defaults(converted) == aggregation
 
 
-def test_multi_sensor_conversion_rejects_incompatible_number_metadata(hass):
+def test_multi_sensor_conversion_allows_incompatible_measurements_as_unitless(hass):
     hass.states.async_set(
         "number.temperature",
         "20",
@@ -740,10 +741,37 @@ def test_multi_sensor_conversion_rejects_incompatible_number_metadata(hass):
         {"device_class": "humidity", "unit_of_measurement": "%"},
     )
 
+    # Number entities retain their source-native contracts, so unrelated
+    # measurements are not offered as a shared sensor conversion.
     assert (
         _sensor_conversion_choices(["number.temperature", "number.humidity"], hass)
         == {}
     )
+
+    hass.states.async_set(
+        "sensor.temperature",
+        "20",
+        {"device_class": "temperature", "unit_of_measurement": "°C"},
+    )
+    hass.states.async_set(
+        "sensor.humidity",
+        "50",
+        {"device_class": "humidity", "unit_of_measurement": "%"},
+    )
+
+    source_ids = ["sensor.temperature", "sensor.humidity"]
+    choices = _sensor_conversion_choices(source_ids, hass)
+    assert set(choices) == {"state"}
+    converted = _apply_sensor_conversion_defaults(
+        hass,
+        _reference_entity_defaults(hass, source_ids, "sensor"),
+        choices["state"],
+    )
+
+    assert converted[CONF_INITIAL_VALUE] == "35.0"
+    assert _yaml_value(converted[CONF_DOMAIN_OPTIONS_JSON]) == {
+        "state_class": "measurement"
+    }
 
 
 @pytest.mark.parametrize(
@@ -814,6 +842,51 @@ def test_multi_pollution_sensors_normalize_units_before_aggregation(
     assert options[CONF_UNIT_OF_MEASUREMENT] == expected_unit
     assert options.get(CONF_CLASS) == device_class
     assert options["state_class"] == "measurement"
+
+
+@pytest.mark.parametrize(
+    ("device_class", "first_unit", "first_value", "second_unit", "second_value", "expected"),
+    [
+        ("temperature", "°C", "20", "°F", "68", 20),
+        ("power", "W", "1000", "kW", "2", 1500),
+        ("distance", "m", "1000", "km", "2", 1500),
+    ],
+)
+def test_multi_sensor_conversion_uses_home_assistant_unit_converters(
+    hass,
+    device_class,
+    first_unit,
+    first_value,
+    second_unit,
+    second_value,
+    expected,
+):
+    """Standard unit families keep their class and normalize to the first unit."""
+    source_ids = ["sensor.first", "sensor.second"]
+    for entity_id, value, unit in (
+        (source_ids[0], first_value, first_unit),
+        (source_ids[1], second_value, second_unit),
+    ):
+        hass.states.async_set(
+            entity_id,
+            value,
+            {"device_class": device_class, "unit_of_measurement": unit},
+        )
+
+    choices = _sensor_conversion_choices(source_ids, hass)
+    converted = _apply_sensor_conversion_defaults(
+        hass,
+        _reference_entity_defaults(hass, source_ids, "sensor"),
+        choices["state"],
+    )
+
+    assert float(converted[CONF_INITIAL_VALUE]) == pytest.approx(expected)
+    assert Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(
+        parse_result=True
+    ) == pytest.approx(expected)
+    options = _yaml_value(converted[CONF_DOMAIN_OPTIONS_JSON])
+    assert options[CONF_CLASS] == device_class
+    assert options[CONF_UNIT_OF_MEASUREMENT] == first_unit
 
 
 def test_air_quality_source_offers_pollutant_sensor_classes(hass):
@@ -3115,6 +3188,26 @@ def test_entity_template_validation_rejects_invalid_embedded_action_jinja(hass):
 
     assert err.value.field_name == CONF_COMMAND_ACTIONS_JSON
     assert err.value.template_name == "turn_on[0].data.note"
+
+
+async def test_async_build_reports_jinja_error_before_platform_schema(hass):
+    """Invalid common Jinja must remain attached to its visible form field."""
+    form = _entity_input(
+        {
+            CONF_PLATFORM: "sensor",
+            CONF_VALUE_TEMPLATE: "{{ invalid template",
+            CONF_DOMAIN_OPTIONS_JSON: {
+                "class": "pm25",
+                "state_class": "measurement",
+                "unit_of_measurement": "μg/m³",
+            },
+        }
+    )
+
+    with pytest.raises(InvalidTemplate) as err:
+        await _async_build_entity_config(hass, form)
+
+    assert err.value.field_name == CONF_VALUE_TEMPLATE
 
 
 @pytest.mark.parametrize("platform", VIRTUAL_ENTITY_DOMAINS)

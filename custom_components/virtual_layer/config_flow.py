@@ -30,6 +30,7 @@ from homeassistant.components.lawn_mower import LawnMowerEntityFeature
 from homeassistant.components.lock import LockEntityFeature
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.components.siren import SirenEntityFeature
+from homeassistant.components.sensor.const import UNIT_CONVERTERS as SENSOR_UNIT_CONVERTERS
 from homeassistant.components.update import UpdateEntityFeature
 from homeassistant.components.vacuum import VacuumEntityFeature
 from homeassistant.components.valve import ValveEntityFeature
@@ -266,6 +267,12 @@ LEGACY_STATIC_NATIVE_FIELD_ALIASES = {
     },
 }
 DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES = {
+    "air_quality": {
+        # Matter's Air Quality cluster requires an overall categorical value;
+        # pollutant concentrations alone leave controllers such as Apple Home
+        # displaying the aggregate quality as Unknown.
+        "air_quality": "unknown",
+    },
     "climate": {
         "hvac_modes": ["off", "heat", "cool", "heat_cool", "auto", "dry", "fan_only"],
         "hvac_mode": "off",
@@ -418,6 +425,7 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
 DOMAIN_NATIVE_TEMPLATE_PROPERTIES = {
     "ai_task": ("supported_features",),
     "air_quality": (
+        "air_quality",
         "particulate_matter_2_5",
         "particulate_matter_10",
         "particulate_matter_0_1",
@@ -710,6 +718,7 @@ NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.update(
 NATIVE_TEMPLATE_STATE_PROPERTIES = frozenset(
     {
         "activity",
+        "air_quality",
         "condition",
         "current_operation",
         "current_option",
@@ -1695,6 +1704,43 @@ def _sensor_unit_conversion_profile(
     return None
 
 
+def _sensor_unit_conversion_transforms(
+    units: Collection[str | None], device_class: str | None = None
+) -> tuple[str, tuple[tuple[float, float], ...]] | None:
+    """Return a canonical unit and affine transforms for sensor values.
+
+    The legacy profiles cover particulate and gas aliases which Home Assistant
+    deliberately does not expose through a generic converter.  For every
+    standard sensor device class, defer to Home Assistant's own converter so
+    the flow supports temperature offsets (°F ↔ °C), as well as power, energy,
+    distance, pressure, and other conversion families.
+    """
+    if profile := _sensor_unit_conversion_profile(units):
+        unit, factors = profile
+        return unit, tuple((factor, 0.0) for factor in factors)
+
+    normalized = tuple(str(unit).strip() if unit else "" for unit in units)
+    converter = SENSOR_UNIT_CONVERTERS.get(device_class)
+    if not converter or not normalized or any(
+        unit not in converter.VALID_UNITS for unit in normalized
+    ):
+        return None
+
+    canonical = normalized[0]
+    try:
+        transforms = tuple(
+            (
+                converter.convert(1.0, unit, canonical)
+                - converter.convert(0.0, unit, canonical),
+                converter.convert(0.0, unit, canonical),
+            )
+            for unit in normalized
+        )
+    except (TypeError, ValueError):
+        return None
+    return canonical, transforms
+
+
 def _sensor_state_sources_support_numeric_conversion(entity_ids, hass) -> bool:
     """Return whether sensor states are numeric or typed temporary unknowns."""
     for entity_id in entity_ids:
@@ -1720,7 +1766,15 @@ def _sensor_conversion_choices(
     hass=None,
 ) -> dict[
     str,
-    tuple[tuple[str, ...], str, str | None, str | None, str, str, tuple[float, ...]],
+    tuple[
+        tuple[str, ...],
+        str,
+        str | None,
+        str | None,
+        str | None,
+        str,
+        tuple[tuple[float, float], ...],
+    ],
 ]:
     """Return sensor measurements safely extractable from selected sources."""
     entity_ids = tuple(entity_ids)
@@ -1772,13 +1826,31 @@ def _sensor_conversion_choices(
                             unit = state.attributes.get(unit_attribute) or fallback_unit
                         source_classes.append(source_class or None)
                         source_units.append(unit or None)
-                    unit_profile = _sensor_unit_conversion_profile(source_units)
+                    unit_profile = _sensor_unit_conversion_transforms(
+                        source_units,
+                        str(source_classes[0]) if len(set(source_classes)) == 1 else None,
+                    )
                     if len(set(source_classes)) != 1 or unit_profile is None:
-                        continue
-                    device_class = source_classes[0]
-                    fallback_unit, factors = unit_profile
+                        # Different physical measurements cannot truthfully
+                        # retain either source's device class or unit.  They
+                        # can nevertheless be intentionally combined as a
+                        # numeric, unitless virtual sensor.  Keep this escape
+                        # hatch limited to sensor state values: native
+                        # attributes from unrelated domains still need an
+                        # explicit compatible property contract.
+                        if attribute != "state" or not sensor_state_sources:
+                            continue
+                        device_class = None
+                        unit_attribute = None
+                        fallback_unit = None
+                        transforms = tuple(
+                            (1.0, 0.0) for _entity_id in entity_ids
+                        )
+                    else:
+                        device_class = source_classes[0]
+                        fallback_unit, transforms = unit_profile
                 else:
-                    factors = tuple(1.0 for _entity_id in entity_ids)
+                    transforms = tuple((1.0, 0.0) for _entity_id in entity_ids)
                 choices[attribute] = (
                     entity_ids,
                     attribute,
@@ -1786,7 +1858,7 @@ def _sensor_conversion_choices(
                     unit_attribute,
                     fallback_unit,
                     conversion,
-                    factors,
+                    transforms,
                 )
         return choices
     for entity_id in entity_ids:
@@ -1804,16 +1876,18 @@ def _sensor_conversion_choices(
             conversion,
         ) in _SENSOR_CONVERSION_PROPERTIES.get(domain, ()):
             key = f"{entity_id}:{attribute}"
-            factors = (1.0,)
+            transforms = ((1.0, 0.0),)
             if hass is not None and unit_attribute:
                 state = hass.states.get(entity_id)
                 source_unit = (
                     state.attributes.get(unit_attribute) if state else None
                 ) or fallback_unit
                 if (
-                    unit_profile := _sensor_unit_conversion_profile((source_unit,))
+                    unit_profile := _sensor_unit_conversion_transforms(
+                        (source_unit,), device_class
+                    )
                 ) is not None:
-                    fallback_unit, factors = unit_profile
+                    fallback_unit, transforms = unit_profile
             choices[key] = (
                 (entity_id,),
                 attribute,
@@ -1821,7 +1895,7 @@ def _sensor_conversion_choices(
                 unit_attribute,
                 fallback_unit,
                 conversion,
-                factors,
+                transforms,
             )
     return choices
 
@@ -1848,7 +1922,7 @@ def _sensor_conversion_schema(
             str | None,
             str,
             str,
-            tuple[float, ...],
+            tuple[tuple[float, float], ...],
         ],
     ],
     default_aggregation: str = SENSOR_AGGREGATION_AVERAGE,
@@ -1920,7 +1994,7 @@ def _sensor_conversion_value_expression(
     entity_id: str,
     attribute: str,
     conversion: str,
-    factor: float = 1.0,
+    transform: tuple[float, float] = (1.0, 0.0),
 ) -> str:
     """Build one nullable numeric expression for a converted sensor source."""
     source_value = (
@@ -1929,9 +2003,12 @@ def _sensor_conversion_value_expression(
         else f"state_attr({entity_id!r}, {attribute!r})"
     )
     raw_numeric_value = f"{source_value} | float(none)"
-    numeric_value = (
-        raw_numeric_value if factor == 1.0 else f"(({raw_numeric_value}) * {factor!r})"
-    )
+    scale, offset = transform
+    numeric_value = raw_numeric_value
+    if scale != 1.0:
+        numeric_value = f"(({numeric_value}) * {scale!r})"
+    if offset != 0.0:
+        numeric_value = f"(({numeric_value}) + {offset!r})"
     if conversion == "brightness_percent":
         return (
             f"([0, ((({numeric_value}) / 255 * 100) | round(1)), 100] "
@@ -2015,7 +2092,9 @@ def _aggregate_sensor_conversion_values(
 
 
 def _convert_sensor_numeric_value(
-    value: Any, conversion: str, factor: float = 1.0
+    value: Any,
+    conversion: str,
+    transform: tuple[float, float] = (1.0, 0.0),
 ) -> float | None:
     """Normalize one source value exactly as the generated Jinja helper does."""
     try:
@@ -2024,7 +2103,8 @@ def _convert_sensor_numeric_value(
         return None
     if not math.isfinite(numeric_value):
         return None
-    numeric_value *= factor
+    scale, offset = transform
+    numeric_value = numeric_value * scale + offset
     if conversion == "brightness_percent":
         numeric_value = round(numeric_value / 255 * 100, 1)
     elif conversion == "fraction_percent":
@@ -2048,7 +2128,7 @@ def _apply_sensor_conversion_defaults(
         str | None,
         str,
         str,
-        tuple[float, ...],
+        tuple[tuple[float, float], ...],
     ],
     aggregation: str = SENSOR_AGGREGATION_AVERAGE,
 ) -> dict[str, Any]:
@@ -2060,12 +2140,12 @@ def _apply_sensor_conversion_defaults(
         unit_attribute,
         fallback_unit,
         conversion,
-        factors,
+        transforms,
     ) = choice
     result = dict(defaults)
     state = hass.states.get(entity_ids[0])
     values = []
-    for source_id, factor in zip(entity_ids, factors, strict=True):
+    for source_id, transform in zip(entity_ids, transforms, strict=True):
         source_state = hass.states.get(source_id)
         source_value = (
             source_state.state
@@ -2076,7 +2156,7 @@ def _apply_sensor_conversion_defaults(
         )
         if (
             converted_value := _convert_sensor_numeric_value(
-                source_value, conversion, factor
+                source_value, conversion, transform
             )
         ) is not None:
             values.append(converted_value)
@@ -2087,8 +2167,10 @@ def _apply_sensor_conversion_defaults(
     )
     result[CONF_INITIAL_VALUE] = str(value) if value is not None else "unknown"
     expressions = [
-        _sensor_conversion_value_expression(entity_id, attribute, conversion, factor)
-        for entity_id, factor in zip(entity_ids, factors, strict=True)
+        _sensor_conversion_value_expression(
+            entity_id, attribute, conversion, transform
+        )
+        for entity_id, transform in zip(entity_ids, transforms, strict=True)
     ]
     raw_expressions = [
         (
@@ -2116,7 +2198,7 @@ def _apply_sensor_conversion_defaults(
     options["state_class"] = "measurement"
     if device_class:
         options[CONF_CLASS] = device_class
-    elif attribute == "state" and state is not None:
+    elif len(entity_ids) == 1 and attribute == "state" and state is not None:
         source_class = state.attributes.get("device_class")
         if isinstance(source_class, str) and source_class.strip():
             options[CONF_CLASS] = source_class
@@ -3896,12 +3978,10 @@ async def _async_build_entity_config(
         validate_platform=False,
     )
     _validate_entity_templates(hass, entity)
-    await hass.async_add_executor_job(
-        _validate_platform_entity,
-        entity,
-        schema,
-        validate_domain_options,
-    )
+    # Platform schemas include HA Template validators which must run on the
+    # event loop. Validate raw Jinja first so syntax errors stay attached to
+    # their visible form field instead of being collapsed into domain options.
+    _validate_platform_entity(entity, schema, validate_domain_options)
     _validate_virtual_dependency_cycle(hass, entity, replacing_entity_id)
     _validate_virtual_entity_id_available(hass, entity, replacing_entity_id)
     return device_name, entity
@@ -7648,10 +7728,14 @@ def _reference_entity_defaults(
     }
     if (
         platform == "sensor"
-        and len(source_device_classes) == 1
+        and source_device_classes
         and "" not in source_device_classes
     ):
-        domain_options = {CONF_CLASS: next(iter(source_device_classes))}
+        if len(source_device_classes) == 1:
+            domain_options = {CONF_CLASS: next(iter(source_device_classes))}
+        else:
+            domain_options = {}
+
         if len(source_units) == 1 and "" not in source_units:
             domain_options[CONF_UNIT_OF_MEASUREMENT] = next(iter(source_units))
         defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)

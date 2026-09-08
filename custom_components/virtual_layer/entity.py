@@ -129,13 +129,11 @@ def repair_legacy_template_data(value, _seen=None, _depth=0):
                 key: repair_legacy_template_data(item, _seen, _depth + 1)
                 for key, item in value.items()
             }
-        items = [
-            repair_legacy_template_data(item, _seen, _depth + 1)
-            for item in value
-        ]
+        items = [repair_legacy_template_data(item, _seen, _depth + 1) for item in value]
         return tuple(items) if isinstance(value, tuple) else items
     finally:
         _seen.remove(identity)
+
 
 def nonnegative_int(value) -> int:
     """Coerce a non-negative integer without accepting booleans as numbers."""
@@ -185,11 +183,14 @@ def allowed_local_path(hass, file_name: str) -> str | None:
         return str(candidate)
     return None
 
+
 def virtual_schema(default_initial_value: str, extra_attrs):
     schema = {
         vol.Required(CONF_NAME): cv.string,
         vol.Optional(CONF_INITIAL_VALUE, default=default_initial_value): cv.string,
-        vol.Optional(CONF_INITIAL_AVAILABILITY, default=DEFAULT_AVAILABILITY): cv.boolean,
+        vol.Optional(
+            CONF_INITIAL_AVAILABILITY, default=DEFAULT_AVAILABILITY
+        ): cv.boolean,
         vol.Optional(CONF_ATTRIBUTES, default=dict): dict,
         vol.Optional(CONF_ICON): cv.string,
         vol.Optional(CONF_ICON_TEMPLATE): cv.string,
@@ -202,7 +203,9 @@ def virtual_schema(default_initial_value: str, extra_attrs):
         vol.Optional(CONF_EVENT_HOOKS, default=list): vol.All(cv.ensure_list, [dict]),
         vol.Optional(CONF_PERSISTENT, default=DEFAULT_PERSISTENT): cv.boolean,
         vol.Optional(CONF_PULL_INTERVAL, default=0): nonnegative_int,
-        vol.Optional(CONF_SOURCE_ENTITIES, default=list): vol.All(cv.ensure_list, [cv.entity_id]),
+        vol.Optional(CONF_SOURCE_ENTITIES, default=list): vol.All(
+            cv.ensure_list, [cv.entity_id]
+        ),
         vol.Optional(CONF_TEMPLATE_SOURCES, default=dict): dict,
         vol.Optional(CONF_VALUE_TEMPLATE): cv.string,
         vol.Optional(ATTR_DEVICE_ID, default="NOTYET"): cv.string,
@@ -222,18 +225,19 @@ def virtual_schema(default_initial_value: str, extra_attrs):
 
 
 class VirtualEntity(RestoreEntity):
-    """A base class to add state restoring.
-    """
+    """A base class to add state restoring."""
 
     # Are we saving/restoring this entity
     _persistent: bool = True
 
-    _COMMAND_METHOD_EXCLUSIONS = frozenset({
-        "async_added_to_hass",
-        "async_will_remove_from_hass",
-        "async_camera_image",
-        "async_image",
-    })
+    _COMMAND_METHOD_EXCLUSIONS = frozenset(
+        {
+            "async_added_to_hass",
+            "async_will_remove_from_hass",
+            "async_camera_image",
+            "async_image",
+        }
+    )
     _NATIVE_TEMPLATE_RESERVED_NAMES = RESERVED_NATIVE_TEMPLATE_NAMES
 
     def __init_subclass__(cls, **kwargs):
@@ -258,7 +262,9 @@ class VirtualEntity(RestoreEntity):
                 continue
 
             @wraps(method)
-            async def _with_command_action(self, *args, __method=method, __command=command, **kwargs):
+            async def _with_command_action(
+                self, *args, __method=method, __command=command, **kwargs
+            ):
                 action_result = await self._async_run_command_action(
                     __command,
                     __method,
@@ -281,8 +287,11 @@ class VirtualEntity(RestoreEntity):
                 # source is expected to report asynchronously (notably fan
                 # turn-off), in which case its source listener reconciles on
                 # the next state event.
-                if self._source_entities and not self._preserve_optimistic_command_state(
-                    __command, args, kwargs
+                if (
+                    self._source_entities
+                    and not self._preserve_optimistic_command_state(
+                        __command, args, kwargs
+                    )
                 ):
                     self._apply_templates()
                 return result
@@ -290,7 +299,7 @@ class VirtualEntity(RestoreEntity):
             _with_command_action._virtual_action_wrapped = True
             setattr(cls, method_name, _with_command_action)
 
-    def __init__(self, config, domain, old_style : bool = False):
+    def __init__(self, config, domain, old_style: bool = False):
         """Initialize an Virtual Sensor."""
         _LOGGER.debug(
             "Creating virtual %s entity %s",
@@ -366,9 +375,11 @@ class VirtualEntity(RestoreEntity):
             self._attr_name = config.get(CONF_NAME)
             if self._attr_name.startswith("!"):
                 self._attr_name = self._attr_name[1:]
-                self.entity_id = f'{domain}.{slugify(self._attr_name)}'
+                self.entity_id = f"{domain}.{slugify(self._attr_name)}"
             else:
-                self.entity_id = f'{domain}.{COMPONENT_DOMAIN}_{slugify(self._attr_name)}'
+                self.entity_id = (
+                    f"{domain}.{COMPONENT_DOMAIN}_{slugify(self._attr_name)}"
+                )
             self._attr_unique_id = slugify(self._attr_name)
 
         else:
@@ -380,7 +391,7 @@ class VirtualEntity(RestoreEntity):
             self.entity_id = config.get(ATTR_ENTITY_ID)
             if self.entity_id == "NOTYET":
                 self._attr_name = self._attr_name.removeprefix("+")
-                self.entity_id = f'{domain}.{slugify(self._attr_name)}'
+                self.entity_id = f"{domain}.{slugify(self._attr_name)}"
 
             self._attr_unique_id = config.get(ATTR_UNIQUE_ID, None)
             if self._attr_unique_id == "NOTYET":
@@ -390,7 +401,8 @@ class VirtualEntity(RestoreEntity):
                 _LOGGER.debug("setting up device info")
                 device_info = {
                     "identifiers": {(COMPONENT_DOMAIN, config.get(ATTR_DEVICE_ID))},
-                    "manufacturer": config.get(CONF_MANUFACTURER) or COMPONENT_MANUFACTURER,
+                    "manufacturer": config.get(CONF_MANUFACTURER)
+                    or COMPONENT_MANUFACTURER,
                     "model": config.get(CONF_MODEL) or COMPONENT_MODEL,
                 }
                 for config_key, info_key in (
@@ -437,9 +449,7 @@ class VirtualEntity(RestoreEntity):
         )
         if not isinstance(attribute_names, (list, tuple, set)):
             attribute_names = list(self._virtual_attributes)
-        attribute_names = [
-            name for name in attribute_names if isinstance(name, str)
-        ]
+        attribute_names = [name for name in attribute_names if isinstance(name, str)]
         previous_configured_names = state.attributes.get(
             ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES,
             [],
@@ -465,15 +475,19 @@ class VirtualEntity(RestoreEntity):
         }
         self._attr_extra_state_attributes.update(self._virtual_attributes)
         if self._virtual_attributes:
-            self._attr_extra_state_attributes[ATTR_VIRTUAL_ATTRIBUTES] = list(self._virtual_attributes.keys())
+            self._attr_extra_state_attributes[ATTR_VIRTUAL_ATTRIBUTES] = list(
+                self._virtual_attributes.keys()
+            )
         self._attr_extra_state_attributes[ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES] = sorted(
             self._configured_virtual_attribute_names
         )
         if _LOGGER.isEnabledFor(logging.DEBUG):
-            self._attr_extra_state_attributes.update({
-                ATTR_ENTITY_ID: self.entity_id,
-                ATTR_UNIQUE_ID: self.unique_id,
-            })
+            self._attr_extra_state_attributes.update(
+                {
+                    ATTR_ENTITY_ID: self.entity_id,
+                    ATTR_UNIQUE_ID: self.unique_id,
+                }
+            )
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -548,7 +562,7 @@ class VirtualEntity(RestoreEntity):
     def set_available(self, value):
         self._attr_available = value
         self._update_attributes()
-        self.async_schedule_update_ha_state()
+        self._schedule_state_update()
 
     def _schedule_state_update(self, force_refresh: bool = False) -> None:
         """Schedule a state update safely from loop or executor contexts."""
@@ -562,13 +576,15 @@ class VirtualEntity(RestoreEntity):
             self.schedule_update_ha_state(force_refresh=force_refresh)
 
     def set_attributes(self, attributes):
-        self._virtual_attributes.update({
-            name: value
-            for name, value in attributes.items()
-            if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
-        })
+        self._virtual_attributes.update(
+            {
+                name: value
+                for name, value in attributes.items()
+                if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
+            }
+        )
         self._update_attributes()
-        self.async_schedule_update_ha_state()
+        self._schedule_state_update()
 
     def clear_attributes(self, attributes):
         if attributes:
@@ -579,7 +595,7 @@ class VirtualEntity(RestoreEntity):
         else:
             self._virtual_attributes.clear()
         self._update_attributes()
-        self.async_schedule_update_ha_state()
+        self._schedule_state_update()
 
     def set_state(self, value) -> None:
         raise NotImplementedError
@@ -612,11 +628,13 @@ class VirtualEntity(RestoreEntity):
             self._apply_templates()
 
         if source_entities:
-            self._refresh_remove_listeners.append(async_track_state_change_event(
-                self.hass,
-                source_entities,
-                _async_source_entity_changed,
-            ))
+            self._refresh_remove_listeners.append(
+                async_track_state_change_event(
+                    self.hass,
+                    source_entities,
+                    _async_source_entity_changed,
+                )
+            )
 
         templates = [
             template
@@ -630,6 +648,7 @@ class VirtualEntity(RestoreEntity):
             if template
         ]
         if templates:
+
             @callback
             def _async_template_changed(_event, _updates):
                 self._apply_templates()
@@ -658,6 +677,7 @@ class VirtualEntity(RestoreEntity):
             # opportunity, matching the state seen by a later reload.
             if self.hass.state is not CoreState.running:
                 fired = False
+
                 @callback
                 def _on_startup(_event):
                     nonlocal fired
@@ -675,11 +695,13 @@ class VirtualEntity(RestoreEntity):
                 self._schedule_startup_availability_retry()
 
         if self._pull_interval:
-            self._refresh_remove_listeners.append(async_track_time_interval(
-                self.hass,
-                lambda _now: self._apply_templates(),
-                timedelta(seconds=self._pull_interval),
-            ))
+            self._refresh_remove_listeners.append(
+                async_track_time_interval(
+                    self.hass,
+                    lambda _now: self._apply_templates(),
+                    timedelta(seconds=self._pull_interval),
+                )
+            )
 
         self._setup_event_hooks()
 
@@ -722,11 +744,13 @@ class VirtualEntity(RestoreEntity):
                     if self._state_hook_matches(hook, event):
                         self._schedule_event_hook(index, hook, event)
 
-                self._refresh_remove_listeners.append(async_track_state_change_event(
-                    self.hass,
-                    entity_ids,
-                    _async_hook_state_changed,
-                ))
+                self._refresh_remove_listeners.append(
+                    async_track_state_change_event(
+                        self.hass,
+                        entity_ids,
+                        _async_hook_state_changed,
+                    )
+                )
                 continue
 
             if trigger == "event":
@@ -776,9 +800,13 @@ class VirtualEntity(RestoreEntity):
     def _state_hook_matches(self, hook, event) -> bool:
         old_state = event.data.get("old_state")
         new_state = event.data.get("new_state")
-        if not self._hook_values_match(hook.get("from"), old_state.state if old_state else None):
+        if not self._hook_values_match(
+            hook.get("from"), old_state.state if old_state else None
+        ):
             return False
-        if not self._hook_values_match(hook.get("to"), new_state.state if new_state else None):
+        if not self._hook_values_match(
+            hook.get("to"), new_state.state if new_state else None
+        ):
             return False
 
         attributes = self._hook_attributes(hook)
@@ -1054,12 +1082,14 @@ class VirtualEntity(RestoreEntity):
         # percentage to a fan's discrete speed steps). Keep direct argument
         # variables and command_data aligned for editable action templates.
         variables.update(command_data)
-        variables.update({
-            "command": command,
-            "command_data": command_data,
-            "entity_id": self.entity_id,
-            "this": self.hass.states.get(self.entity_id),
-        })
+        variables.update(
+            {
+                "command": command,
+                "command_data": command_data,
+                "entity_id": self.entity_id,
+                "this": self.hass.states.get(self.entity_id),
+            }
+        )
         prepared_sequence = await self._render_command_data_templates(
             sequence,
             variables,
@@ -1144,6 +1174,7 @@ class VirtualEntity(RestoreEntity):
 
     def _command_service_data(self, command, method, args, kwargs) -> dict:
         """Build Home Assistant service data from native command arguments."""
+
         def normalize(value):
             """Keep command-data templates representable as native Jinja data."""
             if isinstance(value, Enum):
@@ -1167,9 +1198,7 @@ class VirtualEntity(RestoreEntity):
             else:
                 data[name] = value
         data = {
-            name: normalize(value)
-            for name, value in data.items()
-            if value is not None
+            name: normalize(value) for name, value in data.items() if value is not None
         }
 
         key = (self._platform_domain, command)
@@ -1196,13 +1225,15 @@ class VirtualEntity(RestoreEntity):
         ):
             return
 
-        source_entities = list(dict.fromkeys(
-            entity_id
-            for entity_id in self._source_entities
-            if isinstance(entity_id, str)
-            and entity_id.startswith(f"{domain}.")
-            and entity_id != self.entity_id
-        ))
+        source_entities = list(
+            dict.fromkeys(
+                entity_id
+                for entity_id in self._source_entities
+                if isinstance(entity_id, str)
+                and entity_id.startswith(f"{domain}.")
+                and entity_id != self.entity_id
+            )
+        )
         service_domain = domain
         cross_domain_power_proxy = False
         if (
@@ -1210,14 +1241,15 @@ class VirtualEntity(RestoreEntity):
             and command in {"turn_off", "turn_on"}
             and domain in CROSS_DOMAIN_POWER_TARGET_DOMAINS
         ):
-            cross_domain_sources = list(dict.fromkeys(
-                entity_id
-                for entity_id in self._source_entities
-                if isinstance(entity_id, str)
-                and entity_id != self.entity_id
-                and entity_id.split(".", 1)[0]
-                in CROSS_DOMAIN_POWER_SOURCE_DOMAINS
-            ))
+            cross_domain_sources = list(
+                dict.fromkeys(
+                    entity_id
+                    for entity_id in self._source_entities
+                    if isinstance(entity_id, str)
+                    and entity_id != self.entity_id
+                    and entity_id.split(".", 1)[0] in CROSS_DOMAIN_POWER_SOURCE_DOMAINS
+                )
+            )
             if len(cross_domain_sources) == 1:
                 source_entities = cross_domain_sources
                 service_domain = source_entities[0].split(".", 1)[0]
@@ -1329,13 +1361,16 @@ class VirtualEntity(RestoreEntity):
                     self._attr_available = available
                     changed = True
             except (OverflowError, TemplateError, TypeError, ValueError) as e:
-                _LOGGER.warning(f"Unable to render availability template for {self.entity_id}: {e}")
+                _LOGGER.warning(
+                    f"Unable to render availability template for {self.entity_id}: {e}"
+                )
 
         # Preserve the last valid state/native properties while a source is
         # unavailable. Generic attributes may still be useful for diagnostics.
-        apply_state_templates = not (
-            availability_rendered and not self._attr_available
-        ) and not self._restore_waiting_for_sources
+        apply_state_templates = (
+            not (availability_rendered and not self._attr_available)
+            and not self._restore_waiting_for_sources
+        )
 
         if self._icon_template:
             try:
@@ -1347,14 +1382,18 @@ class VirtualEntity(RestoreEntity):
                     self._attr_icon = next_icon
                     changed = True
             except (OverflowError, TemplateError, TypeError, ValueError) as e:
-                _LOGGER.warning(f"Unable to render icon template for {self.entity_id}: {e}")
+                _LOGGER.warning(
+                    f"Unable to render icon template for {self.entity_id}: {e}"
+                )
 
         if self._value_template and apply_state_templates:
             try:
                 self.set_state(self._render_template(self._value_template))
                 changed = True
             except (OverflowError, TemplateError, TypeError, ValueError) as e:
-                _LOGGER.warning(f"Unable to render value template for {self.entity_id}: {e}")
+                _LOGGER.warning(
+                    f"Unable to render value template for {self.entity_id}: {e}"
+                )
 
         for name, template in self._attribute_templates.items():
             try:
@@ -1366,7 +1405,9 @@ class VirtualEntity(RestoreEntity):
                     self._virtual_attributes[name] = rendered
                     changed = True
             except (OverflowError, TemplateError, TypeError, ValueError) as e:
-                _LOGGER.warning(f"Unable to render attribute template {name} for {self.entity_id}: {e}")
+                _LOGGER.warning(
+                    f"Unable to render attribute template {name} for {self.entity_id}: {e}"
+                )
 
         native_changed = False
         if apply_state_templates:
@@ -1375,10 +1416,13 @@ class VirtualEntity(RestoreEntity):
                 key=lambda item: self._native_template_priority(item[0]),
             ):
                 try:
-                    native_changed = self._apply_native_template_value(
-                        name,
-                        self._render_template(template, parse_result=True),
-                    ) or native_changed
+                    native_changed = (
+                        self._apply_native_template_value(
+                            name,
+                            self._render_template(template, parse_result=True),
+                        )
+                        or native_changed
+                    )
                 except (
                     OverflowError,
                     TemplateError,
@@ -1406,7 +1450,9 @@ class VirtualEntity(RestoreEntity):
                 TypeError,
                 ValueError,
             ) as e:
-                _LOGGER.warning(f"Unable to apply attribute sources for {self.entity_id}: {e}")
+                _LOGGER.warning(
+                    f"Unable to apply attribute sources for {self.entity_id}: {e}"
+                )
 
         if changed:
             self._update_attributes()
@@ -1447,14 +1493,20 @@ class VirtualEntity(RestoreEntity):
                     self._attr_available = available
                     changed = True
             except (OverflowError, TemplateError, TypeError, ValueError) as e:
-                _LOGGER.warning(f"Unable to render event hook availability template for {self.entity_id}: {e}")
+                _LOGGER.warning(
+                    f"Unable to render event hook availability template for {self.entity_id}: {e}"
+                )
 
         if hook.get(CONF_VALUE_TEMPLATE):
             try:
-                self.set_state(self._render_template(hook[CONF_VALUE_TEMPLATE], variables))
+                self.set_state(
+                    self._render_template(hook[CONF_VALUE_TEMPLATE], variables)
+                )
                 changed = True
             except (OverflowError, TemplateError, TypeError, ValueError) as e:
-                _LOGGER.warning(f"Unable to render event hook value template for {self.entity_id}: {e}")
+                _LOGGER.warning(
+                    f"Unable to render event hook value template for {self.entity_id}: {e}"
+                )
 
         attributes = hook.get(CONF_ATTRIBUTES)
         if isinstance(attributes, dict):
@@ -1484,7 +1536,9 @@ class VirtualEntity(RestoreEntity):
                         self._virtual_attributes[name] = rendered
                         changed = True
                 except (OverflowError, TemplateError, TypeError, ValueError) as e:
-                    _LOGGER.warning(f"Unable to render event hook attribute template {name} for {self.entity_id}: {e}")
+                    _LOGGER.warning(
+                        f"Unable to render event hook attribute template {name} for {self.entity_id}: {e}"
+                    )
 
         should_refresh = hook.get(
             "refresh",
@@ -1504,7 +1558,7 @@ class VirtualEntity(RestoreEntity):
 
         if changed:
             self._update_attributes()
-            self.async_schedule_update_ha_state()
+            self._schedule_state_update()
 
 
 class VirtualOpenableEntity(VirtualEntity):
@@ -1571,15 +1625,17 @@ class VirtualOpenableEntity(VirtualEntity):
 
     def _update_attributes(self):
         super()._update_attributes()
-        self._attr_extra_state_attributes.update({
-            name: value for name, value in (
-                (ATTR_DEVICE_CLASS, self._attr_device_class),
-            ) if value is not None
-        })
+        self._attr_extra_state_attributes.update(
+            {
+                name: value
+                for name, value in ((ATTR_DEVICE_CLASS, self._attr_device_class),)
+                if value is not None
+            }
+        )
 
     def _cancel_timer(self) -> None:
         """Cancel the current movement timer if active."""
-        if hasattr(self, '_timer_handle') and self._timer_handle:
+        if hasattr(self, "_timer_handle") and self._timer_handle:
             self._timer_handle()
             self._timer_handle = None
 
@@ -1593,7 +1649,7 @@ class VirtualOpenableEntity(VirtualEntity):
         self._attr_is_opening = False
         self._attr_is_closing = False
 
-        self._attr_is_closed = (self._current_position == 0)
+        self._attr_is_closed = self._current_position == 0
 
         self.async_write_ha_state()
 
@@ -1632,7 +1688,7 @@ class VirtualOpenableEntity(VirtualEntity):
             self._attr_is_opening = False
             self._attr_is_closing = False
             self._attr_is_closed = self._current_position == 0
-            self.async_schedule_update_ha_state()
+            self._schedule_state_update()
             return
 
         if self._open_close_duration == 0:
@@ -1643,14 +1699,16 @@ class VirtualOpenableEntity(VirtualEntity):
             self._current_position = self._target_position
             self._attr_is_opening = False
             self._attr_is_closing = False
-            self._attr_is_closed = (self._current_position == 0)
+            self._attr_is_closed = self._current_position == 0
             self._target_position = None
 
-            self.async_schedule_update_ha_state(force_refresh=True)
+            self._schedule_state_update(force_refresh=True)
             return
 
         if self._open_close_tick > self._open_close_duration:
-            _LOGGER.warning(f"Tick duration {self._open_close_tick} > total duration {self._open_close_duration}, capping to {self._open_close_duration}")
+            _LOGGER.warning(
+                f"Tick duration {self._open_close_tick} > total duration {self._open_close_duration}, capping to {self._open_close_duration}"
+            )
             self._open_close_tick = self._open_close_duration
 
         distance = abs(self._target_position - self._current_position)
@@ -1659,7 +1717,9 @@ class VirtualOpenableEntity(VirtualEntity):
         self._positions_per_tick = distance / total_ticks
 
         self._set_direction_flags(self._target_position)
-        self._timer_handle = async_call_later(self.hass, self._open_close_tick, self._update_position)
+        self._timer_handle = async_call_later(
+            self.hass, self._open_close_tick, self._update_position
+        )
 
     def set_state(self, value) -> None:
         value = str(value).lower()
@@ -1717,9 +1777,13 @@ class VirtualOpenableEntity(VirtualEntity):
             return
 
         if self._attr_is_closing:
-            next_pos = max(self._target_position, self._current_position - self._positions_per_tick)
+            next_pos = max(
+                self._target_position, self._current_position - self._positions_per_tick
+            )
         else:
-            next_pos = min(self._target_position, self._current_position + self._positions_per_tick)
+            next_pos = min(
+                self._target_position, self._current_position + self._positions_per_tick
+            )
 
         self._current_position = next_pos
 
@@ -1727,7 +1791,9 @@ class VirtualOpenableEntity(VirtualEntity):
             self._stop()
         else:
             self.async_write_ha_state()
-            self._timer_handle = async_call_later(self.hass, self._open_close_tick, self._update_position)
+            self._timer_handle = async_call_later(
+                self.hass, self._open_close_tick, self._update_position
+            )
 
     async def async_will_remove_from_hass(self) -> None:
         """Cancel movement before the entity is detached from Home Assistant."""

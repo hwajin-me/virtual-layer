@@ -59,9 +59,7 @@ except ImportError:  # Home Assistant before 2026.8
         CONCENTRATION_PARTS_PER_MILLION,
     )
 else:
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER = (
-        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER
-    )
+    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER = UnitOfDensity.MICROGRAMS_PER_CUBIC_METER
     CONCENTRATION_PARTS_PER_MILLION = UnitOfRatio.PARTS_PER_MILLION
 
 _LOGGER = logging.getLogger(__name__)
@@ -96,22 +94,33 @@ def validate_domain_options(config) -> None:
         except (TypeError, ValueError) as err:
             raise vol.Invalid("mode must be auto, box, or slider") from err
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(virtual_schema(DEFAULT_NUMBER_VALUE, {
-    vol.Optional(CONF_CLASS): cv.string,
-    vol.Required(CONF_MIN): number_float,
-    vol.Required(CONF_MAX): number_float,
-    vol.Optional(ATTR_STEP, default=DEFAULT_STEP): number_float,
-    vol.Optional(CONF_MODE, default=NumberMode.AUTO): _as_number_mode,
-    vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
-}))
-NUMBER_SCHEMA = vol.Schema(virtual_schema(DEFAULT_NUMBER_VALUE, {
-    vol.Optional(CONF_CLASS): cv.string,
-    vol.Required(CONF_MIN): number_float,
-    vol.Required(CONF_MAX): number_float,
-    vol.Optional(ATTR_STEP, default=DEFAULT_STEP): number_float,
-    vol.Optional(CONF_MODE, default=NumberMode.AUTO): _as_number_mode,
-    vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
-}))
+
+PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
+    virtual_schema(
+        DEFAULT_NUMBER_VALUE,
+        {
+            vol.Optional(CONF_CLASS): cv.string,
+            vol.Required(CONF_MIN): number_float,
+            vol.Required(CONF_MAX): number_float,
+            vol.Optional(ATTR_STEP, default=DEFAULT_STEP): number_float,
+            vol.Optional(CONF_MODE, default=NumberMode.AUTO): _as_number_mode,
+            vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
+        },
+    )
+)
+NUMBER_SCHEMA = vol.Schema(
+    virtual_schema(
+        DEFAULT_NUMBER_VALUE,
+        {
+            vol.Optional(CONF_CLASS): cv.string,
+            vol.Required(CONF_MIN): number_float,
+            vol.Required(CONF_MAX): number_float,
+            vol.Optional(ATTR_STEP, default=DEFAULT_STEP): number_float,
+            vol.Optional(CONF_MODE, default=NumberMode.AUTO): _as_number_mode,
+            vol.Optional(CONF_UNIT_OF_MEASUREMENT, default=""): cv.string,
+        },
+    )
+)
 
 UNITS_OF_MEASUREMENT = {
     NumberDeviceClass.APPARENT_POWER: UnitOfApparentPower.VOLT_AMPERE,  # apparent power (VA)
@@ -149,24 +158,26 @@ UNITS_OF_MEASUREMENT = {
 
 
 async def async_setup_platform(
-        hass: HomeAssistant,
-        config: ConfigType,
-        async_add_entities: AddEntitiesCallback,
-        _discovery_info: DiscoveryInfoType | None = None,
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    _discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
     """Ignore platform setup; Virtual Layer entities are config-entry only."""
     _LOGGER.debug("ignoring platform setup")
 
 
 async def async_setup_entry(
-        hass: HomeAssistant,
-        entry: ConfigEntry,
-        async_add_entities: Callable[[list], None],
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: Callable[[list], None],
 ) -> None:
     _LOGGER.debug("setting up the entries...")
 
     entities = []
-    for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN):
+    for entity in get_entity_configs(
+        hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
+    ):
         entity = NUMBER_SCHEMA(entity)
         entities.append(VirtualNumber(entity, False))
     async_add_entities(entities)
@@ -204,8 +215,13 @@ class VirtualNumber(VirtualEntity, NumberEntity):
 
         # Set unit of measurement
         self._attr_unit_of_measurement = config.get(CONF_UNIT_OF_MEASUREMENT)
-        if not self._attr_unit_of_measurement and self._attr_device_class in UNITS_OF_MEASUREMENT:
-            self._attr_unit_of_measurement = UNITS_OF_MEASUREMENT[self._attr_device_class]
+        if (
+            not self._attr_unit_of_measurement
+            and self._attr_device_class in UNITS_OF_MEASUREMENT
+        ):
+            self._attr_unit_of_measurement = UNITS_OF_MEASUREMENT[
+                self._attr_device_class
+            ]
         self._attr_native_unit_of_measurement = self._attr_unit_of_measurement
 
         _LOGGER.debug(f"VirtualNumber: {self.name} created")
@@ -259,15 +275,19 @@ class VirtualNumber(VirtualEntity, NumberEntity):
 
     def _update_attributes(self):
         super()._update_attributes()
-        self._attr_extra_state_attributes.update({
-            name: value for name, value in (
-                (ATTR_DEVICE_CLASS, self._attr_device_class),
-                (ATTR_UNIT_OF_MEASUREMENT, self._attr_unit_of_measurement),
-                (ATTR_MIN, self.native_min_value),
-                (ATTR_MAX, self.native_max_value),
-                (ATTR_STEP, self.native_step),
-            ) if value is not None
-        })
+        self._attr_extra_state_attributes.update(
+            {
+                name: value
+                for name, value in (
+                    (ATTR_DEVICE_CLASS, self._attr_device_class),
+                    (ATTR_UNIT_OF_MEASUREMENT, self._attr_unit_of_measurement),
+                    (ATTR_MIN, self.native_min_value),
+                    (ATTR_MAX, self.native_max_value),
+                    (ATTR_STEP, self.native_step),
+                )
+                if value is not None
+            }
+        )
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new value."""
@@ -284,7 +304,7 @@ class VirtualNumber(VirtualEntity, NumberEntity):
         if not math.isfinite(value):
             raise ValueError("Number value must be finite")
         self._attr_native_value = self._normalize_value(value, self.native_value)
-        self.async_schedule_update_ha_state()
+        self._schedule_state_update()
 
     def set_state(self, value) -> None:
         self.set(value)

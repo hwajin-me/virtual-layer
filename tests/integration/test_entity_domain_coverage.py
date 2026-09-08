@@ -134,6 +134,8 @@ _NATIVE_TEMPLATE_SAMPLES = {
 
 
 def _native_template_sample(domain: str, property_name: str):
+    if property_name == "air_quality":
+        return "good"
     if property_name == "source_entity":
         return f"{domain}.helper_source"
     if property_name == "device_class":

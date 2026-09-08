@@ -559,7 +559,7 @@ class VirtualLight(VirtualEntity, LightEntity):
                 value = ColorMode(str(value))
             except ValueError as err:
                 raise ValueError(f"Invalid light color mode: {value}") from err
-            if value not in self._attr_supported_color_modes:
+            if value not in self._attr_supported_color_modes and value != ColorMode.ONOFF:
                 raise ValueError(f"Unsupported light color mode: {value}")
         elif name == "brightness":
             value = _as_brightness(value)

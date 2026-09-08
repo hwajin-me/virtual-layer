@@ -423,6 +423,48 @@ async def test_multiple_pm25_sensors_normalize_units_in_add_flow(hass):
     assert float(sensor.native_value) == pytest.approx(20)
 
 
+async def test_add_flow_combines_incompatible_sensor_measurements_unitlessly(hass):
+    """Different sensor units may be deliberately aggregated without metadata."""
+    hass.states.async_set(
+        "sensor.temperature", "20", {"device_class": "temperature", "unit_of_measurement": "°C"}
+    )
+    hass.states.async_set(
+        "sensor.humidity", "50", {"device_class": "humidity", "unit_of_measurement": "%"}
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["sensor.temperature", "sensor.humidity"]},
+    )
+    assert result["step_id"] == "sensor_conversion"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SENSOR_CONVERSION: "state", CONF_SENSOR_AGGREGATION: "average"},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_USE_TEMPLATE_HELPER: True}
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+        "state_class": "measurement"
+    }
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], defaults
+    )
+    stored = _first_stored_entity(result)
+    assert stored[CONF_NATIVE_TEMPLATES]["device_class"] == "{{ None }}"
+    assert stored[CONF_NATIVE_TEMPLATES]["native_unit_of_measurement"] == "{{ None }}"
+
+
 async def test_edit_flow_converts_climate_entity_to_live_temperature_sensor(hass):
     """Editing across domains must preserve the chosen conversion helper."""
     hass.states.async_set(

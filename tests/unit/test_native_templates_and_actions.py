@@ -2891,6 +2891,7 @@ def test_generic_domain_native_templates_follow_domain_state_contracts(hass):
                 "unknown",
                 **{
                     CONF_NATIVE_TEMPLATES: {
+                        "air_quality": "{{ 'very poor' }}",
                         "particulate_matter_2_5": "{{ 12.5 }}",
                     }
                 },
@@ -2941,7 +2942,8 @@ def test_generic_domain_native_templates_follow_domain_state_contracts(hass):
     assert calendar.state == "on"
     assert calendar.extra_state_attributes["message"] == "Current meeting"
     assert calendar.extra_state_attributes["location"] == "Office"
-    assert air_quality.state == 12.5
+    assert air_quality.state == "very_poor"
+    assert air_quality.extra_state_attributes["air_quality"] == "very_poor"
     assert air_quality.extra_state_attributes["particulate_matter_2_5"] == 12.5
     assert dt_util.parse_datetime(event.state) is not None
     assert event.extra_state_attributes["event_type"] == "pressed"

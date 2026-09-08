@@ -95,11 +95,31 @@ def _set_zone(hass, entity_id, name, latitude, longitude):
     )
 
 
+async def test_move_to_coords_schedules_state_safely_from_executor(hass):
+    """Synchronous HA entity services may invoke methods on a worker thread."""
+    tracker = _helper_tracker(hass)
+    tracker.schedule_update_ha_state = Mock()
+
+    await hass.async_add_executor_job(
+        tracker.move_to_coords,
+        {ATTR_LATITUDE: 37.5, ATTR_LONGITUDE: 127.0},
+        12,
+    )
+    await hass.async_block_till_done()
+
+    tracker.schedule_update_ha_state.assert_called_once_with(force_refresh=False)
+    assert tracker.latitude == 37.5
+    assert tracker.longitude == 127.0
+    assert tracker.location_accuracy == 12
+
+
 def test_presence_classification_prioritizes_wifi_ble_near_and_far_states(hass):
     tracker = _helper_tracker(hass)
     tracker._config[CONF_PRESENCE_CLASSIFICATION] = True
     tracker._presence_classification = True
-    tracker._source_entities.extend(["binary_sensor.phone_wifi", "sensor.phone_distance"])
+    tracker._source_entities.extend(
+        ["binary_sensor.phone_wifi", "sensor.phone_distance"]
+    )
     _set_zone(hass, "zone.home", "Home", 37.5000, 127.0000)
     _set_position(hass, "device_tracker.first_phone", 37.5000, 127.0000)
     _set_position(hass, "device_tracker.second_phone", 37.5000, 127.0000)
@@ -147,8 +167,12 @@ def test_dawarich_configuration_requires_safe_url_credentials_and_bounds():
         }
     }
     validate_domain_options(valid)
-    for key, value in ((CONF_DAWARICH_URL, "ftp://bad"), (CONF_DAWARICH_API_KEY, ""),
-                       (CONF_DAWARICH_POLL_INTERVAL, 1), (CONF_DAWARICH_HISTORY_LIMIT, 101)):
+    for key, value in (
+        (CONF_DAWARICH_URL, "ftp://bad"),
+        (CONF_DAWARICH_API_KEY, ""),
+        (CONF_DAWARICH_POLL_INTERVAL, 1),
+        (CONF_DAWARICH_HISTORY_LIMIT, 101),
+    ):
         invalid = {CONF_DAWARICH: dict(valid[CONF_DAWARICH], **{key: value})}
         with pytest.raises(vol.Invalid):
             validate_domain_options(invalid)
@@ -170,28 +194,43 @@ def test_dawarich_configuration_requires_safe_url_credentials_and_bounds():
 )
 def test_polygon_rejects_insufficient_or_collinear_espresense_anchors(anchors):
     with pytest.raises(vol.Invalid):
-        validate_domain_options({
-            "polygonal_zone": {
-                "geojson": {
-                    "type": "FeatureCollection",
-                    "features": [{
-                        "type": "Feature", "properties": {"name": "Room"},
-                        "geometry": {"type": "Polygon", "coordinates": [[
-                            [126.9, 37.4], [127.1, 37.4], [127.1, 37.6],
-                            [126.9, 37.4],
-                        ]]},
-                    }],
-                },
-                "espresense_anchors": anchors,
+        validate_domain_options(
+            {
+                "polygonal_zone": {
+                    "geojson": {
+                        "type": "FeatureCollection",
+                        "features": [
+                            {
+                                "type": "Feature",
+                                "properties": {"name": "Room"},
+                                "geometry": {
+                                    "type": "Polygon",
+                                    "coordinates": [
+                                        [
+                                            [126.9, 37.4],
+                                            [127.1, 37.4],
+                                            [127.1, 37.6],
+                                            [126.9, 37.4],
+                                        ]
+                                    ],
+                                },
+                            }
+                        ],
+                    },
+                    "espresense_anchors": anchors,
+                }
             }
-        })
+        )
 
 
 def test_dawarich_point_envelopes_and_family_member_matching():
-    points = VirtualDeviceTracker._dawarich_points({"data": [{"latitude": 37.5, "longitude": 127.0}]})
+    points = VirtualDeviceTracker._dawarich_points(
+        {"data": [{"latitude": 37.5, "longitude": 127.0}]}
+    )
     assert points == [{"latitude": 37.5, "longitude": 127.0}]
     assert VirtualDeviceTracker._dawarich_family_point(
-        {"locations": [{"name": "Alex", "location": {"lat": 37.5, "lon": 127.0}}]}, "alex"
+        {"locations": [{"name": "Alex", "location": {"lat": 37.5, "lon": 127.0}}]},
+        "alex",
     ) == {"lat": 37.5, "lon": 127.0}
 
 
@@ -244,12 +283,18 @@ async def test_dawarich_refresh_updates_tracker_and_never_puts_api_key_in_state(
             requests.append((url, kwargs))
             if url.endswith("/visits"):
                 return Response({"visits": [{"place_name": "Office"}]})
-            return Response({"points": [
-                {"lat": 37.5, "lon": 127.0, "timestamp": 9},
-                {"lat": 37.6, "lon": 127.1, "timestamp": 10, "speed": 4.2},
-            ]})
+            return Response(
+                {
+                    "points": [
+                        {"lat": 37.5, "lon": 127.0, "timestamp": 9},
+                        {"lat": 37.6, "lon": 127.1, "timestamp": 10, "speed": 4.2},
+                    ]
+                }
+            )
 
-    monkeypatch.setattr(tracker_platform, "async_get_clientsession", lambda _hass: Session())
+    monkeypatch.setattr(
+        tracker_platform, "async_get_clientsession", lambda _hass: Session()
+    )
     await tracker._async_refresh_dawarich()
 
     assert (tracker.latitude, tracker.longitude) == (37.6, 127.1)
@@ -493,17 +538,19 @@ def test_location_helper_restores_source_movement_history(hass):
     tracker._update_location_from_sources()
 
     restored = _helper_tracker(hass)
-    restored._virtual_attributes.update({
-        ATTR_LOCATION_PRIORITY_SOURCE: tracker.extra_state_attributes[
-            ATTR_LOCATION_PRIORITY_SOURCE
-        ],
-        ATTR_LOCATION_SOURCE_POSITIONS: tracker.extra_state_attributes[
-            ATTR_LOCATION_SOURCE_POSITIONS
-        ],
-        ATTR_LOCATION_SOURCE_LAST_MOVED: tracker.extra_state_attributes[
-            ATTR_LOCATION_SOURCE_LAST_MOVED
-        ],
-    })
+    restored._virtual_attributes.update(
+        {
+            ATTR_LOCATION_PRIORITY_SOURCE: tracker.extra_state_attributes[
+                ATTR_LOCATION_PRIORITY_SOURCE
+            ],
+            ATTR_LOCATION_SOURCE_POSITIONS: tracker.extra_state_attributes[
+                ATTR_LOCATION_SOURCE_POSITIONS
+            ],
+            ATTR_LOCATION_SOURCE_LAST_MOVED: tracker.extra_state_attributes[
+                ATTR_LOCATION_SOURCE_LAST_MOVED
+            ],
+        }
+    )
     restored._virtual_attributes[ATTR_LOCATION_SOURCE_POSITIONS][
         "device_tracker.first_phone"
     ] = [True, False]

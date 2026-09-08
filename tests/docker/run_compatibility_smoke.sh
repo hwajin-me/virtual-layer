@@ -26,7 +26,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from custom_components.virtual_layer import number, sensor
+from custom_components.virtual_layer import get_entity_from_domain, number, sensor
 from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
 from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClimate
 from custom_components.virtual_layer.config_flow import (
@@ -480,9 +480,18 @@ async def test_config_flow_create_modify_runtime():
             "25",
             {"device_class": "pm25", "unit_of_measurement": "μg/m³"},
         )
+        await asyncio.sleep(0.1)
         await hass.async_block_till_done()
         recovered_state = hass.states.get("sensor.docker_flow_pm25_max")
-        assert float(recovered_state.state) == 25.0
+        runtime_entity = get_entity_from_domain(
+            hass, "sensor", "sensor.docker_flow_pm25_max"
+        )
+        assert float(recovered_state.state) == 25.0, (
+            recovered_state,
+            runtime_entity._restore_waiting_for_sources,
+            runtime_entity._render_template(runtime_entity._value_template),
+            runtime_entity._value_template,
+        )
         assert recovered_state.attributes["available"] is True
     finally:
         await hass.async_stop()

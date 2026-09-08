@@ -60,6 +60,20 @@ CONF_STATE_CLASS = "state_class"
 
 DEFAULT_GENERIC_VALUE = "unknown"
 
+# Matter's Air Quality cluster uses these seven values. Keep the stored Home
+# Assistant value textual so it is directly consumable by Matter bridges.
+MATTER_AIR_QUALITY_VALUES = frozenset(
+    {
+        "unknown",
+        "good",
+        "fair",
+        "moderate",
+        "poor",
+        "very_poor",
+        "extremely_poor",
+    }
+)
+
 GENERIC_LIST_TEMPLATE_PROPERTIES = frozenset({
     "event_types",
     "group_members",
@@ -201,6 +215,19 @@ class GenericVirtualEntity(VirtualEntity, Entity):
         self._attr_state = value
 
     def _apply_native_template_value(self, name: str, value) -> bool:
+        if self._domain == "air_quality" and name == "air_quality":
+            if value is None:
+                value = "unknown"
+            value = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+            if value not in MATTER_AIR_QUALITY_VALUES:
+                raise ValueError(
+                    "air_quality must be one of "
+                    + ", ".join(sorted(MATTER_AIR_QUALITY_VALUES))
+                )
+            changed = self._attr_state != value
+            self._attr_state = value
+            self._domain_options[name] = value
+            return changed
         if name in GENERIC_LIST_TEMPLATE_PROPERTIES:
             value = _template_string_list(value, name)
         elif name in GENERIC_MAPPING_TEMPLATE_PROPERTIES:
@@ -270,6 +297,7 @@ class GenericVirtualEntity(VirtualEntity, Entity):
         if (
             self._domain == "air_quality"
             and name == "particulate_matter_2_5"
+            and "air_quality" not in self._domain_options
             and self._attr_state != value
         ):
             self._attr_state = value
