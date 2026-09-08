@@ -192,7 +192,7 @@ def virtual_schema(default_initial_value: str, extra_attrs):
         vol.Optional(CONF_INITIAL_AVAILABILITY, default=DEFAULT_AVAILABILITY): cv.boolean,
         vol.Optional(CONF_ATTRIBUTES, default=dict): dict,
         vol.Optional(CONF_ICON): cv.string,
-        vol.Optional(CONF_ICON_TEMPLATE): cv.template,
+        vol.Optional(CONF_ICON_TEMPLATE): cv.string,
         vol.Optional(CONF_AUTO_HELPER): object,
         vol.Optional(CONF_ATTRIBUTE_SOURCES, default=dict): dict,
         vol.Optional(CONF_ATTRIBUTE_TEMPLATES, default=dict): dict,

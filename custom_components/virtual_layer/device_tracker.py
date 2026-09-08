@@ -1431,7 +1431,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         self._location = None
         self._coords = new_coords
         self._gps_accuracy = accuracy
-        self.async_schedule_update_ha_state()
+        self.hass.add_job(self.async_schedule_update_ha_state)
 
     def set_state(self, value) -> None:
         if self._location_helper or self._polygon_config:

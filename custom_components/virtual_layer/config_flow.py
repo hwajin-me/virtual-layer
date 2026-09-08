@@ -3265,6 +3265,7 @@ def _validate_platform_entity(
             "Virtual Layer domain validation failed (platform=%s, error=%s)",
             platform,
             err,
+            exc_info=True,
         )
         raise InvalidDomainOptions from err
 
