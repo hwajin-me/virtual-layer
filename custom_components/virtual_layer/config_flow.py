@@ -2048,6 +2048,10 @@ def _selected_sensor_conversion_choice(
     """Read either one source choice or a validated per-source selection."""
     entity_ids = tuple(entity_ids)
     if len(entity_ids) > 1:
+        # Preserve an in-progress flow opened by an older frontend that still
+        # submits the former combined conversion selector.
+        if (legacy_choice := user_input.get(CONF_SENSOR_CONVERSION)) in choices:
+            return choices[legacy_choice]
         return _sensor_conversion_choice_from_source_selections(
             entity_ids, hass, user_input
         )
@@ -2320,7 +2324,7 @@ def _sensor_conversion_schema(
             if not source_options:
                 continue
             schema[
-                vol.Required(
+                vol.Optional(
                     _sensor_source_conversion_field(index),
                     default=source_options[0]["value"],
                 )
@@ -2869,7 +2873,7 @@ def _motion_hold_schema(defaults: Mapping) -> vol.Schema:
                     default=defaults.get(CONF_MOTION_DETECTION_LOGIC, "majority"),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=["majority", "any_active"],
+                        options=["majority", "two_thirds", "one_third", "any_active", "all_active"],
                         translation_key="motion_detection_logic",
                     )
                 ),
@@ -2901,11 +2905,11 @@ def _apply_motion_hold_minutes(
         raise InvalidDomainOptions from err
     if not 0 <= minutes <= MOTION_HOLD_MINUTES_MAX:
         raise InvalidDomainOptions
-    if logic not in {"majority", "any_active"}:
+    if logic not in {"majority", "two_thirds", "one_third", "any_active", "all_active"}:
         raise InvalidDomainOptions
     result = dict(defaults)
     current_logic = result.get(CONF_MOTION_DETECTION_LOGIC, "majority")
-    if current_logic not in {"majority", "any_active"}:
+    if current_logic not in {"majority", "two_thirds", "one_third", "any_active", "all_active"}:
         current_logic = "majority"
     current_delay = _motion_hold_minutes_default(result) * 60
     result[CONF_MOTION_HOLD_MINUTES] = minutes
@@ -2915,12 +2919,26 @@ def _apply_motion_hold_minutes(
     for entity_id in source_entities:
         variables.append(_source_variable_name(entity_id, seen))
     current_template = _text_default(result.get(CONF_VALUE_TEMPLATE))
+    legacy_all_active_template = "{{ " + " and ".join(
+        f"(({name} | lower) in ['1', 'on', 'open', 'true', 'unlocked', 'yes'])"
+        for name in variables
+    ) + " }}"
     if current_template == _presence_motion_helper_template(
         source_entities, variables, "motion", current_delay, current_logic
     ):
         result[CONF_VALUE_TEMPLATE] = _presence_motion_helper_template(
             source_entities, variables, "motion", minutes * 60, logic
         )
+    elif current_template in {
+        *(_binary_detection_helper_template(variables, mode) for mode in (
+            "majority", "two_thirds", "one_third", "any_active", "all_active"
+        )),
+        _presence_motion_helper_template(source_entities, variables, "presence"),
+        _safety_boolean_helper_template(variables),
+        "{{ " + variables[0] + " }}" if len(variables) == 1 else "",
+        legacy_all_active_template,
+    }:
+        result[CONF_VALUE_TEMPLATE] = _binary_detection_helper_template(variables, logic)
     return result
 
 
@@ -3006,11 +3024,11 @@ def _matter_air_quality_default(defaults: Mapping) -> str:
     )
     if isinstance(template, str):
         match = re.fullmatch(
-            r"\s*\{\{\s*['\"]?(unknown|good|fair|moderate|poor|very_poor|extremely_poor)['\"]?\s*\}\}\s*",
+            r"\s*\{\{\s*(['\"])(unknown|good|fair|moderate|poor|very_poor|extremely_poor)\1\s*\}\}\s*",
             template,
         )
         if match:
-            return match.group(1)
+            return match.group(2)
     return "source"
 
 
@@ -3218,6 +3236,8 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         ),
     }
     domain_schema = {}
+    if platform == "binary_sensor":
+        schema[vol.Optional("configure_detection", default=False)] = cv.boolean
     if platform == "device_tracker":
         domain_schema.update(
             {
@@ -4448,7 +4468,7 @@ def _build_entity_config(
         if not 0 <= motion_hold_minutes <= MOTION_HOLD_MINUTES_MAX:
             raise InvalidDomainOptions
         detection_logic = user_input.get(CONF_MOTION_DETECTION_LOGIC, "majority")
-        if detection_logic not in {"majority", "any_active"}:
+        if detection_logic not in {"majority", "two_thirds", "one_third", "any_active", "all_active"}:
             raise InvalidDomainOptions
         variable_names = []
         existing_variables: set[str] = set()
@@ -4477,6 +4497,22 @@ def _build_entity_config(
                 motion_hold_minutes * 60,
                 detection_logic,
             )
+        domain_options.pop(CONF_MOTION_HOLD_MINUTES, None)
+        domain_options.pop(CONF_MOTION_DETECTION_LOGIC, None)
+        entity[CONF_MOTION_HOLD_MINUTES] = motion_hold_minutes
+        entity[CONF_MOTION_DETECTION_LOGIC] = detection_logic
+    elif platform == "binary_sensor" and CONF_MOTION_HOLD_MINUTES in user_input:
+        try:
+            motion_hold_minutes = int(user_input[CONF_MOTION_HOLD_MINUTES])
+        except (TypeError, ValueError, OverflowError) as err:
+            raise InvalidDomainOptions from err
+        detection_logic = user_input.get(CONF_MOTION_DETECTION_LOGIC, "majority")
+        if (
+            not 0 <= motion_hold_minutes <= MOTION_HOLD_MINUTES_MAX
+            or detection_logic
+            not in {"majority", "two_thirds", "one_third", "any_active", "all_active"}
+        ):
+            raise InvalidDomainOptions
         domain_options.pop(CONF_MOTION_HOLD_MINUTES, None)
         domain_options.pop(CONF_MOTION_DETECTION_LOGIC, None)
         entity[CONF_MOTION_HOLD_MINUTES] = motion_hold_minutes
@@ -5668,6 +5704,22 @@ def _safety_boolean_helper_template(variable_names: list[str]) -> str:
     return "{{ ( [" + active_checks + "] | select | list | count ) > 0 }}"
 
 
+def _binary_detection_helper_template(variable_names: list[str], logic: str) -> str:
+    """Build the configurable stateless binary-sensor aggregation helper."""
+    active_checks = ", ".join(
+        f"(({name} | lower) in {sorted(BOOLEAN_TRUE_STATES)!r})"
+        for name in variable_names
+    )
+    count = "(active | count)"
+    condition = {
+        "any_active": count + " > 0",
+        "all_active": count + " == " + str(len(variable_names)),
+        "one_third": count + " * 3 >= " + str(len(variable_names)),
+        "two_thirds": count + " * 3 >= " + str(len(variable_names) * 2),
+    }.get(logic, count + " > " + str(len(variable_names)) + " / 2")
+    return "{% set active = [" + active_checks + "] | select | list %}{{ " + condition + " }}"
+
+
 def _presence_motion_helper_template(
     entity_ids: list[str],
     variable_names: list[str],
@@ -5680,11 +5732,13 @@ def _presence_motion_helper_template(
         f"(({variable_name} | lower) in {sorted(BOOLEAN_TRUE_STATES)!r})"
         for variable_name in variable_names
     )
-    active_condition = (
-        "(active | count) > 0"
-        if detection_logic == "any_active"
-        else "(active | count) > " + str(len(variable_names)) + " / 2"
-    )
+    active_count = "(active | count)"
+    active_condition = {
+        "any_active": active_count + " > 0",
+        "all_active": active_count + " == " + str(len(variable_names)),
+        "one_third": active_count + " * 3 >= " + str(len(variable_names)),
+        "two_thirds": active_count + " * 3 >= " + str(len(variable_names) * 2),
+    }.get(detection_logic, active_count + " > " + str(len(variable_names)) + " / 2")
     majority = (
         "{% set active = [" + active_checks + "] | select | list %}"
         "{% if " + active_condition + " %}true"
@@ -8661,7 +8715,9 @@ def _reference_entity_defaults(
             presence_or_motion_class,
         )
     elif platform == "binary_sensor" and safety_boolean_sources:
-        defaults[CONF_VALUE_TEMPLATE] = _safety_boolean_helper_template(variable_names)
+        defaults[CONF_VALUE_TEMPLATE] = _binary_detection_helper_template(
+            variable_names, "any_active"
+        )
     elif (
         all_location or mixed_location_presence or all_presence_distance
     ) and platform == "device_tracker":
@@ -9705,7 +9761,10 @@ def _entity_form_defaults(
             "dimmable",
         )
     elif platform == "air_quality":
-        defaults[CONF_MATTER_AIR_QUALITY] = _matter_air_quality_default(defaults)
+        # This is a pending step answer, not persisted configuration. Restoring
+        # it here skips the dedicated editor and can overwrite a changed Jinja
+        # template with the previously selected fixed level.
+        defaults.pop(CONF_MATTER_AIR_QUALITY, None)
     elif platform == "binary_sensor":
         motion_hold_minutes = domain_options.pop(CONF_MOTION_HOLD_MINUTES, None)
         if motion_hold_minutes is not None:
@@ -10255,6 +10314,10 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 user_input,
                 self._entity_defaults,
             )
+            if user_input.pop("configure_detection", False):
+                if user_input.get(CONF_PLATFORM) == "binary_sensor":
+                    self._entity_defaults = user_input
+                    return await self.async_step_motion_hold()
             try:
                 user_input, self._reference_defaults = _refresh_add_reference_defaults(
                     self.hass,
@@ -10855,6 +10918,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 user_input,
                 self._entity_defaults,
             )
+            if user_input.pop("configure_detection", False):
+                if user_input.get(CONF_PLATFORM) == "binary_sensor":
+                    self._entity_defaults = user_input
+                    return await self.async_step_motion_hold()
             try:
                 user_input, self._reference_defaults = _refresh_add_reference_defaults(
                     self.hass,
@@ -11517,6 +11584,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 user_input,
                 self._entity_defaults,
             )
+            if user_input.pop("configure_detection", False):
+                if user_input.get(CONF_PLATFORM) == "binary_sensor":
+                    self._entity_defaults = user_input
+                    return await self.async_step_edit_motion_hold()
         if user_input is not None and _needs_domain_specific_form(user_input):
             user_input = _complete_domain_form_defaults(user_input)
             self._entity_defaults = user_input

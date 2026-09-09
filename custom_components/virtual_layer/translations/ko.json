@@ -50,39 +50,15 @@
         }
       },
       "motion_hold": {
-        "title": "동작 인식 설정",
-        "description": "이 가상 동작 엔티티의 인식 유지 시간을 설정합니다. 이 설정은 자동 생성된 helper template에 반영됩니다.",
+        "title": "Binary Sensor 인식 설정",
+        "description": "이 가상 binary sensor가 소스 상태를 결합하는 방법을 설정합니다. 선택값은 이 엔티티의 자동 helper template에 반영됩니다.",
         "data": {
           "motion_hold_minutes": "동작 감지 유지 시간",
-          "motion_detection_logic": "동작 감지 판정 로직"
+          "motion_detection_logic": "활성 소스 기준"
         },
         "data_description": {
-          "motion_hold_minutes": "모든 소스가 off가 된 뒤에도 생성된 motion helper를 on으로 유지할 시간(분)입니다. 0이면 즉시 해제합니다. presence helper는 지연 없이 현재 과반 결과를 사용합니다.",
-          "motion_detection_logic": "과반은 절반을 초과한 소스가 동작을 감지해야 on이 되고, 하나라도 감지는 한 소스만 감지해도 on이 됩니다. 선택한 로직은 자동 helper template에 반영됩니다."
-        }
-      },
-      "motion_hold": {
-        "title": "동작 인식 설정",
-        "description": "새 가상 동작 엔티티의 인식 유지 시간을 설정합니다. 자동 생성된 helper template에 반영됩니다.",
-        "data": {
-          "motion_hold_minutes": "동작 감지 유지 시간",
-          "motion_detection_logic": "동작 감지 판정 로직"
-        },
-        "data_description": {
-          "motion_hold_minutes": "모든 소스가 off가 된 뒤에도 생성된 motion helper를 on으로 유지할 시간(분)입니다. 0이면 즉시 해제합니다.",
-          "motion_detection_logic": "과반은 절반을 초과한 소스가 동작을 감지해야 on이 되고, 하나라도 감지는 한 소스만 감지해도 on이 됩니다. 선택한 로직은 자동 helper template에 반영됩니다."
-        }
-      },
-      "edit_motion_hold": {
-        "title": "동작 인식 설정",
-        "description": "이 가상 동작 엔티티의 인식 유지 시간을 설정합니다. 자동 생성된 helper template에 반영됩니다.",
-        "data": {
-          "motion_hold_minutes": "동작 감지 유지 시간",
-          "motion_detection_logic": "동작 감지 판정 로직"
-        },
-        "data_description": {
-          "motion_hold_minutes": "모든 소스가 off가 된 뒤에도 생성된 motion helper를 on으로 유지할 시간(분)입니다. 0이면 즉시 해제합니다.",
-          "motion_detection_logic": "과반은 절반을 초과한 소스가 동작을 감지해야 on이 되고, 하나라도 감지는 한 소스만 감지해도 on이 됩니다. 선택한 로직은 자동 helper template에 반영됩니다."
+          "motion_hold_minutes": "motion helper에서만 사용합니다. 모든 소스가 off가 된 후에도 on을 유지할 시간(분)이며, 0이면 즉시 해제합니다. 다른 binary sensor class에는 적용되지 않습니다.",
+          "motion_detection_logic": "과반, 3분의 2 이상, 3분의 1 이상, 하나라도 감지, 모두 감지 중 활성 소스의 최소 기준을 선택합니다."
         }
       },
       "entity": {
@@ -101,7 +77,8 @@
           "source_entities_text": "소스 엔티티",
           "pull_interval": "가져오기 주기",
           "value_template": "값 템플릿",
-          "availability_template": "사용 가능 여부 템플릿"
+          "availability_template": "사용 가능 여부 템플릿",
+          "configure_detection": "인식 방법 설정"
         },
         "data_description": {
           "device_name": "표시 이름입니다. 서로 다른 장치가 같은 이름을 사용할 수 있으며 장치 ID로만 그룹을 구분합니다.",
@@ -116,7 +93,8 @@
           "value_template": "엔티티의 주 상태를 만드는 Jinja 템플릿입니다. 소스 엔티티를 복사하면 helper가 생성되며, 이후 소스 변경 시 직접 수정한 템플릿은 보존됩니다.",
           "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다. 예시 식(앞뒤를 Jinja 구분자로 감싸세요): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
-          "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요."
+          "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
+          "configure_detection": "활성화하고 제출하면 별도 인식 설정 단계가 열립니다. 이 binary sensor의 활성 소스 판정 기준을 선택할 수 있습니다."
         },
         "sections": {
           "device_details": {
@@ -841,7 +819,8 @@
           "source_entities_text": "소스 엔티티",
           "pull_interval": "가져오기 주기",
           "value_template": "값 템플릿",
-          "availability_template": "사용 가능 여부 템플릿"
+          "availability_template": "사용 가능 여부 템플릿",
+          "configure_detection": "인식 방법 설정"
         },
         "data_description": {
           "device_name": "수정 가능한 표시 이름입니다. 엔티티가 속할 가상 장치는 장치 ID로 결정합니다.",
@@ -856,7 +835,8 @@
           "value_template": "엔티티의 주 상태를 만드는 Jinja 템플릿입니다. 소스 엔티티를 복사하면 helper가 생성되며, 이후 소스 변경 시 직접 수정한 템플릿은 보존됩니다.",
           "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다. 예시 식(앞뒤를 Jinja 구분자로 감싸세요): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
-          "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요."
+          "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
+          "configure_detection": "활성화하고 제출하면 별도 인식 설정 단계가 열립니다. 이 binary sensor의 활성 소스 판정 기준을 선택할 수 있습니다."
         },
         "sections": {
           "device_details": {
@@ -1507,7 +1487,8 @@
           "source_entities_text": "소스 엔티티",
           "pull_interval": "가져오기 주기",
           "value_template": "값 템플릿",
-          "availability_template": "사용 가능 여부 템플릿"
+          "availability_template": "사용 가능 여부 템플릿",
+          "configure_detection": "인식 방법 설정"
         },
         "data_description": {
           "device_name": "표시 이름입니다. 서로 다른 장치가 같은 이름을 사용할 수 있으며 장치 ID로만 그룹을 구분합니다.",
@@ -1522,7 +1503,8 @@
           "value_template": "엔티티의 주 상태를 만드는 Jinja 템플릿입니다. 소스 엔티티를 복사하면 helper가 생성되며, 이후 소스 변경 시 직접 수정한 템플릿은 보존됩니다.",
           "availability_template": "가상 엔티티의 사용 가능 여부를 반환하는 선택적 Jinja 템플릿입니다. 예시 식(앞뒤를 Jinja 구분자로 감싸세요): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "쉼표로 구분하거나 한 줄에 하나씩 엔티티 ID를 입력하세요. 소스 상태가 바뀌면 템플릿을 갱신합니다.",
-          "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요."
+          "pull_interval": "소스 상태를 주기적으로 확인할 간격(초)입니다. 상태 변경 시에만 갱신하려면 0을 사용하세요.",
+          "configure_detection": "활성화하고 제출하면 별도 인식 설정 단계가 열립니다. 이 binary sensor의 활성 소스 판정 기준을 선택할 수 있습니다."
         },
         "sections": {
           "device_details": {
@@ -2044,6 +2026,30 @@
         "data_description": {
           "target_entity_type": "선택한 타입에 맞춰 상태, 네이티브 속성 및 지원 명령 helper를 생성합니다. 여러 제어 및 센서 원본을 하나의 Humidifier 같은 네이티브 가상 엔티티로 조합할 수도 있습니다."
         }
+      },
+      "motion_hold": {
+        "title": "Binary Sensor 인식 설정",
+        "description": "이 가상 binary sensor가 소스 상태를 결합하는 방법을 설정합니다. 선택값은 이 엔티티의 자동 helper template에 반영됩니다.",
+        "data": {
+          "motion_hold_minutes": "동작 감지 유지 시간",
+          "motion_detection_logic": "활성 소스 기준"
+        },
+        "data_description": {
+          "motion_hold_minutes": "motion helper에서만 사용합니다. 모든 소스가 off가 된 후에도 on을 유지할 시간(분)이며, 0이면 즉시 해제합니다. 다른 binary sensor class에는 적용되지 않습니다.",
+          "motion_detection_logic": "과반, 3분의 2 이상, 3분의 1 이상, 하나라도 감지, 모두 감지 중 활성 소스의 최소 기준을 선택합니다."
+        }
+      },
+      "edit_motion_hold": {
+        "title": "Binary Sensor 인식 설정",
+        "description": "이 가상 binary sensor가 소스 상태를 결합하는 방법을 설정합니다. 선택값은 이 엔티티의 자동 helper template에 반영됩니다.",
+        "data": {
+          "motion_hold_minutes": "동작 감지 유지 시간",
+          "motion_detection_logic": "활성 소스 기준"
+        },
+        "data_description": {
+          "motion_hold_minutes": "motion helper에서만 사용합니다. 모든 소스가 off가 된 후에도 on을 유지할 시간(분)이며, 0이면 즉시 해제합니다. 다른 binary sensor class에는 적용되지 않습니다.",
+          "motion_detection_logic": "과반, 3분의 2 이상, 3분의 1 이상, 하나라도 감지, 모두 감지 중 활성 소스의 최소 기준을 선택합니다."
+        }
       }
     }
   },
@@ -2051,7 +2057,10 @@
     "motion_detection_logic": {
       "options": {
         "majority": "과반",
-        "any_active": "하나라도 감지"
+        "two_thirds": "3분의 2 이상",
+        "one_third": "3분의 1 이상",
+        "any_active": "하나라도 감지",
+        "all_active": "모두 감지"
       }
     },
     "sensor_aggregation": {

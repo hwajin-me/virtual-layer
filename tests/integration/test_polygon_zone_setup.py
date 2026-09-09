@@ -1,7 +1,8 @@
 """Integration tests for polygon virtual device trackers."""
 
-import asyncio
 import copy
+from datetime import timedelta
+from threading import get_ident
 
 import homeassistant.helpers.entity_registry as er
 import pytest
@@ -13,7 +14,8 @@ from homeassistant.const import (
     CONF_PLATFORM,
 )
 from homeassistant.data_entry_flow import FlowResultType
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
+from homeassistant.util import dt as dt_util
 
 from custom_components.virtual_layer.config_flow import (
     ACTION_ADD_ENTITY,
@@ -44,6 +46,7 @@ from custom_components.virtual_layer.const import (
     CONF_SOURCE_ENTITIES,
 )
 from custom_components.virtual_layer.device_tracker import (
+    VirtualDeviceTracker,
     ATTR_POLYGON_PERSON,
     ATTR_POLYGON_SELECTED_SOURCE,
     ATTR_POLYGON_SELECTED_MEMBERS,
@@ -51,6 +54,51 @@ from custom_components.virtual_layer.device_tracker import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize("polygon", [False, True])
+async def test_tracker_periodic_refresh_stays_on_event_loop(hass, monkeypatch, polygon):
+    """HA timers must not move tracker state/template evaluation to its executor."""
+    method = "_update_polygon_from_sources" if polygon else "_update_location_from_sources"
+    original = getattr(VirtualDeviceTracker, method)
+    threads = []
+
+    def record_refresh(self):
+        threads.append(get_ident())
+        return original(self)
+
+    monkeypatch.setattr(VirtualDeviceTracker, method, record_refresh)
+    hass.states.async_set(
+        "device_tracker.timer_source", "not_home",
+        {ATTR_LATITUDE: 37.5, ATTR_LONGITUDE: 127.0},
+    )
+    config = {
+        CONF_PLATFORM: "device_tracker",
+        CONF_NAME: "Timer Tracker",
+        ATTR_ENTITY_ID: "device_tracker.timer_tracker",
+        CONF_INITIAL_VALUE: "not_home",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: False,
+        CONF_SOURCE_ENTITIES: ["device_tracker.timer_source"],
+    }
+    config.update(
+        {CONF_POLYGONAL_ZONE: {CONF_POLYGON_GEOJSON: GEOJSON}}
+        if polygon else {CONF_LOCATION_HELPER: {"distance_threshold_meters": 300}}
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "Timer Device"},
+        options={ATTR_DEVICES: {"Timer Device": [config]}},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    threads.clear()
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=2))
+    await hass.async_block_till_done()
+    assert threads
+    assert set(threads) == {hass.loop_thread_id}
+    assert hass.states.get("device_tracker.timer_tracker").attributes[ATTR_LATITUDE] == 37.5
 
 GEOJSON = {
     "type": "FeatureCollection",
@@ -391,7 +439,6 @@ async def test_person_only_polygon_tracker_tracks_person_coordinates(hass):
         "not_home",
         {ATTR_LATITUDE: 35.1796, ATTR_LONGITUDE: 129.0756, "gps_accuracy": 10},
     )
-    await asyncio.sleep(0.01)
     await hass.async_block_till_done()
 
     state = hass.states.get("device_tracker.alex_polygon")

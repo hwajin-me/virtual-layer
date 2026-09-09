@@ -737,7 +737,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         self._refresh_remove_listeners.append(
             async_track_time_interval(
                 self.hass,
-                lambda _now: self._update_location_from_sources(),
+                self._async_location_source_changed,
                 timedelta(minutes=1),
             )
         )
@@ -944,7 +944,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 }
             )
             self._update_attributes()
-            self.hass.add_job(self.async_schedule_update_ha_state)
+            self._schedule_state_update()
         except (
             asyncio.TimeoutError,
             ClientError,
@@ -957,7 +957,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             )
             self._virtual_attributes[ATTR_DAWARICH_ERROR] = str(err)
             self._update_attributes()
-            self.hass.add_job(self.async_schedule_update_ha_state)
+            self._schedule_state_update()
 
     async def _async_setup_polygon_tracking(self) -> None:
         """Load polygon definitions and start source aggregation."""
@@ -975,7 +975,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         self._refresh_remove_listeners.append(
             async_track_time_interval(
                 self.hass,
-                lambda _now: self._update_polygon_from_sources(),
+                self._async_polygon_source_changed,
                 timedelta(minutes=1),
             )
         )
@@ -1280,7 +1280,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             ATTR_RADIUS: 0,
         }
         self._gps_accuracy = selected["gps_accuracy"]
-        self.hass.add_job(self.async_schedule_update_ha_state)
+        self._schedule_state_update()
 
     @callback
     def _async_location_source_changed(self, _event) -> None:

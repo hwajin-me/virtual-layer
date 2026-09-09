@@ -129,6 +129,7 @@ from custom_components.virtual_layer.config_flow import (
     _log_unhandled_flow_errors,
     _managed_device_choices,
     _matter_air_quality_schema,
+    _matter_air_quality_default,
     _matter_fan_source_levels,
     _merged_native_template,
     _lowest_light_capability,
@@ -1445,6 +1446,24 @@ def test_air_quality_form_offers_and_persists_direct_matter_level():
     assert source_entity[CONF_NATIVE_TEMPLATES]["air_quality"] == (
         "{{ states('sensor.aqi') }}"
     )
+
+
+@pytest.mark.parametrize("template, expected", [
+    ("{{ 'good' }}", "good"),
+    ('{{ "poor" }}', "poor"),
+    ("{{ good }}", "source"),
+    ("{{ 'good\" }}", "source"),
+    ("{{ states('sensor.quality') }}", "source"),
+])
+def test_air_quality_editor_only_infers_quoted_literals(template, expected):
+    defaults = _entity_form_defaults("Air", {
+        CONF_PLATFORM: "air_quality",
+        CONF_NAME: "Quality",
+        CONF_NATIVE_TEMPLATES: {"air_quality": template},
+    })
+    assert CONF_MATTER_AIR_QUALITY not in defaults
+    assert _needs_domain_specific_form(defaults)
+    assert _matter_air_quality_default(defaults) == expected
 
 
 def _native_helper_sample(platform: str, property_name: str, index: int):
@@ -5021,6 +5040,34 @@ def test_motion_settings_step_regenerates_the_automatic_helper_logic(hass):
     assert configured[CONF_MOTION_DETECTION_LOGIC] == "any_active"
     assert "(active | count) > 0" in configured[CONF_VALUE_TEMPLATE]
     assert "< 540" in configured[CONF_VALUE_TEMPLATE]
+
+
+def test_mixed_binary_device_classes_can_use_any_active_logic(hass):
+    source_ids = ["binary_sensor.front_door", "binary_sensor.hall_smoke"]
+    hass.states.async_set(source_ids[0], "off", {"device_class": "door"})
+    hass.states.async_set(source_ids[1], "on", {"device_class": "smoke"})
+
+    defaults = _reference_entity_defaults(hass, source_ids)
+    configured = _apply_motion_hold_minutes(defaults, 0, "any_active")
+
+    assert defaults[CONF_PLATFORM] == "binary_sensor"
+    assert " and " in defaults[CONF_VALUE_TEMPLATE]
+    assert "(active | count) > 0" in configured[CONF_VALUE_TEMPLATE]
+
+
+@pytest.mark.parametrize("first_logic", ["majority", "two_thirds", "one_third", "any_active", "all_active"])
+def test_binary_logic_can_be_changed_repeatedly(hass, first_logic):
+    sources = ["binary_sensor.first", "binary_sensor.second", "binary_sensor.third"]
+    for source in sources:
+        hass.states.async_set(source, "on")
+    defaults = _reference_entity_defaults(hass, sources)
+    first = _apply_motion_hold_minutes(defaults, 0, first_logic)
+    second = _apply_motion_hold_minutes(first, 0, "all_active")
+    variables = {name: "on" for name in _yaml_value(second[CONF_TEMPLATE_SOURCES_JSON])}
+    template = Template(second[CONF_VALUE_TEMPLATE], hass)
+    assert template.async_render(variables=variables) is True
+    variables[next(iter(variables))] = "off"
+    assert template.async_render(variables=variables) is False
 
 
 def test_presence_motion_helper_requires_binary_sensor_sources(hass):

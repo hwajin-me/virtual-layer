@@ -695,7 +695,7 @@ class VirtualEntity(RestoreEntity):
             self._refresh_remove_listeners.append(
                 async_track_time_interval(
                     self.hass,
-                    lambda _now: self._apply_templates(),
+                    _async_source_entity_changed,
                     timedelta(seconds=self._pull_interval),
                 )
             )

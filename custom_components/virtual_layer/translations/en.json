@@ -50,39 +50,15 @@
         }
       },
       "motion_hold": {
-        "title": "Configure Motion Recognition",
-        "description": "Set the recognition hold time for this virtual motion entity. This setting updates its automatically generated helper template.",
+        "title": "Configure Binary Sensor Detection",
+        "description": "Set how this virtual binary sensor combines its source states. The choices update the automatic helper template for this entity.",
         "data": {
           "motion_hold_minutes": "Motion detection hold time",
-          "motion_detection_logic": "Motion detection logic"
+          "motion_detection_logic": "Active-source threshold"
         },
         "data_description": {
-          "motion_hold_minutes": "After every source reports off, keep the generated motion helper on for this many minutes. Set 0 to clear immediately. Presence helpers always use the current majority without a delay.",
-          "motion_detection_logic": "Majority requires more than half the sources to detect motion; Any active turns on when one source detects motion. The selected logic is rendered into the automatic helper template."
-        }
-      },
-      "motion_hold": {
-        "title": "Configure Motion Recognition",
-        "description": "Set the recognition hold time for this new virtual motion entity. This updates its automatically generated helper template.",
-        "data": {
-          "motion_hold_minutes": "Motion detection hold time",
-          "motion_detection_logic": "Motion detection logic"
-        },
-        "data_description": {
-          "motion_hold_minutes": "After every source reports off, keep the generated motion helper on for this many minutes. Set 0 to clear immediately.",
-          "motion_detection_logic": "Majority requires more than half the sources to detect motion; Any active turns on when one source detects motion. The selected logic is rendered into the automatic helper template."
-        }
-      },
-      "edit_motion_hold": {
-        "title": "Configure Motion Recognition",
-        "description": "Set the recognition hold time for this virtual motion entity. This updates its automatically generated helper template.",
-        "data": {
-          "motion_hold_minutes": "Motion detection hold time",
-          "motion_detection_logic": "Motion detection logic"
-        },
-        "data_description": {
-          "motion_hold_minutes": "After every source reports off, keep the generated motion helper on for this many minutes. Set 0 to clear immediately.",
-          "motion_detection_logic": "Majority requires more than half the sources to detect motion; Any active turns on when one source detects motion. The selected logic is rendered into the automatic helper template."
+          "motion_hold_minutes": "Only motion helpers use this value: after every source is off, retain on for this many minutes. Set 0 to clear immediately. Other binary sensor classes ignore it.",
+          "motion_detection_logic": "Choose the minimum active-source threshold: majority, two thirds, one third, any active source, or every source."
         }
       },
       "entity": {
@@ -101,7 +77,8 @@
           "source_entities_text": "Source entities",
           "pull_interval": "Pull interval",
           "value_template": "Value template",
-          "availability_template": "Availability template"
+          "availability_template": "Availability template",
+          "configure_detection": "Configure detection logic"
         },
         "data_description": {
           "device_name": "Display name only. Different Devices may use the same name; Device ID determines grouping.",
@@ -116,7 +93,8 @@
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
           "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
-          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes."
+          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
+          "configure_detection": "Enable and submit to open the separate detection settings step. Select the active-source threshold for this binary sensor."
         },
         "sections": {
           "device_details": {
@@ -841,7 +819,8 @@
           "source_entities_text": "Source entities",
           "pull_interval": "Pull interval",
           "value_template": "Value template",
-          "availability_template": "Availability template"
+          "availability_template": "Availability template",
+          "configure_detection": "Configure detection logic"
         },
         "data_description": {
           "device_name": "Editable display name. Device ID determines which virtual Device contains the entity.",
@@ -856,7 +835,8 @@
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
           "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
-          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes."
+          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
+          "configure_detection": "Enable and submit to open the separate detection settings step. Select the active-source threshold for this binary sensor."
         },
         "sections": {
           "device_details": {
@@ -1507,7 +1487,8 @@
           "source_entities_text": "Source entities",
           "pull_interval": "Pull interval",
           "value_template": "Value template",
-          "availability_template": "Availability template"
+          "availability_template": "Availability template",
+          "configure_detection": "Configure detection logic"
         },
         "data_description": {
           "device_name": "Display name only. Different Devices may use the same name; Device ID determines grouping.",
@@ -1522,7 +1503,8 @@
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
           "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
-          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes."
+          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
+          "configure_detection": "Enable and submit to open the separate detection settings step. Select the active-source threshold for this binary sensor."
         },
         "sections": {
           "device_details": {
@@ -2044,6 +2026,30 @@
         "data_description": {
           "target_entity_type": "The generated state, native-property, and supported command helpers will use this entity type. Multiple control and sensor sources can also compose one native virtual entity, such as a Humidifier."
         }
+      },
+      "motion_hold": {
+        "title": "Configure Binary Sensor Detection",
+        "description": "Set how this virtual binary sensor combines its source states. The choices update the automatic helper template for this entity.",
+        "data": {
+          "motion_hold_minutes": "Motion detection hold time",
+          "motion_detection_logic": "Active-source threshold"
+        },
+        "data_description": {
+          "motion_hold_minutes": "Only motion helpers use this value: after every source is off, retain on for this many minutes. Set 0 to clear immediately. Other binary sensor classes ignore it.",
+          "motion_detection_logic": "Choose the minimum active-source threshold: majority, two thirds, one third, any active source, or every source."
+        }
+      },
+      "edit_motion_hold": {
+        "title": "Configure Binary Sensor Detection",
+        "description": "Set how this virtual binary sensor combines its source states. The choices update the automatic helper template for this entity.",
+        "data": {
+          "motion_hold_minutes": "Motion detection hold time",
+          "motion_detection_logic": "Active-source threshold"
+        },
+        "data_description": {
+          "motion_hold_minutes": "Only motion helpers use this value: after every source is off, retain on for this many minutes. Set 0 to clear immediately. Other binary sensor classes ignore it.",
+          "motion_detection_logic": "Choose the minimum active-source threshold: majority, two thirds, one third, any active source, or every source."
+        }
       }
     }
   },
@@ -2051,7 +2057,10 @@
     "motion_detection_logic": {
       "options": {
         "majority": "Majority",
-        "any_active": "Any active"
+        "two_thirds": "At least two thirds",
+        "one_third": "At least one third",
+        "any_active": "Any active",
+        "all_active": "All active"
       }
     },
     "sensor_aggregation": {

@@ -633,6 +633,36 @@ async def test_edit_flow_converts_climate_entity_to_live_temperature_sensor(hass
     )
 
 
+async def test_binary_detection_settings_step_saves_mixed_class_logic(hass):
+    hass.states.async_set("binary_sensor.door", "off", {"device_class": "door"})
+    hass.states.async_set("binary_sensor.smoke", "on", {"device_class": "smoke"})
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+    manager = hass.config_entries.options
+    result = await manager.async_init(entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY})
+    result = await manager.async_configure(result["flow_id"], {
+        CONF_REFERENCE_ENTITY_ID: ["binary_sensor.door", "binary_sensor.smoke"]
+    })
+    result = await _choose_add_template_helper(hass, result)
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults["configure_detection"] = True
+    result = await manager.async_configure(result["flow_id"], defaults)
+    assert result["step_id"] == "motion_hold"
+    result = await manager.async_configure(result["flow_id"], {
+        "motion_hold_minutes": 0, "motion_detection_logic": "any_active",
+    })
+    assert result["step_id"] == "entity"
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert "(active | count) > 0" in defaults[CONF_VALUE_TEMPLATE]
+    result = await manager.async_configure(result["flow_id"], defaults)
+    stored = _first_stored_entity(result)
+    assert stored["motion_detection_logic"] == "any_active"
+
+
 async def test_multiple_boolean_domains_create_live_binary_sensor(hass):
     """Mixed boolean domains must combine and update in Home Assistant."""
     hass.states.async_set("switch.first", "on")
@@ -9597,6 +9627,35 @@ async def test_air_quality_uses_a_dedicated_matter_configuration_step(hass):
         {"matter_air_quality": "good"},
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
+
+    device = next(iter(entry.options[ATTR_DEVICES]))
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    entity_choices = next(iter(result["data_schema"].schema.values())).container
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_ENTITY_KEY: next(iter(entity_choices))},
+    )
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    if result["step_id"] == "edit_entity_type":
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "air_quality"},
+        )
+    if result["step_id"] == "edit_entity_helper":
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_KEEP},
+        )
+    assert result["step_id"] == "edit_entity"
+    values = _flatten_entity_form_sections(result["data_schema"]({}))
+    custom = "{{ 'fair' if is_state('air_quality.living_room', 'good') else 'poor' }}"
+    values[CONF_NATIVE_VALUE_TEMPLATES]["air_quality"] = custom
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert result["step_id"] == "edit_air_quality"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"matter_air_quality": "source"},
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert entry.options[ATTR_DEVICES][device][0][CONF_NATIVE_TEMPLATES]["air_quality"] == custom
 
 
 async def test_virtual_camera_alias_does_not_proxy_itself(hass):

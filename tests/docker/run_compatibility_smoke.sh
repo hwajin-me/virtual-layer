@@ -12,6 +12,8 @@ docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
 import asyncio
 import os
 import tempfile
+from threading import get_ident
+from unittest.mock import AsyncMock, patch
 from pathlib import Path
 
 import yaml
@@ -21,7 +23,8 @@ from homeassistant.components.light import ColorMode, LightEntityFeature
 from homeassistant.components.sensor import DEVICE_CLASS_UNITS
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import __version__ as HA_VERSION
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, HassJob
+from homeassistant.util import dt as dt_util
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
@@ -56,6 +59,8 @@ from custom_components.virtual_layer.const import (
 )
 from custom_components.virtual_layer.light import LIGHT_SCHEMA, VirtualLight
 from custom_components.virtual_layer.sensor import SENSOR_SCHEMA, VirtualSensor
+from custom_components.virtual_layer.device_tracker import VirtualDeviceTracker
+from custom_components.virtual_layer.entity import VirtualEntity
 from custom_components.virtual_layer.vacuum import VACUUM_SCHEMA, VirtualVacuum
 
 
@@ -297,6 +302,52 @@ async def configure_flow(manager, result, user_input):
     return result
 
 
+async def test_tracker_timer_dispatch(hass):
+    """Exercise HA's real timer-job dispatch for both tracker helper modes."""
+    periodic_sensor = VirtualSensor({
+        "name": "Docker Periodic", "entity_id": "sensor.docker_periodic",
+        "pull_interval": 60, "persistent": False,
+    }, False)
+    periodic_sensor.hass = hass
+    callbacks = []
+    threads = []
+    with (
+        patch.object(periodic_sensor, "_apply_templates", side_effect=lambda: threads.append(get_ident())),
+        patch("custom_components.virtual_layer.entity.async_track_time_interval",
+              side_effect=lambda _hass, action, interval: callbacks.append(action) or (lambda: None)),
+    ):
+        periodic_sensor._setup_templates()
+        assert len(callbacks) == 1
+        hass.async_run_hass_job(HassJob(callbacks[0]), dt_util.utcnow())
+        await hass.async_block_till_done()
+        assert threads == [hass.loop_thread_id], threads
+    for polygon in (False, True):
+        tracker = VirtualDeviceTracker({
+            "name": "Docker Timer", "entity_id": "device_tracker.docker_timer",
+            "initial_value": "not_home", "persistent": False,
+            "location_helper": {"distance_threshold_meters": 300},
+        })
+        tracker.hass = hass
+        if polygon:
+            tracker._polygon_config = {"geojson": None}
+        callbacks = []
+        threads = []
+        method = "_update_polygon_from_sources" if polygon else "_update_location_from_sources"
+        with (
+            patch.object(VirtualEntity, "async_added_to_hass", new=AsyncMock()),
+            patch.object(tracker, "_async_reload_polygon_zones", new=AsyncMock()),
+            patch.object(tracker, method, side_effect=lambda: threads.append(get_ident())),
+            patch("custom_components.virtual_layer.device_tracker.async_track_time_interval",
+                  side_effect=lambda _hass, action, interval: callbacks.append(action) or (lambda: None)),
+        ):
+            await tracker.async_added_to_hass()
+            threads.clear()
+            assert len(callbacks) == 1
+            hass.async_run_hass_job(HassJob(callbacks[0]), dt_util.utcnow())
+            await hass.async_block_till_done()
+            assert threads == [hass.loop_thread_id], (polygon, threads)
+
+
 async def test_config_flow_create_modify_runtime():
     """Create, load, edit, reload, and live-update through real HA flows."""
     config_dir = Path(tempfile.mkdtemp())
@@ -312,6 +363,7 @@ async def test_config_flow_create_modify_runtime():
         assert await bootstrap.async_from_config_dict({}, hass) is hass
         assert await async_setup_component(hass, COMPONENT_DOMAIN, {})
         await hass.async_start()
+        await test_tracker_timer_dispatch(hass)
 
         source_ids = ["sensor.docker_flow_pm25_a", "sensor.docker_flow_pm25_b"]
         hass.states.async_set(
