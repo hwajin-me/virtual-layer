@@ -10,11 +10,13 @@ import math
 import mimetypes
 from collections.abc import Callable
 from contextvars import ContextVar
+from io import BytesIO
 
 import aiofiles
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-from aiohttp import ClientError
+from aiohttp import ClientError, web
+from PIL import Image, ImageOps
 from homeassistant.components.camera import (
     DOMAIN as PLATFORM_DOMAIN,
 )
@@ -35,6 +37,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.network import get_url
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from webrtc_models import RTCIceCandidateInit
 
@@ -63,6 +66,8 @@ _CAMERA_WEBRTC_ALIAS_CHAIN: ContextVar[frozenset[int]] = ContextVar(
 # Finish before Home Assistant's 10 second camera/snapshot deadline so a
 # last-known-good result can be returned instead of being cancelled outside.
 MEDIA_ALIAS_TIMEOUT = 8
+IMAGE_REFRESH_INTERVAL = 1
+IMAGE_VIDEO_SIZE = (1280, 720)
 
 DEPENDENCIES = [COMPONENT_DOMAIN]
 
@@ -105,9 +110,31 @@ def _camera_state_is_on(value) -> bool:
 def _camera_entity_id(value: str) -> str:
     """Validate a camera entity id used as an alias source."""
     entity_id = cv.entity_id(value)
-    if not entity_id.startswith(f"{PLATFORM_DOMAIN}."):
-        raise vol.Invalid("source_entity must be a camera entity")
+    if entity_id.split(".", 1)[0] not in {"camera", "image"}:
+        raise vol.Invalid("source_entity must be a camera or image entity")
     return entity_id
+
+
+def _image_as_jpeg(payload: bytes) -> bytes:
+    """Normalize raster maps for MJPEG/HomeKit outside the event loop."""
+    with Image.open(BytesIO(payload)) as image:
+        if image.width * image.height > 16_000_000:
+            raise ValueError("source image exceeds the pixel limit")
+        # HomeKit's FFmpeg command does not resize the input. YUV420 requires
+        # even dimensions, and a fixed canvas prevents resolution changes in
+        # the middle of an H.264 session. Contain rather than crop the map.
+        rgba = ImageOps.exif_transpose(image).convert("RGBA")
+        scale = min(IMAGE_VIDEO_SIZE[0] / rgba.width, IMAGE_VIDEO_SIZE[1] / rgba.height)
+        rgba = rgba.resize(
+            (max(1, round(rgba.width * scale)), max(1, round(rgba.height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+        background = Image.new("RGB", IMAGE_VIDEO_SIZE, "white")
+        position = ((background.width - rgba.width) // 2, (background.height - rgba.height) // 2)
+        background.paste(rgba, position, mask=rgba.getchannel("A"))
+        output = BytesIO()
+        background.save(output, format="JPEG", quality=85)
+        return output.getvalue()
 
 
 BASE_SCHEMA = virtual_schema(DEFAULT_CAMERA_VALUE, {
@@ -166,14 +193,20 @@ class VirtualCamera(VirtualEntity, Camera):
             mimetypes.guess_type(self._image_path or "")[0] or "image/jpeg"
         )
         self._source_entity = config.get(CONF_SOURCE_ENTITY)
+        if self._is_image_source:
+            self._attr_frame_interval = IMAGE_REFRESH_INTERVAL
         self._stream_source = config.get(CONF_STREAM_SOURCE)
         self._last_camera_image: bytes | None = None
+        self._last_source_image: bytes | None = None
+        self._image_fetch_task: asyncio.Task[bytes | None] | None = None
+        self._image_generation = 0
         self._last_stream_source: str | None = self._stream_source
         # Camera.__init__ sees the WebRTC proxy methods on this class. The
         # actual capability is source-dependent and is synchronized once the
         # source camera is available in the entity component.
         self._supports_native_async_webrtc = False
         self._camera_internal_added = False
+        self._media_removed = False
         self._tracked_source_camera: str | None = None
         self._source_camera_remove_listener: Callable[[], None] | None = None
 
@@ -182,6 +215,7 @@ class VirtualCamera(VirtualEntity, Camera):
     def _create_state(self, config):
         super()._create_state(config)
         self._last_camera_image = None
+        self._last_source_image = None
         try:
             self._attr_is_on = _camera_state_is_on(
                 config.get(CONF_INITIAL_VALUE),
@@ -239,6 +273,7 @@ class VirtualCamera(VirtualEntity, Camera):
         return bool(
             self._stream_source
             and not self._image_path
+            and not self._is_image_source
             and self._source_camera() is None
         )
 
@@ -249,6 +284,20 @@ class VirtualCamera(VirtualEntity, Camera):
     ) -> bytes | None:
         if not self._attr_is_on:
             return None
+        if self._is_image_source and not self._image_path:
+            task = self._image_fetch_task
+            if task is None or task.done():
+                task = self._image_fetch_task = self.hass.async_create_background_task(
+                    self._async_refresh_image(), "Virtual Layer image camera snapshot",
+                )
+            try:
+                # One viewer disconnecting must not cancel another viewer's
+                # snapshot. Removal/source edits explicitly cancel this task.
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if task.cancelled():
+                    return None
+                raise
         source = self._source_camera()
         if source is not None and not self._image_path:
             marker = id(self)
@@ -314,7 +363,56 @@ class VirtualCamera(VirtualEntity, Camera):
         self._last_camera_image = bytes(image)
         return self._last_camera_image
 
+    async def _async_refresh_image(self) -> bytes | None:
+        """Fetch/decode once for concurrent snapshot and stream consumers."""
+        generation = self._image_generation
+        component = self.hass.data.get("image")
+        source = component.get_entity(self._source_entity) if component else None
+        if source is None:
+            return self._last_camera_image
+        try:
+            async with asyncio.timeout(MEDIA_ALIAS_TIMEOUT):
+                payload = await source.async_image()
+                if payload is None:
+                    return self._last_camera_image
+                if not isinstance(payload, (bytes, bytearray, memoryview)):
+                    raise ValueError("image must be bytes-like")
+                if len(payload) > MAX_LOCAL_MEDIA_BYTES:
+                    raise ValueError("image exceeds the media size limit")
+                payload = bytes(payload)
+                if payload != self._last_source_image:
+                    jpeg = await self.hass.async_add_executor_job(_image_as_jpeg, payload)
+                    if generation != self._image_generation or self._media_removed:
+                        return None
+                    self._last_source_image = payload
+                    self._last_camera_image = jpeg
+                self.content_type = "image/jpeg"
+        except (
+            TimeoutError, ClientError, HomeAssistantError, OSError,
+            TypeError, ValueError, Image.DecompressionBombError,
+        ):
+            pass
+        return self._last_camera_image if generation == self._image_generation else None
+
+    @callback
+    def _invalidate_image_source(self) -> None:
+        """Prevent an old in-flight source from repopulating the new cache."""
+        self._image_generation += 1
+        if self._image_fetch_task is not None:
+            self._image_fetch_task.cancel()
+            self._image_fetch_task = None
+        self._last_camera_image = None
+        self._last_source_image = None
+
     async def stream_source(self) -> str | None:
+        if self._is_image_source and not self._stream_source and not self._image_path:
+            # Use HA's authenticated camera endpoint. HomeKit's FFmpeg worker
+            # encodes this MJPEG input as H.264 on demand.
+            return (
+                f"{get_url(self.hass, prefer_external=False)}"
+                f"/api/camera_proxy_stream/{self.entity_id}"
+                f"?token={self.access_tokens[-1]}"
+            )
         source = self._source_camera()
         if source is not None and not self._stream_source:
             marker = id(self)
@@ -348,6 +446,55 @@ class VirtualCamera(VirtualEntity, Camera):
         if self._stream_source:
             self._last_stream_source = self._stream_source
         return self._last_stream_source if self._source_entity else self._stream_source
+
+    @property
+    def _is_image_source(self) -> bool:
+        return bool(self._source_entity and self._source_entity.startswith("image."))
+
+    async def handle_async_mjpeg_stream(
+        self, request: web.Request,
+    ) -> web.StreamResponse | None:
+        """Repeat unchanged maps so an H.264 encoder never runs out of frames."""
+        if not self._is_image_source or self._image_path or self._stream_source:
+            return await super().handle_async_mjpeg_stream(request)
+        response = web.StreamResponse(headers={
+            "Content-Type": "multipart/x-mixed-replace; boundary=frameboundary",
+        })
+        await response.prepare(request)
+        refresh_task: asyncio.Task[bytes | None] | None = None
+        generation = self._image_generation
+        try:
+            payload = await self.async_camera_image()
+            refresh_at = self.hass.loop.time() + self.frame_interval
+            while (
+                self._attr_is_on
+                and not self._media_removed
+                and generation == self._image_generation
+                and self._is_image_source
+                and not self._image_path
+                and not self._stream_source
+            ):
+                if refresh_task is not None and refresh_task.done():
+                    payload = refresh_task.result() or payload
+                    refresh_task = None
+                    refresh_at = self.hass.loop.time() + self.frame_interval
+                if refresh_task is None and self.hass.loop.time() >= refresh_at:
+                    refresh_task = asyncio.create_task(self.async_camera_image())
+                if payload is None:
+                    break
+                await response.write(
+                    b"--frameboundary\r\nContent-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(payload)}\r\n\r\n".encode()
+                    + payload + b"\r\n"
+                )
+                await asyncio.sleep(1 / 25)
+        except ConnectionResetError:
+            pass
+        finally:
+            if refresh_task is not None:
+                refresh_task.cancel()
+                await asyncio.gather(refresh_task, return_exceptions=True)
+        return response
 
     async def async_handle_async_webrtc_offer(
         self,
@@ -478,6 +625,11 @@ class VirtualCamera(VirtualEntity, Camera):
 
     async def async_will_remove_from_hass(self) -> None:
         """Remove the independently managed source-camera listener."""
+        self._media_removed = True
+        task = self._image_fetch_task
+        self._invalidate_image_source()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
         if self._source_camera_remove_listener is not None:
             self._source_camera_remove_listener()
             self._source_camera_remove_listener = None
@@ -526,7 +678,7 @@ class VirtualCamera(VirtualEntity, Camera):
 
     def _source_camera(self) -> Camera | None:
         """Return the configured source camera without recursing into self."""
-        if not self._source_entity or self.hass is None:
+        if not self._source_entity or self._is_image_source or self.hass is None:
             return None
 
         component = self.hass.data.get(PLATFORM_DOMAIN)
@@ -599,6 +751,10 @@ class VirtualCamera(VirtualEntity, Camera):
                 features |= CameraEntityFeature.STREAM
 
         self._attr_supported_features = features
+        if self._is_image_source and not self._stream_source:
+            # HA's HLS worker cannot remux MJPEG. Its frontend uses the native
+            # MJPEG endpoint, while HomeKit independently transcodes to H.264.
+            self._attr_supported_features &= ~CameraEntityFeature.STREAM
         self._supports_native_async_webrtc = supports_native_webrtc
         self.__dict__.pop("supported_features", None)
         self._invalidate_camera_capabilities_cache()
@@ -632,8 +788,11 @@ class VirtualCamera(VirtualEntity, Camera):
             attribute = backing_fields[name]
             changed = getattr(self, attribute) != value
             setattr(self, attribute, value)
+            if name == CONF_SOURCE_ENTITY and changed:
+                self._invalidate_image_source()
+                self._last_stream_source = self._stream_source
             if name == CONF_IMAGE_PATH and changed:
-                self._last_camera_image = None
+                self._invalidate_image_source()
                 self.content_type = (
                     mimetypes.guess_type(value or "")[0] or "image/jpeg"
                 )

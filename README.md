@@ -370,6 +370,28 @@ virtual tracker updates or cleans up both generated entities normally.
 
 ## Cameras
 
+For a robot vacuum map in Apple Home, select one `image.*` source, choose
+**Camera** as the target entity type, and save it on the desired Device.
+The source must provide a raster image (PNG/JPEG/WebP); SVG polygon maps are
+not supported by this conversion. Native values → Source Entity can also use
+`{{ 'image.vacuum_map' }}` on an existing virtual camera.
+
+The camera fits the entire image onto a fixed 1280 × 720 JPEG canvas, preserving
+its aspect ratio with white padding and applying EXIF orientation. This avoids
+odd-dimension H.264 failures and resolution changes during a stream. It checks
+for updates once per second by default while viewed (editable with **Frame
+interval**) and repeats unchanged frames as MJPEG even during slow source
+requests. Concurrent requests share an in-progress image fetch. HomeKit
+Bridge's default FFmpeg encoder converts this feed to H.264 on demand; keep
+the default video codec, because `copy` cannot convert MJPEG to H.264. Pair
+the camera as an individual HomeKit accessory using the UI steps below.
+Leave this camera unchecked on HomeKit's **Cameras that support native H.264
+streams** screen; that option selects `copy` and bypasses required encoding.
+The map and robot position update only as often as the original image does.
+The Home Assistant URL must be reachable from its own FFmpeg process.
+Temporary source failures retain the last valid image. An explicit image path
+or stream URL overrides the corresponding generated media.
+
 Create a camera alias by selecting one camera as the original entity. The UI
 automatically selects the `camera` domain, copies its state through a template,
 and sets the camera-specific `source_entity` option. The virtual camera proxies

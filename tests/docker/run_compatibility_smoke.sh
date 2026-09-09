@@ -13,10 +13,12 @@ import asyncio
 import os
 import tempfile
 from threading import get_ident
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from pathlib import Path
+from io import BytesIO
 
 import yaml
+from PIL import Image
 from homeassistant import bootstrap, loader
 from homeassistant.components.climate import HVACMode
 from homeassistant.helpers.data_entry_flow import FlowManagerResourceView
@@ -396,6 +398,42 @@ async def test_tracker_timer_dispatch(hass):
             assert threads == [hass.loop_thread_id], (polygon, threads)
 
 
+async def test_image_camera_encoding(hass):
+    """Verify image aliases and the container's H.264 encoder with real bytes."""
+    output = BytesIO()
+    Image.new("RGBA", (501, 1501), (0, 0, 255, 128)).save(output, "PNG")
+    source = Mock(async_image=AsyncMock(return_value=output.getvalue()))
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        "name": "Docker Map", "entity_id": "camera.docker_map",
+        "source_entity": "image.docker_map",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    with patch.dict(hass.data, {"image": Mock(get_entity=Mock(return_value=source))}):
+        jpeg = await entity.async_camera_image()
+    assert jpeg.startswith(b"\xff\xd8")
+    with Image.open(BytesIO(jpeg)) as rendered:
+        assert rendered.size == (1280, 720)
+    entity._sync_stream_capabilities()
+    assert CameraEntityFeature.STREAM not in entity.supported_features
+    process = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "image2pipe", "-framerate", "25", "-vcodec", "mjpeg", "-i", "pipe:0",
+        "-frames:v", "3", "-c:v", "libx264", "-profile:v", "baseline",
+        "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-f", "h264", "pipe:1",
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        encoded, errors = await asyncio.wait_for(process.communicate(jpeg * 3), 30)
+        assert process.returncode == 0, errors.decode()
+        assert len(encoded) > 100 and b"\x00\x00\x00\x01" in encoded
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+
+
 async def test_config_flow_create_modify_runtime():
     """Create, load, edit, reload, and live-update through real HA flows."""
     config_dir = Path(tempfile.mkdtemp())
@@ -412,6 +450,7 @@ async def test_config_flow_create_modify_runtime():
         assert await async_setup_component(hass, COMPONENT_DOMAIN, {})
         await hass.async_start()
         await test_tracker_timer_dispatch(hass)
+        await test_image_camera_encoding(hass)
 
         source_ids = ["sensor.docker_flow_pm25_a", "sensor.docker_flow_pm25_b"]
         hass.states.async_set(

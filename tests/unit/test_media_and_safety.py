@@ -1,9 +1,11 @@
 """Regression tests for non-mergeable media and safety sensor helpers."""
 
 import asyncio
+from io import BytesIO
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from PIL import Image
 from aiohttp import ClientConnectionError
 from homeassistant.components.camera import (
     Camera,
@@ -39,6 +41,94 @@ from custom_components.virtual_layer.const import (
 from custom_components.virtual_layer.image import IMAGE_SCHEMA, VirtualImage
 
 pytestmark = pytest.mark.unit
+
+
+def _map_png(color="red"):
+    output = BytesIO()
+    Image.new("RGBA", (33, 31), color).save(output, "PNG")
+    return output.getvalue()
+
+
+async def test_image_camera_snapshot_refresh_failure_and_retarget(hass):
+    source = Mock()
+    source.async_image = AsyncMock(return_value=_map_png())
+    component = Mock()
+    component.get_entity.return_value = source
+    hass.data["image"] = component
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Map", ATTR_ENTITY_ID: "camera.map",
+        ATTR_UNIQUE_ID: "map", "source_entity": "image.map",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._sync_stream_capabilities()
+    assert not entity.supported_features & CameraEntityFeature.STREAM
+    first = await entity.async_camera_image()
+    assert entity.content_type == "image/jpeg"
+    with Image.open(BytesIO(first)) as image:
+        assert image.format == "JPEG"
+        assert image.size == (1280, 720)
+    assert await entity.async_camera_image() == first
+    source.async_image.return_value = _map_png("blue")
+    second = await entity.async_camera_image()
+    assert second != first
+    for invalid in (None, b"not an image", "invalid bytes"):
+        source.async_image.return_value = invalid
+        assert await entity.async_camera_image() == second
+    source.async_image.side_effect = ClientConnectionError()
+    assert await entity.async_camera_image() == second
+    entity._apply_native_template_value("source_entity", "image.other")
+    assert await entity.async_camera_image() is None
+    entity._attr_is_on = False
+    source.async_image.reset_mock()
+    assert await entity.async_camera_image() is None
+    source.async_image.assert_not_awaited()
+
+
+async def test_image_camera_stream_repeats_static_frames(hass):
+    entity = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "Map", ATTR_ENTITY_ID: "camera.map",
+        ATTR_UNIQUE_ID: "map", "source_entity": "image.map",
+    }), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_camera_image = AsyncMock(return_value=b"jpeg")
+    response = Mock(prepare=AsyncMock(), write=AsyncMock())
+    response.write.side_effect = [None, None, ConnectionResetError()]
+    with patch.object(camera_platform.web, "StreamResponse", return_value=response):
+        assert await entity.handle_async_mjpeg_stream(Mock()) is response
+    assert response.write.await_count == 3
+    assert response.write.call_args_list[0] == response.write.call_args_list[1]
+    entity.async_camera_image.assert_awaited_once()
+    with patch.object(camera_platform, "get_url", return_value="http://ha.local:8123"):
+        url = await entity.stream_source()
+    assert url.startswith("http://ha.local:8123/api/camera_proxy_stream/camera.map?token=")
+    assert url.endswith(entity.access_tokens[-1])
+    entity._apply_native_template_value("stream_source", "rtsp://camera/live")
+    assert await entity.stream_source() == "rtsp://camera/live"
+    assert not entity.use_stream_for_stills
+    entity._sync_stream_capabilities()
+    assert entity.supported_features & CameraEntityFeature.STREAM
+
+
+async def test_image_source_can_create_camera_helpers(hass):
+    from custom_components.virtual_layer.config_flow import (
+        CONF_NATIVE_VALUE_TEMPLATES, _source_target_domains,
+    )
+    hass.states.async_set("image.map", "2026-09-09T00:00:00+00:00", {
+        "image_path": "/config/map.png", "stream_source": "invalid",
+    })
+    assert "camera" in _source_target_domains(["image.map"], "image")
+    defaults = _reference_entity_defaults(hass, ["image.map"], target_platform="camera")
+    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert Template(defaults["value_template"], hass).async_render() == "on"
+    native = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert Template(native["source_entity"], hass).async_render() == "image.map"
+    assert Template(native["is_on"], hass).async_render() is True
+    assert Template(native["image_path"], hass).async_render() is None
+    assert Template(native["stream_source"], hass).async_render() is None
+    hass.states.async_set("image.map", "unavailable")
+    assert Template(native["is_on"], hass).async_render() is True
 
 
 async def test_virtual_image_alias_returns_source_image(hass):

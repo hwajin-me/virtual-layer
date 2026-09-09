@@ -1680,6 +1680,7 @@ def _fan_source_role_schema(
 
 
 _SINGLE_SOURCE_TARGET_DOMAINS = {
+    "image": ("image", "camera"),
     "climate": ("climate",),
     "fan": ("fan", "switch", "light"),
     "humidifier": ("humidifier", "switch", "fan"),
@@ -4756,7 +4757,10 @@ def _build_entity_config(
         entity[CONF_SOURCE_ENTITIES] = source_entities
         entity.setdefault(
             CONF_VALUE_TEMPLATE,
-            f"{{{{ states('{source_entity}') }}}}",
+            (
+                "{{ 'on' }}" if source_entity.startswith("image.")
+                else f"{{{{ states('{source_entity}') }}}}"
+            ),
         )
 
     return device_name, entity
@@ -6171,6 +6175,15 @@ def _native_source_template(
     """Build a native-property helper from a source state when possible."""
     attributes = state.attributes
     source_platform = entity_id.split(".", 1)[0]
+    if platform == "camera" and source_platform == "image":
+        # A map timestamp is not camera power, and copying a source's file
+        # attribute would bypass image conversion and the generated MJPEG feed.
+        if property_name == "is_on":
+            return "{{ true }}"
+        if property_name in {"image_path", "stream_source"}:
+            return "{{ none }}"
+        if property_name == "supported_features":
+            return "{{ 1 }}"
     if property_name == "air_quality":
         # Legacy Home Assistant air-quality entities expose PM2.5 as their
         # state, while Matter requires an overall categorical value. Prefer a
@@ -8555,6 +8568,8 @@ def _reference_entity_defaults(
             )
     elif platform == "device_tracker" and all_presence_distance:
         initial_value = "not_home"
+    elif platform == "camera" and source_domains == ["image"]:
+        initial_value = "on"
     elif len(states) == 1:
         initial_value = first_state.state
     elif all_number:
@@ -8780,7 +8795,7 @@ def _reference_entity_defaults(
         template_sources[variable_name] = entity_id
 
     defaults[CONF_TEMPLATE_SOURCES_JSON] = _json_default(template_sources)
-    if platform == "camera" and len(entity_ids) == 1 and source_domains[0] == "camera":
+    if platform == "camera" and len(entity_ids) == 1 and source_domains[0] in {"camera", "image"}:
         defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(
             {
                 CAMERA_SOURCE_ENTITY_OPTION: entity_ids[0],
@@ -8890,6 +8905,8 @@ def _reference_entity_defaults(
         defaults[CONF_VALUE_TEMPLATE] = (
             f"{{{{ {variable_names[humidifier_component_profile['switch']]} }}}}"
         )
+    elif platform == "camera" and source_domains == ["image"]:
+        defaults[CONF_VALUE_TEMPLATE] = "{{ 'on' }}"
     elif len(entity_ids) == 1:
         defaults[CONF_VALUE_TEMPLATE] = f"{{{{ {variable_names[0]} }}}}"
     elif all_boolean and platform in BOOLEAN_SOURCE_DOMAINS | {"binary_sensor"}:
