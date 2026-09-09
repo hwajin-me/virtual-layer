@@ -211,7 +211,8 @@ async def test_combined_wifi_ble_and_gps_tracker_classifies_presence_in_hass(has
     assert state.attributes[ATTR_LATITUDE] == 37.5
 
 
-async def test_polygon_tracker_triangulates_espresense_anchors_into_geojson_zone(hass):
+@pytest.mark.parametrize("explicit_meters", [False, True])
+async def test_polygon_tracker_triangulates_espresense_anchors_into_geojson_zone(hass, explicit_meters, freezer):
     anchors = {
         "sensor.esp_a_distance": {ATTR_LATITUDE: 37.5000, ATTR_LONGITUDE: 126.9999},
         "sensor.esp_b_distance": {ATTR_LATITUDE: 37.5001, ATTR_LONGITUDE: 127.0000},
@@ -222,6 +223,13 @@ async def test_polygon_tracker_triangulates_espresense_anchors_into_geojson_zone
         "sensor.esp_b_distance", "1105", {"unit_of_measurement": "cm"}
     )
     hass.states.async_set("sensor.esp_c_distance", "885", {"unit_of_measurement": "cm"})
+    if explicit_meters:
+        for entity_id, distance in zip(anchors, (8.85, 11.05, 8.85), strict=True):
+            hass.states.async_set(entity_id, str(distance * 100), {
+                "unit_of_measurement": "cm",
+                "distance": distance * 100,
+                "distance_meters": distance,
+            })
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "espresense"},
@@ -268,6 +276,22 @@ async def test_polygon_tracker_triangulates_espresense_anchors_into_geojson_zone
         debug = hass.states.get(f"sensor.room_position_debug{index}")
         assert debug is not None
         assert debug.attributes["source_entity_id"] == entity_id
+
+    # A silent device must stop claiming a room without another state event.
+    freezer.tick(timedelta(seconds=31))
+    async_fire_time_changed(hass, dt_util.utcnow())
+    await hass.async_block_till_done()
+    expired = hass.states.get("device_tracker.room_position")
+    assert expired.state == "not_home"
+    assert expired.attributes["espresense_sources"] == []
+    assert expired.attributes["polygon_zone"] is None
+    assert ATTR_LATITUDE not in expired.attributes
+
+    # Recovery needs a complete fresh set of distances.
+    for entity_id in anchors:
+        hass.states.async_set(entity_id, "900", {"unit_of_measurement": "cm"})
+    await hass.async_block_till_done()
+    assert hass.states.get("device_tracker.room_position").state == "Seoul Home"
 
 
 async def test_polygon_tracker_zone_sensor_and_map_image_share_one_virtual_device(hass):

@@ -52,6 +52,8 @@ from homeassistant.helpers.template import Template, TemplateError
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
+from .binary_options import detection_minutes
+from . import air_quality_options as aq_options
 from .cfg import (
     _platform_command_names,
     _rename_meta_data,
@@ -1174,6 +1176,7 @@ def _lowest_light_capability(states: Collection) -> str:
     )
 
 _DOMAIN_OPTION_RESERVED_KEYS = {
+    CONF_AIR_QUALITY_LOGIC,
     ATTR_ENTITY_ID,
     ATTR_ENTITY_KEY,
     ATTR_FRIENDLY_NAME,
@@ -1703,6 +1706,11 @@ def _source_target_domains(
         configured = _SINGLE_SOURCE_TARGET_DOMAINS.get(source_domain, ())
     if _sensor_conversion_choices(entity_ids):
         configured = (*configured, "sensor")
+    if entity_ids and all(
+        entity_id.split('.', 1)[0] in {"sensor", "number", "air_quality"}
+        for entity_id in entity_ids
+    ):
+        configured = (*configured, "air_quality")
     if _binary_sensor_conversion_choices(entity_ids):
         configured = (*configured, "binary_sensor")
     elif _humidifier_component_profile(entity_ids) is not None:
@@ -2009,6 +2017,10 @@ def _sensor_conversion_choice_from_source_selections(
         descriptors.append(descriptor)
     device_classes = {descriptor[1] for descriptor in descriptors}
     if len(device_classes) != 1:
+        # Preserve the explicitly supported unitless sensor-state composition
+        # when the new per-source form replaces the old combined selector.
+        if all(entity_id.startswith("sensor.") for entity_id in entity_ids):
+            return _sensor_conversion_choices(entity_ids, hass).get("state")
         return None
     conversions = {descriptor[4] for descriptor in descriptors}
     if conversions <= {"direct", "percent_clamped"}:
@@ -2029,6 +2041,8 @@ def _sensor_conversion_choice_from_source_selections(
     device_class = device_classes.pop()
     profile = _sensor_unit_conversion_transforms(source_units, device_class)
     if profile is None:
+        if all(entity_id.startswith("sensor.") for entity_id in entity_ids):
+            return _sensor_conversion_choices(entity_ids, hass).get("state")
         return None
     unit, transforms = profile
     return (
@@ -2308,10 +2322,16 @@ def _sensor_conversion_schema(
         ],
     ],
     default_aggregation: str = SENSOR_AGGREGATION_AVERAGE,
+    submitted: Mapping[str, Any] | None = None,
+    current_defaults: Mapping[str, Any] | None = None,
 ) -> vol.Schema:
     """Choose the source measurement to expose through the virtual sensor."""
+    submitted = submitted or {}
+    default_aggregation = submitted.get(CONF_SENSOR_AGGREGATION, default_aggregation)
     entity_ids = next(iter(choices.values()))[0] if choices else ()
     if len(entity_ids) > 1:
+        preferred = next(iter(choices.values()))[1]
+        preferred = preferred if isinstance(preferred, tuple) else (preferred,) * len(entity_ids)
         schema = {}
         for index, entity_id in enumerate(entity_ids):
             source_options = [
@@ -2323,10 +2343,27 @@ def _sensor_conversion_schema(
             ]
             if not source_options:
                 continue
+            selected = preferred[index]
+            # Recover the source attribute from our generated helper when
+            # reopening an existing entity. Custom templates keep the safe
+            # compatible default unless the source reference is unambiguous.
+            template = str((current_defaults or {}).get(CONF_VALUE_TEMPLATE, ""))
+            referenced = [
+                option["value"] for option in source_options
+                if (
+                    f"states({entity_id!r})"
+                    if option["value"] == "state"
+                    else f"state_attr({entity_id!r}, {option['value']!r})"
+                ) in template
+            ]
+            if len(referenced) == 1:
+                selected = referenced[0]
             schema[
                 vol.Optional(
                     _sensor_source_conversion_field(index),
-                    default=source_options[0]["value"],
+                    default=submitted.get(
+                        _sensor_source_conversion_field(index), selected
+                    ),
                 )
             ] = selector.SelectSelector(
                 selector.SelectSelectorConfig(
@@ -2346,15 +2383,14 @@ def _sensor_conversion_schema(
                 mode=selector.SelectSelectorMode.DROPDOWN,
             )
         )
-        # Accept the former single-choice key during an in-progress flow from
-        # an older frontend; it is ignored in favor of the per-source defaults.
+        # Accept the former combined key for flows opened before an upgrade.
         return _complete_form_schema(vol.Schema(schema, extra=vol.ALLOW_EXTRA))
     options = [
         {
             "value": key,
             "label": (
                 f"{', '.join(entity_ids)} · "
-                f"{('temperature' if isinstance(attribute, tuple) else attribute).replace('_', ' ').title()}"
+                f"{(_device_class or 'measurement' if isinstance(attribute, tuple) else attribute).replace('_', ' ').title()}"
             ),
         }
         for key, (
@@ -2369,7 +2405,8 @@ def _sensor_conversion_schema(
     ]
     schema = {
         vol.Required(
-            CONF_SENSOR_CONVERSION, default=options[0]["value"]
+            CONF_SENSOR_CONVERSION,
+            default=submitted.get(CONF_SENSOR_CONVERSION, options[0]["value"]),
         ): selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=options,
@@ -2646,17 +2683,42 @@ def _apply_sensor_conversion_defaults(
             options[CONF_UNIT_OF_MEASUREMENT] = (
                 unit_profile[0] if unit_profile is not None else unit
             )
+    # A direct cumulative-meter alias must retain its statistics contract.
+    # Averaging multiple meters does not establish a monotonic total, so only
+    # preserve the source class for one unmodified state measurement.
+    if (
+        (len(entity_ids) == 1 or aggregation == "sum")
+        and all(attribute == "state" for attribute in source_attributes)
+        and state is not None
+        and options.get(CONF_CLASS) in {"energy", "gas", "water"}
+        and state.attributes.get("state_class") in {"total", "total_increasing"}
+        and all(
+            hass.states.get(source_id) is not None
+            and hass.states.get(source_id).attributes.get("state_class")
+            == state.attributes["state_class"]
+            for source_id in entity_ids
+        )
+    ):
+        options["state_class"] = state.attributes["state_class"]
+        if len(entity_ids) > 1:
+            # Missing one meter must not publish a partial sum and be mistaken
+            # for a counter reset by HA statistics or the Matter controller.
+            result[CONF_AVAILABILITY_TEMPLATE] = (
+                "{{ " + " and ".join(
+                    f"({expression} | is_number)" for expression in raw_expressions
+                ) + " }}"
+            )
     result[CONF_DOMAIN_OPTIONS_JSON] = _json_default(options)
     native_templates = dict(result.get(CONF_NATIVE_VALUE_TEMPLATES, {}))
     native_templates["device_class"] = _literal_template(options.get(CONF_CLASS))
     native_templates["native_unit_of_measurement"] = _literal_template(
         options.get(CONF_UNIT_OF_MEASUREMENT)
     )
-    native_templates["state_class"] = _literal_template("measurement")
+    native_templates["state_class"] = _literal_template(options["state_class"])
     result[CONF_NATIVE_VALUE_TEMPLATES] = native_templates
     result[CONF_ENTITY_NAME] = (
         f"{result.get(CONF_ENTITY_NAME, _fallback_entity_name(entity_ids[0]))} "
-        f"{('temperature' if isinstance(attribute, tuple) else attribute).replace('_', ' ').title()}"
+        f"{(device_class or 'measurement' if isinstance(attribute, tuple) else attribute).replace('_', ' ').title()}"
     )
     return result
 
@@ -2859,6 +2921,14 @@ def _setup_schema(
 
 def _motion_hold_schema(defaults: Mapping) -> vol.Schema:
     """Build the dedicated per-entity motion-recognition settings step."""
+    template = _text_default(defaults.get(CONF_VALUE_TEMPLATE))
+    default_logic = defaults.get(CONF_MOTION_DETECTION_LOGIC)
+    if not isinstance(default_logic, str) or default_logic not in {"majority", "two_thirds", "one_third", "any_active", "all_active"}:
+        default_logic = (
+            "majority" if "all_off_since" in template or " / 2" in template
+            else "any_active" if "> 0" in template
+            else "all_active"
+        )
     return _complete_form_schema(
         vol.Schema(
             {
@@ -2866,11 +2936,11 @@ def _motion_hold_schema(defaults: Mapping) -> vol.Schema:
                     CONF_MOTION_HOLD_MINUTES,
                     default=_motion_hold_minutes_default(defaults),
                 ): vol.All(
-                    vol.Coerce(int), vol.Range(min=0, max=MOTION_HOLD_MINUTES_MAX)
+                    detection_minutes
                 ),
                 vol.Required(
                     CONF_MOTION_DETECTION_LOGIC,
-                    default=defaults.get(CONF_MOTION_DETECTION_LOGIC, "majority"),
+                    default=default_logic,
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=["majority", "two_thirds", "one_third", "any_active", "all_active"],
@@ -2886,13 +2956,7 @@ def _is_automatic_motion_helper(defaults: Mapping) -> bool:
     """Return whether defaults contain the generated composite-motion helper."""
     if defaults.get(CONF_PLATFORM) != "binary_sensor":
         return False
-    try:
-        options = _parse_domain_options(defaults.get(CONF_DOMAIN_OPTIONS_JSON))
-    except InvalidJson:
-        return False
-    return options.get(CONF_CLASS) == "motion" and "all_off_since" in _text_default(
-        defaults.get(CONF_VALUE_TEMPLATE)
-    )
+    return bool(_stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT)))
 
 
 def _apply_motion_hold_minutes(
@@ -2900,20 +2964,26 @@ def _apply_motion_hold_minutes(
 ) -> dict[str, Any]:
     """Apply selected motion settings while preserving user-authored helpers."""
     try:
-        minutes = int(value)
-    except (TypeError, ValueError, OverflowError) as err:
+        minutes = detection_minutes(value)
+    except (TypeError, ValueError, OverflowError, vol.Invalid) as err:
         raise InvalidDomainOptions from err
     if not 0 <= minutes <= MOTION_HOLD_MINUTES_MAX:
         raise InvalidDomainOptions
-    if logic not in {"majority", "two_thirds", "one_third", "any_active", "all_active"}:
+    if not isinstance(logic, str) or logic not in {"majority", "two_thirds", "one_third", "any_active", "all_active"}:
         raise InvalidDomainOptions
     result = dict(defaults)
     current_logic = result.get(CONF_MOTION_DETECTION_LOGIC, "majority")
-    if current_logic not in {"majority", "two_thirds", "one_third", "any_active", "all_active"}:
+    if not isinstance(current_logic, str) or current_logic not in {"majority", "two_thirds", "one_third", "any_active", "all_active"}:
         current_logic = "majority"
     current_delay = _motion_hold_minutes_default(result) * 60
     result[CONF_MOTION_HOLD_MINUTES] = minutes
     result[CONF_MOTION_DETECTION_LOGIC] = logic
+    previous = _motion_hold_schema(defaults)({})
+    if (
+        logic == previous[CONF_MOTION_DETECTION_LOGIC]
+        and minutes == previous[CONF_MOTION_HOLD_MINUTES]
+    ):
+        return result
     source_entities = _stored_entity_ids(result.get(CONF_SOURCE_ENTITIES_TEXT))
     variables, seen = [], set()
     for entity_id in source_entities:
@@ -3109,10 +3179,12 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     if property_name not in managed_native_properties
                 }
             )
-    entity_name = defaults.get(CONF_ENTITY_NAME, "Virtual Entity")
-    default_entity_id = defaults.get(ATTR_ENTITY_ID) or _default_virtual_entity_id(
+    entity_name = defaults.get(CONF_ENTITY_NAME, "")
+    default_entity_id = defaults.get(ATTR_ENTITY_ID) or _default_virtual_entity_id_for_sources(
         platform,
         entity_name,
+        _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT)),
+        defaults.get(CONF_DEVICE_NAME, ""),
     )
     device_details_schema = vol.Schema(
         {
@@ -3236,8 +3308,6 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         ),
     }
     domain_schema = {}
-    if platform == "binary_sensor":
-        schema[vol.Optional("configure_detection", default=False)] = cv.boolean
     if platform == "device_tracker":
         domain_schema.update(
             {
@@ -3436,8 +3506,6 @@ def _needs_domain_specific_form(user_input) -> bool:
         )
     if platform == "light":
         return CONF_MATTER_LIGHT_TYPE not in user_input
-    if platform == "air_quality":
-        return CONF_MATTER_AIR_QUALITY not in user_input
     return False
 
 
@@ -3562,11 +3630,19 @@ def _device_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     )
 
 
-def _default_virtual_entity_id(platform: str, entity_name: str) -> str:
+def _default_virtual_entity_id(
+    platform: str, entity_name: str, device_name: str | None = None
+) -> str:
     """Return an entity id with the selected Home Assistant domain prefix."""
     if platform not in VIRTUAL_ENTITY_DOMAINS:
         return ""
     object_id = slugify(str(entity_name).removeprefix("+"))
+    if device_name is not None:
+        suffix = object_id or uuid.uuid4().hex[:8]
+        device_slug = slugify(device_name) or "virtual_device"
+        # Reserve space for both components, including a random unnamed suffix.
+        device_slug = device_slug[: MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH // 2].rstrip("_")
+        object_id = f"{device_slug}_{suffix}"
     if not object_id:
         return ""
     object_id = object_id[:MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH].rstrip("_")
@@ -3577,14 +3653,15 @@ def _default_virtual_entity_id_for_sources(
     platform: str,
     entity_name: str,
     source_entity_ids: Collection[str],
+    device_name: str | None = None,
 ) -> str:
     """Generate a copy-safe default ID without changing the domain prefix."""
-    entity_id = _default_virtual_entity_id(platform, entity_name)
+    entity_id = _default_virtual_entity_id(platform, entity_name, device_name)
     if entity_id not in source_entity_ids:
         return entity_id
 
     suffix = "_copy"
-    object_id = slugify(str(entity_name).removeprefix("+")) or "virtual_entity"
+    object_id = entity_id.split(".", 1)[1]
     object_id = object_id[: MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH - len(suffix)]
     object_id = object_id.rstrip("_") + suffix
     return f"{platform}.{object_id}"
@@ -4203,6 +4280,12 @@ def _build_entity_config(
         entity[CONF_ICON_TEMPLATE] = icon_template
 
     entity_id = _text_default(user_input.get(ATTR_ENTITY_ID)).strip()
+    if not entity_id:
+        entity_id = _default_virtual_entity_id_for_sources(
+            platform, entity_name,
+            _stored_entity_ids(user_input.get(CONF_SOURCE_ENTITIES_TEXT)),
+            device_name,
+        )
     if entity_id:
         try:
             entity_id = cv.entity_id(entity_id)
@@ -4321,6 +4404,13 @@ def _build_entity_config(
             raise InvalidDomainOptions
         if matter_air_quality != "source":
             native_templates["air_quality"] = _literal_template(matter_air_quality)
+        if CONF_AIR_QUALITY_LOGIC in user_input:
+            try:
+                recipe = aq_options.normalize(user_input[CONF_AIR_QUALITY_LOGIC])
+            except (TypeError, ValueError, vol.Invalid) as err:
+                raise InvalidDomainOptions from err
+            recipe["generated_template"] = aq_options.generate(recipe)
+            entity[CONF_AIR_QUALITY_LOGIC] = recipe
     if platform == "media_player":
         priority = user_input.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITY)
         if priority is not None:
@@ -4374,22 +4464,24 @@ def _build_entity_config(
         domain_options[CONF_LIGHT_IGNORE_UNRESPONSIVE] = cv.boolean(
             user_input.get(CONF_LIGHT_IGNORE_UNRESPONSIVE, True)
         )
-        if (
-            not domain_options[CONF_LIGHT_IGNORE_UNRESPONSIVE]
-            and len(source_entities) > 1
-        ):
+        if len(source_entities) > 1:
             # This is the strict alternative to the generated resilient
             # multi-light availability helper. It is deliberately explicit:
             # a user can require every selected bulb to answer before showing
             # the virtual light as available.
-            entity[CONF_AVAILABILITY_TEMPLATE] = (
-                "{{ "
-                + " and ".join(
+            generated_availability = {
+                joiner: "{{ " + joiner.join(
                     f"states({entity_id!r}) not in ['unknown', 'unavailable']"
                     for entity_id in source_entities
+                ) + " }}"
+                for joiner in (" and ", " or ")
+            }
+            if entity.get(CONF_AVAILABILITY_TEMPLATE) in generated_availability.values():
+                joiner = (
+                    " or " if domain_options[CONF_LIGHT_IGNORE_UNRESPONSIVE]
+                    else " and "
                 )
-                + " }}"
-            )
+                entity[CONF_AVAILABILITY_TEMPLATE] = generated_availability[joiner]
     elif platform == "climate":
         for field_name in CLIMATE_MODE_LIST_FIELDS:
             if field_name in user_input:
@@ -4462,13 +4554,13 @@ def _build_entity_config(
         and CONF_MOTION_HOLD_MINUTES in user_input
     ):
         try:
-            motion_hold_minutes = int(user_input[CONF_MOTION_HOLD_MINUTES])
-        except (TypeError, ValueError, OverflowError) as err:
+            motion_hold_minutes = detection_minutes(user_input[CONF_MOTION_HOLD_MINUTES])
+        except (TypeError, ValueError, OverflowError, vol.Invalid) as err:
             raise InvalidDomainOptions from err
         if not 0 <= motion_hold_minutes <= MOTION_HOLD_MINUTES_MAX:
             raise InvalidDomainOptions
         detection_logic = user_input.get(CONF_MOTION_DETECTION_LOGIC, "majority")
-        if detection_logic not in {"majority", "two_thirds", "one_third", "any_active", "all_active"}:
+        if not isinstance(detection_logic, str) or detection_logic not in {"majority", "two_thirds", "one_third", "any_active", "all_active"}:
             raise InvalidDomainOptions
         variable_names = []
         existing_variables: set[str] = set()
@@ -4503,8 +4595,8 @@ def _build_entity_config(
         entity[CONF_MOTION_DETECTION_LOGIC] = detection_logic
     elif platform == "binary_sensor" and CONF_MOTION_HOLD_MINUTES in user_input:
         try:
-            motion_hold_minutes = int(user_input[CONF_MOTION_HOLD_MINUTES])
-        except (TypeError, ValueError, OverflowError) as err:
+            motion_hold_minutes = detection_minutes(user_input[CONF_MOTION_HOLD_MINUTES])
+        except (TypeError, ValueError, OverflowError, vol.Invalid) as err:
             raise InvalidDomainOptions from err
         detection_logic = user_input.get(CONF_MOTION_DETECTION_LOGIC, "majority")
         if (
@@ -5196,6 +5288,12 @@ def _replace_ui_entity(
         old_entity_key = old_entity.get(ATTR_ENTITY_KEY)
         old_entities[old_index] = _ensure_entity_key(entity, old_entity_key)
         devices[old_device_name] = old_entities
+        if device_config and new_device_name != _device_display_name(
+            old_device_name, _get_device_attributes(next_options, old_device_name)
+        ):
+            return _replace_ui_device(
+                next_options, old_device_name, new_device_name, device_config
+            )
         if not reusing_existing_device:
             _set_device_attributes(next_options, new_device_key, device_config)
         return next_options
@@ -5225,6 +5323,7 @@ def _replace_ui_device(
     old_device_name: str,
     new_device_name: str,
     device_config: dict[str, Any],
+    hass=None,
 ) -> dict[str, Any]:
     """Update one Device's metadata and safely merge its entity group if needed."""
     next_options = _plain_options(options or {})
@@ -5252,6 +5351,44 @@ def _replace_ui_device(
             if existing.get(ATTR_DEVICE_ID, existing_name) == new_device_id:
                 target_device_name = existing_name
                 break
+
+    target_exists = target_device_name in devices and target_device_name != old_device_name
+    effective_name = (
+        _device_display_name(target_device_name, _get_device_attributes(next_options, target_device_name))
+        if target_exists else new_device_name
+    )
+    old_display_name = _device_display_name(
+        old_device_name, _get_device_attributes(next_options, old_device_name)
+    )
+    if effective_name != old_display_name:
+        occupied = {
+            _virtual_entity_id(item) for item in _iter_option_entities(next_options)
+        }
+        for item in old_entities:
+            if not isinstance(item, dict) or item.get(CONF_PLATFORM) not in VIRTUAL_ENTITY_DOMAINS:
+                continue
+            old_id = _virtual_entity_id(item)
+            candidate = _default_virtual_entity_id_for_sources(
+                item[CONF_PLATFORM], _text_default(item.get(CONF_NAME)),
+                _stored_entity_ids(item.get(CONF_SOURCE_ENTITIES)), effective_name,
+            )
+            base = candidate
+            serial = 2
+            while True:
+                trial = {**item, ATTR_ENTITY_ID: candidate}
+                try:
+                    if candidate in occupied and candidate != old_id:
+                        raise EntityIdAlreadyUsed
+                    if hass is not None:
+                        _validate_virtual_entity_id_available(hass, trial, old_id)
+                    break
+                except EntityIdAlreadyUsed:
+                    suffix = f"_{serial}"
+                    domain, object_id = base.split(".", 1)
+                    candidate = f"{domain}.{object_id[:MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH - len(suffix)].rstrip('_')}{suffix}"
+                    serial += 1
+            item[ATTR_ENTITY_ID] = candidate
+            occupied.add(candidate)
 
     device_attributes = _options_device_attributes(next_options)
     if target_device_name == old_device_name:
@@ -5780,14 +5917,14 @@ def _motion_hold_minutes_default(defaults: Mapping) -> int:
     configured = defaults.get(CONF_MOTION_HOLD_MINUTES)
     if not isinstance(configured, bool):
         try:
-            configured = int(configured)
-        except (TypeError, ValueError, OverflowError):
+            configured = detection_minutes(configured)
+        except (TypeError, ValueError, OverflowError, vol.Invalid):
             configured = None
         if configured is not None and 0 <= configured <= MOTION_HOLD_MINUTES_MAX:
             return configured
     template = _text_default(defaults.get(CONF_VALUE_TEMPLATE))
     match = re.search(r"\) < (\d+)\s*\) %\}true", template)
-    if match:
+    if match and len(match.group(1)) <= 6:
         seconds = int(match.group(1))
         if 0 <= seconds <= MOTION_HOLD_MINUTES_MAX * 60 and seconds % 60 == 0:
             return seconds // 60
@@ -6009,6 +6146,16 @@ def _combined_entity_name(states: list) -> str:
     return _shorten_generated_text(combined_name, MAX_GENERATED_ENTITY_NAME_LENGTH)
 
 
+def _air_quality_source_expression(entity_id: str) -> str:
+    """Read live category attributes and ignore unavailable source snapshots."""
+    attribute = f"state_attr({entity_id!r}, 'air_quality')"
+    state = f"states({entity_id!r})"
+    return (
+        f"(({attribute} if {attribute} is not none else {state}) "
+        f"if {state} not in ['unknown', 'unavailable'] else 'unknown')"
+    )
+
+
 def _native_source_template(
     entity_id: str,
     state,
@@ -6024,15 +6171,11 @@ def _native_source_template(
         # state, while Matter requires an overall categorical value. Prefer a
         # dedicated source attribute when present, otherwise the state, but
         # never pass a concentration through as a Matter quality enum.
-        source_value = (
-            f"state_attr({entity_id!r}, 'air_quality')"
-            if "air_quality" in attributes
-            else f"states({entity_id!r})"
-        )
+        source_value = _air_quality_source_expression(entity_id)
         return (
             "{% set value = ("
             + source_value
-            + " | string | lower | replace('-', '_') | replace(' ', '_')) %}"
+            + " | string | trim | lower | replace('-', '_') | replace(' ', '_')) %}"
             "{{ value if value in ['unknown', 'good', 'fair', 'moderate', "
             "'poor', 'very_poor', 'extremely_poor'] else 'unknown' }}"
         )
@@ -6161,18 +6304,14 @@ def _native_reference_templates(
     for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()):
         if property_name == "air_quality" and len(entity_ids) > 1:
             source_values = [
-                (
-                    f"state_attr({entity_id!r}, 'air_quality')"
-                    if "air_quality" in state.attributes
-                    else f"states({entity_id!r})"
-                )
-                for entity_id, state in zip(entity_ids, states, strict=True)
+                _air_quality_source_expression(entity_id)
+                for entity_id in entity_ids
             ]
             templates[property_name] = (
                 "{% set ns = namespace(value='unknown') %}"
                 "{% for source in ["
                 + ", ".join(source_values)
-                + "] %}{% set value = source | string | lower "
+                + "] %}{% set value = source | string | trim | lower "
                 "| replace('-', '_') | replace(' ', '_') %}"
                 "{% if ns.value == 'unknown' and value in ['good', 'fair', "
                 "'moderate', 'poor', 'very_poor', 'extremely_poor'] %}"
@@ -6908,7 +7047,14 @@ def _boiler_air_conditioner_command_actions(
             continue
         if boiler_action is None or air_conditioner_action is None:
             continue
-        elif command == "set_temperature":
+        boiler_write_sequence = []
+        if hot_water_switch_id:
+            boiler_write_sequence.append({
+                "action": "switch.turn_on",
+                "target": {ATTR_ENTITY_ID: hot_water_switch_id},
+            })
+        boiler_write_sequence.append(boiler_action)
+        if command == "set_temperature":
             # Explicit HVAC mode plus temperature must perform a complete
             # ownership hand-off.  Automations, dashboards, and Assist often
             # send these together; routing only the setpoint can otherwise
@@ -7005,7 +7151,7 @@ def _boiler_air_conditioner_command_actions(
                             + repr(air_conditioner_entity_id)
                             + ") != 'heat' }}"
                         ),
-                        "sequence": [boiler_action],
+                        "sequence": boiler_write_sequence,
                     },
                     {
                         "conditions": (
@@ -7031,7 +7177,7 @@ def _boiler_air_conditioner_command_actions(
                 "sequence": [
                     {
                         "choose": choose,
-                        "default": [boiler_action],
+                        "default": boiler_write_sequence,
                     }
                 ],
             }
@@ -7047,7 +7193,7 @@ def _boiler_air_conditioner_command_actions(
                             "sequence": [air_conditioner_action],
                         }
                     ],
-                    "default": [boiler_action],
+                    "default": boiler_write_sequence,
                 }
             ]
     if boiler_temperature_calibration_template:
@@ -7065,6 +7211,7 @@ def _apply_boiler_temperature_calibration(
     calibration_template: str,
 ) -> None:
     """Map virtual room requests to boiler water setpoints before clamping."""
+    visited_actions: set[int] = set()
 
     def apply_to_sequence(sequence: list[dict[str, Any]]) -> None:
         index = 0
@@ -7073,6 +7220,12 @@ def _apply_boiler_temperature_calibration(
             if not isinstance(action, dict):
                 index += 1
                 continue
+            # Generated branches can share the same service action object.
+            # Apply the formula once, even when several routes reach it.
+            if id(action) in visited_actions:
+                index += 1
+                continue
+            visited_actions.add(id(action))
             if (
                 action.get("action") == "climate.set_temperature"
                 and action.get("target", {}).get(ATTR_ENTITY_ID) == boiler_entity_id
@@ -7083,11 +7236,13 @@ def _apply_boiler_temperature_calibration(
                 # rather than its following sibling in Home Assistant scripts,
                 # so it leaves this service with the original command_data.
                 calibrated_command_data = (
+                    "{% if command_data.get('temperature') is number %}"
                     "{% set boiler_calibrated_temperature %}"
                     + calibration_template
                     + "{% endset %}{% set command_data = dict(command_data, temperature="
                     "(boiler_calibrated_temperature | float(command_data.get('temperature')))) %}"
-                    "{{ command_data }}"
+                    "{% endif %}"
+                    + action["data"]
                 )
                 action["data"] = calibrated_command_data
                 index += 1
@@ -8496,19 +8651,6 @@ def _reference_entity_defaults(
             + repr(entity_ids[air_conditioner_index])
             + ") not in ['unknown', 'unavailable'] }}"
         )
-    generated_entity_id = _default_virtual_entity_id_for_sources(
-        platform,
-        defaults[CONF_ENTITY_NAME],
-        entity_ids,
-    )
-    if generated_entity_id != _default_virtual_entity_id(
-        platform,
-        defaults[CONF_ENTITY_NAME],
-    ):
-        # Copying an existing virtual entity commonly preserves its friendly
-        # name. Avoid making the new form self-reference its source before the
-        # user has had a chance to customize the generated ID.
-        defaults[ATTR_ENTITY_ID] = generated_entity_id
     if boiler_profile is not None:
         climate_entity_id = entity_ids[boiler_profile[0]]
         defaults[CONF_ICON_TEMPLATE] = (
@@ -9597,7 +9739,7 @@ def _entity_form_defaults(
         CONF_ICON_TEMPLATE: repair_legacy_enum_template(
             _text_default(entity.get(CONF_ICON_TEMPLATE))
         ),
-        ATTR_ENTITY_ID: _text_default(entity.get(ATTR_ENTITY_ID)),
+        ATTR_ENTITY_ID: _text_default(_virtual_entity_id(entity)),
         CONF_PLATFORM: platform,
         CONF_INITIAL_VALUE: _text_default(
             entity.get(CONF_INITIAL_VALUE),
@@ -9765,6 +9907,8 @@ def _entity_form_defaults(
         # it here skips the dedicated editor and can overwrite a changed Jinja
         # template with the previously selected fixed level.
         defaults.pop(CONF_MATTER_AIR_QUALITY, None)
+        if CONF_AIR_QUALITY_LOGIC in entity:
+            defaults[CONF_AIR_QUALITY_LOGIC] = _mapping_or_empty(entity[CONF_AIR_QUALITY_LOGIC])
     elif platform == "binary_sensor":
         motion_hold_minutes = domain_options.pop(CONF_MOTION_HOLD_MINUTES, None)
         if motion_hold_minutes is not None:
@@ -9847,8 +9991,140 @@ def _log_unhandled_flow_errors(cls):
     return cls
 
 
+class _AirQualityLogicFlow:
+    """Share recipe steps across initial setup, options-add and options-edit."""
+
+    def _aq_signature(self, defaults, edit=False):
+        return (edit, getattr(self, "_edit_selection_key", None) if edit else None,
+                defaults.get(CONF_PLATFORM),
+                tuple(_stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT))))
+
+    def _aq_needs_setup(self, defaults, edit=False):
+        return (isinstance(defaults, Mapping)
+                and defaults.get(CONF_PLATFORM) == "air_quality"
+                and getattr(self, "_aq_completed", None) != self._aq_signature(defaults, edit))
+
+    async def _aq_mode_step(self, user_input=None, *, edit=False):
+        defaults = self._entity_defaults or {}
+        stored = defaults.get(CONF_AIR_QUALITY_LOGIC)
+        try:
+            recipe = aq_options.normalize(stored)
+        except (TypeError, ValueError, vol.Invalid):
+            level = _matter_air_quality_default(defaults)
+            recipe = {"mode": "fixed", "fixed": level} if level != "source" else {"mode": "source"}
+            if edit and level == "source" and _native_template_mapping(
+                defaults.get(CONF_NATIVE_VALUE_TEMPLATES)
+            ).get("air_quality"):
+                # Legacy entries have no recipe baseline. Keep their Jinja
+                # editable rather than guessing that it can be regenerated.
+                recipe = {"mode": "custom"}
+        recipe.setdefault("sources", _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT)))
+        errors = {}
+        if user_input is not None:
+            mode = user_input.get("mode")
+            if mode not in aq_options.MODES:
+                errors["mode"] = "invalid_domain_options"
+            else:
+                self._aq_pending = {**recipe, "mode": mode}
+                self._aq_edit = edit
+                if mode == "custom":
+                    return await self._aq_finish({"mode": "custom"})
+                if mode == "measurement":
+                    return await self._aq_calculation_step()
+                return await self._aq_logic_step()
+        return self.async_show_form(
+            step_id="edit_air_quality" if edit else "air_quality",
+            data_schema=aq_options.mode_schema(recipe["mode"]), errors=errors,
+        )
+
+    async def _aq_calculation_step(self, user_input=None):
+        errors = {}
+        if user_input is not None:
+            try:
+                calculation = aq_options.normalize_calculation(user_input)
+            except (TypeError, ValueError, vol.Invalid):
+                errors["base"] = "invalid_air_quality_logic"
+                self._aq_pending.update(user_input)
+            else:
+                self._aq_pending.update(calculation)
+                return await self._aq_logic_step()
+        return self.async_show_form(
+            step_id="edit_air_quality_calculation" if self._aq_edit else "air_quality_calculation",
+            data_schema=aq_options.calculation_schema(self._aq_pending), errors=errors,
+        )
+
+    async def async_step_air_quality_calculation(self, user_input=None):
+        return await self._aq_calculation_step(user_input)
+
+    async def async_step_edit_air_quality_calculation(self, user_input=None):
+        return await self._aq_calculation_step(user_input)
+
+    async def _aq_logic_step(self, user_input=None):
+        pending = self._aq_pending
+        errors = {}
+        if user_input is not None:
+            try:
+                recipe = aq_options.recipe_from_form(pending["mode"], {**pending, **user_input})
+                # Compile before allowing the template form to open.
+                template = aq_options.generate(recipe)
+                if template:
+                    Template(template, self.hass).ensure_valid()
+            except (TypeError, ValueError, vol.Invalid, TemplateError):
+                errors["base"] = "invalid_air_quality_logic"
+                self._aq_pending = {**pending, **user_input}
+                if pending["mode"] == "measurement":
+                    self._aq_pending["thresholds"] = [user_input.get(f"boundary_{i}") for i in range(1, 6)]
+                    self._aq_pending["levels"] = [user_input.get(f"grade_{i}", aq_options.LEVELS[i-1]) for i in range(1, 7)]
+            else:
+                return await self._aq_finish(recipe)
+        return self.async_show_form(
+            step_id="edit_air_quality_logic" if self._aq_edit else "air_quality_logic",
+            data_schema=aq_options.logic_schema(pending["mode"], self._aq_pending), errors=errors,
+        )
+
+    async def _aq_finish(self, recipe):
+        defaults = _complete_domain_form_defaults(self._entity_defaults or {})
+        generated = aq_options.generate(recipe)
+        native = dict(defaults.get(CONF_NATIVE_VALUE_TEMPLATES, {}))
+        old_defaults = (getattr(self, "_edit_current_defaults", None) or defaults) if self._aq_edit else defaults
+        old_recipe = old_defaults.get(CONF_AIR_QUALITY_LOGIC, {})
+        old_recipe = old_recipe if isinstance(old_recipe, Mapping) else {}
+        old_template = _native_template_mapping(old_defaults.get(CONF_NATIVE_VALUE_TEMPLATES)).get("air_quality", "")
+        policy = getattr(self, "_edit_helper_update_mode", HELPER_UPDATE_AUTO) if self._aq_edit else HELPER_UPDATE_AUTO
+        customized = bool(old_template and (
+            old_recipe.get("mode") == "custom" or (
+                old_recipe.get("generated_template")
+                and old_template != old_recipe["generated_template"]
+            )
+        ))
+        preserve = self._aq_edit and (policy == HELPER_UPDATE_KEEP or (
+            policy != HELPER_UPDATE_FORCE and customized
+        ))
+        if recipe["mode"] == "custom" or preserve:
+            native["air_quality"] = old_template or native.get("air_quality") or "{{ 'unknown' }}"
+        elif generated:
+            native["air_quality"] = generated
+        recipe = {**recipe, "generated_template": generated}
+        defaults[CONF_AIR_QUALITY_LOGIC] = recipe
+        defaults[CONF_NATIVE_VALUE_TEMPLATES] = native
+        # The recipe has already populated the editable template. A stale
+        # legacy dropdown must never override edits made on the next screen.
+        defaults.pop(CONF_MATTER_AIR_QUALITY, None)
+        self._entity_defaults = defaults
+        self._aq_completed = self._aq_signature(defaults, self._aq_edit)
+        if self._aq_edit:
+            return await self.async_step_edit_entity()
+        return await self.async_step_entity()
+
+    async def async_step_air_quality_logic(self, user_input=None):
+        return await self._aq_logic_step(user_input)
+
+    async def async_step_edit_air_quality_logic(self, user_input=None):
+        return await self._aq_logic_step(user_input)
+
+
 @_log_unhandled_flow_errors
-class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
+class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
     """Virtual Layer config flow."""
 
     VERSION = 1
@@ -10092,10 +10368,10 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                     ),
                 )
                 return await self.async_step_entity_helper()
-            errors[CONF_SENSOR_CONVERSION] = "required"
+            errors["base"] = "incompatible_sensor_sources"
         return self.async_show_form(
             step_id="sensor_conversion",
-            data_schema=_sensor_conversion_schema(choices),
+            data_schema=_sensor_conversion_schema(choices, submitted=user_input),
             errors=errors,
         )
 
@@ -10105,6 +10381,21 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             return await self.async_step_entity_source()
 
         if user_input is not None:
+            try:
+                _validate_entity_templates(self.hass, {
+                    CONF_PLATFORM: "climate",
+                    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE: user_input.get(
+                        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                    ),
+                })
+            except InvalidTemplate as err:
+                return self.async_show_form(
+                    step_id="entity_helper",
+                    data_schema=_helper_usage_schema(user_input.get(
+                        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                    )),
+                    errors={err.field_name: "invalid_template"},
+                )
             if CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE in self._reference_defaults:
                 self._reference_defaults = _reference_entity_defaults(
                     self.hass,
@@ -10282,26 +10573,17 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
 
     async def async_step_air_quality(self, user_input=None):
         """Configure the Matter aggregate air-quality value separately."""
-        if not self._entity_defaults:
-            return await self.async_step_entity()
-        if user_input is not None:
-            self._entity_defaults = {
-                **self._entity_defaults,
-                CONF_MATTER_AIR_QUALITY: user_input[CONF_MATTER_AIR_QUALITY],
-            }
-            return await self.async_step_entity(self._entity_defaults)
-        return self.async_show_form(
-            step_id="air_quality",
-            data_schema=_matter_air_quality_schema(
-                _matter_air_quality_default(self._entity_defaults)
-            ),
-        )
+        return await self._aq_mode_step(user_input)
 
     async def async_step_entity(self, user_input=None):
         """Add the first UI-managed virtual entity."""
+        if user_input is None and self._aq_needs_setup(self._entity_defaults):
+            return await self.async_step_air_quality()
         if (
             user_input is None
-            and not self._motion_hold_configured
+            and self._motion_hold_configured != tuple(_stored_entity_ids(
+                (self._entity_defaults or {}).get(CONF_SOURCE_ENTITIES_TEXT)
+            ))
             and self._entity_defaults is not None
             and _is_automatic_motion_helper(self._entity_defaults)
         ):
@@ -10314,10 +10596,6 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 user_input,
                 self._entity_defaults,
             )
-            if user_input.pop("configure_detection", False):
-                if user_input.get(CONF_PLATFORM) == "binary_sensor":
-                    self._entity_defaults = user_input
-                    return await self.async_step_motion_hold()
             try:
                 user_input, self._reference_defaults = _refresh_add_reference_defaults(
                     self.hass,
@@ -10327,6 +10605,9 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                 )
             except InvalidEntityReference as err:
                 errors[err.field_name] = "invalid_entity_id"
+        if user_input is not None and not errors and self._aq_needs_setup(user_input):
+            self._entity_defaults = _complete_domain_form_defaults(user_input)
+            return await self.async_step_air_quality()
         if (
             user_input is not None
             and not errors
@@ -10334,8 +10615,6 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         ):
             user_input = _complete_domain_form_defaults(user_input)
             self._entity_defaults = user_input
-            if user_input.get(CONF_PLATFORM) == "air_quality":
-                return await self.async_step_air_quality()
             return self.async_show_form(
                 step_id="entity",
                 data_schema=_entity_schema(user_input),
@@ -10403,7 +10682,9 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
                     user_input[CONF_MOTION_HOLD_MINUTES],
                     user_input[CONF_MOTION_DETECTION_LOGIC],
                 )
-                self._motion_hold_configured = True
+                self._motion_hold_configured = tuple(_stored_entity_ids(
+                    self._entity_defaults.get(CONF_SOURCE_ENTITIES_TEXT)
+                ))
                 return await self.async_step_entity()
             except (InvalidDomainOptions, KeyError):
                 errors[CONF_MOTION_HOLD_MINUTES] = "invalid_domain_options"
@@ -10419,12 +10700,14 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
 
 
 @_log_unhandled_flow_errors
-class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
+class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlowWithReload):
     """Virtual Layer options flow."""
 
     def __init__(self) -> None:
         self._edit_device_name: str | None = None
         self._edit_index: int | None = None
+        self._edit_selection_key: str | None = None
+        self._edit_entity_snapshot: dict[str, Any] | None = None
         self._managed_device_name: str | None = None
         self._entity_defaults: dict[str, Any] | None = None
         self._reference_defaults: dict[str, Any] = {}
@@ -10519,6 +10802,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     self._managed_device_name,
                     new_device_name,
                     device_config,
+                    self.hass,
                 )
                 return self.async_create_entry(data=options)
             except MissingDeviceName:
@@ -10681,10 +10965,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     ),
                 )
                 return await self.async_step_entity_helper()
-            errors[CONF_SENSOR_CONVERSION] = "required"
+            errors["base"] = "incompatible_sensor_sources"
         return self.async_show_form(
             step_id="sensor_conversion",
-            data_schema=_sensor_conversion_schema(choices),
+            data_schema=_sensor_conversion_schema(choices, submitted=user_input),
             errors=errors,
         )
 
@@ -10694,6 +10978,21 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             return await self.async_step_entity_source()
 
         if user_input is not None:
+            try:
+                _validate_entity_templates(self.hass, {
+                    CONF_PLATFORM: "climate",
+                    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE: user_input.get(
+                        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                    ),
+                })
+            except InvalidTemplate as err:
+                return self.async_show_form(
+                    step_id="entity_helper",
+                    data_schema=_helper_usage_schema(user_input.get(
+                        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                    )),
+                    errors={err.field_name: "invalid_template"},
+                )
             if CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE in self._reference_defaults:
                 self._reference_defaults = _reference_entity_defaults(
                     self.hass,
@@ -10886,26 +11185,17 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
     async def async_step_air_quality(self, user_input=None):
         """Configure Matter aggregate air quality for a new entity."""
-        if not self._entity_defaults:
-            return await self.async_step_entity()
-        if user_input is not None:
-            self._entity_defaults = {
-                **self._entity_defaults,
-                CONF_MATTER_AIR_QUALITY: user_input[CONF_MATTER_AIR_QUALITY],
-            }
-            return await self.async_step_entity(self._entity_defaults)
-        return self.async_show_form(
-            step_id="air_quality",
-            data_schema=_matter_air_quality_schema(
-                _matter_air_quality_default(self._entity_defaults)
-            ),
-        )
+        return await self._aq_mode_step(user_input)
 
     async def async_step_entity(self, user_input=None):
         """Add a UI-managed virtual entity."""
+        if user_input is None and self._aq_needs_setup(self._entity_defaults):
+            return await self.async_step_air_quality()
         if (
             user_input is None
-            and not self._add_motion_hold_configured
+            and self._add_motion_hold_configured != tuple(_stored_entity_ids(
+                (self._entity_defaults or {}).get(CONF_SOURCE_ENTITIES_TEXT)
+            ))
             and self._entity_defaults is not None
             and _is_automatic_motion_helper(self._entity_defaults)
         ):
@@ -10918,10 +11208,6 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 user_input,
                 self._entity_defaults,
             )
-            if user_input.pop("configure_detection", False):
-                if user_input.get(CONF_PLATFORM) == "binary_sensor":
-                    self._entity_defaults = user_input
-                    return await self.async_step_motion_hold()
             try:
                 user_input, self._reference_defaults = _refresh_add_reference_defaults(
                     self.hass,
@@ -10931,6 +11217,9 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 )
             except InvalidEntityReference as err:
                 errors[err.field_name] = "invalid_entity_id"
+        if user_input is not None and not errors and self._aq_needs_setup(user_input):
+            self._entity_defaults = _complete_domain_form_defaults(user_input)
+            return await self.async_step_air_quality()
         if (
             user_input is not None
             and not errors
@@ -10938,8 +11227,6 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         ):
             user_input = _complete_domain_form_defaults(user_input)
             self._entity_defaults = user_input
-            if user_input.get(CONF_PLATFORM) == "air_quality":
-                return await self.async_step_air_quality()
             return self.async_show_form(
                 step_id="entity",
                 data_schema=_entity_schema(user_input),
@@ -11003,7 +11290,9 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     user_input[CONF_MOTION_HOLD_MINUTES],
                     user_input[CONF_MOTION_DETECTION_LOGIC],
                 )
-                self._add_motion_hold_configured = True
+                self._add_motion_hold_configured = tuple(_stored_entity_ids(
+                    self._entity_defaults.get(CONF_SOURCE_ENTITIES_TEXT)
+                ))
                 return await self.async_step_entity()
             except (InvalidDomainOptions, KeyError):
                 errors[CONF_MOTION_HOLD_MINUTES] = "invalid_domain_options"
@@ -11029,7 +11318,9 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     self.config_entry.options,
                     user_input[CONF_ENTITY_KEY],
                 )
-                _get_ui_entity(self.config_entry.options, device_name, index)
+                entity = _get_ui_entity(self.config_entry.options, device_name, index)
+                self._edit_selection_key = user_input[CONF_ENTITY_KEY]
+                self._edit_entity_snapshot = _plain_options(entity)
                 self._edit_device_name = device_name
                 self._edit_index = index
                 return await self.async_step_edit_entity_source()
@@ -11101,6 +11392,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             return await self.async_step_select_entity()
 
         try:
+            self._resolve_edit_selection()
             entity = _get_ui_entity(
                 self.config_entry.options,
                 self._edit_device_name,
@@ -11289,12 +11581,14 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     ),
                 )
                 return await self.async_step_edit_entity_helper()
-            errors[CONF_SENSOR_CONVERSION] = "required"
+            errors["base"] = "incompatible_sensor_sources"
         return self.async_show_form(
             step_id="edit_sensor_conversion",
             data_schema=_sensor_conversion_schema(
                 choices,
                 _sensor_aggregation_from_defaults(self._edit_current_defaults or {}),
+                submitted=user_input,
+                current_defaults=self._edit_current_defaults,
             ),
             errors=errors,
         )
@@ -11356,6 +11650,21 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             return await self.async_step_edit_entity_source()
 
         if user_input is not None:
+            try:
+                _validate_entity_templates(self.hass, {
+                    CONF_PLATFORM: "climate",
+                    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE: user_input.get(
+                        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                    ),
+                })
+            except InvalidTemplate as err:
+                return self.async_show_form(
+                    step_id="edit_entity_helper",
+                    data_schema=_helper_update_schema(user_input.get(
+                        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                    )),
+                    errors={err.field_name: "invalid_template"},
+                )
             try:
                 if (
                     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
@@ -11548,20 +11857,24 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
     async def async_step_edit_air_quality(self, user_input=None):
         """Configure Matter aggregate air quality while editing an entity."""
-        if not self._entity_defaults:
-            return await self.async_step_edit_entity()
-        if user_input is not None:
-            self._entity_defaults = {
-                **self._entity_defaults,
-                CONF_MATTER_AIR_QUALITY: user_input[CONF_MATTER_AIR_QUALITY],
-            }
-            return await self.async_step_edit_entity(self._entity_defaults)
-        return self.async_show_form(
-            step_id="edit_air_quality",
-            data_schema=_matter_air_quality_schema(
-                _matter_air_quality_default(self._entity_defaults)
-            ),
+        return await self._aq_mode_step(user_input, edit=True)
+
+    def _resolve_edit_selection(self) -> None:
+        """Reject stale edits and follow the selected key after list changes."""
+        if self._edit_selection_key is None:
+            return
+        device_name, index = _find_entity_by_selection_key(
+            self.config_entry.options, self._edit_selection_key,
         )
+        entity = _get_ui_entity(self.config_entry.options, device_name, index)
+        if (
+            device_name != self._edit_device_name
+            or _plain_options(entity) != self._edit_entity_snapshot
+        ):
+            # Another flow moved or changed this entity. Reopen it to avoid
+            # overwriting that change with this form's old values/metadata.
+            raise InvalidEntitySelection
+        self._edit_index = index
 
     async def async_step_edit_entity(self, user_input=None):
         """Edit a UI-managed virtual entity."""
@@ -11569,9 +11882,14 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         if self._edit_device_name is None or self._edit_index is None:
             return await self.async_step_select_entity()
 
+        if user_input is None and self._aq_needs_setup(self._entity_defaults, True):
+            return await self.async_step_edit_air_quality()
+
         if (
             user_input is None
-            and not self._edit_motion_hold_configured
+            and self._edit_motion_hold_configured != tuple(_stored_entity_ids(
+                (self._entity_defaults or {}).get(CONF_SOURCE_ENTITIES_TEXT)
+            ))
             and self._entity_defaults is not None
             and _is_automatic_motion_helper(self._entity_defaults)
         ):
@@ -11584,15 +11902,12 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 user_input,
                 self._entity_defaults,
             )
-            if user_input.pop("configure_detection", False):
-                if user_input.get(CONF_PLATFORM) == "binary_sensor":
-                    self._entity_defaults = user_input
-                    return await self.async_step_edit_motion_hold()
+        if user_input is not None and self._aq_needs_setup(user_input, True):
+            self._entity_defaults = _complete_domain_form_defaults(user_input)
+            return await self.async_step_edit_air_quality()
         if user_input is not None and _needs_domain_specific_form(user_input):
             user_input = _complete_domain_form_defaults(user_input)
             self._entity_defaults = user_input
-            if user_input.get(CONF_PLATFORM) == "air_quality":
-                return await self.async_step_edit_air_quality()
             return self.async_show_form(
                 step_id="edit_entity",
                 data_schema=_entity_schema(user_input),
@@ -11603,11 +11918,24 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 self._entity_defaults,
             )
             try:
+                self._resolve_edit_selection()
                 current_entity = _get_ui_entity(
                     self.config_entry.options,
                     self._edit_device_name,
                     self._edit_index,
                 )
+                old_device = _get_device_attributes(
+                    self.config_entry.options, self._edit_device_name
+                )
+                if (
+                    _text_default(user_input.get(CONF_ENTITY_NAME)).strip()
+                    != _text_default(current_entity.get(CONF_NAME)).strip()
+                    or _text_default(user_input.get(CONF_DEVICE_NAME)).strip()
+                    != _device_display_name(self._edit_device_name, old_device)
+                ):
+                    # A name change explicitly requests a fresh default ID,
+                    # even when the old ID was customized.
+                    user_input[ATTR_ENTITY_ID] = ""
                 submitted_sources = _parse_source_entities(
                     user_input.get(CONF_SOURCE_ENTITIES_TEXT, ""),
                 )
@@ -11708,6 +12036,7 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     ),
                 )
                 device_config = _build_device_config(user_input, device_name)
+                self._resolve_edit_selection()
                 options = _replace_ui_entity(
                     self.config_entry.options,
                     self._edit_device_name,
@@ -11775,7 +12104,9 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                     user_input[CONF_MOTION_HOLD_MINUTES],
                     user_input[CONF_MOTION_DETECTION_LOGIC],
                 )
-                self._edit_motion_hold_configured = True
+                self._edit_motion_hold_configured = tuple(_stored_entity_ids(
+                    self._entity_defaults.get(CONF_SOURCE_ENTITIES_TEXT)
+                ))
                 return await self.async_step_edit_entity()
             except (InvalidDomainOptions, KeyError):
                 errors[CONF_MOTION_HOLD_MINUTES] = "invalid_domain_options"

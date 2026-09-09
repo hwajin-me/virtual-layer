@@ -1057,6 +1057,39 @@ class BlendedCfg:
         )
 
         sensor_entities = self._entities.setdefault("sensor", [])
+        if platform == "air_quality":
+            # matterbridge-hass consumes sensor states, not air_quality domain
+            # attributes. Keep this categorical: numeric 0..6 is interpreted
+            # by that plugin as an AQI score, not as the Matter enum.
+            bridge_unique_id = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}air_quality"
+            bridge_entity_id = self._reserve_entity_id(
+                "sensor", f"sensor.{object_id}_air_quality", bridge_unique_id,
+            )
+            sensor_entities.append({
+                **{key: entity[key] for key in (
+                    ATTR_DEVICE_ID, CONF_MANUFACTURER, CONF_MODEL, CONF_SW_VERSION,
+                    CONF_HW_VERSION, CONF_SERIAL_NUMBER, CONF_CONFIGURATION_URL,
+                    CONF_SUGGESTED_AREA, CONF_VIA_DEVICE_ID,
+                ) if key in entity},
+                CONF_NAME: f"{entity[CONF_NAME]} - Air Quality",
+                ATTR_ENTITY_ID: bridge_entity_id,
+                ATTR_UNIQUE_ID: bridge_unique_id,
+                ATTR_DEVICE_ID: device_id,
+                CONF_INITIAL_VALUE: "unknown",
+                CONF_INITIAL_AVAILABILITY: True,
+                CONF_PERSISTENT: False,
+                CONF_SOURCE_ENTITIES: [entity_id],
+                CONF_VALUE_TEMPLATE: (
+                    "{% set grade = states(" + repr(entity_id) + ") %}"
+                    "{{ grade if grade in ['good', 'fair', 'moderate', 'poor', "
+                    "'very_poor', 'extremely_poor'] else 'unknown' }}"
+                ),
+                CONF_ATTRIBUTES: {
+                    "virtual_entity_id": entity_id,
+                    "sensor_type": "matter_air_quality",
+                },
+                CONF_ICON: "mdi:air-filter",
+            })
         if platform == "vacuum" and entity.get("battery_level") is not None:
             battery_unique_id = (
                 f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}battery"
@@ -1075,7 +1108,12 @@ class BlendedCfg:
                 CONF_INITIAL_AVAILABILITY: True,
                 CONF_PERSISTENT: False,
                 CONF_CLASS: "battery",
+                "state_class": "measurement",
                 CONF_UNIT_OF_MEASUREMENT: PERCENTAGE,
+                CONF_SOURCE_ENTITIES: [entity_id],
+                CONF_VALUE_TEMPLATE: (
+                    "{{ state_attr(" + repr(entity_id) + ", 'battery_level') }}"
+                ),
                 CONF_ATTRIBUTES: {
                     "virtual_entity_id": entity_id,
                     "sensor_type": "battery",

@@ -972,11 +972,18 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                     self._async_polygon_source_changed,
                 )
             )
+        anchors = self._polygon_config.get(CONF_POLYGON_ESPRESENSE_ANCHORS, {})
+        refresh_seconds = min(
+            [5.0] + [
+                float(anchor.get("max_age_seconds", DEFAULT_ESPRESENSE_MAX_AGE_SECONDS))
+                for anchor in anchors.values()
+            ]
+        ) if anchors else 60.0
         self._refresh_remove_listeners.append(
             async_track_time_interval(
                 self.hass,
                 self._async_polygon_source_changed,
-                timedelta(minutes=1),
+                timedelta(seconds=max(1.0, refresh_seconds)),
             )
         )
         if self._polygon_config.get(CONF_POLYGON_FILES):
@@ -1058,11 +1065,15 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             max_age = float(
                 anchor.get("max_age_seconds", DEFAULT_ESPRESENSE_MAX_AGE_SECONDS)
             )
-            if now - state.last_updated > timedelta(seconds=max_age):
+            if now - state.last_updated >= timedelta(seconds=max_age):
                 continue
-            raw = state.attributes.get(
-                "distance", state.attributes.get("distance_meters", state.state)
-            )
+            # Explicit metre measurements are independent of the state unit.
+            if "distance_meters" in state.attributes:
+                raw = state.attributes["distance_meters"]
+                unit = "m"
+            else:
+                raw = state.attributes.get("distance", state.state)
+                unit = str(state.attributes.get("unit_of_measurement", "m")).strip().lower()
             try:
                 distance = float(raw)
                 latitude, longitude = self._validated_coordinates(
@@ -1070,7 +1081,6 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 )
             except (TypeError, ValueError, OverflowError, KeyError):
                 continue
-            unit = str(state.attributes.get("unit_of_measurement", "m")).lower()
             unit_scale = {"m": 1, "cm": 0.01, "mm": 0.001, "ft": 0.3048}.get(unit)
             if unit_scale is None:
                 continue
@@ -1409,10 +1419,13 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         domain = entity_id.split(".", 1)[0]
         if domain in {"binary_sensor", "switch", "input_boolean"}:
             return str(state.state).lower() in {"on", "home", "true", "present"}
-        # Plain device_tracker state is intentionally not treated as a radio
-        # proof: it may be a named-zone iCloud/GPS report. Wi-Fi and
-        # ESPresense integrations conventionally expose a binary sensor or a
-        # switch; those are unambiguous and therefore safe to prioritize.
+        if domain == "device_tracker":
+            # AB BLE Gateway applies its RSSI threshold and idle timeout before
+            # publishing home. Honor that radio decision without interpreting
+            # RSSI as an uncalibrated distance or treating GPS home as radio.
+            return state.attributes.get("source_type") in {
+                "bluetooth", "bluetooth_le", "router"
+            } and state.state == "home"
         return False
 
     @staticmethod

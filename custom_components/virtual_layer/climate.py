@@ -464,10 +464,12 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             features |= ClimateEntityFeature.TARGET_HUMIDITY
         if target_temperature_high is not None and target_temperature_low is not None:
             features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
-        elif (
+        if (
             target_temperature is not None
             or (
                 "set_temperature" in self._command_actions
+                and target_temperature_high is None
+                and target_temperature_low is None
                 and not has_dynamic_native_template(
                     CONF_TARGET_TEMPERATURE,
                     CONF_TARGET_TEMPERATURE_HIGH,

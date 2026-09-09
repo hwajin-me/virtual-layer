@@ -50,6 +50,41 @@ from custom_components.virtual_layer.const import (
 pytestmark = pytest.mark.unit
 
 
+async def test_air_quality_bridge_sensor_is_categorical_and_grouped(hass, tmp_path, monkeypatch):
+    from homeassistant.helpers.template import Template
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    monkeypatch.setattr(cfg_module, "default_meta_file", lambda hass: str(tmp_path / "air_quality.meta.json"))
+    entry = MockConfigEntry(domain="virtual_layer", data={ATTR_GROUP_NAME: "aq_bridge"})
+    entry.add_to_hass(hass)
+
+    cfg = BlendedCfg(hass, {ATTR_GROUP_NAME: "aq_bridge"}, {
+        ATTR_DEVICES: {"Air Device": [{
+            CONF_PLATFORM: "air_quality", CONF_NAME: "Living",
+            ATTR_ENTITY_ID: "air_quality.living", ATTR_ENTITY_KEY: "aq-key",
+            CONF_INITIAL_VALUE: "unknown", CONF_INITIAL_AVAILABILITY: True,
+            CONF_PERSISTENT: False,
+        }]},
+    }, config_entry=entry)
+    await cfg.async_load()
+    parent = cfg.entities["air_quality"][0]
+    bridge = next(item for item in cfg.entities["sensor"]
+                  if item.get(CONF_ATTRIBUTES, {}).get("sensor_type") == "matter_air_quality")
+    assert bridge[ATTR_ENTITY_ID] == "sensor.living_air_quality"
+    assert bridge[ATTR_DEVICE_ID] == parent[ATTR_DEVICE_ID]
+    assert bridge[ATTR_UNIQUE_ID] == parent[ATTR_UNIQUE_ID] + ".virtual_layer_diagnostic.air_quality"
+    assert "device_class" not in bridge
+    assert "unit_of_measurement" not in bridge
+    assert "state_class" not in bridge
+    helper = Template(bridge[CONF_VALUE_TEMPLATE], hass)
+    for grade in ("good", "fair", "moderate", "poor", "very_poor", "extremely_poor", "unknown"):
+        hass.states.async_set(parent[ATTR_ENTITY_ID], grade)
+        assert helper.async_render() == grade
+    for value in ("0", "6", "35", "unavailable", "bad"):
+        hass.states.async_set(parent[ATTR_ENTITY_ID], value)
+        assert helper.async_render() == "unknown"
+
+
 def test_make_entity_id_uses_the_domain_prefix_for_prefixed_names():
     assert _make_entity_id("sensor", "+Kitchen Temperature") == (
         "sensor.kitchen_temperature"

@@ -355,9 +355,10 @@ async def test_real_config_entry_loads_every_supported_domain(
     assert len(registered_device_ids) == 1
     battery_state = hass.states.get("sensor.vacuum_entity_battery")
     assert battery_state is not None
-    assert battery_state.state == "80"
+    assert battery_state.state == str(hass.states.get("vacuum.vacuum_entity").attributes["battery_level"])
     assert battery_state.attributes["device_class"] == "battery"
     assert battery_state.attributes["unit_of_measurement"] == "%"
+    assert battery_state.attributes["state_class"] == "measurement"
     assert (
         entity_registry.async_get("sensor.vacuum_entity_battery").device_id
         in registered_device_ids

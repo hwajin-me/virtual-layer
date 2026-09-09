@@ -14,7 +14,8 @@
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
       "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
       "invalid_domain_options": "Enter valid options for the selected entity domain.",
-      "required": "This field is required."
+      "required": "This field is required.",
+      "invalid_air_quality_logic": "Select valid sources and units. Enter five finite, non-negative, strictly increasing boundaries (up to 1e12) and six valid interval categories."
     },
     "step": {
       "user": {
@@ -40,13 +41,13 @@
         }
       },
       "air_quality": {
-        "title": "Configure Matter Air Quality",
-        "description": "Matter controllers require one overall air-quality category in addition to pollutant measurements. Choose a fixed category for this virtual device, or choose Source or dynamic template to use the editable Air quality template from the entity form. Numeric PM or AQI values are measurements, not Matter categories.",
+        "title": "Choose air-quality logic",
+        "description": "Configure how this entity determines its overall air-quality category before reviewing templates. This recipe generates editable Jinja; it does not configure your Matter bridge. Choose source categories, your own measurement boundaries, a fixed category, or custom Jinja. A categorical sensor.<name>_air_quality companion is generated on the same Device for MatterBridge 3.10.8 + matterbridge-hass 1.5.0. Set the plugin Air Quality Regex to match its actual entity ID exactly. This is a category string, not numeric AQI: do not add a numeric device class or unit. Plugin 1.5.0 skips unknown updates, so the previous Matter category may remain.",
         "data": {
-          "matter_air_quality": "Matter overall air quality"
+          "mode": "Determination method"
         },
         "data_description": {
-          "matter_air_quality": "Use a fixed category when your source exposes only numeric values. Use Source or dynamic template when the source provides a valid category or when you maintain custom Jinja logic."
+          "mode": "Source: use textual categories. Measurement: classify finite measurements with your own five boundaries. Fixed: publish one chosen category. Custom: keep or write Jinja on the next screen."
         }
       },
       "motion_hold": {
@@ -77,15 +78,14 @@
           "source_entities_text": "Source entities",
           "pull_interval": "Pull interval",
           "value_template": "Value template",
-          "availability_template": "Availability template",
-          "configure_detection": "Configure detection logic"
+          "availability_template": "Availability template"
         },
         "data_description": {
           "device_name": "Display name only. Different Devices may use the same name; Device ID determines grouping.",
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "icon_template": "Optional Jinja template that returns an icon name. It can use template source variables and this.",
-          "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
+          "entity_id": "Optional. Defaults to domain.device_name_entity_name in snake case; an unnamed entity uses a random alphanumeric suffix. Clear to regenerate, or enter your own ID. Changing the Device or entity name automatically regenerates existing IDs, including custom IDs.",
           "platform": "Home Assistant entity domain. Submit once after changing it to load the domain-specific controls and Jinja fields.",
           "initial_value": "Fallback state used before a template renders or when no value template is configured.",
           "initial_availability": "Initial availability used when no availability template is configured.",
@@ -93,8 +93,7 @@
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
           "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
-          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
-          "configure_detection": "Enable and submit to open the separate detection settings step. Select the active-source threshold for this binary sensor."
+          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes."
         },
         "sections": {
           "device_details": {
@@ -638,7 +637,7 @@
         },
         "data_description": {
           "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates.",
-          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual room-temperature request into the boiler water setpoint. Use temperature as the requested room value. At the target, the default maps 25°C to 40°C water, 27°C to 44°C, 30°C to 47°C, and 33°C to 50°C. While the current virtual room temperature is below the request, it adds 1.5°C of water temperature per 1°C gap, capped at 8°C, then removes that boost as the room recovers. Tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula."
+          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual room-temperature request into the boiler water setpoint. Use temperature as the requested room value. At the target, the default maps 25°C to 40°C water, 27°C to 44°C, 30°C to 47°C, and 33°C to 50°C. While the current virtual room temperature is below the request, it adds 1.5°C of water temperature per 1°C gap, capped at 8°C, reducing the boost on subsequent commands as the room recovers. Tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula. Calculation runs only on a set_temperature command; it does not periodically resend a reduced setpoint. current_temperature must represent a real room sensor, not water temperature. The gain 1.5 and cap 8 are tunable starting values, not a model of heating delay or residual heat."
         }
       },
       "matter_fan_levels": {
@@ -694,6 +693,66 @@
         "data_description": {
           "matter_fan_speed_source": "Use the fan entity that physically controls speed, such as the Xiaomi Home fan rather than the MIOT status/control fan."
         }
+      },
+      "air_quality_logic": {
+        "title": "Configure air-quality rules",
+        "description": "Enter five increasing boundaries and assign any category to each of six intervals. Equality follows the preceding calculation rule. These are user rules, not a regional AQI standard. Review the template next. Automatic/Keep current preserve custom templates; choose Force helper to replace them with changed rules.",
+        "data": {
+          "fixed": "Fixed category",
+          "sources": "Air-quality sources",
+          "attribute": "Source attribute",
+          "aggregation": "Combine source categories",
+          "missing": "Missing or invalid values",
+          "unit": "Boundary unit",
+          "boundary_1": "Boundary 1",
+          "boundary_2": "Boundary 2",
+          "boundary_3": "Boundary 3",
+          "boundary_4": "Boundary 4",
+          "boundary_5": "Boundary 5",
+          "grade_1": "Interval 1 category",
+          "grade_2": "Interval 2 category",
+          "grade_3": "Interval 3 category",
+          "grade_4": "Interval 4 category",
+          "grade_5": "Interval 5 category",
+          "grade_6": "Interval 6 category"
+        },
+        "data_description": {
+          "fixed": "A constant category; it will not track changing pollution measurements.",
+          "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
+          "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
+          "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
+          "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit.",
+          "boundary_1": "Boundary between intervals 1 and 2; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_2": "Boundary between intervals 2 and 3; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_3": "Boundary between intervals 3 and 4; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_4": "Boundary between intervals 4 and 5; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_5": "Boundary between intervals 5 and 6; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "grade_1": "Category for interval 1. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_2": "Category for interval 2. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_3": "Category for interval 3. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_4": "Category for interval 4. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values."
+        }
+      },
+      "air_quality_calculation": {
+        "title": "Air-quality calculation",
+        "description": "Unit conversion → per-source calibration → measurement aggregation → threshold classification. Next, edit five boundaries and six interval categories. Defaults a=0, b=1, c=0 preserve values. Aggregation uses current source values, not a time average.",
+        "data": {
+          "reducer": "Measurement aggregation",
+          "boundary_rule": "Boundary equality rule",
+          "quadratic": "Quadratic coefficient a",
+          "multiplier": "Multiplier b",
+          "offset": "Offset c"
+        },
+        "data_description": {
+          "reducer": "Classify each source, or classify the mean, median, minimum or maximum of calibrated values once. Combine only the same physical quantity, never different pollutants.",
+          "boundary_rule": "Upper inclusive: x ≤ boundary stays in the lower interval. Lower inclusive: x ≥ boundary enters the next interval.",
+          "quadratic": "After unit conversion apply y = a×x² + b×x + c. Zero selects linear calibration. Negative or non-finite results count as missing.",
+          "multiplier": "One preserves scale. Example: a=0, b=1.1, c=-2 yields y=1.1×x-2.",
+          "offset": "Added after unit conversion and scaling. Zero leaves the offset unchanged."
+        }
       }
     }
   },
@@ -712,7 +771,8 @@
       "entity_not_found": "The selected virtual entity was not found.",
       "no_devices": "There are no virtual devices to manage.",
       "no_entities": "This device does not have any virtual entities to edit.",
-      "required": "This field is required."
+      "required": "This field is required.",
+      "invalid_air_quality_logic": "Select valid sources and units. Enter five finite, non-negative, strictly increasing boundaries (up to 1e12) and six valid interval categories."
     },
     "step": {
       "init": {
@@ -794,13 +854,13 @@
         }
       },
       "edit_air_quality": {
-        "title": "Configure Matter Air Quality",
-        "description": "Matter controllers require one overall air-quality category in addition to pollutant measurements. Choose a fixed category for this virtual device, or choose Source or dynamic template to keep the editable Air quality template from the entity form. Numeric PM or AQI values are measurements, not Matter categories.",
+        "title": "Choose air-quality logic",
+        "description": "Configure how this entity determines its overall air-quality category before reviewing templates. This recipe generates editable Jinja; it does not configure your Matter bridge. Choose source categories, your own measurement boundaries, a fixed category, or custom Jinja. A categorical sensor.<name>_air_quality companion is generated on the same Device for MatterBridge 3.10.8 + matterbridge-hass 1.5.0. Set the plugin Air Quality Regex to match its actual entity ID exactly. This is a category string, not numeric AQI: do not add a numeric device class or unit. Plugin 1.5.0 skips unknown updates, so the previous Matter category may remain.",
         "data": {
-          "matter_air_quality": "Matter overall air quality"
+          "mode": "Determination method"
         },
         "data_description": {
-          "matter_air_quality": "Use a fixed category when your source exposes only numeric values. Use Source or dynamic template when the source provides a valid category or when you maintain custom Jinja logic."
+          "mode": "Source: use textual categories. Measurement: classify finite measurements with your own five boundaries. Fixed: publish one chosen category. Custom: keep or write Jinja on the next screen."
         }
       },
       "edit_entity": {
@@ -819,15 +879,14 @@
           "source_entities_text": "Source entities",
           "pull_interval": "Pull interval",
           "value_template": "Value template",
-          "availability_template": "Availability template",
-          "configure_detection": "Configure detection logic"
+          "availability_template": "Availability template"
         },
         "data_description": {
           "device_name": "Editable display name. Device ID determines which virtual Device contains the entity.",
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "icon_template": "Optional Jinja template that returns an icon name. It can use template source variables and this.",
-          "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
+          "entity_id": "Optional. Defaults to domain.device_name_entity_name in snake case; an unnamed entity uses a random alphanumeric suffix. Clear to regenerate, or enter your own ID. Changing the Device or entity name automatically regenerates existing IDs, including custom IDs.",
           "platform": "Home Assistant entity domain. Submit once after changing it to load the domain-specific controls and Jinja fields.",
           "initial_value": "Fallback state used before a template renders or when no value template is configured.",
           "initial_availability": "Initial availability used when no availability template is configured.",
@@ -835,8 +894,7 @@
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
           "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
-          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
-          "configure_detection": "Enable and submit to open the separate detection settings step. Select the active-source threshold for this binary sensor."
+          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes."
         },
         "sections": {
           "device_details": {
@@ -1392,7 +1450,7 @@
         },
         "data_description": {
           "helper_update_mode": "Automatic preserves each template you edited and regenerates untouched helpers. Keep current means the helper is not used and every template stays unchanged. Force helper replaces generated and custom templates using the selected source entities.",
-          "boiler_temperature_calibration_template": "This is used only for a detected boiler climate. It converts the virtual room request (temperature) to the boiler water setpoint. The suggested recovery curve keeps the 25→40, 27→44, 30→47, and 33→50°C room-to-water targets, adds 1.5°C water per 1°C room gap while recovering, and limits that extra heat to 8°C. An old direct-pass-through default is automatically replaced in this form; any other saved formula is kept as your custom value."
+          "boiler_temperature_calibration_template": "This is used only for a detected boiler climate. It converts the virtual room request (temperature) to the boiler water setpoint. The suggested recovery curve keeps the 25→40, 27→44, 30→47, and 33→50°C room-to-water targets, adds 1.5°C water per 1°C room gap while recovering, and limits that extra heat to 8°C. An old direct-pass-through default is automatically replaced in this form; any other saved formula is kept as your custom value. Calculation runs only on a set_temperature command; it does not periodically resend a reduced setpoint. current_temperature must represent a real room sensor, not water temperature. The gain 1.5 and cap 8 are tunable starting values, not a model of heating delay or residual heat."
         }
       },
       "entity_helper": {
@@ -1462,13 +1520,13 @@
         }
       },
       "air_quality": {
-        "title": "Configure Matter Air Quality",
-        "description": "Matter controllers require one overall air-quality category in addition to pollutant measurements. Choose a fixed category for this virtual device, or choose Source or dynamic template to use the editable Air quality template from the entity form. Numeric PM or AQI values are measurements, not Matter categories.",
+        "title": "Choose air-quality logic",
+        "description": "Configure how this entity determines its overall air-quality category before reviewing templates. This recipe generates editable Jinja; it does not configure your Matter bridge. Choose source categories, your own measurement boundaries, a fixed category, or custom Jinja. A categorical sensor.<name>_air_quality companion is generated on the same Device for MatterBridge 3.10.8 + matterbridge-hass 1.5.0. Set the plugin Air Quality Regex to match its actual entity ID exactly. This is a category string, not numeric AQI: do not add a numeric device class or unit. Plugin 1.5.0 skips unknown updates, so the previous Matter category may remain.",
         "data": {
-          "matter_air_quality": "Matter overall air quality"
+          "mode": "Determination method"
         },
         "data_description": {
-          "matter_air_quality": "Use a fixed category when your source exposes only numeric values. Use Source or dynamic template when the source provides a valid category or when you maintain custom Jinja logic."
+          "mode": "Source: use textual categories. Measurement: classify finite measurements with your own five boundaries. Fixed: publish one chosen category. Custom: keep or write Jinja on the next screen."
         }
       },
       "entity": {
@@ -1487,15 +1545,14 @@
           "source_entities_text": "Source entities",
           "pull_interval": "Pull interval",
           "value_template": "Value template",
-          "availability_template": "Availability template",
-          "configure_detection": "Configure detection logic"
+          "availability_template": "Availability template"
         },
         "data_description": {
           "device_name": "Display name only. Different Devices may use the same name; Device ID determines grouping.",
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "icon_template": "Optional Jinja template that returns an icon name. It can use template source variables and this.",
-          "entity_id": "Optional. Leave empty to generate one from the entity domain and name.",
+          "entity_id": "Optional. Defaults to domain.device_name_entity_name in snake case; an unnamed entity uses a random alphanumeric suffix. Clear to regenerate, or enter your own ID. Changing the Device or entity name automatically regenerates existing IDs, including custom IDs.",
           "platform": "Home Assistant entity domain. Submit once after changing it to load the domain-specific controls and Jinja fields.",
           "initial_value": "Fallback state used before a template renders or when no value template is configured.",
           "initial_availability": "Initial availability used when no availability template is configured.",
@@ -1503,8 +1560,7 @@
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
           "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
-          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes.",
-          "configure_detection": "Enable and submit to open the separate detection settings step. Select the active-source threshold for this binary sensor."
+          "pull_interval": "Seconds between periodic source checks. Use 0 to update only on source state changes."
         },
         "sections": {
           "device_details": {
@@ -2050,6 +2106,126 @@
           "motion_hold_minutes": "Only motion helpers use this value: after every source is off, retain on for this many minutes. Set 0 to clear immediately. Other binary sensor classes ignore it.",
           "motion_detection_logic": "Choose the minimum active-source threshold: majority, two thirds, one third, any active source, or every source."
         }
+      },
+      "air_quality_logic": {
+        "title": "Configure air-quality rules",
+        "description": "Enter five increasing boundaries and assign any category to each of six intervals. Equality follows the preceding calculation rule. These are user rules, not a regional AQI standard. Review the template next. Automatic/Keep current preserve custom templates; choose Force helper to replace them with changed rules.",
+        "data": {
+          "fixed": "Fixed category",
+          "sources": "Air-quality sources",
+          "attribute": "Source attribute",
+          "aggregation": "Combine source categories",
+          "missing": "Missing or invalid values",
+          "unit": "Boundary unit",
+          "boundary_1": "Boundary 1",
+          "boundary_2": "Boundary 2",
+          "boundary_3": "Boundary 3",
+          "boundary_4": "Boundary 4",
+          "boundary_5": "Boundary 5",
+          "grade_1": "Interval 1 category",
+          "grade_2": "Interval 2 category",
+          "grade_3": "Interval 3 category",
+          "grade_4": "Interval 4 category",
+          "grade_5": "Interval 5 category",
+          "grade_6": "Interval 6 category"
+        },
+        "data_description": {
+          "fixed": "A constant category; it will not track changing pollution measurements.",
+          "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
+          "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
+          "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
+          "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit.",
+          "boundary_1": "Boundary between intervals 1 and 2; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_2": "Boundary between intervals 2 and 3; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_3": "Boundary between intervals 3 and 4; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_4": "Boundary between intervals 4 and 5; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_5": "Boundary between intervals 5 and 6; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "grade_1": "Category for interval 1. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_2": "Category for interval 2. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_3": "Category for interval 3. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_4": "Category for interval 4. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values."
+        }
+      },
+      "edit_air_quality_logic": {
+        "title": "Configure air-quality rules",
+        "description": "Enter five increasing boundaries and assign any category to each of six intervals. Equality follows the preceding calculation rule. These are user rules, not a regional AQI standard. Review the template next. Automatic/Keep current preserve custom templates; choose Force helper to replace them with changed rules.",
+        "data": {
+          "fixed": "Fixed category",
+          "sources": "Air-quality sources",
+          "attribute": "Source attribute",
+          "aggregation": "Combine source categories",
+          "missing": "Missing or invalid values",
+          "unit": "Boundary unit",
+          "boundary_1": "Boundary 1",
+          "boundary_2": "Boundary 2",
+          "boundary_3": "Boundary 3",
+          "boundary_4": "Boundary 4",
+          "boundary_5": "Boundary 5",
+          "grade_1": "Interval 1 category",
+          "grade_2": "Interval 2 category",
+          "grade_3": "Interval 3 category",
+          "grade_4": "Interval 4 category",
+          "grade_5": "Interval 5 category",
+          "grade_6": "Interval 6 category"
+        },
+        "data_description": {
+          "fixed": "A constant category; it will not track changing pollution measurements.",
+          "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
+          "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
+          "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
+          "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit.",
+          "boundary_1": "Boundary between intervals 1 and 2; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_2": "Boundary between intervals 2 and 3; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_3": "Boundary between intervals 3 and 4; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_4": "Boundary between intervals 4 and 5; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_5": "Boundary between intervals 5 and 6; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "grade_1": "Category for interval 1. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_2": "Category for interval 2. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_3": "Category for interval 3. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_4": "Category for interval 4. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values."
+        }
+      },
+      "air_quality_calculation": {
+        "title": "Air-quality calculation",
+        "description": "Unit conversion → per-source calibration → measurement aggregation → threshold classification. Next, edit five boundaries and six interval categories. Defaults a=0, b=1, c=0 preserve values. Aggregation uses current source values, not a time average.",
+        "data": {
+          "reducer": "Measurement aggregation",
+          "boundary_rule": "Boundary equality rule",
+          "quadratic": "Quadratic coefficient a",
+          "multiplier": "Multiplier b",
+          "offset": "Offset c"
+        },
+        "data_description": {
+          "reducer": "Classify each source, or classify the mean, median, minimum or maximum of calibrated values once. Combine only the same physical quantity, never different pollutants.",
+          "boundary_rule": "Upper inclusive: x ≤ boundary stays in the lower interval. Lower inclusive: x ≥ boundary enters the next interval.",
+          "quadratic": "After unit conversion apply y = a×x² + b×x + c. Zero selects linear calibration. Negative or non-finite results count as missing.",
+          "multiplier": "One preserves scale. Example: a=0, b=1.1, c=-2 yields y=1.1×x-2.",
+          "offset": "Added after unit conversion and scaling. Zero leaves the offset unchanged."
+        }
+      },
+      "edit_air_quality_calculation": {
+        "title": "Air-quality calculation",
+        "description": "Unit conversion → per-source calibration → measurement aggregation → threshold classification. Next, edit five boundaries and six interval categories. Defaults a=0, b=1, c=0 preserve values. Aggregation uses current source values, not a time average.",
+        "data": {
+          "reducer": "Measurement aggregation",
+          "boundary_rule": "Boundary equality rule",
+          "quadratic": "Quadratic coefficient a",
+          "multiplier": "Multiplier b",
+          "offset": "Offset c"
+        },
+        "data_description": {
+          "reducer": "Classify each source, or classify the mean, median, minimum or maximum of calibrated values once. Combine only the same physical quantity, never different pollutants.",
+          "boundary_rule": "Upper inclusive: x ≤ boundary stays in the lower interval. Lower inclusive: x ≥ boundary enters the next interval.",
+          "quadratic": "After unit conversion apply y = a×x² + b×x + c. Zero selects linear calibration. Negative or non-finite results count as missing.",
+          "multiplier": "One preserves scale. Example: a=0, b=1.1, c=-2 yields y=1.1×x-2.",
+          "offset": "Added after unit conversion and scaling. Zero leaves the offset unchanged."
+        }
       }
     }
   },
@@ -2140,6 +2316,61 @@
         "source": "Source or dynamic template",
         "0.5": "0.5 °C",
         "1": "1 °C"
+      }
+    },
+    "air_quality_mode": {
+      "options": {
+        "source": "Source categories",
+        "measurement": "Measurement boundaries",
+        "fixed": "Fixed category",
+        "custom": "Custom Jinja"
+      }
+    },
+    "air_quality_aggregation": {
+      "options": {
+        "first": "First valid source",
+        "worst": "Worst category"
+      }
+    },
+    "air_quality_missing": {
+      "options": {
+        "skip": "Skip invalid sources",
+        "unknown": "Unknown if any source is invalid"
+      }
+    },
+    "air_quality_unit": {
+      "options": {
+        "unitless": "Unitless (AQI)",
+        "μg/m³": "μg/m³",
+        "mg/m³": "mg/m³",
+        "ppm": "ppm",
+        "ppb": "ppb"
+      }
+    },
+    "air_quality_grade": {
+      "options": {
+        "unknown": "Unknown",
+        "good": "Good",
+        "fair": "Fair",
+        "moderate": "Moderate",
+        "poor": "Poor",
+        "very_poor": "Very poor",
+        "extremely_poor": "Extremely poor"
+      }
+    },
+    "air_quality_reducer": {
+      "options": {
+        "per_source": "Classify each source",
+        "mean": "Classify mean",
+        "median": "Classify median",
+        "minimum": "Classify minimum",
+        "maximum": "Classify maximum"
+      }
+    },
+    "air_quality_boundary_rule": {
+      "options": {
+        "upper_inclusive": "Equality in lower interval (≤)",
+        "lower_inclusive": "Equality in upper interval (≥)"
       }
     }
   },

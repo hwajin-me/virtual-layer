@@ -129,6 +129,15 @@ Every entity supports:
 - command actions
 - pull interval
 
+Default entity IDs use `domain.device_name_entity_name`, with both names
+converted to snake case (for example,
+`sensor.temperature_sensor_living_room_temperature_sensor`). When the entity
+name is not yet available, the suggested ID uses an eight-character random
+alphanumeric suffix. Clear the ID field to regenerate it from the submitted
+names, or enter an explicit ID. Changing an existing entity's name or Device
+name automatically regenerates its ID, including previously customized IDs.
+Renaming a Device regenerates IDs for all its entities; unrelated edits keep IDs.
+
 The UI accepts JSON objects for static attributes, template sources, attribute
 sources, attribute templates, native property templates, and command actions.
 
@@ -285,6 +294,17 @@ meaningfully concatenated or averaged.
 
 ## Polygon Zones
 
+AB BLE Gateway trackers can also be selected together with GPS trackers in the
+virtual device tracker source picker. Trackers reporting `source_type:
+bluetooth_le` (also `bluetooth` or `router`) and `home` take precedence over GPS.
+When they report `not_home`, `unknown`, or `unavailable`, GPS selection resumes.
+Configure beacon identity, RSSI thresholds, and idle timeout in AB BLE Gateway;
+Virtual Layer honors its resulting presence state. RSSI alone does not provide
+calibrated distance or room triangulation. For room/entrance polygon positioning,
+configure at least three non-collinear ESPresense distance anchors. Their stale
+positions are reevaluated at most every five seconds, or sooner for shorter
+configured anchor lifetimes (with a one-second minimum refresh interval).
+
 A virtual `device_tracker` can combine multiple source trackers and resolve its
 GPS position against named GeoJSON polygons. Configure it entirely in the
 Add/Edit Virtual Entity form:
@@ -389,6 +409,9 @@ advertising a newly created camera automatically.
 
 ### Matter Bridge
 
+For thermostat modes, setpoint attributes, fan controls, and sensor metadata,
+see the [Matterbridge 3.10.8 / matterbridge-hass 1.5.0 compatibility audit](docs/matterbridge-compatibility.md).
+
 Matter 1.5 defines a camera device type, but its live-video transport is a
 WebRTC camera session rather than Home Assistant's H.264/RTSP
 `stream_source`. Virtual Layer therefore cannot turn a camera into a Matter
@@ -444,6 +467,64 @@ media players include playback metadata, sound modes, grouping, and progress;
 and covers include tilt position and tilt actions. For example, a vacuum can
 template its activity, battery level, fan speed list, current fan speed, and
 supported feature set without editing JSON.
+
+Air-quality entities have dedicated **Air quality logic** steps before the
+template editor, in both creation and editing. Choose source categories,
+measurement thresholds, a fixed category, or custom Jinja. Measurement mode
+requires five increasing upper boundaries and six category assignments; these
+are user-defined rules, not a built-in health or regulatory standard. Select
+the input entities, optional attribute, unit, first/worst-source aggregation,
+and missing-value policy. Compatible mass units and ppm/ppb are converted;
+incompatible units yield an unknown input. Attribute units are explicitly
+declared because the source's primary state unit may describe another value.
+The resulting `air_quality` native template remains editable. Automatic helper
+updates preserve customized templates; force-helper regenerates them, while
+keep-current retains them. This supplies an overall category in addition to
+concentration values; configuring a Matter bridge remains a separate task.
+
+Measurement mode now includes a separate **Air-quality calculation** step before
+the source/threshold form. Processing order is unit conversion, per-source
+calibration `y = a*x*x + b*x + c`, numeric aggregation, then interval lookup.
+Defaults `a=0, b=1, c=0` leave values unchanged. Choose per-source classification
+(then first/worst category), or classify the mean, median, minimum, or maximum
+of the calibrated measurements. These combine current readings, not historical
+time averages; only combine the same measured quantity. Negative or non-finite
+inputs/results follow the missing-value policy.
+
+The calculation step also selects which interval includes exact boundary values:
+upper-inclusive keeps equality in the lower interval; lower-inclusive moves it
+to the next interval. All five thresholds and six category assignments remain
+editable on reopening, including repeated or reversed categories. For example,
+`a=0, b=1.1, c=-2` applies a linear correction, while `a=0.01, b=1, c=0`
+applies a quadratic correction. These are mathematical examples, not recommended
+air-quality calibration standards. Use custom Jinja for other formulas.
+
+### MatterBridge 3.10.8 / matterbridge-hass 1.5.0
+
+Each virtual air-quality entity also generates a categorical
+`sensor.<parent_object_id>_air_quality` on the same Device. Its state follows the
+parent's overall category; concentration readings are not converted to enum
+numbers. The sensor has no numeric device class, state class, or unit.
+In the plugin's **Air Quality Regex** setting, match the actual generated ID,
+for example `^sensor\.living_air_quality$`. The plugin's default empty regex
+does not enable this path. ID collisions may change the generated ID: check
+Home Assistant before entering the regex. Keep the category and concentration
+sensors on the same Device and avoid splitting them into separate endpoints.
+
+The plugin maps category strings to Matter AirQuality, while PM2.5/PM10/CO₂
+measurement sensors populate separate concentration clusters. Do not send
+numeric Matter enum values 0–6 as AQI: version 1.5.0 interprets numbers as a
+0–500 index. Adding arbitrary `air_quality` attributes to concentration sensors
+does not activate its category conversion.
+
+Known upstream limitation: the 1.5.0 converter returns no update for `unknown`,
+so a previously valid Matter category can remain stale. Virtual Layer publishes
+`unknown` honestly; it does not substitute a healthy category or mark the whole
+shared Device unreachable. Correct Matter Unknown=0 propagation requires a
+plugin-side fix. Actual Apple Home behavior still requires end-to-end testing.
+References: [plugin sensor detection](https://github.com/Luligu/matterbridge-hass/blob/1.5.0/src/sensor.entity.ts),
+[category conversion](https://github.com/Luligu/matterbridge-hass/blob/1.5.0/src/converters.ts),
+[MatterBridge cluster features](https://github.com/Luligu/matterbridge/blob/3.10.8/packages/core/src/matterbridgeEndpoint.ts#L5086).
 
 The five domains without additional synchronous native properties (`infrared`,
 `radio_frequency`, `scene`, `tag`, and `wake_word`) continue to use the common

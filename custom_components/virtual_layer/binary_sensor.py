@@ -24,6 +24,7 @@ from . import (
     get_entity_configs,
     get_entity_from_domain,
 )
+from .binary_options import detection_minutes
 from .const import *
 from .entity import VirtualEntity, virtual_schema
 
@@ -36,14 +37,14 @@ DEFAULT_BINARY_SENSOR_VALUE = "off"
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(virtual_schema(DEFAULT_BINARY_SENSOR_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
     vol.Optional(CONF_MOTION_HOLD_MINUTES): vol.All(
-        vol.Coerce(int), vol.Range(min=0, max=24 * 60)
+        detection_minutes
     ),
     vol.Optional(CONF_MOTION_DETECTION_LOGIC): vol.In({"majority", "two_thirds", "one_third", "any_active", "all_active"}),
 }))
 BINARY_SENSOR_SCHEMA = vol.Schema(virtual_schema(DEFAULT_BINARY_SENSOR_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
     vol.Optional(CONF_MOTION_HOLD_MINUTES): vol.All(
-        vol.Coerce(int), vol.Range(min=0, max=24 * 60)
+        detection_minutes
     ),
     vol.Optional(CONF_MOTION_DETECTION_LOGIC): vol.In({"majority", "two_thirds", "one_third", "any_active", "all_active"}),
 }))

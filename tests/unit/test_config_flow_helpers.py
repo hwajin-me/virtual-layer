@@ -426,7 +426,7 @@ def test_entity_form_defaults_to_the_selected_domain_prefix():
         }
     )({})
 
-    assert defaults[ATTR_ENTITY_ID] == "sensor.washer_phase"
+    assert defaults[ATTR_ENTITY_ID] == "sensor.virtual_device_washer_phase"
 
 
 def test_entity_form_preserves_an_existing_entity_id():
@@ -566,6 +566,25 @@ def test_single_switch_source_can_target_fan_with_power_command_helpers(hass):
 
     type_schema = _entity_type_schema("switch.source", "switch")
     assert type_schema({})[CONF_TARGET_ENTITY_TYPE] == "switch"
+
+
+def test_conversion_form_restores_individual_generated_measurements(hass):
+    sources = ["climate.first", "climate.second"]
+    for source in sources:
+        hass.states.async_set(source, "heat", {"current_temperature": 20, "temperature": 24})
+    choices = _sensor_conversion_choices(sources, hass)
+    schema = _sensor_conversion_schema(
+        choices,
+        current_defaults={
+            CONF_VALUE_TEMPLATE: (
+                "{{ [state_attr('climate.first', 'temperature'), "
+                "state_attr('climate.second', 'current_temperature')] | average }}"
+            ),
+        },
+    )
+    defaults = schema({})
+    assert defaults["sensor_source_conversion_0"] == "temperature"
+    assert defaults["sensor_source_conversion_1"] == "current_temperature"
 
 
 def test_climate_sensor_conversion_generates_typed_temperature_helper(hass):
@@ -1080,6 +1099,27 @@ def test_air_quality_helpers_only_copy_valid_matter_quality_levels(hass):
     assert Template(templates["air_quality"], hass).async_render(
         parse_result=True
     ) == "very_poor"
+
+
+@pytest.mark.parametrize("multiple", [False, True])
+def test_air_quality_helper_tracks_live_attributes_and_availability(hass, multiple):
+    source = "air_quality.dynamic"
+    hass.states.async_set(source, "12.5")
+    ids = [source]
+    if multiple:
+        hass.states.async_set("air_quality.backup", "fair")
+        ids.append("air_quality.backup")
+    template = Template(_native_reference_templates(
+        "air_quality", ids, [hass.states.get(entity_id) for entity_id in ids]
+    )["air_quality"], hass)
+    fallback = "fair" if multiple else "unknown"
+    assert template.async_render() == fallback
+    hass.states.async_set(source, "12.5", {"air_quality": " Very Poor "})
+    assert template.async_render() == "very_poor"
+    hass.states.async_set(source, "unavailable", {"air_quality": "good"})
+    assert template.async_render() == fallback
+    hass.states.async_set(source, "poor")
+    assert template.async_render() == "poor"
 
 
 def test_scaled_sensor_conversion_keeps_missing_attribute_unknown(hass):
@@ -2315,7 +2355,11 @@ def test_multiple_climate_sources_keep_domain_and_generate_type_aware_helpers(ha
     ]
     assert heat_sequence[3]["action"] == "climate.set_temperature"
     assert heat_sequence[3]["target"] == {ATTR_ENTITY_ID: "climate.boiler"}
-    assert temperature_action["default"][0]["target"] == {
+    assert temperature_action["default"][0] == {
+        "action": "switch.turn_on",
+        "target": {ATTR_ENTITY_ID: "switch.hot_water"},
+    }
+    assert temperature_action["default"][1]["target"] == {
         ATTR_ENTITY_ID: "climate.boiler"
     }
 
@@ -4120,7 +4164,8 @@ def test_default_boiler_temperature_calibration_adds_bounded_recovery_boost(hass
         parse_result=True,
     )
 
-    assert command_data["temperature"] == 51.5
+    # 51.5°C is rounded to the physical source's 1°C grid.
+    assert command_data["temperature"] == 52
 
 
 def test_reference_virtual_boiler_off_does_not_send_unsupported_fan_only(hass):
@@ -4892,7 +4937,7 @@ def test_reference_entity_defaults_avoids_source_id_for_a_single_entity_copy(has
 
     defaults = _reference_entity_defaults(hass, ["sensor.kitchen_lamp"])
 
-    assert defaults[ATTR_ENTITY_ID] == "sensor.kitchen_lamp_copy"
+    assert _entity_schema(defaults)({})[ATTR_ENTITY_ID] == "sensor.virtual_device_kitchen_lamp"
 
 
 def test_reference_entity_defaults_copy_id_keeps_suffix_after_slug_limit(hass):
@@ -4901,8 +4946,29 @@ def test_reference_entity_defaults_copy_id_keeps_suffix_after_slug_limit(hass):
 
     defaults = _reference_entity_defaults(hass, [source_id])
 
-    assert defaults[ATTR_ENTITY_ID].endswith("_copy")
-    assert defaults[ATTR_ENTITY_ID] != source_id
+    entity_id = _entity_schema(defaults)({})[ATTR_ENTITY_ID]
+    assert len(entity_id.split(".", 1)[1]) <= 80
+    assert entity_id != source_id
+
+
+def test_device_scoped_entity_id_defaults():
+    assert _default_virtual_entity_id(
+        "sensor", "Living Room Temperature Sensor", "Temperature Sensor"
+    ) == "sensor.temperature_sensor_living_room_temperature_sensor"
+    ids = {_default_virtual_entity_id("sensor", "", "Temperature Sensor") for _ in range(10)}
+    assert len(ids) == 10
+    for entity_id in ids:
+        suffix = entity_id.removeprefix("sensor.temperature_sensor_")
+        assert len(suffix) == 8 and suffix.isalnum()
+
+
+def test_unnamed_entity_form_suggests_device_scoped_random_id():
+    defaults = _entity_schema({
+        CONF_PLATFORM: "sensor", CONF_DEVICE_NAME: "Temperature Sensor",
+        CONF_ENTITY_NAME: "",
+    })({})
+    suffix = defaults[ATTR_ENTITY_ID].removeprefix("sensor.temperature_sensor_")
+    assert len(suffix) == 8 and suffix.isalnum()
 
 
 def test_presence_motion_helper_uses_majority_and_delayed_all_off_clear(
@@ -5053,6 +5119,26 @@ def test_mixed_binary_device_classes_can_use_any_active_logic(hass):
     assert defaults[CONF_PLATFORM] == "binary_sensor"
     assert " and " in defaults[CONF_VALUE_TEMPLATE]
     assert "(active | count) > 0" in configured[CONF_VALUE_TEMPLATE]
+
+
+@pytest.mark.parametrize("value", [True, False, 1.5, "2.5", -1, 1441, float("nan"), float("inf"), [], {}])
+def test_detection_hold_rejects_invalid_minutes(value):
+    from custom_components.virtual_layer.binary_options import detection_minutes
+
+    with pytest.raises(vol.Invalid):
+        detection_minutes(value)
+    with pytest.raises(InvalidDomainOptions):
+        _apply_motion_hold_minutes({}, value)
+
+
+@pytest.mark.parametrize("logic", [[], {}, None, 17])
+def test_detection_step_recovers_malformed_stored_logic(logic):
+    from custom_components.virtual_layer.config_flow import _motion_hold_schema
+
+    defaults = _motion_hold_schema({CONF_MOTION_DETECTION_LOGIC: logic})({})
+    assert defaults[CONF_MOTION_DETECTION_LOGIC] == "all_active"
+    with pytest.raises(InvalidDomainOptions):
+        _apply_motion_hold_minutes({}, 0, logic)
 
 
 @pytest.mark.parametrize("first_logic", ["majority", "two_thirds", "one_third", "any_active", "all_active"])
@@ -5328,6 +5414,28 @@ def test_reference_entity_defaults_accepts_standard_energy_sensor(hass):
     assert defaults[CONF_PLATFORM] == "sensor"
     assert defaults[CONF_INITIAL_VALUE] == "12.5"
     assert defaults[CONF_DOMAIN_OPTIONS_JSON]
+
+
+@pytest.mark.parametrize("state_class", ["total", "total_increasing"])
+def test_converted_energy_alias_preserves_cumulative_state_class(hass, state_class):
+    hass.states.async_set("sensor.energy", "12.5", {
+        "device_class": "energy", "state_class": state_class,
+        "unit_of_measurement": "kWh",
+    })
+    hass.states.async_set("sensor.energy_two", "7.5", {
+        "device_class": "energy", "state_class": state_class,
+        "unit_of_measurement": "kWh",
+    })
+    sources = ["sensor.energy", "sensor.energy_two"]
+    choices = _sensor_conversion_choices(sources, hass)
+    converted = _apply_sensor_conversion_defaults(
+        hass, _reference_entity_defaults(hass, sources), choices["state"], "sum",
+    )
+    assert _yaml_value(converted[CONF_DOMAIN_OPTIONS_JSON])["state_class"] == state_class
+    assert Template(converted[CONF_NATIVE_VALUE_TEMPLATES]["state_class"], hass).async_render() == state_class
+    assert Template(converted[CONF_VALUE_TEMPLATE], hass).async_render() == 20
+    hass.states.async_set("sensor.energy_two", "unavailable")
+    assert Template(converted[CONF_AVAILABILITY_TEMPLATE], hass).async_render() is False
 
 
 def test_config_flow_validation_errors_are_logged_at_error(caplog):
@@ -6793,12 +6901,38 @@ def test_replace_ui_device_renames_group_and_updates_shared_metadata():
 
     assert "Laundry" not in next_options[ATTR_DEVICES]
     assert len(next_options[ATTR_DEVICES]["laundry-new"]) == 2
+    assert [item[ATTR_ENTITY_ID] for item in next_options[ATTR_DEVICES]["laundry-new"]] == [
+        "sensor.laundry_room_washer_phase", "binary_sensor.laundry_room_washer_door",
+    ]
     assert next_options[ATTR_DEVICE_ATTRIBUTES]["laundry-new"] == {
         ATTR_DEVICE_ID: "laundry-new",
         CONF_NAME: "Laundry Room",
         CONF_MANUFACTURER: "Acme",
     }
     assert original[ATTR_DEVICE_ATTRIBUTES]["Laundry"][ATTR_DEVICE_ID] == "laundry-old"
+
+
+def test_device_rename_regenerates_custom_ids_and_keeps_invalid_records():
+    original = {
+        ATTR_DEVICES: {"device-1": [
+            {CONF_PLATFORM: "sensor", CONF_NAME: "Temperature", ATTR_ENTITY_ID: "sensor.custom", ATTR_ENTITY_KEY: "one"},
+            {CONF_PLATFORM: "sensor", CONF_NAME: "Temperature", ATTR_ENTITY_ID: "sensor.other", ATTR_ENTITY_KEY: "two"},
+            "broken",
+        ]},
+        ATTR_DEVICE_ATTRIBUTES: {"device-1": {ATTR_DEVICE_ID: "device-1", CONF_NAME: "Old"}},
+    }
+    result = _replace_ui_device(original, "device-1", "New Room", {
+        ATTR_DEVICE_ID: "device-1", CONF_NAME: "New Room",
+    })
+    entities = result[ATTR_DEVICES]["device-1"]
+    assert entities[0][ATTR_ENTITY_ID] == "sensor.new_room_temperature"
+    assert entities[1][ATTR_ENTITY_ID] == "sensor.new_room_temperature_2"
+    assert [item[ATTR_ENTITY_KEY] for item in entities[:2]] == ["one", "two"]
+    assert entities[2] == "broken"
+    assert original[ATTR_DEVICES]["device-1"][0][ATTR_ENTITY_ID] == "sensor.custom"
+    assert _replace_ui_device(result, "device-1", "New Room", {
+        ATTR_DEVICE_ID: "device-1", CONF_NAME: "New Room", CONF_MANUFACTURER: "Acme",
+    })[ATTR_DEVICES] == result[ATTR_DEVICES]
 
 
 def test_replace_ui_device_merges_matching_stable_device_id_without_overwrite():

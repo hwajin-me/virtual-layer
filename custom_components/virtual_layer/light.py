@@ -252,6 +252,7 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._response_retries = config.get(CONF_LIGHT_RESPONSE_RETRIES, 2)
         self._ignore_unresponsive = config.get(CONF_LIGHT_IGNORE_UNRESPONSIVE, True)
         self._response_refresh_cancel = None
+        self._response_pending = False
         matter_type = config.get(CONF_MATTER_LIGHT_TYPE)
         if matter_type:
             self._matter_color_modes = set(MATTER_LIGHT_COLOR_MODES[matter_type])
@@ -546,10 +547,12 @@ class VirtualLight(VirtualEntity, LightEntity):
             return
         if self._response_refresh_cancel is not None:
             self._response_refresh_cancel()
+        self._response_pending = True
         attempts = 0
 
         def _refresh(_now) -> None:
             nonlocal attempts
+            self._response_pending = False
             self._apply_templates()
             attempts += 1
             if attempts <= self._response_retries:
@@ -563,7 +566,14 @@ class VirtualLight(VirtualEntity, LightEntity):
             self.hass, self._response_delay, _refresh
         )
 
+    def _apply_templates(self):
+        """Defer source events as well as immediate post-command rendering."""
+        if self._response_pending:
+            return
+        super()._apply_templates()
+
     async def async_will_remove_from_hass(self) -> None:
+        self._response_pending = False
         if self._response_refresh_cancel is not None:
             self._response_refresh_cancel()
             self._response_refresh_cancel = None
@@ -597,7 +607,13 @@ class VirtualLight(VirtualEntity, LightEntity):
             # extended-color profile. Matter Bridge then saw RGB support even
             # though Home Assistant was presenting an on/off control.
             allowed_modes = self._matter_color_modes | {ColorMode.ONOFF}
+            if self._matter_color_modes != {ColorMode.ONOFF}:
+                allowed_modes.add(ColorMode.BRIGHTNESS)
             value &= allowed_modes
+            # Color modes already imply level control in Home Assistant.
+            # BRIGHTNESS is valid alone, but not alongside a color mode.
+            if ColorMode.BRIGHTNESS in value and len(value) > 1:
+                value.discard(ColorMode.BRIGHTNESS)
             if not value:
                 value = {ColorMode.ONOFF}
             current = self._attr_supported_color_modes

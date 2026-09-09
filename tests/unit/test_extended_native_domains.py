@@ -382,6 +382,50 @@ async def test_humidifier_and_dehumidifier_power_actions_remain_consistent():
     assert dehumidifier.action == "off"
 
 
+@pytest.mark.parametrize("mode", ["heat", "cool", "heat_cool"])
+async def test_climate_accepts_bridge_single_and_range_setpoints(hass, mode):
+    """Exercise HA's feature gate used by Matterbridge's service requests."""
+    from homeassistant.components.climate import async_service_temperature_set
+    from homeassistant.core import ServiceCall
+
+    climate = VirtualClimate(_config(
+        CLIMATE_SCHEMA, "climate", mode,
+        hvac_modes=["off", "heat", "cool", "heat_cool"],
+        target_temperature=22,
+        target_temperature_low=20,
+        target_temperature_high=24,
+    ), False)
+    climate.hass = hass
+    climate._create_state(climate._config)
+    climate._attr_extra_state_attributes = {}
+    climate.async_write_ha_state = Mock()
+    assert ClimateEntityFeature.TARGET_TEMPERATURE in climate.supported_features
+    assert ClimateEntityFeature.TARGET_TEMPERATURE_RANGE in climate.supported_features
+    assert climate.state_attributes["temperature"] == 22
+    assert climate.state_attributes["target_temp_low"] == 20
+    assert climate.state_attributes["target_temp_high"] == 24
+
+    await async_service_temperature_set(climate, ServiceCall(
+        hass, "climate", "set_temperature", {"temperature": 23},
+    ))
+    assert climate.target_temperature == 23
+    await async_service_temperature_set(climate, ServiceCall(
+        hass, "climate", "set_temperature",
+        {"target_temp_low": 19, "target_temp_high": 25},
+    ))
+    assert (climate.target_temperature_low, climate.target_temperature_high) == (19, 25)
+
+
+def test_climate_range_only_does_not_advertise_single_setpoint():
+    climate = VirtualClimate(_config(
+        CLIMATE_SCHEMA, "climate", "heat_cool",
+        target_temperature_low=20, target_temperature_high=24,
+        command_actions={"set_temperature": []},
+    ), False)
+    assert ClimateEntityFeature.TARGET_TEMPERATURE_RANGE in climate.supported_features
+    assert ClimateEntityFeature.TARGET_TEMPERATURE not in climate.supported_features
+
+
 def test_climate_exposes_target_humidity_only_when_configured():
     without_humidity = VirtualClimate(
         _config(CLIMATE_SCHEMA, "climate", "off"),

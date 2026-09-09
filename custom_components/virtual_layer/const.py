@@ -111,6 +111,7 @@ CONF_LIGHT_RESPONSE_RETRIES = "light_response_retries"
 CONF_LIGHT_IGNORE_UNRESPONSIVE = "light_ignore_unresponsive"
 CONF_TEMPLATE_SOURCES = "template_sources"
 CONF_NATIVE_TEMPLATES = "native_templates"
+CONF_AIR_QUALITY_LOGIC = "air_quality_logic"
 CONF_VALUE_TEMPLATE = "value_template"
 CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE = "boiler_temperature_calibration_template"
 CONF_MANUFACTURER = "manufacturer"
@@ -157,6 +158,7 @@ GENERIC_ENTITY_OPTION_EXCLUDED_KEYS = frozenset({
     CONF_SW_VERSION,
     CONF_TEMPLATE_SOURCES,
     CONF_NATIVE_TEMPLATES,
+    CONF_AIR_QUALITY_LOGIC,
     CONF_VIA_DEVICE_ID,
     CONF_VALUE_TEMPLATE,
     "unit_of_measurement",

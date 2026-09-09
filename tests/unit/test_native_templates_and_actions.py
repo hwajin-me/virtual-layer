@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 import voluptuous as vol
+from unittest.mock import patch
 from homeassistant.components.camera import CameraEntityFeature
 from homeassistant.components.climate import ClimateEntityFeature, HVACMode
 from homeassistant.components.climate.const import HVACAction
@@ -33,6 +34,54 @@ from homeassistant.const import ATTR_ENTITY_ID, UnitOfTemperature
 from homeassistant.core import State
 from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
+
+
+@pytest.mark.parametrize("profile", ["dimmable", "color_temperature", "extended_color"])
+def test_matter_light_preserves_brightness_only_fallback(profile):
+    entity = VirtualLight(
+        LIGHT_SCHEMA(_base("light.level_fallback", "on", matter_light_type=profile)),
+        False,
+    )
+    entity._apply_native_template_value("supported_color_modes", ["brightness"])
+    entity._native_templates_applied()
+    assert entity.supported_color_modes == {ColorMode.BRIGHTNESS}
+    assert entity.color_mode in {None, ColorMode.BRIGHTNESS}
+
+
+def test_matter_light_color_mode_implies_brightness_without_duplicate_mode():
+    entity = VirtualLight(
+        LIGHT_SCHEMA(_base("light.level_color", "on", matter_light_type="extended_color")),
+        False,
+    )
+    entity._apply_native_template_value(
+        "supported_color_modes", ["onoff", "brightness", "color_temp"]
+    )
+    assert entity.supported_color_modes == {ColorMode.COLOR_TEMP}
+
+
+def test_light_response_delay_defers_source_events_and_replaces_timer():
+    light = VirtualLight(LIGHT_SCHEMA(_base("light.delayed", "off")), False)
+    light._source_entities = ["light.source"]
+    callbacks = []
+    cancelers = []
+
+    def schedule(hass, delay, callback):
+        callbacks.append(callback)
+        cancel = Mock()
+        cancelers.append(cancel)
+        return cancel
+
+    with patch("custom_components.virtual_layer.light.async_call_later", schedule), patch(
+        "custom_components.virtual_layer.entity.VirtualEntity._apply_templates"
+    ) as apply:
+        light._schedule_source_reconciliation()
+        light._apply_templates()
+        apply.assert_not_called()
+        light._schedule_source_reconciliation()
+        cancelers[0].assert_called_once()
+        callbacks[-1](None)
+        apply.assert_called_once()
+        assert not light._response_pending
 
 from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
 from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClimate

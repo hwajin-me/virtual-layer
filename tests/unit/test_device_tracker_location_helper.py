@@ -75,6 +75,25 @@ def _helper_tracker(hass):
     return tracker
 
 
+@pytest.mark.parametrize("source_type", ["bluetooth_le", "bluetooth", "router"])
+def test_radio_tracker_presence_overrides_gps_and_releases_on_disconnect(hass, source_type):
+    tracker = _helper_tracker(hass)
+    _set_position(hass, "device_tracker.first_phone", 35.0, 129.0)
+    hass.states.async_set("device_tracker.second_phone", "home", {
+        "source_type": source_type, "rssi": -48, "last_seen_seconds": 1.2,
+    })
+    tracker._update_location_from_sources()
+    assert tracker.state == "home"
+    for state in ("not_home", "unavailable", "unknown"):
+        hass.states.async_set("device_tracker.second_phone", state, {
+            "source_type": source_type, "rssi": -48,
+        })
+        tracker._update_location_from_sources()
+        assert tracker.latitude == pytest.approx(35.0)
+        assert tracker.longitude == pytest.approx(129.0)
+        assert tracker.state != "home"
+
+
 def _set_position(hass, entity_id, latitude, longitude):
     hass.states.async_set(
         entity_id,

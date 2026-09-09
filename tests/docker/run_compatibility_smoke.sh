@@ -159,6 +159,22 @@ assert sensor.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER == (
 async def test_sensor_conversion_runtime():
     hass = HomeAssistant(tempfile.mkdtemp())
     try:
+        from homeassistant.helpers.template import Template
+        from custom_components.virtual_layer.air_quality_options import LEVELS, generate
+
+        hass.states.async_set("sensor.aq_a", "0.005", {"unit_of_measurement": "mg/m³"})
+        hass.states.async_set("sensor.aq_b", "25", {"unit_of_measurement": "μg/m³"})
+        recipe = {
+            "mode": "measurement", "sources": ["sensor.aq_a", "sensor.aq_b"],
+            "unit": "μg/m³", "thresholds": [10, 20, 30, 40, 50],
+            "levels": list(LEVELS), "multiplier": 2,
+            "boundary_rule": "lower_inclusive",
+        }
+        for reducer, expected in (("per_source", "fair"), ("mean", "poor"),
+                                  ("median", "poor"), ("minimum", "fair"),
+                                  ("maximum", "extremely_poor")):
+            helper = Template(generate({**recipe, "reducer": reducer}), hass)
+            assert helper.async_render() == expected, (reducer, helper.async_render())
         hass.states.async_set(
             "climate.docker_source",
             "heat",
@@ -413,6 +429,7 @@ async def test_config_flow_create_modify_runtime():
         assert result["step_id"] == "entity"
         create_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
         create_defaults[CONF_ENTITY_NAME] = "Docker PM2.5"
+        create_defaults["device_name"] = "Docker Air"
         create_defaults["entity_id"] = "sensor.docker_flow_pm25"
         result = await configure_flow(flow, result, create_defaults)
         assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -494,18 +511,19 @@ async def test_config_flow_create_modify_runtime():
         await hass.async_block_till_done()
 
         assert hass.states.get("sensor.docker_flow_pm25") is None
-        modified_state = hass.states.get("sensor.docker_flow_pm25_max")
+        modified_id = "sensor.docker_air_docker_pm2_5_maximum"
+        modified_state = hass.states.get(modified_id)
         assert modified_state is not None
         assert float(modified_state.state) == 20.0
         assert modified_state.attributes["unit_of_measurement"] == "μg/m³"
-        modified_registry_entry = registry.async_get("sensor.docker_flow_pm25_max")
+        modified_registry_entry = registry.async_get(modified_id)
         assert modified_registry_entry is not None
         assert modified_registry_entry.unique_id == original_unique_id
         assert modified_registry_entry.device_id == device_id
         assert registry.async_get("sensor.docker_flow_pm25") is None
         for suffix in ("info", "debug1", "debug2"):
             assert registry.async_get(f"sensor.docker_flow_pm25_{suffix}") is None
-            companion_id = f"sensor.docker_flow_pm25_max_{suffix}"
+            companion_id = f"{modified_id}_{suffix}"
             companion_entry = registry.async_get(companion_id)
             assert companion_entry is not None
             assert companion_entry.device_id == device_id
@@ -516,7 +534,7 @@ async def test_config_flow_create_modify_runtime():
             {"device_class": "pm25", "unit_of_measurement": "mg/m³"},
         )
         await hass.async_block_till_done()
-        assert float(hass.states.get("sensor.docker_flow_pm25_max").state) == 30.0
+        assert float(hass.states.get(modified_id).state) == 30.0
 
         for source_id in source_ids:
             hass.states.async_set(
@@ -525,7 +543,7 @@ async def test_config_flow_create_modify_runtime():
                 {"device_class": "pm25", "unit_of_measurement": "μg/m³"},
             )
         await hass.async_block_till_done()
-        assert hass.states.get("sensor.docker_flow_pm25_max").state == "unavailable"
+        assert hass.states.get(modified_id).state == "unavailable"
 
         hass.states.async_set(
             source_ids[0],
@@ -534,9 +552,9 @@ async def test_config_flow_create_modify_runtime():
         )
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
-        recovered_state = hass.states.get("sensor.docker_flow_pm25_max")
+        recovered_state = hass.states.get(modified_id)
         runtime_entity = get_entity_from_domain(
-            hass, "sensor", "sensor.docker_flow_pm25_max"
+            hass, "sensor", modified_id
         )
         assert float(recovered_state.state) == 25.0, (
             recovered_state,
