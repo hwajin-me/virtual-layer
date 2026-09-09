@@ -12,6 +12,49 @@ LEVELS = ("good", "fair", "moderate", "poor", "very_poor", "extremely_poor")
 MODES = ("source", "measurement", "fixed", "custom")
 UNITS = ("unitless", "μg/m³", "mg/m³", "ppm", "ppb")
 REDUCERS = ("per_source", "mean", "median", "minimum", "maximum")
+QUANTITIES = (
+    "any",
+    "pm1",
+    "pm25",
+    "pm10",
+    "aqi",
+    "carbon_dioxide",
+    "carbon_monoxide",
+    "ozone",
+    "nitrogen_dioxide",
+    "nitrogen_monoxide",
+    "sulphur_dioxide",
+    "volatile_organic_compounds",
+    "volatile_organic_compounds_parts",
+)
+
+# PM0.1 and N2O have no matching standard sensor device class. Their named
+# attributes remain usable; never alias PM1 to PM0.1 or NO2 to N2O.
+NATIVE_MEASUREMENT_CLASSES = {
+    "particulate_matter_2_5": "pm25",
+    "particulate_matter_10": "pm10",
+    "air_quality_index": "aqi",
+    "carbon_dioxide": "carbon_dioxide",
+    "carbon_monoxide": "carbon_monoxide",
+    "ozone": "ozone",
+    "nitrogen_dioxide": "nitrogen_dioxide",
+    "nitrogen_monoxide": "nitrogen_monoxide",
+    "sulphur_dioxide": "sulphur_dioxide",
+}
+
+
+def validate_quantity_unit(quantity, unit):
+    allowed = UNITS
+    if quantity in ("pm1", "pm25", "pm10", "volatile_organic_compounds"):
+        allowed = ("μg/m³", "mg/m³")
+    elif quantity == "aqi":
+        allowed = ("unitless",)
+    elif quantity == "volatile_organic_compounds_parts":
+        allowed = ("ppm", "ppb")
+    elif quantity != "any":
+        allowed = ("μg/m³", "mg/m³", "ppm", "ppb")
+    if unit not in allowed:
+        raise vol.Invalid("Unit does not match measured quantity")
 
 
 def calculation_schema(defaults):
@@ -98,6 +141,9 @@ def logic_schema(mode, defaults):
         ),
     }
     if mode == "measurement":
+        fields[vol.Required("quantity", default=defaults.get("quantity", "any"))] = (
+            choice(QUANTITIES, "air_quality_quantity")
+        )
         fields[vol.Required("unit", default=defaults.get("unit", "unitless"))] = choice(
             UNITS, "air_quality_unit"
         )
@@ -153,10 +199,15 @@ def normalize(recipe):
         missing=missing,
     )
     if mode == "measurement":
+        quantity = recipe.get("quantity", "any")
+        if quantity not in QUANTITIES:
+            raise vol.Invalid("Invalid measurement quantity")
+        result["quantity"] = quantity
         result.update(normalize_calculation(recipe))
         unit = recipe.get("unit")
         if unit not in UNITS:
             raise vol.Invalid("Invalid unit")
+        validate_quantity_unit(quantity, unit)
         thresholds = recipe.get("thresholds")
         if not isinstance(thresholds, list) or len(thresholds) != 5:
             raise vol.Invalid("Five boundaries are required")
@@ -186,7 +237,7 @@ def normalize(recipe):
 
 def source_schema(mode, defaults):
     """Source controls are separate from calibration and interval controls."""
-    keys = {"sources", "attribute", "aggregation", "missing", "unit"}
+    keys = {"sources", "attribute", "aggregation", "missing", "unit", "quantity"}
     return vol.Schema(
         {
             key: value
@@ -197,7 +248,7 @@ def source_schema(mode, defaults):
 
 
 def threshold_schema(mode, defaults):
-    keys = {"sources", "attribute", "aggregation", "missing", "unit"}
+    keys = {"sources", "attribute", "aggregation", "missing", "unit", "quantity"}
     return vol.Schema(
         {
             key: value
@@ -211,8 +262,13 @@ def normalize_sources(mode, values):
     result = normalize({**values, "mode": "source"})
     result["mode"] = mode
     if mode == "measurement":
+        quantity = values.get("quantity", "any")
+        if quantity not in QUANTITIES:
+            raise vol.Invalid("Invalid measurement quantity")
+        result["quantity"] = quantity
         if values.get("unit") not in UNITS:
             raise vol.Invalid("Invalid unit")
+        validate_quantity_unit(quantity, values["unit"])
         result["unit"] = values["unit"]
     return result
 
@@ -253,6 +309,11 @@ def generate(recipe):
     if mode == "fixed":
         return "{{ " + repr(recipe["fixed"]) + " }}"
     attribute = recipe["attribute"]
+    quantity_check = ""
+    if mode == "measurement" and not attribute and recipe["quantity"] != "any":
+        quantity_check = " and state_attr(entity_id, 'device_class') == " + repr(
+            recipe["quantity"]
+        )
     read = f"state_attr(entity_id, {attribute!r})" if attribute else "states(entity_id)"
     if mode == "source" and not attribute:
         read = "state_attr(entity_id, 'air_quality') if state_attr(entity_id, 'air_quality') is not none else states(entity_id)"
@@ -260,7 +321,9 @@ def generate(recipe):
         "{% set ns = namespace(grades=[], numbers=[], missing=false) %}"
         "{% for entity_id in " + repr(recipe["sources"]) + " %}"
         "{% set grade = 'unknown' %}"
-        "{% if states(entity_id) not in ['unknown', 'unavailable'] %}"
+        "{% if states(entity_id) not in ['unknown', 'unavailable']"
+        + quantity_check
+        + " %}"
         "{% set value = " + read + " %}"
     )
     if mode == "source":
@@ -279,6 +342,10 @@ def generate(recipe):
             "ppm": {"ppm": 1, "ppb": 0.001},
             "ppb": {"ppm": 1000, "ppb": 1},
         }[recipe["unit"]]
+        if recipe["unit"] == "unitless" and recipe["quantity"] == "aqi":
+            # HA sources may explicitly label the dimensionless AQI index.
+            # Do not accept this label for unrelated unitless measurements.
+            factors["AQI"] = 1
         # For attributes the user explicitly declares the unit; an entity's
         # state unit can describe an unrelated primary measurement.
         unit = (

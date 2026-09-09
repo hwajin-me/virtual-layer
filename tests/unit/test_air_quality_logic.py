@@ -24,6 +24,306 @@ def measurement(**overrides):
 
 
 @pytest.mark.parametrize(
+    "quantity,unit",
+    [
+        ("pm25", "ppm"),
+        ("pm1", "unitless"),
+        ("aqi", "μg/m³"),
+        ("volatile_organic_compounds_parts", "mg/m³"),
+        ("carbon_dioxide", "unitless"),
+        ("invalid", "ppm"),
+    ],
+)
+def test_quantity_and_unit_mismatches_are_rejected(quantity, unit):
+    with pytest.raises(vol.Invalid):
+        aq.normalize(measurement(quantity=quantity, unit=unit))
+    with pytest.raises(vol.Invalid):
+        aq.normalize_sources(
+            "measurement",
+            {"sources": ["sensor.test"], "quantity": quantity, "unit": unit},
+        )
+
+
+def test_pm01_and_nitrogen_oxide_do_not_alias_other_pollutants(hass):
+    from custom_components.virtual_layer.config_flow import _native_source_template
+
+    for device_class, property_name in (
+        ("pm1", "particulate_matter_0_1"),
+        ("nitrogen_dioxide", "nitrogen_oxide"),
+    ):
+        hass.states.async_set(
+            "sensor.pollutant",
+            "25",
+            {"device_class": device_class, "unit_of_measurement": "μg/m³"},
+        )
+        helper = _native_source_template(
+            "sensor.pollutant",
+            hass.states.get("sensor.pollutant"),
+            property_name,
+            "air_quality",
+        )
+        assert Template(helper, hass).async_render() is None
+        hass.states.async_set("sensor.pollutant", "25", {property_name: 0.5})
+        assert Template(helper, hass).async_render() == 0.5
+
+
+@pytest.mark.parametrize(
+    "property_name,device_class", list(aq.NATIVE_MEASUREMENT_CLASSES.items())
+)
+@pytest.mark.parametrize(
+    "unit,value",
+    [("μg/m³", "0.5"), ("mg/m³", "0.001"), ("ppm", "10"), ("μg/m³", "bad")],
+)
+def test_all_native_measurement_classes(hass, property_name, device_class, unit, value):
+    from custom_components.virtual_layer.config_flow import _native_source_template
+
+    hass.states.async_set(
+        "sensor.pollutant",
+        value,
+        {"device_class": device_class, "unit_of_measurement": unit},
+    )
+    helper = _native_source_template(
+        "sensor.pollutant",
+        hass.states.get("sensor.pollutant"),
+        property_name,
+        "air_quality",
+    )
+    expected = (
+        None
+        if device_class == "aqi" or unit == "ppm" or value == "bad"
+        else (0.5 if unit == "μg/m³" else 1)
+    )
+    assert Template(helper, hass).async_render() == expected
+
+
+@pytest.mark.parametrize("domain", ["sensor", "number"])
+@pytest.mark.parametrize(
+    "property_name,device_class", list(aq.NATIVE_MEASUREMENT_CLASSES.items())
+)
+def test_native_measurements_follow_live_class_and_recover(
+    hass, domain, property_name, device_class
+):
+    from custom_components.virtual_layer.config_flow import _native_source_template
+
+    entity_id = f"{domain}.pollutant"
+    hass.states.async_set(entity_id, "unavailable")
+    helper = Template(
+        _native_source_template(
+            entity_id, hass.states.get(entity_id), property_name, "air_quality"
+        ),
+        hass,
+    )
+    assert helper.async_render() is None
+    attrs = {
+        "device_class": device_class,
+        "unit_of_measurement": "AQI" if device_class == "aqi" else "mg/m³",
+    }
+    hass.states.async_set(entity_id, "0.5", attrs)
+    assert helper.async_render() == (0.5 if device_class == "aqi" else 500)
+    hass.states.async_set(entity_id, "0.5", {**attrs, "device_class": "temperature"})
+    assert helper.async_render() is None
+    hass.states.async_set(
+        entity_id, "20", {"unit_of_measurement": "°C", property_name: 0.25}
+    )
+    assert helper.async_render() == 0.25
+    hass.states.async_set(entity_id, "unavailable", {property_name: 0.25})
+    assert helper.async_render() is None
+    hass.states.async_set(entity_id, "0.5", attrs)
+    assert helper.async_render() == (0.5 if device_class == "aqi" else 500)
+
+
+@pytest.mark.parametrize("source_unit", [None, "", "AQI", "ppm"])
+def test_aqi_recipe_supports_dimensionless_index_unit(hass, source_unit):
+    hass.states.async_set(
+        "sensor.pm25", "25", {"device_class": "aqi", "unit_of_measurement": source_unit}
+    )
+    helper = Template(aq.generate(measurement(quantity="aqi", unit="unitless")), hass)
+    assert helper.async_render() == ("unknown" if source_unit == "ppm" else "moderate")
+
+
+async def test_aqi_flow_infers_quantity_and_previews_labeled_index(hass):
+    from custom_components.virtual_layer.config_flow import VirtualFlowHandler
+
+    flow = VirtualFlowHandler()
+    flow.hass = hass
+    flow._entity_defaults = {"platform": "air_quality"}
+    hass.states.async_set(
+        "sensor.aqi", "25", {"device_class": "aqi", "unit_of_measurement": "AQI"}
+    )
+    result = await flow.async_step_air_quality({"mode": "measurement"})
+    assert result["step_id"] == "air_quality_sources"
+    result = await flow.async_step_air_quality_sources(
+        {"sources": ["sensor.aqi"], "unit": "unitless"}
+    )
+    assert flow._aq_pending["quantity"] == "aqi"
+    assert result["step_id"] == "air_quality_calculation"
+    result = await flow.async_step_air_quality_calculation({})
+    assert result["step_id"] == "air_quality_logic"
+    result = await flow.async_step_air_quality_logic(
+        {f"boundary_{i}": i * 10 for i in range(1, 6)}
+    )
+    assert result["step_id"] == "air_quality_review"
+    assert not result["errors"]
+    assert Template(aq.generate(flow._aq_pending), hass).async_render() == "moderate"
+
+
+@pytest.mark.parametrize(
+    "property_name",
+    [*aq.NATIVE_MEASUREMENT_CLASSES, "particulate_matter_0_1", "nitrogen_oxide"],
+)
+@pytest.mark.parametrize("bad", [None, True, -1, float("nan"), float("inf"), "bad"])
+def test_all_concentrations_clear_invalid_runtime_values(property_name, bad):
+    from custom_components.virtual_layer.generic import GenericVirtualEntity
+
+    entity = GenericVirtualEntity(
+        {"name": "Air", "entity_id": "air_quality.test", "initial_value": "unknown"},
+        "air_quality",
+        False,
+    )
+    entity._apply_native_template_value(property_name, 12.5)
+    entity._apply_native_template_value(property_name, bad)
+    assert entity._domain_options[property_name] is None
+    entity._apply_native_template_value("air_quality", "good")
+    entity._apply_native_template_value("air_quality", bad)
+    assert entity.state == "unknown"
+
+
+@pytest.mark.parametrize("quantity", aq.QUANTITIES[1:])
+def test_quantity_filter_follows_live_device_class(hass, quantity):
+    unit = (
+        "unitless"
+        if quantity == "aqi"
+        else ("ppm" if quantity == "volatile_organic_compounds_parts" else "μg/m³")
+    )
+    source_unit = None if unit == "unitless" else unit
+    recipe = measurement(unit=unit, quantity=quantity)
+    hass.states.async_set(
+        "sensor.pm25",
+        "25",
+        {"device_class": quantity, "unit_of_measurement": source_unit},
+    )
+    helper = Template(aq.generate(recipe), hass)
+    assert helper.async_render() == "moderate"
+    hass.states.async_set(
+        "sensor.pm25",
+        "25",
+        {"device_class": "temperature", "unit_of_measurement": source_unit},
+    )
+    assert helper.async_render() == "unknown"
+
+
+async def test_flow_rejects_mixed_pollutants_before_calculation(hass):
+    from custom_components.virtual_layer.config_flow import VirtualFlowHandler
+
+    flow = VirtualFlowHandler()
+    flow.hass = hass
+    flow._entity_defaults = {"platform": "air_quality"}
+    hass.states.async_set("sensor.pm", "1", {"device_class": "pm25"})
+    hass.states.async_set("sensor.co", "1", {"device_class": "carbon_monoxide"})
+    await flow.async_step_air_quality({"mode": "measurement"})
+    result = await flow.async_step_air_quality_sources(
+        {"sources": ["sensor.pm", "sensor.co"], "unit": "μg/m³"}
+    )
+    assert result["step_id"] == "air_quality_sources"
+    assert result["errors"] == {"base": "mixed_air_quality_measurements"}
+    result = await flow.async_step_air_quality_sources(
+        {"sources": ["sensor.co"], "unit": "ppm"}
+    )
+    assert result["step_id"] == "air_quality_calculation"
+    assert flow._aq_pending["quantity"] == "carbon_monoxide"
+
+
+@pytest.mark.parametrize(
+    "unit,value,expected",
+    [
+        ("μg/m³", "0.5", 0.5),
+        ("mg/m³", "0.001", 1),
+        ("ppm", "1", None),
+        ("μg/m³", "unavailable", None),
+    ],
+)
+def test_pm25_native_helper_preserves_measurement_and_missing(
+    hass, unit, value, expected
+):
+    from custom_components.virtual_layer.config_flow import _native_source_template
+
+    hass.states.async_set(
+        "sensor.pm", value, {"device_class": "pm25", "unit_of_measurement": unit}
+    )
+    state = hass.states.get("sensor.pm")
+    helper = _native_source_template(
+        "sensor.pm", state, "particulate_matter_2_5", "air_quality"
+    )
+    assert Template(helper, hass).async_render() == expected
+    for name in ("carbon_dioxide", "ozone", "particulate_matter_10"):
+        helper = _native_source_template("sensor.pm", state, name, "air_quality")
+        assert Template(helper, hass).async_render() is None
+
+
+def test_measurement_to_category_replacement_is_rejected_without_mutation():
+    from copy import deepcopy
+    from custom_components.virtual_layer.config_flow import (
+        _replace_ui_entity,
+        AirQualityConversionRequiresNewEntity,
+    )
+    from custom_components.virtual_layer.const import ATTR_DEVICES
+
+    options = {
+        ATTR_DEVICES: {
+            "Room": [
+                {
+                    "platform": "sensor",
+                    "name": "PM2.5",
+                    "entity_id": "sensor.pm",
+                    "initial_value": 0.5,
+                }
+            ]
+        }
+    }
+    before = deepcopy(options)
+    with pytest.raises(AirQualityConversionRequiresNewEntity):
+        _replace_ui_entity(
+            options, "Room", 0, "Room", {"platform": "air_quality", "name": "Air"}
+        )
+    assert options == before
+
+
+def test_multiple_pm25_sources_average_only_real_measurements(hass):
+    from custom_components.virtual_layer.config_flow import _native_reference_templates
+
+    ids = ["sensor.pm_a", "sensor.pm_b"]
+    for entity_id, value in zip(ids, (0.5, 1.5)):
+        hass.states.async_set(
+            entity_id,
+            str(value),
+            {"device_class": "pm25", "unit_of_measurement": "μg/m³"},
+        )
+    helpers = _native_reference_templates(
+        "air_quality", ids, [hass.states.get(item) for item in ids]
+    )
+    helper = Template(helpers["particulate_matter_2_5"], hass)
+    assert helper.async_render() == 1
+    assert Template(helpers["ozone"], hass).async_render() is None
+    hass.states.async_set(ids[0], "unavailable")
+    assert helper.async_render() == 1.5
+
+
+def test_native_missing_concentration_clears_old_reading():
+    from custom_components.virtual_layer.generic import GenericVirtualEntity
+
+    entity = GenericVirtualEntity(
+        {"name": "Air", "entity_id": "air_quality.test", "initial_value": "unknown"},
+        "air_quality",
+        False,
+    )
+    entity._apply_native_template_value("air_quality", "good")
+    entity._apply_native_template_value("particulate_matter_2_5", 0.5)
+    entity._apply_native_template_value("particulate_matter_2_5", None)
+    assert entity._domain_options["particulate_matter_2_5"] is None
+    assert entity.state == "good"
+
+
+@pytest.mark.parametrize(
     "value,expected",
     [
         (0, "good"),

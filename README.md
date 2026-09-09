@@ -503,7 +503,32 @@ template its activity, battery level, fan speed list, current fan speed, and
 supported feature set without editing JSON.
 
 Air-quality entities have dedicated **Air quality logic** steps before the
-template editor, in both creation and editing. Choose source categories,
+template editor, in both creation and editing.
+
+Keep existing PM2.5 and other measurement entities: editing a sensor/number into
+an air-quality entity is rejected to prevent replacement of the original.
+Use **Add entity** on the same Device for a separate categorical entity.
+Generated PM2.5/PM10 helpers can read matching numeric sensor states, including
+mass-unit conversion. Unmeasured concentrations are unknown (`None`), not zero.
+Old customized templates are not silently rewritten; review them when upgrading.
+
+The input step also selects the measured quantity (PM1/PM2.5/PM10, AQI,
+CO₂/CO/O₃/NO₂/NO/SO₂, or VOC mass/volume ratio). Known quantities are detected
+from source device classes; different pollutants cannot share one numeric
+threshold rule. Classify pollutants separately and combine their categories.
+PM requires mass units, AQI is unitless, and VOC volume ratio requires ppm/ppb.
+Explicit quantities also guard against changed source device classes at runtime.
+Attribute inputs rely on the user's declared quantity and unit.
+
+Legacy concentration attributes use compatible mass-unit helpers, including gas
+sensor states in μg/m³ or mg/m³. Gas ppm/ppb can be used directly in the rule
+steps, but are not guessed into mass concentration attributes. PM0.1 is not PM1,
+and nitrogen oxide (N₂O) is not NO or NO₂: these legacy fields use their exact
+named source attributes. Invalid category outputs clear to unknown; invalid,
+negative, boolean, or non-finite concentrations clear to unmeasured rather than
+leaving a previous reading in place.
+
+Choose source categories,
 measurement thresholds, a fixed category, or custom Jinja. Measurement mode
 requires five increasing upper boundaries and six category assignments; these
 are user-defined rules, not a built-in health or regulatory standard. Select

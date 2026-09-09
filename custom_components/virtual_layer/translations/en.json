@@ -15,7 +15,9 @@
       "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
       "invalid_domain_options": "Enter valid options for the selected entity domain.",
       "required": "This field is required.",
-      "invalid_air_quality_logic": "Select valid sources and units. Enter five finite, non-negative, strictly increasing boundaries (up to 1e12) and six valid interval categories."
+      "invalid_air_quality_logic": "Select valid sources and units. Enter five finite, non-negative, strictly increasing boundaries (up to 1e12) and six valid interval categories.",
+      "air_quality_requires_new_entity": "A measurement sensor cannot be replaced by an air-quality category. Cancel to keep the original, then use Add entity to configure Air Quality separately on the same Device.",
+      "mixed_air_quality_measurements": "Use sources matching the selected quantity. Do not combine different pollutants under the same thresholds; classify them separately, then combine categories."
     },
     "step": {
       "user": {
@@ -714,7 +716,8 @@
           "grade_3": "Interval 3 category",
           "grade_4": "Interval 4 category",
           "grade_5": "Interval 5 category",
-          "grade_6": "Interval 6 category"
+          "grade_6": "Interval 6 category",
+          "quantity": "Measured quantity"
         },
         "data_description": {
           "fixed": "A constant category; it will not track changing pollution measurements.",
@@ -733,7 +736,8 @@
           "grade_3": "Category for interval 3. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "grade_4": "Category for interval 4. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
-          "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values."
+          "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1."
         }
       },
       "air_quality_calculation": {
@@ -762,14 +766,16 @@
           "attribute": "Source attribute",
           "aggregation": "Combine source categories",
           "missing": "Missing or invalid values",
-          "unit": "Boundary unit"
+          "unit": "Boundary unit",
+          "quantity": "Measured quantity"
         },
         "data_description": {
           "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
           "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
           "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
           "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
-          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit."
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit. PM/VOC mass requires μg/m³ or mg/m³; AQI requires unitless; VOC volume ratio requires ppm/ppb. Gases accept mass units or ppm/ppb, but no conversion between mass and volume ratios is performed.",
+          "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1."
         }
       },
       "air_quality_review": {
@@ -800,7 +806,9 @@
       "no_devices": "There are no virtual devices to manage.",
       "no_entities": "This device does not have any virtual entities to edit.",
       "required": "This field is required.",
-      "invalid_air_quality_logic": "Select valid sources and units. Enter five finite, non-negative, strictly increasing boundaries (up to 1e12) and six valid interval categories."
+      "invalid_air_quality_logic": "Select valid sources and units. Enter five finite, non-negative, strictly increasing boundaries (up to 1e12) and six valid interval categories.",
+      "air_quality_requires_new_entity": "A measurement sensor cannot be replaced by an air-quality category. Cancel to keep the original, then use Add entity to configure Air Quality separately on the same Device.",
+      "mixed_air_quality_measurements": "Use sources matching the selected quantity. Do not combine different pollutants under the same thresholds; classify them separately, then combine categories."
     },
     "step": {
       "init": {
@@ -2155,7 +2163,8 @@
           "grade_3": "Interval 3 category",
           "grade_4": "Interval 4 category",
           "grade_5": "Interval 5 category",
-          "grade_6": "Interval 6 category"
+          "grade_6": "Interval 6 category",
+          "quantity": "Measured quantity"
         },
         "data_description": {
           "fixed": "A constant category; it will not track changing pollution measurements.",
@@ -2174,7 +2183,8 @@
           "grade_3": "Category for interval 3. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "grade_4": "Category for interval 4. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
-          "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values."
+          "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1."
         }
       },
       "edit_air_quality_logic": {
@@ -2197,7 +2207,8 @@
           "grade_3": "Interval 3 category",
           "grade_4": "Interval 4 category",
           "grade_5": "Interval 5 category",
-          "grade_6": "Interval 6 category"
+          "grade_6": "Interval 6 category",
+          "quantity": "Measured quantity"
         },
         "data_description": {
           "fixed": "A constant category; it will not track changing pollution measurements.",
@@ -2216,7 +2227,8 @@
           "grade_3": "Category for interval 3. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "grade_4": "Category for interval 4. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
-          "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values."
+          "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+          "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1."
         }
       },
       "air_quality_calculation": {
@@ -2263,14 +2275,16 @@
           "attribute": "Source attribute",
           "aggregation": "Combine source categories",
           "missing": "Missing or invalid values",
-          "unit": "Boundary unit"
+          "unit": "Boundary unit",
+          "quantity": "Measured quantity"
         },
         "data_description": {
           "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
           "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
           "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
           "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
-          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit."
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit. PM/VOC mass requires μg/m³ or mg/m³; AQI requires unitless; VOC volume ratio requires ppm/ppb. Gases accept mass units or ppm/ppb, but no conversion between mass and volume ratios is performed.",
+          "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1."
         }
       },
       "air_quality_review": {
@@ -2291,14 +2305,16 @@
           "attribute": "Source attribute",
           "aggregation": "Combine source categories",
           "missing": "Missing or invalid values",
-          "unit": "Boundary unit"
+          "unit": "Boundary unit",
+          "quantity": "Measured quantity"
         },
         "data_description": {
           "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
           "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
           "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
           "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
-          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit."
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit. PM/VOC mass requires μg/m³ or mg/m³; AQI requires unitless; VOC volume ratio requires ppm/ppb. Gases accept mass units or ppm/ppb, but no conversion between mass and volume ratios is performed.",
+          "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1."
         }
       },
       "edit_air_quality_review": {
@@ -2464,6 +2480,23 @@
         "rules": "Edit thresholds / grades",
         "sources": "Edit input sources",
         "calculation": "Edit calculation"
+      }
+    },
+    "air_quality_quantity": {
+      "options": {
+        "any": "Automatic / custom",
+        "pm1": "PM1",
+        "pm25": "PM2.5",
+        "pm10": "PM10",
+        "aqi": "AQI",
+        "carbon_dioxide": "CO₂",
+        "carbon_monoxide": "CO",
+        "ozone": "O₃",
+        "nitrogen_dioxide": "NO₂",
+        "nitrogen_monoxide": "NO",
+        "sulphur_dioxide": "SO₂",
+        "volatile_organic_compounds": "VOC (mass concentration)",
+        "volatile_organic_compounds_parts": "VOC (volume ratio)"
       }
     }
   },

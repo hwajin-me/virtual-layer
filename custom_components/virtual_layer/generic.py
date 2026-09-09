@@ -220,15 +220,15 @@ class GenericVirtualEntity(VirtualEntity, Entity):
                 value = "unknown"
             value = str(value).strip().lower().replace("-", "_").replace(" ", "_")
             if value not in MATTER_AIR_QUALITY_VALUES:
-                raise ValueError(
-                    "air_quality must be one of "
-                    + ", ".join(sorted(MATTER_AIR_QUALITY_VALUES))
-                )
+                value = "unknown"
             changed = self._attr_state != value
             self._attr_state = value
             self._domain_options[name] = value
             return changed
-        if name in GENERIC_LIST_TEMPLATE_PROPERTIES:
+        if self._domain == "air_quality" and name in GENERIC_NONNEGATIVE_TEMPLATE_PROPERTIES:
+            number = _safe_float(value, float("nan")) if not isinstance(value, bool) else float("nan")
+            value = number if math.isfinite(number) and number >= 0 else None
+        elif name in GENERIC_LIST_TEMPLATE_PROPERTIES:
             value = _template_string_list(value, name)
         elif name in GENERIC_MAPPING_TEMPLATE_PROPERTIES:
             if name == "event" and value is None:

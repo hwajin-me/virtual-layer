@@ -946,6 +946,8 @@ NATIVE_TEMPLATE_DATETIME_PROPERTIES = frozenset(
 
 def _native_source_helper_default(platform: str, property_name: str) -> Any:
     """Return a valid fallback used only by generated source helpers."""
+    if platform == "air_quality" and property_name != "air_quality":
+        return None
     configured = DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES.get(platform, {})
     if property_name in configured:
         return copy.deepcopy(configured[property_name])
@@ -4564,6 +4566,15 @@ def _build_entity_config(
         entity[CONF_MOTION_HOLD_MINUTES] = motion_hold_minutes
         entity[CONF_MOTION_DETECTION_LOGIC] = detection_logic
     entity.update(domain_options)
+    if platform == "air_quality":
+        # Do not label a categorical state as a numeric PM2.5 measurement.
+        for key in ("device_class", "state_class", "unit_of_measurement", "class"):
+            entity.pop(key, None)
+        for field in (CONF_ATTRIBUTES, CONF_ATTRIBUTE_SOURCES, CONF_ATTRIBUTE_TEMPLATES):
+            values = entity.get(field)
+            if isinstance(values, dict):
+                for key in ("device_class", "state_class", "unit_of_measurement"):
+                    values.pop(key, None)
 
     polygon_geojson_value = user_input.get(CONF_POLYGON_GEOJSON_JSON)
     polygon_files = [
@@ -5237,6 +5248,11 @@ def _replace_ui_entity(
     old_entities = _entity_list_or_empty(devices.get(old_device_name))
     if old_index < 0 or old_index >= len(old_entities):
         raise InvalidEntitySelection
+    old_record = old_entities[old_index]
+    if (isinstance(old_record, Mapping)
+            and old_record.get(CONF_PLATFORM) in ("sensor", "number")
+            and entity.get(CONF_PLATFORM) == "air_quality"):
+        raise AirQualityConversionRequiresNewEntity
 
     if old_device_name == new_device_key:
         old_entity = old_entities[old_index]
@@ -6123,6 +6139,7 @@ def _native_source_template(
     """Build a native-property helper from a source state when possible."""
     attributes = state.attributes
     source_platform = entity_id.split(".", 1)[0]
+    platform = platform or source_platform
     if platform == "camera" and source_platform == "image":
         # A map timestamp is not camera power, and copying a source's file
         # attribute would bypass image conversion and the generated MJPEG feed.
@@ -6144,6 +6161,43 @@ def _native_source_template(
             + " | string | trim | lower | replace('-', '_') | replace(' ', '_')) %}"
             "{{ value if value in ['unknown', 'good', 'fair', 'moderate', "
             "'poor', 'very_poor', 'extremely_poor'] else 'unknown' }}"
+        )
+    if platform == "air_quality" and property_name in NATIVE_TEMPLATE_NUMERIC_PROPERTIES:
+        # Missing concentrations are unknown, never a fabricated clean-air zero.
+        classes = aq_options.NATIVE_MEASUREMENT_CLASSES
+        if source_platform in ("sensor", "number") and property_name in classes:
+            # Class metadata can disappear or change after helper creation.
+            # Evaluate it live, including recovery from a missing snapshot.
+            matches = (
+                f"state_attr({entity_id!r}, 'device_class') == "
+                f"{classes[property_name]!r}"
+            )
+            read = (
+                f"(states({entity_id!r}) if {matches} else "
+                f"state_attr({entity_id!r}, {property_name!r}))"
+            )
+            # Canonical legacy concentration attributes use μg/m³. Accept
+            # only compatible mass units; ppm needs gas-specific assumptions.
+            if property_name != "air_quality_index":
+                factor = (
+                    "{'μg/m³': 1, 'µg/m³': 1, 'mg/m³': 1000}.get("
+                    f"state_attr({entity_id!r}, 'unit_of_measurement'))"
+                )
+            else:
+                factor = f"(1 if state_attr({entity_id!r}, 'unit_of_measurement') in [none, '', 'AQI'] else none)"
+            # Exact named attributes already use the native canonical unit;
+            # their unit must not be inferred from an unrelated primary state.
+            factor = f"(({factor}) if {matches} else 1)"
+        else:
+            read = f"state_attr({entity_id!r}, {property_name!r})"
+            factor = "1"
+        number = f"(({read} | float) * ({factor}))"
+        return (
+            "{{ " + number + " if states(" + repr(entity_id)
+            + ") not in ['unknown', 'unavailable'] and " + read
+            + " is not boolean and is_number(" + read + ") and (" + factor
+            + ") is not none and is_number(" + number + ") and " + number
+            + " >= 0 else none }}"
         )
     attribute_name = property_name
     if attribute_name not in attributes:
@@ -6308,7 +6362,8 @@ def _native_reference_templates(
         ]
         aliases = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES
         source_has_values = [
-            property_name in state.attributes
+            (platform == "air_quality" and property_name in NATIVE_TEMPLATE_NUMERIC_PROPERTIES)
+            or property_name in state.attributes
             or aliases.get(property_name) in state.attributes
             or property_name
             in {
@@ -9982,6 +10037,17 @@ class _AirQualityLogicFlow:
         except (TypeError, ValueError, vol.Invalid):
             level = _matter_air_quality_default(defaults)
             recipe = {"mode": "fixed", "fixed": level} if level != "source" else {"mode": "source"}
+            source_ids = _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT))
+            source_states = [self.hass.states.get(item) for item in source_ids]
+            if level == "source" and source_states and all(
+                state is not None and state.attributes.get("device_class") in aq_options.QUANTITIES[1:]
+                for state in source_states
+            ):
+                unit = source_states[0].attributes.get("unit_of_measurement") or "unitless"
+                unit = str(unit).replace("µ", "μ")
+                quantities = {state.attributes.get("device_class") for state in source_states}
+                recipe = {"mode": "measurement", "unit": unit if unit in aq_options.UNITS else "unitless",
+                          "quantity": next(iter(quantities)) if len(quantities) == 1 else "any"}
             if edit and level == "source" and _native_template_mapping(
                 defaults.get(CONF_NATIVE_VALUE_TEMPLATES)
             ).get("air_quality"):
@@ -10017,6 +10083,32 @@ class _AirQualityLogicFlow:
                 errors["base"] = "invalid_air_quality_logic"
                 self._aq_pending.update(user_input)
             else:
+                if mode == "measurement" and not sources["attribute"]:
+                    quantities = {
+                        state.attributes.get("device_class")
+                        for entity_id in sources["sources"]
+                        if (state := self.hass.states.get(entity_id)) is not None
+                        and state.attributes.get("device_class") in aq_options.QUANTITIES[1:]
+                    }
+                    selected = sources.get("quantity", "any")
+                    if len(quantities) > 1 or (selected != "any" and quantities and quantities != {selected}):
+                        self._aq_pending.update(user_input)
+                        return self.async_show_form(
+                            step_id="edit_air_quality_sources" if self._aq_edit else "air_quality_sources",
+                            data_schema=aq_options.source_schema(mode, self._aq_pending),
+                            errors={"base": "mixed_air_quality_measurements"},
+                        )
+                    if selected == "any" and len(quantities) == 1:
+                        sources["quantity"] = next(iter(quantities))
+                    try:
+                        aq_options.validate_quantity_unit(sources["quantity"], sources["unit"])
+                    except vol.Invalid:
+                        self._aq_pending.update(sources)
+                        return self.async_show_form(
+                            step_id="edit_air_quality_sources" if self._aq_edit else "air_quality_sources",
+                            data_schema=aq_options.source_schema(mode, self._aq_pending),
+                            errors={"base": "invalid_air_quality_logic"},
+                        )
                 self._aq_pending.update(sources)
                 if mode == "measurement":
                     return await self._aq_calculation_step()
@@ -11538,6 +11630,12 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
         original_platform = self._edit_original_platform or current_platform
         if user_input is not None:
             target_platform = user_input[CONF_TARGET_ENTITY_TYPE]
+            if original_platform in ("sensor", "number") and target_platform == "air_quality":
+                return self.async_show_form(
+                    step_id="edit_entity_type",
+                    data_schema=_entity_type_schema(self._edit_source_entities, inferred_platform, current_platform),
+                    errors={"base": "air_quality_requires_new_entity"},
+                )
             try:
                 self._reference_defaults = _reference_entity_defaults(
                     self.hass,
@@ -12084,6 +12182,8 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 errors[ATTR_ENTITY_ID] = "invalid_entity_id"
             except EntityIdAlreadyUsed:
                 errors[ATTR_ENTITY_ID] = "entity_id_used"
+            except AirQualityConversionRequiresNewEntity:
+                errors["base"] = "air_quality_requires_new_entity"
             except InvalidDomainOptions:
                 errors[_domain_options_error_field(user_input)] = (
                     "invalid_domain_options"
@@ -12202,6 +12302,10 @@ class EntityIdAlreadyUsed(exceptions.HomeAssistantError):
 
 class InvalidDomainOptions(exceptions.HomeAssistantError):
     """Error indicating invalid domain-specific options."""
+
+
+class AirQualityConversionRequiresNewEntity(InvalidDomainOptions):
+    """A measurement must not be replaced by a categorical entity on edit."""
 
 
 class InvalidEntitySelection(exceptions.HomeAssistantError):
