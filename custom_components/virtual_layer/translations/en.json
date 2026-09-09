@@ -39,6 +39,16 @@
           "group_name": "Device metadata and entity IDs are scoped to this device set."
         }
       },
+      "air_quality": {
+        "title": "Configure Matter Air Quality",
+        "description": "Matter controllers require one overall air-quality category in addition to pollutant measurements. Choose a fixed category for this virtual device, or choose Source or dynamic template to use the editable Air quality template from the entity form. Numeric PM or AQI values are measurements, not Matter categories.",
+        "data": {
+          "matter_air_quality": "Matter overall air quality"
+        },
+        "data_description": {
+          "matter_air_quality": "Use a fixed category when your source exposes only numeric values. Use Source or dynamic template when the source provides a valid category or when you maintain custom Jinja logic."
+        }
+      },
       "entity": {
         "title": "Add Virtual Entity",
         "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls.",
@@ -143,11 +153,11 @@
               "dawarich_person": "Dawarich family person",
               "presence_classification": "Classify home presence",
               "matter_light_type": "Matter light device type",
-              "matter_air_quality": "Matter overall air quality",
               "light_response_delay": "Source response delay",
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
-              "climate_temperature_step": "Temperature adjustment step"
+              "climate_temperature_step": "Temperature adjustment step",
+              "media_player_source_priority": "Media source priority"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -166,11 +176,11 @@
               "dawarich_person": "Optional Home Assistant Person matched to a Dawarich Family member. This uses /api/v1/families/locations; the Person display name must match the family member name.",
               "presence_classification": "When enabled for a combined tracker, Wi-Fi/ESPresense presence is home; BLE distance is front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
               "matter_light_type": "Choose the maximum virtual-light capability: on/off, dimming, color temperature, or extended HS/XY color. When combining bulbs, the generated helper uses the least capable profile: RGB plus color-temperature becomes color temperature, and any on/off-only bulb makes the virtual light on/off only. Effects and flash are never exposed.",
-              "matter_air_quality": "Choose a fixed Matter overall air-quality level, or Source or dynamic template to preserve the native Jinja helper.",
               "light_response_delay": "Seconds to retain a requested light value before reading source states again (0–30).",
               "light_response_retries": "Additional delayed source-state reads after a light command (0–10).",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
-              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls."
+              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
+              "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties."
             }
           },
           "native_value_templates": {
@@ -769,6 +779,16 @@
           "managed_device_name": "All virtual entities and stored metadata belonging to the selected Device will be removed."
         }
       },
+      "edit_air_quality": {
+        "title": "Configure Matter Air Quality",
+        "description": "Matter controllers require one overall air-quality category in addition to pollutant measurements. Choose a fixed category for this virtual device, or choose Source or dynamic template to keep the editable Air quality template from the entity form. Numeric PM or AQI values are measurements, not Matter categories.",
+        "data": {
+          "matter_air_quality": "Matter overall air quality"
+        },
+        "data_description": {
+          "matter_air_quality": "Use a fixed category when your source exposes only numeric values. Use Source or dynamic template when the source provides a valid category or when you maintain custom Jinja logic."
+        }
+      },
       "edit_entity": {
         "title": "Edit Virtual Entity",
         "description": "Update this virtual entity and save the new configuration. After changing the entity domain, submit once to load its domain-specific controls.",
@@ -873,11 +893,11 @@
               "dawarich_person": "Dawarich family person",
               "presence_classification": "Classify home presence",
               "matter_light_type": "Matter light device type",
-              "matter_air_quality": "Matter overall air quality",
               "light_response_delay": "Source response delay",
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
-              "climate_temperature_step": "Temperature adjustment step"
+              "climate_temperature_step": "Temperature adjustment step",
+              "media_player_source_priority": "Media source priority"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -896,11 +916,11 @@
               "dawarich_person": "Optional Person matched to a Dawarich Family member by display name.",
               "presence_classification": "Wi-Fi/ESPresense means home; BLE distance means front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
               "matter_light_type": "Choose the maximum virtual-light capability: on/off, dimming, color temperature, or extended HS/XY color. When combining bulbs, the generated helper uses the least capable profile: RGB plus color-temperature becomes color temperature, and any on/off-only bulb makes the virtual light on/off only. Effects and flash are never exposed.",
-              "matter_air_quality": "Choose a fixed Matter overall air-quality level, or Source or dynamic template to preserve the native Jinja helper.",
               "light_response_delay": "Seconds to retain a requested light value before reading source states again (0–30).",
               "light_response_retries": "Additional delayed source-state reads after a light command (0–10).",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
-              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls."
+              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
+              "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties."
             }
           },
           "native_value_templates": {
@@ -1423,6 +1443,16 @@
           "matter_fan_speed_source": "Use the fan entity that physically controls speed, such as the Xiaomi Home fan rather than the MIOT status/control fan."
         }
       },
+      "air_quality": {
+        "title": "Configure Matter Air Quality",
+        "description": "Matter controllers require one overall air-quality category in addition to pollutant measurements. Choose a fixed category for this virtual device, or choose Source or dynamic template to use the editable Air quality template from the entity form. Numeric PM or AQI values are measurements, not Matter categories.",
+        "data": {
+          "matter_air_quality": "Matter overall air quality"
+        },
+        "data_description": {
+          "matter_air_quality": "Use a fixed category when your source exposes only numeric values. Use Source or dynamic template when the source provides a valid category or when you maintain custom Jinja logic."
+        }
+      },
       "entity": {
         "title": "Add Virtual Entity",
         "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls.",
@@ -1527,11 +1557,11 @@
               "dawarich_person": "Dawarich family person",
               "presence_classification": "Classify home presence",
               "matter_light_type": "Matter light device type",
-              "matter_air_quality": "Matter overall air quality",
               "light_response_delay": "Source response delay",
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
-              "climate_temperature_step": "Temperature adjustment step"
+              "climate_temperature_step": "Temperature adjustment step",
+              "media_player_source_priority": "Media source priority"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -1550,11 +1580,11 @@
               "dawarich_person": "Optional Person matched to a Dawarich Family member by display name.",
               "presence_classification": "Wi-Fi/ESPresense means home; BLE distance means front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
               "matter_light_type": "Choose the maximum virtual-light capability: on/off, dimming, color temperature, or extended HS/XY color. When combining bulbs, the generated helper uses the least capable profile: RGB plus color-temperature becomes color temperature, and any on/off-only bulb makes the virtual light on/off only. Effects and flash are never exposed.",
-              "matter_air_quality": "Choose a fixed Matter overall air-quality level, or Source or dynamic template to preserve the native Jinja helper.",
               "light_response_delay": "Seconds to retain a requested light value before reading source states again (0–30).",
               "light_response_retries": "Additional delayed source-state reads after a light command (0–10).",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
-              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls."
+              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
+              "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties."
             }
           },
           "native_value_templates": {

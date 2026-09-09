@@ -124,6 +124,7 @@ from custom_components.virtual_layer.config_flow import (
     _literal_template,
     _log_unhandled_flow_errors,
     _managed_device_choices,
+    _matter_air_quality_schema,
     _matter_fan_source_levels,
     _merged_native_template,
     _lowest_light_capability,
@@ -187,6 +188,7 @@ from custom_components.virtual_layer.const import (
     CONF_MIN,
     CONF_MODEL,
     CONF_MEDIA_PLAYER_SOURCE_PRIORITIES,
+    CONF_MEDIA_PLAYER_SOURCE_PRIORITY,
     CONF_NATIVE_TEMPLATES,
     CONF_PERSISTENT,
     CONF_PRESENCE_CLASSIFICATION,
@@ -1400,10 +1402,9 @@ def test_light_form_persists_matter_device_type():
 
 
 def test_air_quality_form_offers_and_persists_direct_matter_level():
-    schema = _entity_schema({CONF_PLATFORM: "air_quality"})
-    outer = {marker.schema: validator for marker, validator in schema.schema.items()}
-    domain = _section_validators(schema, CONF_DOMAIN_SETTINGS)
-    assert domain[CONF_MATTER_AIR_QUALITY].config["options"] == [
+    schema = _matter_air_quality_schema()
+    selector_config = next(iter(schema.schema.values())).config
+    assert selector_config["options"] == [
         "source",
         "unknown",
         "good",
@@ -2636,7 +2637,7 @@ def test_media_player_priority_schema_limits_each_picker_to_configured_sources()
     ]
 
 
-def test_media_player_priority_controls_are_exposed_in_the_entity_config_form():
+def test_media_player_priority_control_is_exposed_in_domain_settings():
     schema = _entity_schema(
         {
             CONF_PLATFORM: "media_player",
@@ -2645,16 +2646,16 @@ def test_media_player_priority_controls_are_exposed_in_the_entity_config_form():
             ),
         }
     )
-    priority_section = next(
+    domain_settings = next(
         validator
         for marker, validator in schema.schema.items()
-        if getattr(marker, "schema", marker) == CONF_MEDIA_PLAYER_SOURCE_PRIORITIES
+        if getattr(marker, "schema", marker) == CONF_DOMAIN_SETTINGS
     )
-    priority_fields = {
+    settings_fields = {
         getattr(marker, "schema", marker)
-        for marker in priority_section.schema.schema
+        for marker in domain_settings.schema.schema
     }
-    assert set(DOMAIN_NATIVE_TEMPLATE_PROPERTIES["media_player"]) == priority_fields
+    assert CONF_MEDIA_PLAYER_SOURCE_PRIORITY in settings_fields
 
 
 def test_clearing_media_player_priority_resets_only_generated_helper():

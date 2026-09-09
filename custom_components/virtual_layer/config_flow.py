@@ -154,6 +154,7 @@ CONF_REFERENCE_ENTITY_ID = "reference_entity_id"
 CONF_TARGET_ENTITY_TYPE = "target_entity_type"
 CONF_SENSOR_CONVERSION = "sensor_conversion"
 CONF_SENSOR_AGGREGATION = "sensor_aggregation"
+CONF_SENSOR_SOURCE_CONVERSION_PREFIX = "sensor_source_conversion_"
 CONF_HELPER_UPDATE_MODE = "helper_update_mode"
 CONF_USE_TEMPLATE_HELPER = "use_template_helper"
 CONF_MATTER_FAN_LOW_LEVEL = "matter_fan_low_level"
@@ -1284,6 +1285,13 @@ def _media_player_source_priority_schema(
     return _complete_form_schema(vol.Schema(schema))
 
 
+def _media_player_common_priority(defaults: Mapping) -> list[str]:
+    """Return the shared configured order, or no order for mixed overrides."""
+    priorities = _mapping_or_empty(defaults.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITIES))
+    orders = [tuple(value) for value in priorities.values() if isinstance(value, list)]
+    return list(orders[0]) if orders and all(order == orders[0] for order in orders) else []
+
+
 def _media_player_priority_template(property_name: str, entity_ids: list[str]) -> str:
     """Use an active player first, then ordered sources with usable values."""
     attribute_name = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(
@@ -1948,6 +1956,88 @@ def _typed_measurement_properties(
     return properties
 
 
+def _sensor_source_conversion_choices(
+    entity_id: str, hass=None
+) -> dict[str, tuple[str, str | None, str | None, str, str]]:
+    """Return every safe measurement an individual source can contribute."""
+    domain = entity_id.split(".", 1)[0]
+    if domain in {"sensor", "number"}:
+        state = hass.states.get(entity_id) if hass is not None else None
+        device_class = state.attributes.get("device_class") if state else None
+        if device_class is not None and not isinstance(device_class, str):
+            return {}
+        return {"state": ("state", device_class, "unit_of_measurement", "", "direct")}
+    return {
+        attribute: (attribute, device_class, unit_attribute, fallback_unit, conversion)
+        for attribute, device_class, unit_attribute, fallback_unit, conversion in _SENSOR_CONVERSION_PROPERTIES.get(
+            domain, ()
+        )
+    }
+
+
+def _sensor_source_conversion_field(index: int) -> str:
+    """Return the stable form field for one selected source position."""
+    return f"{CONF_SENSOR_SOURCE_CONVERSION_PREFIX}{index}"
+
+
+def _sensor_conversion_choice_from_source_selections(
+    entity_ids: tuple[str, ...], hass, user_input: Mapping[str, Any]
+):
+    """Validate per-source selections and build one generated helper profile."""
+    descriptors = []
+    for index, entity_id in enumerate(entity_ids):
+        source_choices = _sensor_source_conversion_choices(entity_id, hass)
+        descriptor = source_choices.get(user_input.get(_sensor_source_conversion_field(index)))
+        if descriptor is None:
+            return None
+        descriptors.append(descriptor)
+    device_classes = {descriptor[1] for descriptor in descriptors}
+    if len(device_classes) != 1:
+        return None
+    conversions = {descriptor[4] for descriptor in descriptors}
+    if conversions <= {"direct", "percent_clamped"}:
+        conversion = "percent_clamped" if "percent_clamped" in conversions else "direct"
+    elif len(conversions) == 1:
+        conversion = conversions.pop()
+    else:
+        return None
+    source_units = []
+    for entity_id, descriptor in zip(entity_ids, descriptors, strict=True):
+        state = hass.states.get(entity_id)
+        unit_attribute, fallback_unit = descriptor[2], descriptor[3]
+        source_units.append(
+            state.attributes.get(unit_attribute) or fallback_unit
+            if state is not None and unit_attribute
+            else fallback_unit
+        )
+    device_class = device_classes.pop()
+    profile = _sensor_unit_conversion_transforms(source_units, device_class)
+    if profile is None:
+        return None
+    unit, transforms = profile
+    return (
+        entity_ids,
+        tuple(descriptor[0] for descriptor in descriptors),
+        device_class,
+        None,
+        unit,
+        conversion,
+        transforms,
+    )
+
+
+def _selected_sensor_conversion_choice(
+    entity_ids: Collection[str], hass, user_input: Mapping[str, Any], choices: Mapping
+):
+    """Read either one source choice or a validated per-source selection."""
+    entity_ids = tuple(entity_ids)
+    if len(entity_ids) > 1:
+        return _sensor_conversion_choice_from_source_selections(
+            entity_ids, hass, user_input
+        )
+    return choices.get(user_input.get(CONF_SENSOR_CONVERSION))
+
+
 def _cross_domain_sensor_conversion_choices(
     entity_ids: tuple[str, ...], hass=None
 ) -> dict[
@@ -2200,6 +2290,45 @@ def _sensor_conversion_schema(
     default_aggregation: str = SENSOR_AGGREGATION_AVERAGE,
 ) -> vol.Schema:
     """Choose the source measurement to expose through the virtual sensor."""
+    entity_ids = next(iter(choices.values()))[0] if choices else ()
+    if len(entity_ids) > 1:
+        schema = {}
+        for index, entity_id in enumerate(entity_ids):
+            source_options = [
+                {
+                    "value": attribute,
+                    "label": f"{entity_id} · {attribute.replace('_', ' ').title()}",
+                }
+                for attribute in _sensor_source_conversion_choices(entity_id).keys()
+            ]
+            if not source_options:
+                continue
+            schema[
+                vol.Required(
+                    _sensor_source_conversion_field(index),
+                    default=source_options[0]["value"],
+                )
+            ] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=source_options,
+                    translation_key="sensor_conversion",
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        if default_aggregation not in SENSOR_AGGREGATIONS:
+            default_aggregation = SENSOR_AGGREGATION_AVERAGE
+        schema[
+            vol.Required(CONF_SENSOR_AGGREGATION, default=default_aggregation)
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(SENSOR_AGGREGATIONS),
+                translation_key="sensor_aggregation",
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
+        # Accept the former single-choice key during an in-progress flow from
+        # an older frontend; it is ignored in favor of the per-source defaults.
+        return _complete_form_schema(vol.Schema(schema, extra=vol.ALLOW_EXTRA))
     options = [
         {
             "value": key,
@@ -2797,6 +2926,21 @@ def _matter_air_quality_default(defaults: Mapping) -> str:
     return "source"
 
 
+def _matter_air_quality_schema(default: str = "source") -> vol.Schema:
+    """Build the dedicated Matter aggregate-air-quality step."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_MATTER_AIR_QUALITY, default=default): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(MATTER_AIR_QUALITY_LEVELS),
+                    translation_key="matter_air_quality",
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        }
+    )
+
+
 def _native_template_defaults(
     platform: str,
     defaults: Mapping,
@@ -3098,19 +3242,6 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 ): cv.boolean,
             }
         )
-    elif platform == "air_quality":
-        domain_schema[
-            vol.Required(
-                CONF_MATTER_AIR_QUALITY,
-                default=_matter_air_quality_default(defaults),
-            )
-        ] = selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=list(MATTER_AIR_QUALITY_LEVELS),
-                translation_key="matter_air_quality",
-                mode=selector.SelectSelectorMode.DROPDOWN,
-            )
-        )
     elif platform == "climate":
         domain_schema[
             vol.Required(
@@ -3124,10 +3255,31 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 mode=selector.SelectSelectorMode.DROPDOWN,
             )
         )
+    elif platform == "media_player":
+        source_entities = [
+            entity_id
+            for entity_id in _stored_entity_ids(
+                defaults.get(CONF_SOURCE_ENTITIES_TEXT, "")
+            )
+            if entity_id.startswith("media_player.")
+        ]
+        domain_schema[
+            vol.Optional(
+                CONF_MEDIA_PLAYER_SOURCE_PRIORITY,
+                default=_media_player_common_priority(defaults),
+            )
+        ] = selector.EntitySelector(
+            selector.EntitySelectorConfig(
+                domain="media_player",
+                include_entities=source_entities,
+                multiple=True,
+                reorder=True,
+            )
+        )
     if domain_schema:
         schema[vol.Optional(CONF_DOMAIN_SETTINGS, default=dict)] = section(
             vol.Schema(domain_schema),
-            {"collapsed": platform not in {"climate", "light"}},
+            {"collapsed": platform not in {"climate", "light", "media_player"}},
         )
     native_template_properties = DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
     if native_template_properties:
@@ -3156,20 +3308,6 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 }
             },
         )
-    if platform == "media_player":
-        source_entities = _stored_entity_ids(
-            defaults.get(CONF_SOURCE_ENTITIES_TEXT, "")
-        )
-        if len(source_entities) > 1 and all(
-            entity_id.startswith("media_player.") for entity_id in source_entities
-        ):
-            schema[vol.Optional(CONF_MEDIA_PLAYER_SOURCE_PRIORITIES, default=dict)] = section(
-                _media_player_source_priority_schema(
-                    source_entities,
-                    defaults.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITIES),
-                ),
-                {"collapsed": False},
-            )
     return _complete_form_schema(vol.Schema(schema, extra=vol.ALLOW_EXTRA))
 
 
@@ -4076,16 +4214,19 @@ def _build_entity_config(
         if matter_air_quality != "source":
             native_templates["air_quality"] = _literal_template(matter_air_quality)
     if platform == "media_player":
-        priorities = user_input.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITIES)
-        if priorities is not None:
-            if not isinstance(priorities, Mapping):
+        priority = user_input.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITY)
+        if priority is not None:
+            if not isinstance(priority, list):
                 raise InvalidDomainOptions
             source_entities = _stored_entity_ids(
                 user_input.get(CONF_SOURCE_ENTITIES_TEXT, "")
             )
             applied = _apply_media_player_source_priorities(
                 {CONF_NATIVE_VALUE_TEMPLATES: native_templates},
-                priorities,
+                {
+                    property_name: priority
+                    for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES["media_player"]
+                },
                 source_entities,
             )
             native_templates = applied[CONF_NATIVE_VALUE_TEMPLATES]
@@ -9263,6 +9404,7 @@ def _entity_form_defaults(
         CONF_MEDIA_PLAYER_SOURCE_PRIORITIES: _mapping_or_empty(
             entity.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITIES)
         ),
+        CONF_MEDIA_PLAYER_SOURCE_PRIORITY: _media_player_common_priority(entity),
         CONF_COMMAND_ACTIONS_JSON: _json_default(
             repair_legacy_template_data(entity.get(CONF_COMMAND_ACTIONS))
         ),
@@ -9697,7 +9839,9 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             return await self.async_step_entity_source()
         errors = _flow_errors(self, "sensor_conversion")
         if user_input is not None:
-            choice = choices.get(user_input.get(CONF_SENSOR_CONVERSION))
+            choice = _selected_sensor_conversion_choice(
+                self._source_entities, self.hass, user_input, choices
+            )
             if choice is not None:
                 self._reference_defaults = _apply_sensor_conversion_defaults(
                     self.hass,
@@ -9897,6 +10041,23 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             data_schema=_matter_fan_control_mode_schema(),
         )
 
+    async def async_step_air_quality(self, user_input=None):
+        """Configure the Matter aggregate air-quality value separately."""
+        if not self._entity_defaults:
+            return await self.async_step_entity()
+        if user_input is not None:
+            self._entity_defaults = {
+                **self._entity_defaults,
+                CONF_MATTER_AIR_QUALITY: user_input[CONF_MATTER_AIR_QUALITY],
+            }
+            return await self.async_step_entity(self._entity_defaults)
+        return self.async_show_form(
+            step_id="air_quality",
+            data_schema=_matter_air_quality_schema(
+                _matter_air_quality_default(self._entity_defaults)
+            ),
+        )
+
     async def async_step_entity(self, user_input=None):
         """Add the first UI-managed virtual entity."""
         errors = _flow_errors(self, "entity")
@@ -9923,6 +10084,8 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         ):
             user_input = _complete_domain_form_defaults(user_input)
             self._entity_defaults = user_input
+            if user_input.get(CONF_PLATFORM) == "air_quality":
+                return await self.async_step_air_quality()
             return self.async_show_form(
                 step_id="entity",
                 data_schema=_entity_schema(user_input),
@@ -10232,7 +10395,9 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             return await self.async_step_entity_source()
         errors = _flow_errors(self, "sensor_conversion")
         if user_input is not None:
-            choice = choices.get(user_input.get(CONF_SENSOR_CONVERSION))
+            choice = _selected_sensor_conversion_choice(
+                self._add_source_entities, self.hass, user_input, choices
+            )
             if choice is not None:
                 self._reference_defaults = _apply_sensor_conversion_defaults(
                     self.hass,
@@ -10447,6 +10612,23 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             errors=errors,
         )
 
+    async def async_step_air_quality(self, user_input=None):
+        """Configure Matter aggregate air quality for a new entity."""
+        if not self._entity_defaults:
+            return await self.async_step_entity()
+        if user_input is not None:
+            self._entity_defaults = {
+                **self._entity_defaults,
+                CONF_MATTER_AIR_QUALITY: user_input[CONF_MATTER_AIR_QUALITY],
+            }
+            return await self.async_step_entity(self._entity_defaults)
+        return self.async_show_form(
+            step_id="air_quality",
+            data_schema=_matter_air_quality_schema(
+                _matter_air_quality_default(self._entity_defaults)
+            ),
+        )
+
     async def async_step_entity(self, user_input=None):
         """Add a UI-managed virtual entity."""
         errors = _flow_errors(self, "entity")
@@ -10473,6 +10655,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         ):
             user_input = _complete_domain_form_defaults(user_input)
             self._entity_defaults = user_input
+            if user_input.get(CONF_PLATFORM) == "air_quality":
+                return await self.async_step_air_quality()
             return self.async_show_form(
                 step_id="entity",
                 data_schema=_entity_schema(user_input),
@@ -10788,7 +10972,9 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             return await self.async_step_edit_entity_source()
         errors = _flow_errors(self, "edit_sensor_conversion")
         if user_input is not None:
-            choice = choices.get(user_input.get(CONF_SENSOR_CONVERSION))
+            choice = _selected_sensor_conversion_choice(
+                self._edit_source_entities, self.hass, user_input, choices
+            )
             if choice is not None:
                 self._reference_defaults = _apply_sensor_conversion_defaults(
                     self.hass,
@@ -11055,6 +11241,23 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
             data_schema=_matter_fan_control_mode_schema(),
         )
 
+    async def async_step_edit_air_quality(self, user_input=None):
+        """Configure Matter aggregate air quality while editing an entity."""
+        if not self._entity_defaults:
+            return await self.async_step_edit_entity()
+        if user_input is not None:
+            self._entity_defaults = {
+                **self._entity_defaults,
+                CONF_MATTER_AIR_QUALITY: user_input[CONF_MATTER_AIR_QUALITY],
+            }
+            return await self.async_step_edit_entity(self._entity_defaults)
+        return self.async_show_form(
+            step_id="edit_air_quality",
+            data_schema=_matter_air_quality_schema(
+                _matter_air_quality_default(self._entity_defaults)
+            ),
+        )
+
     async def async_step_edit_entity(self, user_input=None):
         """Edit a UI-managed virtual entity."""
         errors = _flow_errors(self, "edit_entity")
@@ -11071,6 +11274,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         if user_input is not None and _needs_domain_specific_form(user_input):
             user_input = _complete_domain_form_defaults(user_input)
             self._entity_defaults = user_input
+            if user_input.get(CONF_PLATFORM) == "air_quality":
+                return await self.async_step_edit_air_quality()
             return self.async_show_form(
                 step_id="edit_entity",
                 data_schema=_entity_schema(user_input),

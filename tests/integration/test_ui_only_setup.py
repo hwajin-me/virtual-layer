@@ -9565,6 +9565,40 @@ async def test_virtual_camera_alias_proxies_home_assistant_webrtc_websocket(
     ]
 
 
+async def test_air_quality_uses_a_dedicated_matter_configuration_step(hass):
+    hass.states.async_set("air_quality.living_room", "good")
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id,
+        data={CONF_ACTION: ACTION_ADD_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_REFERENCE_ENTITY_ID: ["air_quality.living_room"]},
+    )
+    result = await _choose_add_template_helper(hass, result)
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        defaults,
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "air_quality"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"matter_air_quality": "good"},
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
 async def test_virtual_camera_alias_does_not_proxy_itself(hass):
     entity = VirtualCamera(
         CAMERA_SCHEMA(
