@@ -1592,6 +1592,10 @@ def test_all_native_jinja_fields_have_renderable_source_helpers(hass):
         assert set(templates) == set(properties), platform
         for property_name, template in templates.items():
             rendered = Template(template, hass).async_render(parse_result=True)
+            if platform == "air_quality" and property_name == "unit_of_measurement":
+                # The categorical overall state must never inherit a numeric unit.
+                assert rendered is None
+                continue
             assert rendered is not None, f"{platform}.{property_name}: {template}"
 
         missing_source = f"{platform}.minimal_source"

@@ -505,9 +505,17 @@ supported feature set without editing JSON.
 Air-quality entities have dedicated **Air quality logic** steps before the
 template editor, in both creation and editing.
 
-Keep existing PM2.5 and other measurement entities: editing a sensor/number into
-an air-quality entity is rejected to prevent replacement of the original.
-Use **Add entity** on the same Device for a separate categorical entity.
+Keep existing PM2.5 and other measurement entities: selecting Air Quality while
+editing a sensor/number opens a confirmation to add a separate categorical
+entity on the same Device, using the original virtual measurement as its source.
+The original configuration and identity remain unchanged. Declining returns to
+type selection; confirming only opens configuration, with persistence at final save.
+You can also use **Add entity** directly.
+Measurement setup uses one screen for sources, units and thresholds, followed
+by preview and the final template editor. Quantity, category mappings, missing
+value policies and calibration are grouped in a collapsed advanced section.
+Saved advanced values are retained when reopening the form. Preview offers
+continue, refresh, or return to that same settings screen.
 Generated PM2.5/PM10 helpers can read matching numeric sensor states, including
 mass-unit conversion. Unmeasured concentrations are unknown (`None`), not zero.
 Old customized templates are not silently rewritten; review them when upgrading.

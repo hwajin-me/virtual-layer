@@ -23,6 +23,108 @@ def measurement(**overrides):
     }
 
 
+async def test_compact_setup_preserves_advanced_values_through_errors_and_back(hass):
+    from custom_components.virtual_layer.config_flow import VirtualFlowHandler
+
+    hass.states.async_set("sensor.pm25", "25", {"device_class": "pm25", "unit_of_measurement": "μg/m³"})
+    flow = VirtualFlowHandler()
+    flow.hass = hass
+    flow._entity_defaults = {"platform": "air_quality"}
+    result = await flow.async_step_air_quality({"mode": "measurement"})
+    assert result["step_id"] == "air_quality_setup"
+    values = result["data_schema"]({
+        "sources": ["sensor.pm25"], "unit": "μg/m³",
+        **{f"boundary_{i}": i * 10 for i in range(1, 6)},
+        "advanced": {"multiplier": 2, "grade_5": "good", "missing": "unknown"},
+    })
+    result = await flow.async_step_air_quality_setup({**values, "boundary_2": 10})
+    assert result["step_id"] == "air_quality_setup"
+    assert result["errors"] == {"base": "invalid_air_quality_logic"}
+    restored = result["data_schema"]({})
+    assert restored["advanced"]["multiplier"] == 2
+    assert restored["advanced"]["grade_5"] == "good"
+    restored["boundary_2"] = 20
+    result = await flow.async_step_air_quality_setup(restored)
+    assert result["step_id"] == "air_quality_review"
+    assert result["description_placeholders"]["result"] == "good"
+    assert flow._aq_pending["quantity"] == "pm25"
+    result = await flow.async_step_air_quality_review({"next_action": "rules"})
+    assert result["step_id"] == "air_quality_setup"
+    reopened = result["data_schema"]({})
+    assert reopened["advanced"]["multiplier"] == 2
+    assert reopened["advanced"]["grade_5"] == "good"
+    result = await flow.async_step_air_quality_setup(reopened)
+    assert result["description_placeholders"]["result"] == "good"
+
+
+def test_compact_setup_fields_have_translations():
+    root = Path(__file__).parents[2] / "custom_components/virtual_layer/translations"
+    schema = aq.setup_schema(measurement())
+    for lang in ("en", "ko"):
+        catalog = json.loads((root / f"{lang}.json").read_text())
+        for group, name in (("config", "air_quality_setup"), ("options", "air_quality_setup"), ("options", "edit_air_quality_setup")):
+            text = catalog[group]["step"][name]
+            for key, validator in schema.schema.items():
+                if key.schema == "advanced":
+                    for field in schema({})["advanced"]:
+                        assert text["sections"]["advanced"]["data"][field]
+                        assert text["sections"]["advanced"]["data_description"][field]
+                else:
+                    assert text["data"][key.schema]
+                    assert text["data_description"][key.schema]
+
+
+def test_category_hides_missing_measurements_and_numeric_metadata(hass):
+    from custom_components.virtual_layer.generic import GenericVirtualEntity
+
+    entity = GenericVirtualEntity({
+        "name": "Formaldehyde", "entity_id": "air_quality.formaldehyde",
+        "initial_value": "unknown", "unit_of_measurement": "m³",
+        "attributes": {"unit_of_measurement": "m³", "device_class": "pm25", "state_class": "measurement"},
+    }, "air_quality", False)
+    entity.hass = hass
+    entity._apply_native_template_value("air_quality", "unknown")
+    entity._apply_native_template_value("unit_of_measurement", "m³")
+    for name in aq.NATIVE_MEASUREMENT_CLASSES:
+        entity._apply_native_template_value(name, None)
+    entity._update_attributes()
+    attrs = entity.extra_state_attributes
+    assert attrs["air_quality"] == "unknown"
+    for name in (*aq.NATIVE_MEASUREMENT_CLASSES, "unit_of_measurement", "device_class", "state_class"):
+        assert name not in attrs
+    assert entity.unit_of_measurement is None
+    entity._apply_native_template_value("particulate_matter_2_5", 0)
+    entity._update_attributes()
+    assert entity.extra_state_attributes["particulate_matter_2_5"] == 0
+    entity._apply_native_template_value("particulate_matter_2_5", None)
+    entity._update_attributes()
+    assert "particulate_matter_2_5" not in entity.extra_state_attributes
+
+
+@pytest.mark.parametrize("source_unit", ["m³", "mg/m³", "µg/m³", None])
+async def test_measurement_flow_reports_incompatible_source_units(hass, source_unit):
+    from custom_components.virtual_layer.config_flow import VirtualFlowHandler
+
+    hass.states.async_set("sensor.formaldehyde", "0", {"unit_of_measurement": source_unit})
+    flow = VirtualFlowHandler()
+    flow.hass = hass
+    flow._entity_defaults = {"platform": "air_quality"}
+    await flow.async_step_air_quality({"mode": "measurement"})
+    result = await flow.async_step_air_quality_sources({
+        "sources": ["sensor.formaldehyde"], "unit": "mg/m³", "quantity": "any",
+    })
+    if source_unit in ("m³", None):
+        assert result["errors"] == {"base": "incompatible_air_quality_source_unit"}
+        assert result["step_id"] == "air_quality_sources"
+    else:
+        assert result["step_id"] == "air_quality_logic"
+    # A named attribute has an explicitly declared unit, independent of state.
+    result = await flow.async_step_air_quality_sources({
+        "sources": ["sensor.formaldehyde"], "unit": "mg/m³", "attribute": "raw_state",
+    })
+    assert result["step_id"] == "air_quality_logic"
+
+
 @pytest.mark.parametrize(
     "quantity,unit",
     [
@@ -151,12 +253,12 @@ async def test_aqi_flow_infers_quantity_and_previews_labeled_index(hass):
         "sensor.aqi", "25", {"device_class": "aqi", "unit_of_measurement": "AQI"}
     )
     result = await flow.async_step_air_quality({"mode": "measurement"})
-    assert result["step_id"] == "air_quality_sources"
+    assert result["step_id"] == "air_quality_setup"
     result = await flow.async_step_air_quality_sources(
         {"sources": ["sensor.aqi"], "unit": "unitless"}
     )
     assert flow._aq_pending["quantity"] == "aqi"
-    assert result["step_id"] == "air_quality_calculation"
+    assert result["step_id"] == "air_quality_logic"
     result = await flow.async_step_air_quality_calculation({})
     assert result["step_id"] == "air_quality_logic"
     result = await flow.async_step_air_quality_logic(
@@ -165,6 +267,29 @@ async def test_aqi_flow_infers_quantity_and_previews_labeled_index(hass):
     assert result["step_id"] == "air_quality_review"
     assert not result["errors"]
     assert Template(aq.generate(flow._aq_pending), hass).async_render() == "moderate"
+
+
+@pytest.mark.parametrize("device_class", [None, "formaldehyde", "volatile_organic_compounds"])
+async def test_numeric_formaldehyde_source_defaults_to_measurement(hass, device_class):
+    from custom_components.virtual_layer.config_flow import (
+        CONF_SOURCE_ENTITIES_TEXT, VirtualFlowHandler,
+    )
+
+    source_id = "sensor.formaldehyde_detector_formaldehyde_detector_living_room_formaldehyde"
+    hass.states.async_set(source_id, "0.05", {
+        "unit_of_measurement": "mg/m³", "device_class": device_class,
+    })
+    flow = VirtualFlowHandler()
+    flow.hass = hass
+    flow._entity_defaults = {"platform": "air_quality", CONF_SOURCE_ENTITIES_TEXT: source_id}
+    result = await flow.async_step_air_quality()
+    assert result["data_schema"]({})["mode"] == "measurement"
+    result = await flow.async_step_air_quality({"mode": "measurement"})
+    defaults = result["data_schema"]({f"boundary_{i}": i * 10 for i in range(1, 6)})
+    assert defaults["unit"] == "mg/m³"
+    assert defaults["advanced"]["quantity"] == (
+        "volatile_organic_compounds" if device_class == "volatile_organic_compounds" else "any"
+    )
 
 
 @pytest.mark.parametrize(
@@ -219,7 +344,7 @@ async def test_flow_rejects_mixed_pollutants_before_calculation(hass):
     flow.hass = hass
     flow._entity_defaults = {"platform": "air_quality"}
     hass.states.async_set("sensor.pm", "1", {"device_class": "pm25"})
-    hass.states.async_set("sensor.co", "1", {"device_class": "carbon_monoxide"})
+    hass.states.async_set("sensor.co", "1", {"device_class": "carbon_monoxide", "unit_of_measurement": "ppm"})
     await flow.async_step_air_quality({"mode": "measurement"})
     result = await flow.async_step_air_quality_sources(
         {"sources": ["sensor.pm", "sensor.co"], "unit": "μg/m³"}
@@ -229,7 +354,7 @@ async def test_flow_rejects_mixed_pollutants_before_calculation(hass):
     result = await flow.async_step_air_quality_sources(
         {"sources": ["sensor.co"], "unit": "ppm"}
     )
-    assert result["step_id"] == "air_quality_calculation"
+    assert result["step_id"] == "air_quality_logic"
     assert flow._aq_pending["quantity"] == "carbon_monoxide"
 
 
@@ -601,13 +726,17 @@ def test_split_steps_and_review_actions_have_translations(mode):
         & {key.schema for key in thresholds.schema}
     )
     if mode == "measurement":
-        assert len(thresholds.schema) == 11
+        assert len(thresholds.schema) == 12
         assert "unit" in {key.schema for key in sources.schema}
     root = Path(__file__).parents[2] / "custom_components/virtual_layer/translations"
     for language in ("en", "ko"):
         catalog = json.loads((root / f"{language}.json").read_text())
         for section, prefixes in (("config", ("",)), ("options", ("", "edit_"))):
             for prefix in prefixes:
+                calibration = catalog[section]["step"][prefix + "air_quality_logic"]["sections"]["calibration"]
+                for marker in aq.calculation_schema({}).schema:
+                    assert calibration["data"][marker.schema]
+                    assert calibration["data_description"][marker.schema]
                 for name, schema in (
                     ("air_quality_sources", sources),
                     ("air_quality_review", aq.review_schema(mode)),

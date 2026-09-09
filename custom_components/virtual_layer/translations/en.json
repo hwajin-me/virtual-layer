@@ -15,6 +15,7 @@
       "entity_id_used": "That entity ID is already in use. Choose a unique entity ID.",
       "invalid_domain_options": "Enter valid options for the selected entity domain.",
       "required": "This field is required.",
+      "incompatible_air_quality_source_unit": "The source unit is incompatible. m³ is volume, not concentration. Correct the source unit, or select a numeric attribute and declare its actual concentration unit.",
       "invalid_air_quality_logic": "Select valid sources and units. Enter five finite, non-negative, strictly increasing boundaries (up to 1e12) and six valid interval categories.",
       "air_quality_requires_new_entity": "A measurement sensor cannot be replaced by an air-quality category. Cancel to keep the original, then use Add entity to configure Air Quality separately on the same Device.",
       "mixed_air_quality_measurements": "Use sources matching the selected quantity. Do not combine different pollutants under the same thresholds; classify them separately, then combine categories."
@@ -738,6 +739,26 @@
           "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1."
+        },
+        "sections": {
+          "calibration": {
+            "name": "Advanced calibration",
+            "description": "Optional. Existing calibration values are preserved.",
+            "data": {
+              "reducer": "Measurement aggregation",
+              "boundary_rule": "Boundary equality rule",
+              "quadratic": "Quadratic coefficient a",
+              "multiplier": "Multiplier b",
+              "offset": "Offset c"
+            },
+            "data_description": {
+              "reducer": "Classify each source, or classify the mean, median, minimum or maximum of calibrated values once. Combine only the same physical quantity, never different pollutants.",
+              "boundary_rule": "Upper inclusive: x ≤ boundary stays in the lower interval. Lower inclusive: x ≥ boundary enters the next interval.",
+              "quadratic": "After unit conversion apply y = a×x² + b×x + c. Zero selects linear calibration. Negative or non-finite results count as missing.",
+              "multiplier": "One preserves scale. Example: a=0, b=1.1, c=-2 yields y=1.1×x-2.",
+              "offset": "Added after unit conversion and scaling. Zero leaves the offset unchanged."
+            }
+          }
         }
       },
       "air_quality_calculation": {
@@ -760,7 +781,7 @@
       },
       "air_quality_sources": {
         "title": "Air-quality input sources",
-        "description": "Choose entities, attributes, measurement units and missing-value policy. Source categories proceed to preview; measurements proceed to calibration and thresholds.",
+        "description": "Choose sources and units. Measurements proceed to thresholds, with optional advanced calibration on the same screen.",
         "data": {
           "sources": "Air-quality sources",
           "attribute": "Source attribute",
@@ -787,6 +808,68 @@
         "data_description": {
           "next_action": "Return to a settings step without losing values or refresh the preview. Continue does not save until you submit the final entity form."
         }
+      },
+      "air_quality_setup": {
+        "title": "Air-quality measurement setup",
+        "description": "Set sources, units and thresholds together. Category mappings, attributes and calibration are optional advanced settings. Thresholds are user-defined, not automatic health standards.",
+        "data": {
+          "sources": "Air-quality sources",
+          "unit": "Boundary unit",
+          "boundary_1": "Boundary 1",
+          "boundary_2": "Boundary 2",
+          "boundary_3": "Boundary 3",
+          "boundary_4": "Boundary 4",
+          "boundary_5": "Boundary 5"
+        },
+        "data_description": {
+          "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit. PM/VOC mass requires μg/m³ or mg/m³; AQI requires unitless; VOC volume ratio requires ppm/ppb. Gases accept mass units or ppm/ppb, but no conversion between mass and volume ratios is performed.",
+          "boundary_1": "Boundary between intervals 1 and 2; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_2": "Boundary between intervals 2 and 3; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_3": "Boundary between intervals 3 and 4; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_4": "Boundary between intervals 4 and 5; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_5": "Boundary between intervals 5 and 6; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule."
+        },
+        "sections": {
+          "advanced": {
+            "name": "Advanced settings",
+            "description": "Existing values are preserved. Change only what you need.",
+            "data": {
+              "attribute": "Source attribute",
+              "aggregation": "Combine source categories",
+              "missing": "Missing or invalid values",
+              "grade_1": "Interval 1 category",
+              "grade_2": "Interval 2 category",
+              "grade_3": "Interval 3 category",
+              "grade_4": "Interval 4 category",
+              "grade_5": "Interval 5 category",
+              "grade_6": "Interval 6 category",
+              "quantity": "Measured quantity",
+              "reducer": "Measurement aggregation",
+              "boundary_rule": "Boundary equality rule",
+              "quadratic": "Quadratic coefficient a",
+              "multiplier": "Multiplier b",
+              "offset": "Offset c"
+            },
+            "data_description": {
+              "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
+              "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
+              "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
+              "grade_1": "Category for interval 1. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_2": "Category for interval 2. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_3": "Category for interval 3. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_4": "Category for interval 4. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1.",
+              "reducer": "Classify each source, or classify the mean, median, minimum or maximum of calibrated values once. Combine only the same physical quantity, never different pollutants.",
+              "boundary_rule": "Upper inclusive: x ≤ boundary stays in the lower interval. Lower inclusive: x ≥ boundary enters the next interval.",
+              "quadratic": "After unit conversion apply y = a×x² + b×x + c. Zero selects linear calibration. Negative or non-finite results count as missing.",
+              "multiplier": "One preserves scale. Example: a=0, b=1.1, c=-2 yields y=1.1×x-2.",
+              "offset": "Added after unit conversion and scaling. Zero leaves the offset unchanged."
+            }
+          }
+        }
       }
     }
   },
@@ -806,6 +889,7 @@
       "no_devices": "There are no virtual devices to manage.",
       "no_entities": "This device does not have any virtual entities to edit.",
       "required": "This field is required.",
+      "incompatible_air_quality_source_unit": "The source unit is incompatible. m³ is volume, not concentration. Correct the source unit, or select a numeric attribute and declare its actual concentration unit.",
       "invalid_air_quality_logic": "Select valid sources and units. Enter five finite, non-negative, strictly increasing boundaries (up to 1e12) and six valid interval categories.",
       "air_quality_requires_new_entity": "A measurement sensor cannot be replaced by an air-quality category. Cancel to keep the original, then use Add entity to configure Air Quality separately on the same Device.",
       "mixed_air_quality_measurements": "Use sources matching the selected quantity. Do not combine different pollutants under the same thresholds; classify them separately, then combine categories."
@@ -2185,6 +2269,26 @@
           "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1."
+        },
+        "sections": {
+          "calibration": {
+            "name": "Advanced calibration",
+            "description": "Optional. Existing calibration values are preserved.",
+            "data": {
+              "reducer": "Measurement aggregation",
+              "boundary_rule": "Boundary equality rule",
+              "quadratic": "Quadratic coefficient a",
+              "multiplier": "Multiplier b",
+              "offset": "Offset c"
+            },
+            "data_description": {
+              "reducer": "Classify each source, or classify the mean, median, minimum or maximum of calibrated values once. Combine only the same physical quantity, never different pollutants.",
+              "boundary_rule": "Upper inclusive: x ≤ boundary stays in the lower interval. Lower inclusive: x ≥ boundary enters the next interval.",
+              "quadratic": "After unit conversion apply y = a×x² + b×x + c. Zero selects linear calibration. Negative or non-finite results count as missing.",
+              "multiplier": "One preserves scale. Example: a=0, b=1.1, c=-2 yields y=1.1×x-2.",
+              "offset": "Added after unit conversion and scaling. Zero leaves the offset unchanged."
+            }
+          }
         }
       },
       "edit_air_quality_logic": {
@@ -2229,6 +2333,26 @@
           "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
           "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1."
+        },
+        "sections": {
+          "calibration": {
+            "name": "Advanced calibration",
+            "description": "Optional. Existing calibration values are preserved.",
+            "data": {
+              "reducer": "Measurement aggregation",
+              "boundary_rule": "Boundary equality rule",
+              "quadratic": "Quadratic coefficient a",
+              "multiplier": "Multiplier b",
+              "offset": "Offset c"
+            },
+            "data_description": {
+              "reducer": "Classify each source, or classify the mean, median, minimum or maximum of calibrated values once. Combine only the same physical quantity, never different pollutants.",
+              "boundary_rule": "Upper inclusive: x ≤ boundary stays in the lower interval. Lower inclusive: x ≥ boundary enters the next interval.",
+              "quadratic": "After unit conversion apply y = a×x² + b×x + c. Zero selects linear calibration. Negative or non-finite results count as missing.",
+              "multiplier": "One preserves scale. Example: a=0, b=1.1, c=-2 yields y=1.1×x-2.",
+              "offset": "Added after unit conversion and scaling. Zero leaves the offset unchanged."
+            }
+          }
         }
       },
       "air_quality_calculation": {
@@ -2269,7 +2393,7 @@
       },
       "air_quality_sources": {
         "title": "Air-quality input sources",
-        "description": "Choose entities, attributes, measurement units and missing-value policy. Source categories proceed to preview; measurements proceed to calibration and thresholds.",
+        "description": "Choose sources and units. Measurements proceed to thresholds, with optional advanced calibration on the same screen.",
         "data": {
           "sources": "Air-quality sources",
           "attribute": "Source attribute",
@@ -2299,7 +2423,7 @@
       },
       "edit_air_quality_sources": {
         "title": "Air-quality input sources",
-        "description": "Choose entities, attributes, measurement units and missing-value policy. Source categories proceed to preview; measurements proceed to calibration and thresholds.",
+        "description": "Choose sources and units. Measurements proceed to thresholds, with optional advanced calibration on the same screen.",
         "data": {
           "sources": "Air-quality sources",
           "attribute": "Source attribute",
@@ -2325,6 +2449,140 @@
         },
         "data_description": {
           "next_action": "Return to a settings step without losing values or refresh the preview. Continue does not save until you submit the final entity form."
+        }
+      },
+      "air_quality_add_confirm": {
+        "title": "Keep measurement and add air quality",
+        "description": "Keep {entity_id} unchanged. Add a separate air-quality entity on the same Device using its measurement. Nothing is saved until the final entity form.",
+        "data": {
+          "confirm": "Continue to configure separate air quality"
+        },
+        "data_description": {
+          "confirm": "Check to continue. Submit unchecked to return to type selection without changes."
+        }
+      },
+      "air_quality_setup": {
+        "title": "Air-quality measurement setup",
+        "description": "Set sources, units and thresholds together. Category mappings, attributes and calibration are optional advanced settings. Thresholds are user-defined, not automatic health standards.",
+        "data": {
+          "sources": "Air-quality sources",
+          "unit": "Boundary unit",
+          "boundary_1": "Boundary 1",
+          "boundary_2": "Boundary 2",
+          "boundary_3": "Boundary 3",
+          "boundary_4": "Boundary 4",
+          "boundary_5": "Boundary 5"
+        },
+        "data_description": {
+          "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit. PM/VOC mass requires μg/m³ or mg/m³; AQI requires unitless; VOC volume ratio requires ppm/ppb. Gases accept mass units or ppm/ppb, but no conversion between mass and volume ratios is performed.",
+          "boundary_1": "Boundary between intervals 1 and 2; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_2": "Boundary between intervals 2 and 3; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_3": "Boundary between intervals 3 and 4; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_4": "Boundary between intervals 4 and 5; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_5": "Boundary between intervals 5 and 6; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule."
+        },
+        "sections": {
+          "advanced": {
+            "name": "Advanced settings",
+            "description": "Existing values are preserved. Change only what you need.",
+            "data": {
+              "attribute": "Source attribute",
+              "aggregation": "Combine source categories",
+              "missing": "Missing or invalid values",
+              "grade_1": "Interval 1 category",
+              "grade_2": "Interval 2 category",
+              "grade_3": "Interval 3 category",
+              "grade_4": "Interval 4 category",
+              "grade_5": "Interval 5 category",
+              "grade_6": "Interval 6 category",
+              "quantity": "Measured quantity",
+              "reducer": "Measurement aggregation",
+              "boundary_rule": "Boundary equality rule",
+              "quadratic": "Quadratic coefficient a",
+              "multiplier": "Multiplier b",
+              "offset": "Offset c"
+            },
+            "data_description": {
+              "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
+              "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
+              "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
+              "grade_1": "Category for interval 1. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_2": "Category for interval 2. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_3": "Category for interval 3. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_4": "Category for interval 4. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1.",
+              "reducer": "Classify each source, or classify the mean, median, minimum or maximum of calibrated values once. Combine only the same physical quantity, never different pollutants.",
+              "boundary_rule": "Upper inclusive: x ≤ boundary stays in the lower interval. Lower inclusive: x ≥ boundary enters the next interval.",
+              "quadratic": "After unit conversion apply y = a×x² + b×x + c. Zero selects linear calibration. Negative or non-finite results count as missing.",
+              "multiplier": "One preserves scale. Example: a=0, b=1.1, c=-2 yields y=1.1×x-2.",
+              "offset": "Added after unit conversion and scaling. Zero leaves the offset unchanged."
+            }
+          }
+        }
+      },
+      "edit_air_quality_setup": {
+        "title": "Air-quality measurement setup",
+        "description": "Set sources, units and thresholds together. Category mappings, attributes and calibration are optional advanced settings. Thresholds are user-defined, not automatic health standards.",
+        "data": {
+          "sources": "Air-quality sources",
+          "unit": "Boundary unit",
+          "boundary_1": "Boundary 1",
+          "boundary_2": "Boundary 2",
+          "boundary_3": "Boundary 3",
+          "boundary_4": "Boundary 4",
+          "boundary_5": "Boundary 5"
+        },
+        "data_description": {
+          "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit. PM/VOC mass requires μg/m³ or mg/m³; AQI requires unitless; VOC volume ratio requires ppm/ppb. Gases accept mass units or ppm/ppb, but no conversion between mass and volume ratios is performed.",
+          "boundary_1": "Boundary between intervals 1 and 2; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_2": "Boundary between intervals 2 and 3; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_3": "Boundary between intervals 3 and 4; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_4": "Boundary between intervals 4 and 5; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
+          "boundary_5": "Boundary between intervals 5 and 6; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule."
+        },
+        "sections": {
+          "advanced": {
+            "name": "Advanced settings",
+            "description": "Existing values are preserved. Change only what you need.",
+            "data": {
+              "attribute": "Source attribute",
+              "aggregation": "Combine source categories",
+              "missing": "Missing or invalid values",
+              "grade_1": "Interval 1 category",
+              "grade_2": "Interval 2 category",
+              "grade_3": "Interval 3 category",
+              "grade_4": "Interval 4 category",
+              "grade_5": "Interval 5 category",
+              "grade_6": "Interval 6 category",
+              "quantity": "Measured quantity",
+              "reducer": "Measurement aggregation",
+              "boundary_rule": "Boundary equality rule",
+              "quadratic": "Quadratic coefficient a",
+              "multiplier": "Multiplier b",
+              "offset": "Offset c"
+            },
+            "data_description": {
+              "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
+              "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
+              "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
+              "grade_1": "Category for interval 1. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_2": "Category for interval 2. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_3": "Category for interval 3. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_4": "Category for interval 4. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_5": "Category for interval 5. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "grade_6": "Category for interval 6. Repeated or reversed categories are allowed; interval 6 contains the largest values.",
+              "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1.",
+              "reducer": "Classify each source, or classify the mean, median, minimum or maximum of calibrated values once. Combine only the same physical quantity, never different pollutants.",
+              "boundary_rule": "Upper inclusive: x ≤ boundary stays in the lower interval. Lower inclusive: x ≥ boundary enters the next interval.",
+              "quadratic": "After unit conversion apply y = a×x² + b×x + c. Zero selects linear calibration. Negative or non-finite results count as missing.",
+              "multiplier": "One preserves scale. Example: a=0, b=1.1, c=-2 yields y=1.1×x-2.",
+              "offset": "Added after unit conversion and scaling. Zero leaves the offset unchanged."
+            }
+          }
         }
       }
     }
@@ -2477,7 +2735,7 @@
       "options": {
         "continue": "Continue to template editor",
         "refresh": "Refresh current result",
-        "rules": "Edit thresholds / grades",
+        "rules": "Edit settings",
         "sources": "Edit input sources",
         "calculation": "Edit calculation"
       }

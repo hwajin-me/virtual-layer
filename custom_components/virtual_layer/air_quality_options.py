@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from itertools import pairwise
 
 import voluptuous as vol
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import selector
 
@@ -247,15 +248,30 @@ def source_schema(mode, defaults):
     )
 
 
+def setup_schema(defaults):
+    """One measurement screen; only sources, unit and boundaries are expanded."""
+    basic = {"sources", "unit", *(f"boundary_{i}" for i in range(1, 6))}
+    fields = logic_schema("measurement", defaults).schema
+    advanced = {key: value for key, value in fields.items() if key.schema not in basic}
+    advanced.update(calculation_schema(defaults).schema)
+    return vol.Schema({
+        **{key: value for key, value in fields.items() if key.schema in basic},
+        vol.Optional("advanced", default=dict): section(vol.Schema(advanced), {"collapsed": True}),
+    })
+
+
 def threshold_schema(mode, defaults):
     keys = {"sources", "attribute", "aggregation", "missing", "unit", "quantity"}
-    return vol.Schema(
-        {
+    fields = {
             key: value
             for key, value in logic_schema(mode, defaults).schema.items()
             if key.schema not in keys
-        }
-    )
+    }
+    if mode == "measurement":
+        fields[vol.Optional("calibration", default=dict)] = section(
+            calculation_schema(defaults), {"collapsed": True}
+        )
+    return vol.Schema(fields)
 
 
 def normalize_sources(mode, values):
@@ -275,10 +291,8 @@ def normalize_sources(mode, values):
 
 def review_schema(mode):
     actions = ["continue", "refresh", "rules"]
-    if mode in ("source", "measurement"):
+    if mode == "source":
         actions.append("sources")
-    if mode == "measurement":
-        actions.append("calculation")
     if mode == "source":
         actions.remove("rules")
     return vol.Schema(

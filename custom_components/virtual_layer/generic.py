@@ -210,11 +210,25 @@ class GenericVirtualEntity(VirtualEntity, Entity):
                     and name != "event_type"
                 })
         self._attr_extra_state_attributes.update(domain_options)
+        if self._domain == "air_quality":
+            # Missing measurements are not readings. Remove stale output too,
+            # while retaining a real zero and allowing later values to return.
+            for name in GENERIC_NONNEGATIVE_TEMPLATE_PROPERTIES:
+                if name in domain_options and domain_options[name] is None:
+                    self._attr_extra_state_attributes.pop(name, None)
+            if "air_quality" in self._native_templates or "air_quality" in domain_options:
+                # A category has no concentration/volume unit or numeric class.
+                for name in ("unit_of_measurement", ATTR_DEVICE_CLASS, CONF_STATE_CLASS):
+                    self._attr_extra_state_attributes.pop(name, None)
+                self._attr_unit_of_measurement = None
 
     def set_state(self, value) -> None:
         self._attr_state = value
 
     def _apply_native_template_value(self, name: str, value) -> bool:
+        if (self._domain == "air_quality" and name == "unit_of_measurement"
+                and ("air_quality" in self._native_templates or "air_quality" in self._domain_options)):
+            value = None
         if self._domain == "air_quality" and name == "air_quality":
             if value is None:
                 value = "unknown"

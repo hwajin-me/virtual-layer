@@ -6140,6 +6140,10 @@ def _native_source_template(
     attributes = state.attributes
     source_platform = entity_id.split(".", 1)[0]
     platform = platform or source_platform
+    if platform == "air_quality" and property_name == "unit_of_measurement":
+        # Overall quality is categorical; never copy a source concentration
+        # (or a malformed volume unit) onto the category itself.
+        return "{{ none }}"
     if platform == "camera" and source_platform == "image":
         # A map timestamp is not camera power, and copying a source's file
         # attribute would bypass image conversion and the generated MJPEG feed.
@@ -10040,14 +10044,18 @@ class _AirQualityLogicFlow:
             source_ids = _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT))
             source_states = [self.hass.states.get(item) for item in source_ids]
             if level == "source" and source_states and all(
-                state is not None and state.attributes.get("device_class") in aq_options.QUANTITIES[1:]
+                state is not None and (
+                    state.attributes.get("device_class") in aq_options.QUANTITIES[1:]
+                    or (state.entity_id.split(".", 1)[0] in ("sensor", "number")
+                        and _source_state_is_number(state.entity_id, state))
+                )
                 for state in source_states
             ):
                 unit = source_states[0].attributes.get("unit_of_measurement") or "unitless"
                 unit = str(unit).replace("µ", "μ")
                 quantities = {state.attributes.get("device_class") for state in source_states}
                 recipe = {"mode": "measurement", "unit": unit if unit in aq_options.UNITS else "unitless",
-                          "quantity": next(iter(quantities)) if len(quantities) == 1 else "any"}
+                          "quantity": next(iter(quantities)) if len(quantities) == 1 and next(iter(quantities)) in aq_options.QUANTITIES[1:] else "any"}
             if edit and level == "source" and _native_template_mapping(
                 defaults.get(CONF_NATIVE_VALUE_TEMPLATES)
             ).get("air_quality"):
@@ -10065,6 +10073,8 @@ class _AirQualityLogicFlow:
                 self._aq_edit = edit
                 if mode == "custom":
                     return await self._aq_finish({"mode": "custom"})
+                if mode == "measurement":
+                    return await self._aq_setup_step()
                 if mode in ("source", "measurement"):
                     return await self._aq_sources_step()
                 return await self._aq_logic_step()
@@ -10072,6 +10082,42 @@ class _AirQualityLogicFlow:
             step_id="edit_air_quality" if edit else "air_quality",
             data_schema=aq_options.mode_schema(recipe["mode"]), errors=errors,
         )
+
+    async def _aq_setup_step(self, user_input=None):
+        """Validate the compact form using the same source and recipe rules."""
+        errors = {}
+        if user_input is not None:
+            try:
+                values = dict(user_input)
+                advanced = values.pop("advanced", {})
+                if not isinstance(advanced, Mapping):
+                    raise vol.Invalid("Invalid advanced settings")
+                values.update(advanced)
+                # Retain all input across validation errors, not just sources.
+                self._aq_pending.update(values)
+                self._aq_pending["thresholds"] = [values.get(f"boundary_{i}") for i in range(1, 6)]
+                self._aq_pending["levels"] = [values.get(f"grade_{i}", self._aq_pending.get("levels", aq_options.LEVELS)[i - 1]) for i in range(1, 7)]
+                result = await self._aq_sources_step(values)
+                errors = result.get("errors", {})
+                if not errors:
+                    # Retain the live quantity inferred by source validation.
+                    values["quantity"] = self._aq_pending.get("quantity", "any")
+                    result = await self._aq_logic_step(values)
+                    errors = result.get("errors", {})
+                    if not errors:
+                        return result
+            except (TypeError, ValueError, vol.Invalid):
+                errors = {"base": "invalid_air_quality_logic"}
+        return self.async_show_form(
+            step_id="edit_air_quality_setup" if self._aq_edit else "air_quality_setup",
+            data_schema=aq_options.setup_schema(self._aq_pending), errors=errors,
+        )
+
+    async def async_step_air_quality_setup(self, user_input=None):
+        return await self._aq_setup_step(user_input)
+
+    async def async_step_edit_air_quality_setup(self, user_input=None):
+        return await self._aq_setup_step(user_input)
 
     async def _aq_sources_step(self, user_input=None):
         errors = {}
@@ -10109,9 +10155,31 @@ class _AirQualityLogicFlow:
                             data_schema=aq_options.source_schema(mode, self._aq_pending),
                             errors={"base": "invalid_air_quality_logic"},
                         )
+                    unit_groups = {
+                        "unitless": {"", "AQI"} if sources["quantity"] in ("any", "aqi") else {""},
+                        "μg/m³": {"μg/m³", "mg/m³"},
+                        "mg/m³": {"μg/m³", "mg/m³"},
+                        "ppm": {"ppm", "ppb"},
+                        "ppb": {"ppm", "ppb"},
+                    }
+                    if any(
+                        str(state.attributes.get("unit_of_measurement") or "").replace("µ", "μ")
+                        not in unit_groups[sources["unit"]]
+                        for entity_id in sources["sources"]
+                        if (state := self.hass.states.get(entity_id)) is not None
+                        and state.state not in ("unknown", "unavailable")
+                    ):
+                        self._aq_pending.update(sources)
+                        return self.async_show_form(
+                            step_id="edit_air_quality_sources" if self._aq_edit else "air_quality_sources",
+                            data_schema=aq_options.source_schema(mode, self._aq_pending),
+                            errors={"base": "incompatible_air_quality_source_unit"},
+                        )
                 self._aq_pending.update(sources)
                 if mode == "measurement":
-                    return await self._aq_calculation_step()
+                    # Calibration is optional; keep saved coefficients intact.
+                    # It remains available from the preview's advanced action.
+                    return await self._aq_logic_step()
                 return await self._aq_review_step()
         return self.async_show_form(
             step_id="edit_air_quality_sources" if self._aq_edit else "air_quality_sources",
@@ -10132,10 +10200,14 @@ class _AirQualityLogicFlow:
             if action == "continue":
                 return await self._aq_finish(recipe)
             if action == "sources" and recipe["mode"] in ("source", "measurement"):
+                if recipe["mode"] == "measurement":
+                    return await self._aq_setup_step()
                 return await self._aq_sources_step()
             if action == "calculation" and recipe["mode"] == "measurement":
                 return await self._aq_calculation_step()
             if action == "rules" and recipe["mode"] in ("fixed", "measurement"):
+                if recipe["mode"] == "measurement":
+                    return await self._aq_setup_step()
                 return await self._aq_logic_step()
             if action != "refresh":
                 errors["base"] = "invalid_air_quality_logic"
@@ -10183,6 +10255,12 @@ class _AirQualityLogicFlow:
         errors = {}
         if user_input is not None:
             try:
+                user_input = dict(user_input)
+                calibration = user_input.pop("calibration", {})
+                if not isinstance(calibration, Mapping):
+                    raise vol.Invalid("Invalid calibration section")
+                if pending["mode"] == "measurement" and calibration:
+                    user_input.update(aq_options.normalize_calculation({**pending, **calibration}))
                 recipe = aq_options.recipe_from_form(pending["mode"], {**pending, **user_input})
                 # Compile before allowing the template form to open.
                 template = aq_options.generate(recipe)
@@ -11631,11 +11709,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
         if user_input is not None:
             target_platform = user_input[CONF_TARGET_ENTITY_TYPE]
             if original_platform in ("sensor", "number") and target_platform == "air_quality":
-                return self.async_show_form(
-                    step_id="edit_entity_type",
-                    data_schema=_entity_type_schema(self._edit_source_entities, inferred_platform, current_platform),
-                    errors={"base": "air_quality_requires_new_entity"},
-                )
+                return await self.async_step_air_quality_add_confirm()
             try:
                 self._reference_defaults = _reference_entity_defaults(
                     self.hass,
@@ -11682,6 +11756,41 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 self._edit_target_platform or current_platform,
             ),
             errors=errors,
+        )
+
+    async def async_step_air_quality_add_confirm(self, user_input=None):
+        """Branch an edit into a new category without replacing its measurement."""
+        errors = {}
+        try:
+            self._resolve_edit_selection()
+            entity = _get_ui_entity(self.config_entry.options, self._edit_device_name, self._edit_index)
+            source_id = _virtual_entity_id(entity)
+            if entity.get(CONF_PLATFORM) not in ("sensor", "number") or not source_id:
+                raise InvalidEntitySelection
+        except InvalidEntitySelection:
+            return await self.async_step_select_entity()
+        if user_input is not None:
+            if not user_input.get("confirm", False):
+                return await self.async_step_edit_entity_type()
+            try:
+                defaults = _reference_entity_defaults(self.hass, [source_id], "air_quality", ("air_quality",))
+            except InvalidEntityReference:
+                errors["base"] = "source_unavailable"
+            else:
+                self._reference_defaults = defaults
+                defaults = _with_existing_device_defaults(defaults, self.config_entry.options, self._edit_device_name)
+                defaults[CONF_ENTITY_NAME] = f"{entity.get(CONF_NAME, source_id)} - Air Quality"
+                defaults[ATTR_ENTITY_ID] = "air_quality." + source_id.split(".", 1)[1]
+                self._entity_defaults = _complete_domain_form_defaults(defaults)
+                self._add_source_entities = [source_id]
+                self._add_use_template_helper = True
+                self._edit_source_entities = None
+                self._aq_completed = None
+                return await self.async_step_air_quality()
+        return self.async_show_form(
+            step_id="air_quality_add_confirm",
+            data_schema=vol.Schema({vol.Required("confirm", default=False): selector.BooleanSelector()}),
+            description_placeholders={"entity_id": source_id}, errors=errors,
         )
 
     async def async_step_edit_sensor_conversion(self, user_input=None):
@@ -12028,6 +12137,9 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 user_input,
                 self._entity_defaults,
             )
+        if (user_input is not None and user_input.get(CONF_PLATFORM) == "air_quality"
+                and (self._edit_entity_snapshot or {}).get(CONF_PLATFORM) in ("sensor", "number")):
+            return await self.async_step_air_quality_add_confirm()
         if user_input is not None and self._aq_needs_setup(user_input, True):
             self._entity_defaults = _complete_domain_form_defaults(user_input)
             return await self.async_step_edit_air_quality()
