@@ -10,6 +10,7 @@ docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
   --entrypoint python \
   homeassistant - <<'PY'
 import asyncio
+import copy
 import os
 import tempfile
 from threading import get_ident
@@ -27,7 +28,7 @@ from homeassistant.components.light import ColorMode, LightEntityFeature
 from homeassistant.components.sensor import DEVICE_CLASS_UNITS
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import __version__ as HA_VERSION
-from homeassistant.core import HomeAssistant, HassJob
+from homeassistant.core import HomeAssistant, HassJob, State
 from homeassistant.util import dt as dt_util
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
@@ -398,6 +399,39 @@ async def test_tracker_timer_dispatch(hass):
             assert threads == [hass.loop_thread_id], (polygon, threads)
 
 
+async def test_source_startup_grace(hass):
+    """Validate the startup grace callback against the real HA entity API."""
+    hass.states.async_set("sensor.grace_source", "unknown")
+    entity = VirtualSensor(SENSOR_SCHEMA({
+        "name": "Grace", "entity_id": "sensor.grace_virtual", "persistent": True,
+        "source_entities": ["sensor.grace_source"],
+        "value_template": "{{ states('sensor.grace_source') }}",
+        "availability_template": "{{ has_value('sensor.grace_source') }}",
+    }), False)
+    entity.hass = hass
+    callbacks = {}
+    def schedule(_hass, delay, action):
+        callbacks[delay] = action
+        return lambda: None
+    with (
+        patch.object(entity, "async_get_last_state", AsyncMock(return_value=State(entity.entity_id, "42"))),
+        patch.object(entity, "async_write_ha_state"),
+        patch.object(entity, "async_schedule_update_ha_state"),
+        patch("custom_components.virtual_layer.entity.async_call_later", side_effect=schedule),
+    ):
+        await entity.async_added_to_hass()
+        assert entity.native_value == "42"
+        assert entity.available
+        assert 180 in callbacks
+        callbacks[180](None)
+        assert not entity.available
+        hass.states.async_set("sensor.grace_source", "45")
+        await hass.async_block_till_done()
+        assert entity.available
+        assert str(entity.native_value) == "45"
+        await entity.async_will_remove_from_hass()
+
+
 async def test_image_camera_encoding(hass):
     """Verify image aliases and the container's H.264 encoder with real bytes."""
     output = BytesIO()
@@ -450,6 +484,7 @@ async def test_config_flow_create_modify_runtime():
         assert await async_setup_component(hass, COMPONENT_DOMAIN, {})
         await hass.async_start()
         await test_tracker_timer_dispatch(hass)
+        await test_source_startup_grace(hass)
         await test_image_camera_encoding(hass)
 
         source_ids = ["sensor.docker_flow_pm25_a", "sensor.docker_flow_pm25_b"]
@@ -514,6 +549,26 @@ async def test_config_flow_create_modify_runtime():
         assert created_state.attributes["device_class"] == "pm25"
         assert created_state.attributes["state_class"] == "measurement"
         assert created_state.attributes["unit_of_measurement"] == "μg/m³"
+
+        # Saving unrelated entity changes must preserve the running source
+        # template and its state, including when a new platform is introduced.
+        original_entity = hass.data["sensor"].get_entity("sensor.docker_flow_pm25")
+        saved_options = copy.deepcopy(dict(entry.options))
+        device_name = next(iter(saved_options["devices"]))
+        added = {"platform": "switch", "name": "Incremental Switch",
+                 "entity_id": "switch.incremental", "entity_key": "incremental",
+                 "initial_value": "off", "persistent": False}
+        for records in ([added], [{**added, "initial_value": "on"}], []):
+            options = copy.deepcopy(saved_options)
+            options["devices"][device_name].extend(records)
+            hass.config_entries.async_update_entry(entry, options=options)
+            await hass.async_block_till_done()
+            assert hass.data["sensor"].get_entity("sensor.docker_flow_pm25") is original_entity
+            assert hass.states.get("sensor.docker_flow_pm25") is created_state
+            if records:
+                assert hass.states.get("switch.incremental").state == records[0]["initial_value"]
+            else:
+                assert hass.states.get("switch.incremental") is None
 
         registry = er.async_get(hass)
         created_registry_entry = registry.async_get("sensor.docker_flow_pm25")

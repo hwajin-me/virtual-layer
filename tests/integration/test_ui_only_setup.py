@@ -8283,6 +8283,76 @@ async def test_state_only_reload_removes_attributes_deleted_from_configuration(
     assert restored.attributes[ATTR_VIRTUAL_ATTRIBUTES] == []
 
 
+@pytest.mark.parametrize("domain", ["sensor", "tag"])
+@pytest.mark.parametrize("bad_source", ["unknown", "unavailable", None])
+@pytest.mark.parametrize("availability_template", [False, True])
+@pytest.mark.parametrize("recover_during_grace", [False, True])
+async def test_restored_source_grace_expires_after_three_minutes(
+    hass, tmp_path, monkeypatch, freezer, domain, bad_source, availability_template,
+    recover_during_grace,
+):
+    from datetime import timedelta
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file",
+                        lambda hass: str(tmp_path / "startup.meta.json"))
+    source_id = "sensor.startup_source"
+    entity_id = f"{domain}.startup_restored"
+    hass.states.async_set(source_id, "42")
+    config = {
+        CONF_PLATFORM: domain, CONF_NAME: "Startup restored",
+        ATTR_ENTITY_ID: entity_id, CONF_PERSISTENT: True,
+        CONF_SOURCE_ENTITIES: [source_id],
+        CONF_VALUE_TEMPLATE: "{{ states('sensor.startup_source') }}",
+    }
+    if availability_template:
+        config[CONF_AVAILABILITY_TEMPLATE] = "{{ has_value('sensor.startup_source') }}"
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "startup"}, options={ATTR_DEVICES: {"Device": [config]}})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "42"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    if bad_source is None:
+        hass.states.async_remove(source_id)
+    else:
+        hass.states.async_set(source_id, bad_source)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "42"
+
+    held_value = "42"
+    if recover_during_grace:
+        freezer.tick(timedelta(seconds=60))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        hass.states.async_set(source_id, "44")
+        await hass.async_block_till_done()
+        assert hass.states.get(entity_id).state == "44"
+        hass.states.async_set(source_id, "unknown")
+        await hass.async_block_till_done()
+        held_value = "44"
+    freezer.tick(timedelta(seconds=119 if recover_during_grace else 179))
+    async_fire_time_changed(hass, dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == held_value
+    # A new bad-source event must not restart the three-minute countdown.
+    hass.states.async_set(source_id, "unknown", {"retry": 1})
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == held_value
+    freezer.tick(timedelta(seconds=1))
+    async_fire_time_changed(hass, dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == (
+        "unavailable" if availability_template and domain == "sensor" else "unknown"
+    )
+    hass.states.async_set(source_id, "45")
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "45"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 def test_all_state_only_domains_preserve_restored_state_until_sources_ready(hass):
     """State-only domains must receive the same startup hold as platforms."""
     source_entity_id = "sensor.state_only_startup_source"
@@ -9915,6 +9985,70 @@ async def test_air_quality_bridge_companion_updates_reloads_and_is_removed(hass,
     await hass.async_block_till_done()
     assert registry.async_get(bridge_id) is None
     assert hass.states.get(bridge_id) is None
+
+
+@pytest.mark.parametrize("changed_domain", ["sensor", "switch", "tag"])
+async def test_options_updates_preserve_unrelated_entities(hass, tmp_path, monkeypatch, changed_domain):
+    """CRUD must never unload unrelated native or state-only entities."""
+    from copy import deepcopy
+    from homeassistant.const import EVENT_STATE_CHANGED
+
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file",
+                        lambda hass: str(tmp_path / "incremental.meta.json"))
+    hass.states.async_set("sensor.incremental_source", "12")
+    stable = [
+        {CONF_PLATFORM: domain, CONF_NAME: f"Stable {domain}",
+         ATTR_ENTITY_ID: f"{domain}.stable_{domain}", ATTR_ENTITY_KEY: f"stable-{domain}",
+         CONF_INITIAL_VALUE: "12" if domain == "sensor" else "sunny",
+         CONF_VALUE_TEMPLATE: "{{ states('sensor.incremental_source') }}",
+         CONF_SOURCE_ENTITIES: ["sensor.incremental_source"],
+         CONF_INITIAL_AVAILABILITY: True, CONF_PERSISTENT: False}
+        for domain in ("sensor", "tag")
+    ]
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "incremental"},
+        options={ATTR_DEVICES: {"Device": stable}})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    native = hass.data["sensor"].get_entity("sensor.stable_sensor")
+    hass.states.async_set("tag.stable_tag", "runtime")
+    await hass.async_block_till_done()
+    before = {eid: hass.states.get(eid) for eid in (
+        "sensor.stable_sensor", "tag.stable_tag", "sensor.stable_sensor_info", "sensor.stable_tag_info")}
+    events = []
+    unsub = hass.bus.async_listen(EVENT_STATE_CHANGED, lambda event: events.append(event))
+    changed = {CONF_PLATFORM: changed_domain, CONF_NAME: "Changed",
+        ATTR_ENTITY_ID: f"{changed_domain}.changed", ATTR_ENTITY_KEY: "changed",
+        CONF_INITIAL_VALUE: "on" if changed_domain == "switch" else "1",
+        CONF_INITIAL_AVAILABILITY: True,
+        CONF_PERSISTENT: False}
+    with patch.object(hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload) as reload:
+        edited = {**changed, CONF_INITIAL_VALUE: "off" if changed_domain == "switch" else "0"}
+        for records in ([changed], [edited], [], [changed], []):
+            options = {ATTR_DEVICES: {"Device": deepcopy(stable + records)}}
+            hass.config_entries.async_update_entry(entry, options=options)
+            await hass.async_block_till_done()
+            assert hass.data["sensor"].get_entity("sensor.stable_sensor") is native
+            for eid, state in before.items():
+                assert hass.states.get(eid) is state
+            assert not any(event.data["entity_id"] in before for event in events)
+            if records:
+                assert hass.states.get(f"{changed_domain}.changed").state == (
+                    records[0][CONF_INITIAL_VALUE]
+                )
+            else:
+                assert hass.states.get(f"{changed_domain}.changed") is None
+                assert hass.states.get("sensor.changed_info") is None
+        reload.assert_not_called()
+    unsub()
+    hass.states.async_set("sensor.incremental_source", "25")
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.stable_sensor").state == "25"
+    assert hass.states.get("tag.stable_tag").state == "25"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("tag.stable_tag") is None
 
 
 async def test_air_quality_uses_a_dedicated_matter_configuration_step(hass):

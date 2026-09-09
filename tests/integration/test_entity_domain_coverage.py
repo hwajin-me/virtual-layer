@@ -341,6 +341,25 @@ async def test_real_config_entry_loads_every_supported_domain(
     assert not missing_domains, f"Domains missing runtime states: {missing_domains}"
     assert "Unable to render native template" not in caplog.text
 
+    # Exercise incremental replacement on every advertised platform, including
+    # platforms whose constructors require special native schemas.
+    edited_options = copy.deepcopy(dict(entry.options))
+    previous_states = {
+        domain: hass.states.get(f"{domain}.{domain}_entity")
+        for domain in VIRTUAL_ENTITY_DOMAINS
+    }
+    for config in edited_options[ATTR_DEVICES]["All Domains Device"]:
+        config["icon"] = "mdi:test-tube"
+    hass.config_entries.async_update_entry(entry, options=edited_options)
+    await hass.async_block_till_done()
+    for domain in VIRTUAL_ENTITY_DOMAINS:
+        state = hass.states.get(f"{domain}.{domain}_entity")
+        assert state is not None
+        assert state is not previous_states[domain]
+        if domain not in STATE_ONLY_ENTITY_DOMAINS:
+            assert state.attributes.get("icon") == "mdi:test-tube", domain
+    assert "already used by" not in caplog.text
+
     entity_registry = er.async_get(hass)
     device_registry = dr.async_get(hass)
     registered_device_ids = set()

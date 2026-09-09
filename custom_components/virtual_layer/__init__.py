@@ -9,6 +9,7 @@ import inspect
 import logging
 import math
 from collections.abc import Mapping
+from contextvars import ContextVar
 from datetime import timedelta
 
 import homeassistant.helpers.area_registry as ar
@@ -18,7 +19,7 @@ import homeassistant.helpers.entity_registry as er
 import homeassistant.loader as loader
 import voluptuous as vol
 from homeassistant.auth.permissions.const import POLICY_CONTROL
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ICON,
@@ -29,6 +30,7 @@ from homeassistant.const import (
 from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, Unauthorized, UnknownUser
 from homeassistant.helpers.entity import async_generate_entity_id
+from homeassistant.helpers.entity_platform import async_get_platforms
 from homeassistant.helpers.event import (
     TrackTemplate,
     async_call_later,
@@ -45,11 +47,30 @@ from .cfg import (
     _delete_meta_data,
 )
 from .const import *
-from .entity import repair_legacy_enum_template
+from .entity import STARTUP_SOURCE_GRACE_ALLOWED, repair_legacy_enum_template
 
 _LOGGER = logging.getLogger(__name__)
 _MISSING = object()
 _MAX_SERVICE_PAYLOAD_DEPTH = 100
+_ENTITY_SETUP_CONFIGS = ContextVar("virtual_layer_setup_configs", default=None)
+
+
+def _config_comparison(value):
+    """Compare validated templates by content rather than instance identity."""
+    if isinstance(value, Template):
+        return value.template
+    if isinstance(value, Mapping):
+        return {key: _config_comparison(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_config_comparison(item) for item in value]
+    return copy.deepcopy(value)
+
+
+async def _async_update_options(hass, entry):
+    """Serialize incremental updates without unloading unrelated entities."""
+    async with entry.setup_lock:
+        if entry.state is ConfigEntryState.LOADED:
+            await async_setup_entry(hass, entry, incremental=True)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(COMPONENT_DOMAIN)
 
@@ -175,6 +196,7 @@ _STATE_ONLY_RESTORE_PROXIES_DATA = f"{COMPONENT_DOMAIN}_state_only_restore_proxi
 _STATE_ONLY_RESTORE_WAITING_SOURCES_DATA = (
     f"{COMPONENT_DOMAIN}_state_only_restore_waiting_sources"
 )
+_STATE_ONLY_SOURCE_GRACE_DATA = f"{COMPONENT_DOMAIN}_state_only_source_grace"
 _ENTITY_ID_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_entity_id_guard_listeners"
 _DEVICE_METADATA_GUARD_LISTENERS_DATA = f"{COMPONENT_DOMAIN}_device_metadata_guard_listeners"
 _GENERATED_NAME_SUFFIX = "_virtual_layer_generated_name_suffix"
@@ -328,7 +350,9 @@ async def async_setup(hass, config):
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, *, incremental=False
+) -> bool:
     _LOGGER.debug("Setting up Virtual Layer config entry %s", entry.entry_id)
 
     _async_ensure_runtime_data(hass)
@@ -365,6 +389,51 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug("creating new cfg")
     vcfg = BlendedCfg(hass, entry.data, entry.options, entry)
     await vcfg.async_load()
+
+    _, previous_group = _runtime_group_for_entry(hass, entry)
+    previous_configs = (previous_group or {}).get("config_snapshot", {})
+    # Entity constructors and registry guards may mutate runtime configs. Keep
+    # a separate normalized snapshot so those mutations do not trigger reloads.
+    snapshot = _config_comparison(vcfg.entities)
+    additions = vcfg.entities
+    loaded_platforms = {
+        platform.domain: platform
+        for platform in async_get_platforms(hass, COMPONENT_DOMAIN)
+        if platform.config_entry is entry
+    } if incremental else {}
+    if incremental:
+        _async_remove_entity_id_guard(hass, entry.entry_id)
+        _async_remove_device_metadata_guard(hass, entry.entry_id)
+        old_by_id = {
+            entity[ATTR_UNIQUE_ID]: entity
+            for records in previous_configs.values() for entity in records
+        }
+        new_by_id = {
+            entity[ATTR_UNIQUE_ID]: entity
+            for records in snapshot.values() for entity in records
+        }
+        changed = {
+            uid for uid in old_by_id.keys() | new_by_id.keys()
+            if old_by_id.get(uid) != new_by_id.get(uid)
+        }
+        removed = {
+            domain: [entity for entity in records
+                     if entity[ATTR_UNIQUE_ID] in changed]
+            for domain, records in previous_configs.items()
+        }
+        additions = {
+            domain: [entity for entity in records
+                     if entity[ATTR_UNIQUE_ID] in changed]
+            for domain, records in vcfg.entities.items()
+        }
+        _async_unload_state_only_entities(hass, entry, removed, partial=True)
+        for domain, records in removed.items():
+            if (platform := loaded_platforms.get(domain)) is None:
+                continue
+            for config in records:
+                for entity in list(platform.entities.values()):
+                    if entity.unique_id == config[ATTR_UNIQUE_ID]:
+                        await platform.async_remove_entity(entity.entity_id)
 
     # create the devices.
     _LOGGER.debug("creating the devices")
@@ -408,24 +477,45 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ATTR_CONFIG_ENTRY_ID: entry.entry_id,
             ATTR_ENTITIES: vcfg.entities,
             ATTR_DEVICES: vcfg.devices,
+            "config_snapshot": snapshot,
+            "loaded_platforms": list(loaded_platforms.keys() | set(
+                _entry_platforms_from_entities(vcfg.entities)
+            )),
         }
     })
     if previous_group_name != configured_group_name:
         hass.data[COMPONENT_DOMAIN].pop(previous_group_name, None)
     _LOGGER.debug("Updated runtime data for Device group %s", configured_group_name)
-    _async_setup_state_only_entities(hass, entry, vcfg.entities)
+    _async_setup_state_only_entities(hass, entry, additions, partial=incremental)
 
     # Create the entities.
     _LOGGER.debug("creating the entities")
-    platforms = _entry_platforms_from_entities(vcfg.entities)
+    platforms = _entry_platforms_from_entities(additions)
     platforms_loaded = False
     try:
         if platforms:
             await _async_preload_entry_platforms(hass, entry, platforms)
-            await hass.config_entries.async_forward_entry_setups(entry, platforms)
+            token = _ENTITY_SETUP_CONFIGS.set((configured_group_name, additions))
+            grace_token = STARTUP_SOURCE_GRACE_ALLOWED.set(not incremental)
+            try:
+                for domain in platforms:
+                    if (platform := loaded_platforms.get(domain)) is not None:
+                        pending = []
+
+                        def add_entities(entities, update_before_add=False):
+                            pending.append((list(entities), update_before_add))
+
+                        await platform.platform.async_setup_entry(hass, entry, add_entities)
+                        for entities, update in pending:
+                            await platform.async_add_entities(entities, update)
+                    else:
+                        await hass.config_entries.async_forward_entry_setups(entry, [domain])
+            finally:
+                STARTUP_SOURCE_GRACE_ALLOWED.reset(grace_token)
+                _ENTITY_SETUP_CONFIGS.reset(token)
         platforms_loaded = True
     finally:
-        if not platforms_loaded:
+        if not platforms_loaded and not incremental:
             _async_remove_entity_id_guard(hass, entry.entry_id)
             _async_remove_device_metadata_guard(hass, entry.entry_id)
             _async_unload_state_only_entities(hass, entry, vcfg.entities)
@@ -438,6 +528,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Install service handlers.
     _async_register_virtual_services(hass)
 
+    if not incremental:
+        entry.async_on_unload(entry.add_update_listener(_async_update_options))
+
     return True
 
 
@@ -447,7 +540,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # _LOGGER.debug(f"before hass={hass.data[COMPONENT_DOMAIN]}")
     _runtime_group_name, group_data = _runtime_group_for_entry(hass, entry)
     group_data = group_data or {}
-    platforms = _entry_platforms_from_entities(group_data.get(ATTR_ENTITIES, {}))
+    platforms = group_data.get("loaded_platforms", _entry_platforms_from_entities(
+        group_data.get(ATTR_ENTITIES, {})
+    ))
     unload_ok = True
     if platforms:
         unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
@@ -1002,6 +1097,8 @@ def _async_setup_device_metadata_guard(hass, entry, devices) -> None:
 
 
 def get_entity_configs(hass, group_name, domain):
+    if (setup := _ENTITY_SETUP_CONFIGS.get()) is not None and setup[0] == group_name:
+        return setup[1].get(domain, [])
     return hass.data.get(COMPONENT_DOMAIN, {}).get(group_name, {}).get(ATTR_ENTITIES, {}).get(domain, [])
 
 
@@ -1060,11 +1157,12 @@ def _state_only_managed_attribute_names(entity) -> set[str]:
 
 
 @callback
-def _async_setup_state_only_entities(hass, entry, entities) -> None:
+def _async_setup_state_only_entities(hass, entry, entities, *, partial=False) -> None:
     if not isinstance(entities, Mapping):
         return
-    _async_remove_state_only_template_listeners(hass, entry.entry_id)
-    _async_remove_state_only_restore_proxies(hass, entry.entry_id)
+    if not partial:
+        _async_remove_state_only_template_listeners(hass, entry.entry_id)
+        _async_remove_state_only_restore_proxies(hass, entry.entry_id)
     for domain in STATE_ONLY_ENTITY_DOMAINS:
         for entity in entities.get(domain, []):
             if not isinstance(entity, Mapping):
@@ -1072,9 +1170,10 @@ def _async_setup_state_only_entities(hass, entry, entities) -> None:
             entity_id = _async_register_state_only_entity(hass, entry, entity)
             if entity_id is None:
                 continue
+            stored = async_get_restore_state(hass).last_states.get(entity_id)
             restored = (
                 entity.get(CONF_PERSISTENT, DEFAULT_PERSISTENT)
-                and entity_id in async_get_restore_state(hass).last_states
+                and stored is not None
             )
             state_value, attributes = _state_only_initial_state(hass, entity)
             hass.states.async_set(
@@ -1082,28 +1181,43 @@ def _async_setup_state_only_entities(hass, entry, entities) -> None:
                 state_value,
                 attributes,
             )
-            if restored and _state_only_restore_sources_pending(hass, entity):
+            if not partial and restored and str(stored.state.state).strip().lower() not in {
+                "", "none", "unknown", STATE_UNAVAILABLE,
+            }:
                 hass.data.setdefault(
-                    _STATE_ONLY_RESTORE_WAITING_SOURCES_DATA, set()
+                    _STATE_ONLY_SOURCE_GRACE_DATA, set()
                 ).add(entity_id)
+                if _state_only_restore_sources_pending(hass, entity):
+                    hass.data.setdefault(
+                        _STATE_ONLY_RESTORE_WAITING_SOURCES_DATA, set()
+                    ).add(entity_id)
             _async_register_state_only_restore_proxy(hass, entry.entry_id, entity)
             _async_setup_state_only_templates(hass, entry, entity)
 
 
 @callback
-def _async_unload_state_only_entities(hass, entry, entities) -> None:
-    _async_remove_state_only_template_listeners(hass, entry.entry_id)
-    _async_remove_state_only_restore_proxies(hass, entry.entry_id)
+def _async_unload_state_only_entities(hass, entry, entities, *, partial=False) -> None:
+    entity_ids = {
+        entity[ATTR_ENTITY_ID] for domain in STATE_ONLY_ENTITY_DOMAINS
+        for entity in entities.get(domain, []) if isinstance(entity, Mapping)
+        and entity.get(ATTR_ENTITY_ID)
+    } if partial else None
+    _async_remove_state_only_template_listeners(hass, entry.entry_id, entity_ids)
+    _async_remove_state_only_restore_proxies(hass, entry.entry_id, entity_ids)
     if not isinstance(entities, Mapping):
         return
     waiting = hass.data.get(_STATE_ONLY_RESTORE_WAITING_SOURCES_DATA, set())
+    grace = hass.data.get(_STATE_ONLY_SOURCE_GRACE_DATA, set())
     for domain in STATE_ONLY_ENTITY_DOMAINS:
         for entity in entities.get(domain, []):
             if isinstance(entity, Mapping) and entity.get(ATTR_ENTITY_ID):
                 waiting.discard(entity[ATTR_ENTITY_ID])
+                grace.discard(entity[ATTR_ENTITY_ID])
                 hass.states.async_remove(entity[ATTR_ENTITY_ID])
     if not waiting:
         hass.data.pop(_STATE_ONLY_RESTORE_WAITING_SOURCES_DATA, None)
+    if not grace:
+        hass.data.pop(_STATE_ONLY_SOURCE_GRACE_DATA, None)
 
 
 def _state_only_initial_state(hass, entity) -> tuple[object, dict]:
@@ -1164,10 +1278,14 @@ def _async_register_state_only_restore_proxy(hass, entry_id, entity) -> None:
 
 
 @callback
-def _async_remove_state_only_restore_proxies(hass, entry_id) -> None:
+def _async_remove_state_only_restore_proxies(hass, entry_id, entity_ids=None) -> None:
     """Snapshot and unregister state-only restore proxies before removal."""
     entry_proxies = hass.data.get(_STATE_ONLY_RESTORE_PROXIES_DATA)
-    proxies = entry_proxies.pop(entry_id, {}) if entry_proxies else {}
+    proxies = entry_proxies.get(entry_id, {}) if entry_proxies else {}
+    proxies = {key: proxies.pop(key) for key in list(proxies)
+               if entity_ids is None or key in entity_ids}
+    if entry_proxies is not None and not entry_proxies.get(entry_id):
+        entry_proxies.pop(entry_id, None)
     restore_data = async_get_restore_state(hass)
     for entity_id, proxy in proxies.items():
         if restore_data.entities.get(entity_id) is proxy:
@@ -1181,11 +1299,15 @@ def _async_remove_state_only_restore_proxies(hass, entry_id) -> None:
 
 
 @callback
-def _async_remove_state_only_template_listeners(hass, entry_id) -> None:
+def _async_remove_state_only_template_listeners(hass, entry_id, entity_ids=None) -> None:
     entry_listeners = hass.data.get(_STATE_ONLY_TEMPLATE_LISTENERS_DATA)
-    listeners = entry_listeners.pop(entry_id, []) if entry_listeners else []
-    for remove_listener in listeners:
-        remove_listener()
+    listeners = entry_listeners.get(entry_id, {}) if entry_listeners else {}
+    for entity_id in list(listeners):
+        if entity_ids is None or entity_id in entity_ids:
+            for remove_listener in listeners.pop(entity_id):
+                remove_listener()
+    if entry_listeners is not None and not listeners:
+        entry_listeners.pop(entry_id, None)
     if entry_listeners == {}:
         hass.data.pop(_STATE_ONLY_TEMPLATE_LISTENERS_DATA, None)
 
@@ -1407,6 +1529,12 @@ def _state_only_restore_sources_pending(hass, entity) -> bool:
 def _state_only_restore_waiting_for_sources(hass, entity) -> bool:
     """Clear a state-only startup hold when its sources have all published."""
     entity_id = entity.get(ATTR_ENTITY_ID)
+    if entity_id in hass.data.get(_STATE_ONLY_SOURCE_GRACE_DATA, set()):
+        if _state_only_restore_sources_pending(hass, entity):
+            hass.data.setdefault(
+                _STATE_ONLY_RESTORE_WAITING_SOURCES_DATA, set()
+            ).add(entity_id)
+            return True
     waiting = hass.data.get(_STATE_ONLY_RESTORE_WAITING_SOURCES_DATA)
     if not entity_id or not isinstance(waiting, set) or entity_id not in waiting:
         return False
@@ -1423,6 +1551,9 @@ def _async_apply_state_only_templates(hass, entity) -> None:
     entity_id = entity.get(ATTR_ENTITY_ID)
     state = hass.states.get(entity_id) if entity_id else None
     if state is None:
+        return
+
+    if _state_only_restore_waiting_for_sources(hass, entity):
         return
 
     value = state.state
@@ -1770,7 +1901,32 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
 
     listeners = hass.data.setdefault(
         _STATE_ONLY_TEMPLATE_LISTENERS_DATA, {}
-    ).setdefault(entry.entry_id, [])
+    ).setdefault(entry.entry_id, {}).setdefault(entity_id, [])
+
+    if entity_id in hass.data.get(_STATE_ONLY_SOURCE_GRACE_DATA, set()):
+        @callback
+        def _expire_source_grace(_now):
+            for key in (_STATE_ONLY_SOURCE_GRACE_DATA, _STATE_ONLY_RESTORE_WAITING_SOURCES_DATA):
+                remaining = hass.data.get(key, set())
+                remaining.discard(entity_id)
+                if not remaining:
+                    hass.data.pop(key, None)
+            _async_apply_state_only_templates(hass, entity)
+
+            # State-only entities do not have Entity.available to translate a
+            # failed availability template into a missing state. Do not leave
+            # the restored value visible indefinitely after its grace expires.
+            state = hass.states.get(entity_id)
+            if (
+                state is not None
+                and _state_only_restore_sources_pending(hass, entity)
+                and not state.attributes.get(ATTR_AVAILABLE, True)
+            ):
+                hass.states.async_set(entity_id, "unknown", dict(state.attributes))
+
+        listeners.append(async_call_later(
+            hass, STARTUP_SOURCE_GRACE_SECONDS, _expire_source_grace,
+        ))
 
     if source_entities:
         listeners.append(async_track_state_change_event(

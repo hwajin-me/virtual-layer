@@ -86,6 +86,10 @@ After setup, use `Configure` on the Virtual Layer integration entry to:
 - delete a virtual device and all of its entities
 - finish without changes
 
+Adding, editing, or deleting an entity applies only the changed configuration
+and its affected companion entities. Other virtual entities retain their live
+state and source subscriptions without an integration reload.
+
 Use `Reconfigure` to update the integration entry's main device name.
 
 ## Devices
@@ -226,6 +230,14 @@ delays, and templated action data are supported.
 Set `pull_interval` to a positive number of seconds to periodically refresh
 source values and templates. Leave it empty or set it to `0` to update from
 source entity state changes only.
+
+On startup, persistent entities with a valid saved state have a three-minute
+source recovery window. While a declared source is missing, `unknown`, or
+`unavailable`, the virtual entity preserves its last good state, availability,
+and template-derived properties. Source recovery is reflected immediately.
+After 180 seconds, templates are reevaluated even if no source event arrives,
+and their normal unknown/unavailable handling resumes. Source retries do not
+extend this deadline, and editing entities does not start a new recovery window.
 
 ## Composite Entities
 

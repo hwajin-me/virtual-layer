@@ -10722,7 +10722,7 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
 
 
 @_log_unhandled_flow_errors
-class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlowWithReload):
+class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow):
     """Virtual Layer options flow."""
 
     def __init__(self) -> None:

@@ -179,6 +179,7 @@ def generic_entity_options(config: Mapping) -> dict:
 
 DEFAULT_AVAILABILITY = True
 DEFAULT_PERSISTENT = True
+STARTUP_SOURCE_GRACE_SECONDS = 180
 DIAGNOSTIC_UNIQUE_ID_MARKER = ".virtual_layer_diagnostic."
 
 VIRTUAL_ENTITY_DOMAINS = [

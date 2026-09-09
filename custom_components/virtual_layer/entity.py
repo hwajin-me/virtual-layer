@@ -53,6 +53,7 @@ _VIRTUAL_ENTITY_COMMAND_NAMES = frozenset().union(
 _MISSING = object()
 MAX_LOCAL_MEDIA_BYTES = 25 * 1024 * 1024
 _STARTUP_AVAILABILITY_RETRY_DELAYS = (5, 10, 15, 30)
+STARTUP_SOURCE_GRACE_ALLOWED = ContextVar("virtual_layer_startup_grace", default=True)
 _LEGACY_ENUM_TEMPLATE_RE = re.compile(
     r"<[A-Za-z_][A-Za-z0-9_]*"
     r"(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\|[A-Za-z_][A-Za-z0-9_]*)*)+:\s*"
@@ -342,9 +343,9 @@ class VirtualEntity(RestoreEntity):
         self._pull_interval = config.get(CONF_PULL_INTERVAL, 0)
         self._source_entities = config.get(CONF_SOURCE_ENTITIES, [])
         # A restored entity must not let a partially started source set replace
-        # its last valid state with a temporary fallback. This is cleared as
-        # soon as every configured source has published a usable state.
+        # its last valid state with a temporary fallback during startup.
         self._restore_waiting_for_sources = False
+        self._startup_source_grace = False
         self._template_sources = {
             name: self._normalize_template_source(source)
             for name, source in dict(config.get(CONF_TEMPLATE_SOURCES, {})).items()
@@ -495,7 +496,15 @@ class VirtualEntity(RestoreEntity):
         if not self._persistent or not state:
             self._create_state(self._config)
         else:
-            self._restore_waiting_for_sources = self._sources_pending_startup()
+            self._startup_source_grace = (
+                STARTUP_SOURCE_GRACE_ALLOWED.get()
+                and str(state.state).strip().lower() not in {
+                    "", "none", "unknown", STATE_UNAVAILABLE,
+                }
+            )
+            self._restore_waiting_for_sources = (
+                self._startup_source_grace and self._sources_pending_startup()
+            )
             prerequisites_applied = (
                 False
                 if self._restore_waiting_for_sources
@@ -506,6 +515,16 @@ class VirtualEntity(RestoreEntity):
                 self._native_templates_applied()
         self._update_attributes()
         self._setup_templates()
+        if self._startup_source_grace:
+            @callback
+            def _expire_source_grace(_now):
+                self._startup_source_grace = False
+                self._restore_waiting_for_sources = False
+                self._apply_templates()
+
+            self._refresh_remove_listeners.append(async_call_later(
+                self.hass, STARTUP_SOURCE_GRACE_SECONDS, _expire_source_grace,
+            ))
         self._apply_templates()
 
     def _sources_pending_startup(self) -> bool:
@@ -1344,8 +1363,13 @@ class VirtualEntity(RestoreEntity):
     def _apply_templates(self):
         changed = False
 
+        self._restore_waiting_for_sources = (
+            self._startup_source_grace and self._sources_pending_startup()
+        )
         if self._restore_waiting_for_sources:
-            self._restore_waiting_for_sources = self._sources_pending_startup()
+            # Availability, attributes and native templates must all keep the
+            # last usable snapshot. Source events never extend the deadline.
+            return
 
         availability_rendered = False
         if self._availability_template:
