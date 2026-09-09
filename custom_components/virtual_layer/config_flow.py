@@ -1359,64 +1359,15 @@ def _apply_media_player_source_priorities(
     return result
 
 
-_FORM_FIELD_EXAMPLES: dict[str, Any] = {
-    ATTR_GROUP_NAME: "Living Room",
-    CONF_DEVICE_NAME: "Living Room Air Purifier",
-    CONF_DEVICE_ID: "living-room-air-purifier",
-    CONF_DEVICE_MANUFACTURER: "Virtual Layer",
-    CONF_DEVICE_MODEL: "Composite Device",
-    CONF_DEVICE_SW_VERSION: "1.0.0",
-    CONF_DEVICE_HW_VERSION: "rev-a",
-    CONF_DEVICE_SERIAL_NUMBER: "VL-001",
-    CONF_DEVICE_CONFIGURATION_URL: "https://example.com/device",
-    CONF_DEVICE_SUGGESTED_AREA: "Living Room",
-    CONF_ENTITY_NAME: "Air Purifier",
-    ATTR_ENTITY_ID: "fan.living_room_air_purifier",
-    CONF_SOURCE_ENTITIES_TEXT: "fan.air_purifier\nnumber.air_purifier_speed",
-    CONF_INITIAL_VALUE: "off",
-    CONF_VALUE_TEMPLATE: "{{ states('sensor.source') }}",
-    CONF_AVAILABILITY_TEMPLATE: (
-        "{{ states('sensor.source') not in ['unknown', 'unavailable'] }}"
-    ),
-    CONF_ICON_TEMPLATE: "{{ state_attr('sensor.source', 'icon') }}",
-    CONF_TEMPLATE_SOURCES_JSON: {"source": "sensor.source"},
-    CONF_EVENT_HOOKS_JSON: [
-        {
-            "trigger": "state",
-            ATTR_ENTITY_ID: ["sensor.source"],
-            CONF_VALUE_TEMPLATE: "{{ trigger.to_state.state }}",
-        }
-    ],
-    CONF_ATTRIBUTES_JSON: {"source_type": "composite"},
-    CONF_ATTRIBUTE_SOURCES_JSON: {"battery_level": "sensor.remote.battery_level"},
-    CONF_ATTRIBUTE_TEMPLATES_JSON: {"power": "{{ states('sensor.power') | float(0) }}"},
-    CONF_NATIVE_TEMPLATES_JSON: {
-        "vendor_property": "{{ state_attr('sensor.source', 'vendor_property') }}"
-    },
-    CONF_COMMAND_ACTIONS_JSON: {
-        "turn_on": [
-            {
-                "action": "switch.turn_on",
-                "target": {ATTR_ENTITY_ID: "switch.real_device"},
-            }
-        ]
-    },
-    CONF_DOMAIN_OPTIONS_JSON: {"vendor_option": True},
-    CONF_POLYGON_GEOJSON_JSON: {
-        "type": "FeatureCollection",
-        "features": [],
-    },
-    CONF_POLYGON_TRACKER_RULES_JSON: {
-        "device_tracker.phone": {"enabled": True, "priority": 1}
-    },
-}
+def _form_suggestion(value: Any) -> Any:
+    """Keep frontend values identical to defaults, including empty values.
 
-
-def _form_suggestion(field_name: Any, value: Any) -> Any:
-    """Return the current value or a useful field-specific example."""
-    if value not in (None, "", [], {}):
-        return _plain_options(value)
-    return _plain_options(_FORM_FIELD_EXAMPLES.get(field_name, value))
+    Home Assistant uses suggested_value as editable input, not a placeholder.
+    Injecting examples here adds fake sources and actions to empty entities;
+    structured examples also fail validation in the YAML text selectors before
+    the flow handler runs.
+    """
+    return _plain_options(value)
 
 
 def _editable_optional(field_name: str, value: Any) -> vol.Optional:
@@ -1424,7 +1375,7 @@ def _editable_optional(field_name: str, value: Any) -> vol.Optional:
     return vol.Optional(
         field_name,
         default=value,
-        description={"suggested_value": _form_suggestion(field_name, value)},
+        description={"suggested_value": _form_suggestion(value)},
     )
 
 
@@ -1475,10 +1426,7 @@ def _complete_form_schema(schema: vol.Schema) -> vol.Schema:
             except (RecursionError, TypeError, ValueError):
                 continue
             description = dict(marker.description or {})
-            description["suggested_value"] = _form_suggestion(
-                marker.schema,
-                value,
-            )
+            description["suggested_value"] = _form_suggestion(value)
             marker.description = description
         else:
             # Optional selectors such as a single person entity cannot validate
@@ -10051,13 +9999,70 @@ class _AirQualityLogicFlow:
                 self._aq_edit = edit
                 if mode == "custom":
                     return await self._aq_finish({"mode": "custom"})
-                if mode == "measurement":
-                    return await self._aq_calculation_step()
+                if mode in ("source", "measurement"):
+                    return await self._aq_sources_step()
                 return await self._aq_logic_step()
         return self.async_show_form(
             step_id="edit_air_quality" if edit else "air_quality",
             data_schema=aq_options.mode_schema(recipe["mode"]), errors=errors,
         )
+
+    async def _aq_sources_step(self, user_input=None):
+        errors = {}
+        mode = self._aq_pending["mode"]
+        if user_input is not None:
+            try:
+                sources = aq_options.normalize_sources(mode, user_input)
+            except (TypeError, ValueError, vol.Invalid):
+                errors["base"] = "invalid_air_quality_logic"
+                self._aq_pending.update(user_input)
+            else:
+                self._aq_pending.update(sources)
+                if mode == "measurement":
+                    return await self._aq_calculation_step()
+                return await self._aq_review_step()
+        return self.async_show_form(
+            step_id="edit_air_quality_sources" if self._aq_edit else "air_quality_sources",
+            data_schema=aq_options.source_schema(mode, self._aq_pending), errors=errors,
+        )
+
+    async def async_step_air_quality_sources(self, user_input=None):
+        return await self._aq_sources_step(user_input)
+
+    async def async_step_edit_air_quality_sources(self, user_input=None):
+        return await self._aq_sources_step(user_input)
+
+    async def _aq_review_step(self, user_input=None):
+        recipe = aq_options.normalize(self._aq_pending)
+        errors = {}
+        if user_input is not None:
+            action = user_input.get("next_action")
+            if action == "continue":
+                return await self._aq_finish(recipe)
+            if action == "sources" and recipe["mode"] in ("source", "measurement"):
+                return await self._aq_sources_step()
+            if action == "calculation" and recipe["mode"] == "measurement":
+                return await self._aq_calculation_step()
+            if action == "rules" and recipe["mode"] in ("fixed", "measurement"):
+                return await self._aq_logic_step()
+            if action != "refresh":
+                errors["base"] = "invalid_air_quality_logic"
+        try:
+            result = str(Template(aq_options.generate(recipe), self.hass).async_render()).strip()
+        except TemplateError:
+            result = "unknown"
+            errors["base"] = "invalid_air_quality_logic"
+        return self.async_show_form(
+            step_id="edit_air_quality_review" if self._aq_edit else "air_quality_review",
+            data_schema=aq_options.review_schema(recipe["mode"]), errors=errors,
+            description_placeholders={"result": result},
+        )
+
+    async def async_step_air_quality_review(self, user_input=None):
+        return await self._aq_review_step(user_input)
+
+    async def async_step_edit_air_quality_review(self, user_input=None):
+        return await self._aq_review_step(user_input)
 
     async def _aq_calculation_step(self, user_input=None):
         errors = {}
@@ -10098,10 +10103,11 @@ class _AirQualityLogicFlow:
                     self._aq_pending["thresholds"] = [user_input.get(f"boundary_{i}") for i in range(1, 6)]
                     self._aq_pending["levels"] = [user_input.get(f"grade_{i}", aq_options.LEVELS[i-1]) for i in range(1, 7)]
             else:
-                return await self._aq_finish(recipe)
+                self._aq_pending = recipe
+                return await self._aq_review_step()
         return self.async_show_form(
             step_id="edit_air_quality_logic" if self._aq_edit else "air_quality_logic",
-            data_schema=aq_options.logic_schema(pending["mode"], self._aq_pending), errors=errors,
+            data_schema=aq_options.threshold_schema(pending["mode"], self._aq_pending), errors=errors,
         )
 
     async def _aq_finish(self, recipe):

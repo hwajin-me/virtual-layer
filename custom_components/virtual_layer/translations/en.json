@@ -696,7 +696,7 @@
       },
       "air_quality_logic": {
         "title": "Configure air-quality rules",
-        "description": "Enter five increasing boundaries and assign any category to each of six intervals. Equality follows the preceding calculation rule. These are user rules, not a regional AQI standard. Review the template next. Automatic/Keep current preserve custom templates; choose Force helper to replace them with changed rules.",
+        "description": "Set thresholds and interval categories. Boundaries must increase; equality follows the calculation step. Preview the current classification next. These are user-defined rules, not automatically selected health or regulatory standards.",
         "data": {
           "fixed": "Fixed category",
           "sources": "Air-quality sources",
@@ -752,6 +752,34 @@
           "quadratic": "After unit conversion apply y = a×x² + b×x + c. Zero selects linear calibration. Negative or non-finite results count as missing.",
           "multiplier": "One preserves scale. Example: a=0, b=1.1, c=-2 yields y=1.1×x-2.",
           "offset": "Added after unit conversion and scaling. Zero leaves the offset unchanged."
+        }
+      },
+      "air_quality_sources": {
+        "title": "Air-quality input sources",
+        "description": "Choose entities, attributes, measurement units and missing-value policy. Source categories proceed to preview; measurements proceed to calibration and thresholds.",
+        "data": {
+          "sources": "Air-quality sources",
+          "attribute": "Source attribute",
+          "aggregation": "Combine source categories",
+          "missing": "Missing or invalid values",
+          "unit": "Boundary unit"
+        },
+        "data_description": {
+          "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
+          "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
+          "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
+          "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit."
+        }
+      },
+      "air_quality_review": {
+        "title": "Preview air-quality rules",
+        "description": "Category from these rules: **{result}**. This is a snapshot of current HA values, not a Matter delivery test. For unknown, check source state, units and attribute. Nothing has been saved. Go back to revise or refresh the result. Continue opens the template editor. Custom templates preserved by Keep current/Automatic may differ from this rule preview; inspect them on the next screen.",
+        "data": {
+          "next_action": "Next action"
+        },
+        "data_description": {
+          "next_action": "Return to a settings step without losing values or refresh the preview. Continue does not save until you submit the final entity form."
         }
       }
     }
@@ -2109,7 +2137,7 @@
       },
       "air_quality_logic": {
         "title": "Configure air-quality rules",
-        "description": "Enter five increasing boundaries and assign any category to each of six intervals. Equality follows the preceding calculation rule. These are user rules, not a regional AQI standard. Review the template next. Automatic/Keep current preserve custom templates; choose Force helper to replace them with changed rules.",
+        "description": "Set thresholds and interval categories. Boundaries must increase; equality follows the calculation step. Preview the current classification next. These are user-defined rules, not automatically selected health or regulatory standards.",
         "data": {
           "fixed": "Fixed category",
           "sources": "Air-quality sources",
@@ -2151,7 +2179,7 @@
       },
       "edit_air_quality_logic": {
         "title": "Configure air-quality rules",
-        "description": "Enter five increasing boundaries and assign any category to each of six intervals. Equality follows the preceding calculation rule. These are user rules, not a regional AQI standard. Review the template next. Automatic/Keep current preserve custom templates; choose Force helper to replace them with changed rules.",
+        "description": "Set thresholds and interval categories. Boundaries must increase; equality follows the calculation step. Preview the current classification next. These are user-defined rules, not automatically selected health or regulatory standards.",
         "data": {
           "fixed": "Fixed category",
           "sources": "Air-quality sources",
@@ -2225,6 +2253,62 @@
           "quadratic": "After unit conversion apply y = a×x² + b×x + c. Zero selects linear calibration. Negative or non-finite results count as missing.",
           "multiplier": "One preserves scale. Example: a=0, b=1.1, c=-2 yields y=1.1×x-2.",
           "offset": "Added after unit conversion and scaling. Zero leaves the offset unchanged."
+        }
+      },
+      "air_quality_sources": {
+        "title": "Air-quality input sources",
+        "description": "Choose entities, attributes, measurement units and missing-value policy. Source categories proceed to preview; measurements proceed to calibration and thresholds.",
+        "data": {
+          "sources": "Air-quality sources",
+          "attribute": "Source attribute",
+          "aggregation": "Combine source categories",
+          "missing": "Missing or invalid values",
+          "unit": "Boundary unit"
+        },
+        "data_description": {
+          "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
+          "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
+          "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
+          "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit."
+        }
+      },
+      "air_quality_review": {
+        "title": "Preview air-quality rules",
+        "description": "Category from these rules: **{result}**. This is a snapshot of current HA values, not a Matter delivery test. For unknown, check source state, units and attribute. Nothing has been saved. Go back to revise or refresh the result. Continue opens the template editor. Custom templates preserved by Keep current/Automatic may differ from this rule preview; inspect them on the next screen.",
+        "data": {
+          "next_action": "Next action"
+        },
+        "data_description": {
+          "next_action": "Return to a settings step without losing values or refresh the preview. Continue does not save until you submit the final entity form."
+        }
+      },
+      "edit_air_quality_sources": {
+        "title": "Air-quality input sources",
+        "description": "Choose entities, attributes, measurement units and missing-value policy. Source categories proceed to preview; measurements proceed to calibration and thresholds.",
+        "data": {
+          "sources": "Air-quality sources",
+          "attribute": "Source attribute",
+          "aggregation": "Combine source categories",
+          "missing": "Missing or invalid values",
+          "unit": "Boundary unit"
+        },
+        "data_description": {
+          "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
+          "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
+          "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
+          "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit."
+        }
+      },
+      "edit_air_quality_review": {
+        "title": "Preview air-quality rules",
+        "description": "Category from these rules: **{result}**. This is a snapshot of current HA values, not a Matter delivery test. For unknown, check source state, units and attribute. Nothing has been saved. Go back to revise or refresh the result. Continue opens the template editor. Custom templates preserved by Keep current/Automatic may differ from this rule preview; inspect them on the next screen.",
+        "data": {
+          "next_action": "Next action"
+        },
+        "data_description": {
+          "next_action": "Return to a settings step without losing values or refresh the preview. Continue does not save until you submit the final entity form."
         }
       }
     }
@@ -2371,6 +2455,15 @@
       "options": {
         "upper_inclusive": "Equality in lower interval (≤)",
         "lower_inclusive": "Equality in upper interval (≥)"
+      }
+    },
+    "air_quality_review_action": {
+      "options": {
+        "continue": "Continue to template editor",
+        "refresh": "Refresh current result",
+        "rules": "Edit thresholds / grades",
+        "sources": "Edit input sources",
+        "calculation": "Edit calculation"
       }
     }
   },

@@ -290,3 +290,56 @@ def test_calibration_overflow_and_legacy_defaults(hass):
     assert normalized["reducer"] == "per_source"
     assert normalized["boundary_rule"] == "upper_inclusive"
     assert aq.normalize(normalized) == normalized
+
+
+@pytest.mark.parametrize("mode", ["source", "measurement", "fixed"])
+def test_split_steps_and_review_actions_have_translations(mode):
+    sources = aq.source_schema(mode, measurement())
+    thresholds = aq.threshold_schema(mode, measurement())
+    assert not (
+        {key.schema for key in sources.schema}
+        & {key.schema for key in thresholds.schema}
+    )
+    if mode == "measurement":
+        assert len(thresholds.schema) == 11
+        assert "unit" in {key.schema for key in sources.schema}
+    root = Path(__file__).parents[2] / "custom_components/virtual_layer/translations"
+    for language in ("en", "ko"):
+        catalog = json.loads((root / f"{language}.json").read_text())
+        for section, prefixes in (("config", ("",)), ("options", ("", "edit_"))):
+            for prefix in prefixes:
+                for name, schema in (
+                    ("air_quality_sources", sources),
+                    ("air_quality_review", aq.review_schema(mode)),
+                ):
+                    for marker in schema.schema:
+                        assert catalog[section]["step"][prefix + name]["data"][
+                            marker.schema
+                        ]
+                        assert catalog[section]["step"][prefix + name][
+                            "data_description"
+                        ][marker.schema]
+
+
+async def test_initial_source_flow_validation_preview_refresh_and_back(hass):
+    from custom_components.virtual_layer.config_flow import VirtualFlowHandler
+
+    flow = VirtualFlowHandler()
+    flow.hass = hass
+    flow._entity_defaults = {"platform": "air_quality"}
+    result = await flow.async_step_air_quality({"mode": "source"})
+    assert result["step_id"] == "air_quality_sources"
+    result = await flow.async_step_air_quality_sources({"sources": []})
+    assert result["errors"] == {"base": "invalid_air_quality_logic"}
+    hass.states.async_set("sensor.grade", "poor")
+    result = await flow.async_step_air_quality_sources({"sources": ["sensor.grade"]})
+    assert result["step_id"] == "air_quality_review"
+    assert result["description_placeholders"]["result"] == "poor"
+    hass.states.async_set("sensor.grade", "good")
+    result = await flow.async_step_air_quality_review({"next_action": "refresh"})
+    assert result["description_placeholders"]["result"] == "good"
+    result = await flow.async_step_air_quality_review({"next_action": "calculation"})
+    assert result["errors"] == {"base": "invalid_air_quality_logic"}
+    result = await flow.async_step_air_quality_review({"next_action": "sources"})
+    assert result["data_schema"]({})["sources"] == ["sensor.grade"]
+    assert flow._entity_defaults == {"platform": "air_quality"}

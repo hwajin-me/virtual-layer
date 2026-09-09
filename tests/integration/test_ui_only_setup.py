@@ -10078,6 +10078,9 @@ async def test_air_quality_uses_a_dedicated_matter_configuration_step(hass):
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"fixed": "good"},
     )
+    assert result["step_id"] == "air_quality_review"
+    assert result["description_placeholders"]["result"] == "good"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_action": "continue"})
     assert result["step_id"] == "entity"
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["air_quality"] == "{{ 'good' }}"
@@ -10139,14 +10142,17 @@ async def test_air_quality_measurement_recipe_precedes_templates_and_validates(h
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"mode": "measurement"},
     )
+    assert result["step_id"] == "air_quality_sources"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {
+        "sources": ["sensor.pm25"], "attribute": "", "unit": "μg/m³",
+        "aggregation": "worst", "missing": "unknown",
+    })
     assert result["step_id"] == "air_quality_calculation"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], result["data_schema"]({}),
     )
     assert result["step_id"] == "air_quality_logic"
     values = {
-        "sources": ["sensor.pm25"], "attribute": "", "unit": "μg/m³",
-        "aggregation": "worst", "missing": "unknown",
         **{f"boundary_{i}": i * 10 for i in range(1, 6)},
         **{f"grade_{i}": grade for i, grade in enumerate(
             ("good", "fair", "moderate", "poor", "very_poor", "extremely_poor"), 1
@@ -10159,6 +10165,18 @@ async def test_air_quality_measurement_recipe_precedes_templates_and_validates(h
     assert result["errors"] == {"base": "invalid_air_quality_logic"}
     assert not entry.options[ATTR_DEVICES]
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert result["step_id"] == "air_quality_review"
+    assert result["description_placeholders"]["result"] == "moderate"
+    assert not entry.options[ATTR_DEVICES]
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_action": "rules"})
+    assert result["step_id"] == "air_quality_logic"
+    assert result["data_schema"]({})["boundary_5"] == 50
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    hass.states.async_set("sensor.pm25", "unknown")
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_action": "refresh"})
+    assert result["description_placeholders"]["result"] == "unknown"
+    hass.states.async_set("sensor.pm25", "25", {"unit_of_measurement": "μg/m³"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_action": "continue"})
     assert result["step_id"] == "entity"
     assert not entry.options[ATTR_DEVICES]
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
@@ -10191,6 +10209,8 @@ async def test_air_quality_measurement_recipe_precedes_templates_and_validates(h
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"mode": "measurement"},
     )
+    assert result["step_id"] == "edit_air_quality_sources"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], result["data_schema"]({}))
     assert result["step_id"] == "edit_air_quality_calculation"
     calculation = result["data_schema"]({})
     assert calculation["multiplier"] == 1
@@ -10201,6 +10221,9 @@ async def test_air_quality_measurement_recipe_precedes_templates_and_validates(h
     assert limits["boundary_5"] == 50
     limits.update(boundary_5=60, grade_5="good")
     result = await hass.config_entries.options.async_configure(result["flow_id"], limits)
+    assert result["step_id"] == "edit_air_quality_review"
+    assert result["description_placeholders"]["result"] == "good"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_action": "continue"})
     assert result["step_id"] == "edit_entity"
     updated = _flatten_entity_form_sections(result["data_schema"]({}))
     assert Template(updated[CONF_NATIVE_VALUE_TEMPLATES]["air_quality"], hass).async_render() == "good"

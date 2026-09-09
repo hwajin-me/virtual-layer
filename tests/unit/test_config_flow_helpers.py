@@ -7863,7 +7863,7 @@ def test_entity_sections_carry_actual_values_and_every_marker_has_a_suggestion(h
         for marker in schema.schema[outer[CONF_DEVICE_DETAILS]].schema.schema
         if marker.schema == CONF_DEVICE_MODEL
     )
-    assert details_marker.description["suggested_value"] == "Composite Device"
+    assert details_marker.description["suggested_value"] == ""
 
 
 def test_yaml_editor_accepts_yaml_and_legacy_json_for_command_actions():

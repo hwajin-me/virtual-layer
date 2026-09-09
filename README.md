@@ -516,8 +516,16 @@ updates preserve customized templates; force-helper regenerates them, while
 keep-current retains them. This supplies an overall category in addition to
 concentration values; configuring a Matter bridge remains a separate task.
 
-Measurement mode now includes a separate **Air-quality calculation** step before
-the source/threshold form. Processing order is unit conversion, per-source
+Measurement configuration follows **Input sources → Calculation → Thresholds
+and grades → Preview → Template editor**. Source-category mode skips numeric
+calculation and thresholds; fixed mode asks only for a category before preview.
+Custom Jinja continues directly to the template editor. Preview uses current
+Home Assistant values without saving or changing entity states. You can refresh
+it or return to sources, calculation, or thresholds with your inputs intact.
+It evaluates the proposed rules, not a custom template retained by helper policy
+and not the actual Matter endpoint; inspect retained Jinja in the final editor.
+
+Processing order is unit conversion, per-source
 calibration `y = a*x*x + b*x + c`, numeric aggregation, then interval lookup.
 Defaults `a=0, b=1, c=0` leave values unchanged. Choose per-source classification
 (then first/worst category), or classify the mean, median, minimum, or maximum

@@ -184,6 +184,56 @@ def normalize(recipe):
     return result
 
 
+def source_schema(mode, defaults):
+    """Source controls are separate from calibration and interval controls."""
+    keys = {"sources", "attribute", "aggregation", "missing", "unit"}
+    return vol.Schema(
+        {
+            key: value
+            for key, value in logic_schema(mode, defaults).schema.items()
+            if key.schema in keys
+        }
+    )
+
+
+def threshold_schema(mode, defaults):
+    keys = {"sources", "attribute", "aggregation", "missing", "unit"}
+    return vol.Schema(
+        {
+            key: value
+            for key, value in logic_schema(mode, defaults).schema.items()
+            if key.schema not in keys
+        }
+    )
+
+
+def normalize_sources(mode, values):
+    result = normalize({**values, "mode": "source"})
+    result["mode"] = mode
+    if mode == "measurement":
+        if values.get("unit") not in UNITS:
+            raise vol.Invalid("Invalid unit")
+        result["unit"] = values["unit"]
+    return result
+
+
+def review_schema(mode):
+    actions = ["continue", "refresh", "rules"]
+    if mode in ("source", "measurement"):
+        actions.append("sources")
+    if mode == "measurement":
+        actions.append("calculation")
+    if mode == "source":
+        actions.remove("rules")
+    return vol.Schema(
+        {
+            vol.Required("next_action", default="continue"): choice(
+                actions, "air_quality_review_action"
+            )
+        }
+    )
+
+
 def recipe_from_form(mode, values):
     recipe = {**values, "mode": mode}
     if mode == "measurement":
