@@ -198,7 +198,21 @@ NEW_DEVICE_TARGET = "__new_device__"
 HELPER_UPDATE_AUTO = "automatic"
 HELPER_UPDATE_KEEP = "keep_current"
 HELPER_UPDATE_FORCE = "force_helper"
-DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE = "{{ temperature | float(0) }}"
+# A boiler's climate setpoint is normally water temperature, while the virtual
+# climate entity presents a room-temperature setpoint. The two segments retain
+# the practical reference points: room 25/27°C -> water 40/44°C and room
+# 30/33°C -> water 47/50°C. Slow hydronic systems also receive a bounded
+# recovery boost while the virtual room temperature is below its request.
+DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE = (
+    "{% set room_temperature = temperature | float(0) %} "
+    "{% set current_temperature = state_attr(entity_id, 'current_temperature') "
+    "| float(room_temperature) %} "
+    "{% set base_water_temperature = (room_temperature * 2 - 10) "
+    "if room_temperature <= 27 else room_temperature + 17 %} "
+    "{% set recovery_boost = [((room_temperature - current_temperature) * 1.5), "
+    "0] | max %} "
+    "{{ base_water_temperature + [recovery_boost, 8] | min }}"
+)
 NUMERIC_OUTLIER_THRESHOLD = 3
 SENSOR_AGGREGATION_AVERAGE = "average"
 SENSOR_AGGREGATIONS = (
@@ -1772,7 +1786,7 @@ def _sensor_conversion_choices(
     str,
     tuple[
         tuple[str, ...],
-        str,
+        str | tuple[str, ...],
         str | None,
         str | None,
         str | None,
@@ -1864,6 +1878,120 @@ def _sensor_conversion_choices(
                     conversion,
                     transforms,
                 )
+        # Different entity domains can expose the same measurement under
+        # different native attribute names (or, for sensor, as state). Match
+        # those forms by typed sensor device class rather than attribute name.
+        # This covers climate + temperature sensor, humidifier + humidity
+        # sensor, and compatible native-domain composites without accepting
+        # arbitrary attributes.
+        if len({entity_id.split(".", 1)[0] for entity_id in entity_ids}) > 1:
+            candidate_properties: list[
+                dict[str, tuple[str, str | None, str, str]] | None
+            ] = []
+            for entity_id in entity_ids:
+                domain = entity_id.split(".", 1)[0]
+                if domain == "sensor":
+                    if hass is None:
+                        candidate_properties.append(None)
+                        continue
+                    state = hass.states.get(entity_id)
+                    device_class = (
+                        str(state.attributes.get("device_class"))
+                        if state and state.attributes.get("device_class")
+                        else None
+                    )
+                    candidate_properties.append(
+                        {
+                            device_class: ("state", "unit_of_measurement", "", "direct")
+                        }
+                        if device_class
+                        else {}
+                    )
+                    continue
+                native_properties = {}
+                for (
+                    attribute,
+                    device_class,
+                    unit_attribute,
+                    fallback_unit,
+                    conversion,
+                ) in _SENSOR_CONVERSION_PROPERTIES.get(domain, ()):
+                    if device_class:
+                        # Keep the catalog's ordering: for example, a climate
+                        # temperature sensor should follow current temperature,
+                        # not a setpoint that happens to share its class.
+                        native_properties.setdefault(
+                            device_class,
+                            (attribute, unit_attribute, fallback_unit, conversion),
+                        )
+                candidate_properties.append(native_properties)
+            known_classes = [
+                set(properties)
+                for properties in candidate_properties
+                if properties is not None
+            ]
+            shared_classes = set.intersection(*known_classes) if known_classes else set()
+            for device_class in sorted(shared_classes):
+                descriptors = [
+                    properties.get(device_class)
+                    if properties is not None
+                    else ("state", "unit_of_measurement", "", "direct")
+                    for properties in candidate_properties
+                ]
+                # A sensor has no static type before its state is available.
+                # The native side still makes this a valid target-domain choice;
+                # the runtime-state path below verifies the actual class.
+                if any(descriptor is None for descriptor in descriptors):
+                    continue
+                source_attributes = tuple(descriptor[0] for descriptor in descriptors)
+                conversions = {descriptor[3] for descriptor in descriptors}
+                if conversions <= {"direct", "percent_clamped"}:
+                    # Native humidity values are bounded percentages; applying
+                    # the same safety bound to a sensor's state is valid.
+                    conversion = "percent_clamped" if "percent_clamped" in conversions else "direct"
+                elif len(conversions) == 1:
+                    conversion = conversions.pop()
+                else:
+                    continue
+                if hass is None:
+                    unit = next(
+                        (descriptor[2] for descriptor in descriptors if descriptor[2]),
+                        "",
+                    )
+                    transforms = tuple((1.0, 0.0) for _entity_id in entity_ids)
+                else:
+                    source_units = []
+                    for state, descriptor in zip(
+                        (hass.states.get(entity_id) for entity_id in entity_ids),
+                        descriptors,
+                        strict=True,
+                    ):
+                        if state is None:
+                            break
+                        unit_attribute = descriptor[1]
+                        source_units.append(
+                            state.attributes.get(unit_attribute)
+                            if unit_attribute
+                            else descriptor[2]
+                        )
+                    profile = _sensor_unit_conversion_transforms(
+                        source_units, device_class
+                    ) if len(source_units) == len(entity_ids) else None
+                    if profile is None:
+                        continue
+                    unit, transforms = profile
+                choices.setdefault(
+                    device_class,
+                    (
+                        entity_ids,
+                        source_attributes,
+                        device_class,
+                        None,
+                        unit,
+                        conversion,
+                        transforms,
+                    ),
+                )
         return choices
     for entity_id in entity_ids:
         domain = entity_id.split(".", 1)[0]
@@ -1921,7 +2049,7 @@ def _sensor_conversion_schema(
         str,
         tuple[
             tuple[str, ...],
-            str,
+            str | tuple[str, ...],
             str | None,
             str | None,
             str,
@@ -1936,7 +2064,8 @@ def _sensor_conversion_schema(
         {
             "value": key,
             "label": (
-                f"{', '.join(entity_ids)} · {attribute.replace('_', ' ').title()}"
+                f"{', '.join(entity_ids)} · "
+                f"{('temperature' if isinstance(attribute, tuple) else attribute).replace('_', ' ').title()}"
             ),
         }
         for key, (
@@ -2131,7 +2260,7 @@ def _apply_sensor_conversion_defaults(
     defaults: Mapping[str, Any],
     choice: tuple[
         tuple[str, ...],
-        str,
+        str | tuple[str, ...],
         str | None,
         str | None,
         str,
@@ -2151,14 +2280,21 @@ def _apply_sensor_conversion_defaults(
         transforms,
     ) = choice
     result = dict(defaults)
+    source_attributes = (
+        attribute
+        if isinstance(attribute, tuple)
+        else tuple(attribute for _entity_id in entity_ids)
+    )
     state = hass.states.get(entity_ids[0])
     values = []
-    for source_id, transform in zip(entity_ids, transforms, strict=True):
+    for source_id, source_attribute, transform in zip(
+        entity_ids, source_attributes, transforms, strict=True
+    ):
         source_state = hass.states.get(source_id)
         source_value = (
             source_state.state
-            if source_state is not None and attribute == "state"
-            else source_state.attributes.get(attribute)
+            if source_state is not None and source_attribute == "state"
+            else source_state.attributes.get(source_attribute)
             if source_state is not None
             else None
         )
@@ -2175,16 +2311,22 @@ def _apply_sensor_conversion_defaults(
     )
     result[CONF_INITIAL_VALUE] = str(value) if value is not None else "unknown"
     expressions = [
-        _sensor_conversion_value_expression(entity_id, attribute, conversion, transform)
-        for entity_id, transform in zip(entity_ids, transforms, strict=True)
+        _sensor_conversion_value_expression(
+            entity_id, source_attribute, conversion, transform
+        )
+        for entity_id, source_attribute, transform in zip(
+            entity_ids, source_attributes, transforms, strict=True
+        )
     ]
     raw_expressions = [
         (
             f"states({entity_id!r})"
-            if attribute == "state"
-            else f"state_attr({entity_id!r}, {attribute!r})"
+            if source_attribute == "state"
+            else f"state_attr({entity_id!r}, {source_attribute!r})"
         )
-        for entity_id in entity_ids
+        for entity_id, source_attribute in zip(
+            entity_ids, source_attributes, strict=True
+        )
     ]
     result[CONF_AVAILABILITY_TEMPLATE] = (
         "{{ (["
@@ -2225,7 +2367,7 @@ def _apply_sensor_conversion_defaults(
     result[CONF_NATIVE_VALUE_TEMPLATES] = native_templates
     result[CONF_ENTITY_NAME] = (
         f"{result.get(CONF_ENTITY_NAME, _fallback_entity_name(entity_ids[0]))} "
-        f"{attribute.replace('_', ' ').title()}"
+        f"{('temperature' if isinstance(attribute, tuple) else attribute).replace('_', ' ').title()}"
     )
     return result
 
@@ -7866,7 +8008,7 @@ def _reference_entity_defaults(
                 entity_ids[climate_index],
                 states[climate_index],
                 hot_water_switch_id,
-                boiler_temperature_calibration_template,
+                boiler_calibration_template,
             )
         )
     elif boiler_air_conditioner_profile is not None:

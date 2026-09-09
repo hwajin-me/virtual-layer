@@ -692,6 +692,70 @@ def test_multiple_climate_sources_convert_one_common_measurement_to_average_sens
     )
 
 
+def test_climate_and_temperature_sensor_convert_to_one_average_temperature_sensor(hass):
+    """Climate attributes and sensor state share the temperature conversion."""
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {"current_temperature": 68, "temperature_unit": "°F"},
+    )
+    hass.states.async_set(
+        "sensor.hallway_temperature",
+        "20",
+        {"device_class": "temperature", "unit_of_measurement": "°C"},
+    )
+    source_ids = ["climate.living_room", "sensor.hallway_temperature"]
+    defaults = _reference_entity_defaults(hass, source_ids, "sensor")
+    choices = _sensor_conversion_choices(source_ids, hass)
+
+    assert "temperature" in choices
+    converted = _apply_sensor_conversion_defaults(
+        hass, defaults, choices["temperature"]
+    )
+
+    assert float(converted[CONF_INITIAL_VALUE]) == pytest.approx(68)
+    assert "state_attr('climate.living_room', 'current_temperature')" in converted[
+        CONF_VALUE_TEMPLATE
+    ]
+    assert "states('sensor.hallway_temperature')" in converted[CONF_VALUE_TEMPLATE]
+    assert _yaml_value(converted[CONF_DOMAIN_OPTIONS_JSON]) == {
+        "class": "temperature",
+        "state_class": "measurement",
+        "unit_of_measurement": "°F",
+    }
+    assert float(
+        Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(parse_result=True)
+    ) == pytest.approx(68)
+
+
+def test_humidifier_and_humidity_sensor_convert_to_one_average_sensor(hass):
+    """Native humidity and sensor state are safely combined by device class."""
+    hass.states.async_set(
+        "humidifier.bedroom", "on", {"current_humidity": 40}
+    )
+    hass.states.async_set(
+        "sensor.hallway_humidity",
+        "50",
+        {"device_class": "humidity", "unit_of_measurement": "%"},
+    )
+    source_ids = ["humidifier.bedroom", "sensor.hallway_humidity"]
+    defaults = _reference_entity_defaults(hass, source_ids, "sensor")
+    converted = _apply_sensor_conversion_defaults(
+        hass, defaults, _sensor_conversion_choices(source_ids, hass)["humidity"]
+    )
+
+    assert float(converted[CONF_INITIAL_VALUE]) == pytest.approx(45)
+    assert "state_attr('humidifier.bedroom', 'current_humidity')" in converted[
+        CONF_VALUE_TEMPLATE
+    ]
+    assert "states('sensor.hallway_humidity')" in converted[CONF_VALUE_TEMPLATE]
+    assert _yaml_value(converted[CONF_DOMAIN_OPTIONS_JSON]) == {
+        "class": "humidity",
+        "state_class": "measurement",
+        "unit_of_measurement": "%",
+    }
+
+
 @pytest.mark.parametrize(
     ("aggregation", "expected"),
     [
@@ -3640,7 +3704,6 @@ def test_reference_heating_only_climate_builds_heat_off_boiler_helper(hass):
             "max_temp": 35.0,
         },
     )
-
     defaults = _reference_entity_defaults(hass, ["climate.boiler"])
 
     assert defaults[CONF_PLATFORM] == "climate"
@@ -3740,6 +3803,78 @@ def test_boiler_temperature_calibration_helper_maps_before_source_clamp(hass):
         parse_result=True,
     )
     assert command_data["temperature"] == 41
+
+
+@pytest.mark.parametrize(
+    ("room_temperature", "water_temperature"),
+    ((25, 40), (27, 44), (30, 47), (33, 50)),
+)
+def test_default_boiler_temperature_calibration_maps_room_to_water(
+    hass, room_temperature, water_temperature
+):
+    """The boiler helper's default follows the documented room/water anchors."""
+    hass.states.async_set(
+        "climate.boiler",
+        "heat",
+        {
+            "hvac_modes": ["off", "heat", "fan_only"],
+            "min_temp": 0,
+            "max_temp": 80,
+            "target_temp_step": 1,
+            "temperature": 48,
+        },
+    )
+    hass.states.async_set(
+        "climate.virtual_boiler",
+        "heat",
+        {"current_temperature": room_temperature},
+    )
+
+    defaults = _reference_entity_defaults(hass, ["climate.boiler"])
+    actions = _parse_command_actions(defaults[CONF_COMMAND_ACTIONS_JSON], "climate")
+    sequence = actions["set_temperature"][0]["choose"][0]["sequence"]
+    command_data = Template(sequence[0]["data"], hass).async_render(
+        {
+            "temperature": room_temperature,
+            "command_data": {"temperature": room_temperature},
+            "entity_id": "climate.virtual_boiler",
+        },
+        parse_result=True,
+    )
+
+    assert command_data["temperature"] == water_temperature
+
+
+def test_default_boiler_temperature_calibration_adds_bounded_recovery_boost(hass):
+    """A cold room receives extra water temperature until it approaches target."""
+    hass.states.async_set(
+        "climate.boiler",
+        "heat",
+        {
+            "hvac_modes": ["off", "heat", "fan_only"],
+            "min_temp": 0,
+            "max_temp": 80,
+            "target_temp_step": 1,
+            "temperature": 48,
+        },
+    )
+    hass.states.async_set(
+        "climate.virtual_boiler", "heat", {"current_temperature": 22}
+    )
+
+    defaults = _reference_entity_defaults(hass, ["climate.boiler"])
+    actions = _parse_command_actions(defaults[CONF_COMMAND_ACTIONS_JSON], "climate")
+    sequence = actions["set_temperature"][0]["choose"][0]["sequence"]
+    command_data = Template(sequence[0]["data"], hass).async_render(
+        {
+            "temperature": 27,
+            "command_data": {"temperature": 27},
+            "entity_id": "climate.virtual_boiler",
+        },
+        parse_result=True,
+    )
+
+    assert command_data["temperature"] == 51.5
 
 
 def test_reference_virtual_boiler_off_does_not_send_unsupported_fan_only(hass):

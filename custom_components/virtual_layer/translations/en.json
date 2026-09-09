@@ -606,7 +606,7 @@
         },
         "data_description": {
           "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates.",
-          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual requested temperature into the boiler water setpoint. Use temperature as the requested value. The default preserves direct water-temperature control. For one boiler serving about 10 pyeong, a starting expression of 35 + ((temperature | float(0) - 18) * 2.5) maps 24°C to about 50°C; tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula."
+          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual room-temperature request into the boiler water setpoint. Use temperature as the requested room value. At the target, the default maps 25°C to 40°C water, 27°C to 44°C, 30°C to 47°C, and 33°C to 50°C. While the current virtual room temperature is below the request, it adds 1.5°C of water temperature per 1°C gap, capped at 8°C, then removes that boost as the room recovers. Tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula."
         }
       },
       "matter_fan_levels": {
@@ -1350,7 +1350,7 @@
         },
         "data_description": {
           "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates.",
-          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual requested temperature into the boiler water setpoint. Use temperature as the requested value. The default preserves direct water-temperature control. For one boiler serving about 10 pyeong, a starting expression of 35 + ((temperature | float(0) - 18) * 2.5) maps 24°C to about 50°C; tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula."
+          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual room-temperature request into the boiler water setpoint. Use temperature as the requested room value. At the target, the default maps 25°C to 40°C water, 27°C to 44°C, 30°C to 47°C, and 33°C to 50°C. While the current virtual room temperature is below the request, it adds 1.5°C of water temperature per 1°C gap, capped at 8°C, then removes that boost as the room recovers. Tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula."
         }
       },
       "matter_fan_levels": {

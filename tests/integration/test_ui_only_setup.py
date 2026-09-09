@@ -287,6 +287,115 @@ async def test_climate_source_can_be_converted_to_temperature_sensor_in_add_flow
     assert sensor.native_unit_of_measurement == "°C"
 
 
+async def test_climate_and_temperature_sensor_show_conversion_step_in_add_flow(hass):
+    """Mixed native/state temperature sources must not skip typed conversion."""
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {"current_temperature": 21.5, "temperature_unit": "°C"},
+    )
+    hass.states.async_set(
+        "sensor.hallway_temperature",
+        "22.5",
+        {"device_class": "temperature", "unit_of_measurement": "°C"},
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_REFERENCE_ENTITY_ID: [
+                "climate.living_room",
+                "sensor.hallway_temperature",
+            ]
+        },
+    )
+    if result["step_id"] == "entity_type":
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "sensor"}
+        )
+    assert result["step_id"] == "sensor_conversion"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_SENSOR_CONVERSION: "temperature",
+            CONF_SENSOR_AGGREGATION: "average",
+        },
+    )
+    assert result["step_id"] == "entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_USE_TEMPLATE_HELPER: True}
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+
+    assert "state_attr('climate.living_room', 'current_temperature')" in defaults[
+        CONF_VALUE_TEMPLATE
+    ]
+    assert "states('sensor.hallway_temperature')" in defaults[CONF_VALUE_TEMPLATE]
+    assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+        "class": "temperature",
+        "state_class": "measurement",
+        "unit_of_measurement": "°C",
+    }
+
+
+async def test_humidifier_source_offers_sensor_and_binary_sensor_paths(hass):
+    """A native humidifier may expose either typed humidity or its on/off state."""
+    hass.states.async_set(
+        "humidifier.bedroom",
+        "on",
+        {"current_humidity": 45, "humidity": 50},
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_REFERENCE_ENTITY_ID: ["humidifier.bedroom"]}
+    )
+    assert result["step_id"] == "entity_type"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "sensor"}
+    )
+    assert result["step_id"] == "sensor_conversion"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SENSOR_CONVERSION: "humidifier.bedroom:current_humidity"},
+    )
+    assert result["step_id"] == "entity_helper"
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_REFERENCE_ENTITY_ID: ["humidifier.bedroom"]}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "binary_sensor"}
+    )
+    assert result["step_id"] == "entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_USE_TEMPLATE_HELPER: True}
+    )
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert defaults[CONF_PLATFORM] == "binary_sensor"
+    assert defaults[CONF_VALUE_TEMPLATE] == "{{ bedroom }}"
+
+
 async def test_multiple_light_sources_create_live_average_brightness_sensor(hass):
     """A multi-source conversion must render every source in Home Assistant."""
     hass.states.async_set("light.first", "on", {"brightness": 255})
@@ -1478,7 +1587,7 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
         ("switch", "turn_on"),
         ("climate", "set_temperature"),
     ]
-    assert calls[1][2]["temperature"] == 27
+    assert calls[1][2]["temperature"] == 44
 
     calls.clear()
     with pytest.raises(ValueError, match="Unsupported HVAC mode"):
@@ -1487,7 +1596,13 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
 
     with pytest.raises(ValueError, match="configured minimum and maximum"):
         await boiler.async_set_temperature(temperature=100)
-    assert calls == []
+    # Command actions run before the virtual entity rejects an out-of-range
+    # room request; the generated boiler action still uses the calibration.
+    assert [(domain, service) for domain, service, _data in calls] == [
+        ("switch", "turn_on"),
+        ("climate", "set_temperature"),
+    ]
+    assert calls[1][2]["temperature"] == 117
 
 
 async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(hass):
