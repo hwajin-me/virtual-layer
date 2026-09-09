@@ -34,6 +34,8 @@ from voluptuous_serialize import convert
 
 from custom_components.virtual_layer.config_flow import (
     CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
+    DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
+    LEGACY_DIRECT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     CONF_CLIMATE_TEMPERATURE_STEP_INPUT,
     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     CONF_ADVANCED_SETTINGS,
@@ -90,10 +92,12 @@ from custom_components.virtual_layer.config_flow import (
     _append_ui_entity,
     _async_build_entity_config,
     _auto_helper_profile,
+    _boiler_calibration_form_default,
     _apply_fan_source_roles,
     _apply_media_player_source_priorities,
     _apply_matter_fan_level_helper,
     _apply_matter_fan_percentage_helper,
+    _apply_motion_hold_minutes,
     _build_device_config,
     _build_entity_config,
     _default_virtual_entity_id,
@@ -189,6 +193,8 @@ from custom_components.virtual_layer.const import (
     CONF_MODEL,
     CONF_MEDIA_PLAYER_SOURCE_PRIORITIES,
     CONF_MEDIA_PLAYER_SOURCE_PRIORITY,
+    CONF_MOTION_HOLD_MINUTES,
+    CONF_MOTION_DETECTION_LOGIC,
     CONF_NATIVE_TEMPLATES,
     CONF_PERSISTENT,
     CONF_PRESENCE_CLASSIFICATION,
@@ -4014,6 +4020,18 @@ def test_boiler_temperature_calibration_helper_maps_before_source_clamp(hass):
     assert command_data["temperature"] == 41
 
 
+def test_boiler_calibration_edit_default_replaces_only_legacy_direct_formula():
+    """Editing proposes recovery without replacing an explicit calibration."""
+    assert (
+        _boiler_calibration_form_default(
+            LEGACY_DIRECT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+        )
+        == DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+    )
+    custom_formula = "{{ temperature | float(0) + 5 }}"
+    assert _boiler_calibration_form_default(custom_formula) == custom_formula
+
+
 @pytest.mark.parametrize(
     ("room_temperature", "water_temperature"),
     ((25, 40), (27, 44), (30, 47), (33, 50)),
@@ -4932,6 +4950,77 @@ def test_presence_motion_helper_uses_majority_and_delayed_all_off_clear(
         lambda: dt_util.as_local(cleared_at + timedelta(seconds=301)),
     )
     assert render_template() == "false"
+
+
+def test_presence_helper_uses_current_majority_without_motion_hold(hass):
+    """Presence is a current majority vote; only motion retains detections."""
+    source_ids = [
+        "binary_sensor.entry_presence",
+        "binary_sensor.office_presence",
+        "binary_sensor.guest_presence",
+    ]
+    for entity_id, state in zip(source_ids, ("on", "on", "off"), strict=True):
+        hass.states.async_set(entity_id, state, {"device_class": "presence"})
+
+    defaults = _reference_entity_defaults(hass, source_ids)
+
+    assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
+        CONF_CLASS: "presence",
+    }
+    assert "this.state == 'on'" not in defaults[CONF_VALUE_TEMPLATE]
+    assert "all_off_since" not in defaults[CONF_VALUE_TEMPLATE]
+
+    template = Template(defaults[CONF_VALUE_TEMPLATE], hass)
+    template_sources = _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON])
+
+    def render_template():
+        return template.async_render(
+            variables={
+                name: hass.states.get(entity_id).state
+                for name, entity_id in template_sources.items()
+            },
+            parse_result=False,
+        ).strip()
+
+    assert render_template() == "true"
+    hass.states.async_set(source_ids[0], "off", {"device_class": "presence"})
+    assert render_template() == "false"
+
+
+def test_motion_hold_minutes_reopen_as_a_dedicated_binary_sensor_setting():
+    defaults = _entity_form_defaults(
+        "Security",
+        {
+            CONF_PLATFORM: "binary_sensor",
+            CONF_NAME: "Combined Motion",
+            CONF_CLASS: "motion",
+            CONF_MOTION_HOLD_MINUTES: 12,
+        },
+    )
+
+    assert defaults[CONF_MOTION_HOLD_MINUTES] == 12
+    assert CONF_MOTION_HOLD_MINUTES not in _yaml_value(
+        defaults[CONF_DOMAIN_OPTIONS_JSON]
+    )
+
+
+def test_motion_settings_step_regenerates_the_automatic_helper_logic(hass):
+    source_ids = [
+        "binary_sensor.entry_motion",
+        "binary_sensor.office_motion",
+        "binary_sensor.guest_motion",
+    ]
+    for entity_id, state in zip(source_ids, ("on", "off", "off"), strict=True):
+        hass.states.async_set(entity_id, state, {"device_class": "motion"})
+
+    configured = _apply_motion_hold_minutes(
+        _reference_entity_defaults(hass, source_ids), 9, "any_active"
+    )
+
+    assert configured[CONF_MOTION_HOLD_MINUTES] == 9
+    assert configured[CONF_MOTION_DETECTION_LOGIC] == "any_active"
+    assert "(active | count) > 0" in configured[CONF_VALUE_TEMPLATE]
+    assert "< 540" in configured[CONF_VALUE_TEMPLATE]
 
 
 def test_presence_motion_helper_requires_binary_sensor_sources(hass):

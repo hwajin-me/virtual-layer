@@ -49,6 +49,42 @@
           "matter_air_quality": "Use a fixed category when your source exposes only numeric values. Use Source or dynamic template when the source provides a valid category or when you maintain custom Jinja logic."
         }
       },
+      "motion_hold": {
+        "title": "Configure Motion Recognition",
+        "description": "Set the recognition hold time for this virtual motion entity. This setting updates its automatically generated helper template.",
+        "data": {
+          "motion_hold_minutes": "Motion detection hold time",
+          "motion_detection_logic": "Motion detection logic"
+        },
+        "data_description": {
+          "motion_hold_minutes": "After every source reports off, keep the generated motion helper on for this many minutes. Set 0 to clear immediately. Presence helpers always use the current majority without a delay.",
+          "motion_detection_logic": "Majority requires more than half the sources to detect motion; Any active turns on when one source detects motion. The selected logic is rendered into the automatic helper template."
+        }
+      },
+      "motion_hold": {
+        "title": "Configure Motion Recognition",
+        "description": "Set the recognition hold time for this new virtual motion entity. This updates its automatically generated helper template.",
+        "data": {
+          "motion_hold_minutes": "Motion detection hold time",
+          "motion_detection_logic": "Motion detection logic"
+        },
+        "data_description": {
+          "motion_hold_minutes": "After every source reports off, keep the generated motion helper on for this many minutes. Set 0 to clear immediately.",
+          "motion_detection_logic": "Majority requires more than half the sources to detect motion; Any active turns on when one source detects motion. The selected logic is rendered into the automatic helper template."
+        }
+      },
+      "edit_motion_hold": {
+        "title": "Configure Motion Recognition",
+        "description": "Set the recognition hold time for this virtual motion entity. This updates its automatically generated helper template.",
+        "data": {
+          "motion_hold_minutes": "Motion detection hold time",
+          "motion_detection_logic": "Motion detection logic"
+        },
+        "data_description": {
+          "motion_hold_minutes": "After every source reports off, keep the generated motion helper on for this many minutes. Set 0 to clear immediately.",
+          "motion_detection_logic": "Majority requires more than half the sources to detect motion; Any active turns on when one source detects motion. The selected logic is rendered into the automatic helper template."
+        }
+      },
       "entity": {
         "title": "Add Virtual Entity",
         "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls.",
@@ -1371,10 +1407,12 @@
         "title": "Choose Template Helper Usage",
         "description": "Choose whether to use the template helper for this edit. Automatic uses helpers only for fields that were not customized, Keep current does not apply helpers, and Force replaces all helper-capable fields. The next screen keeps every entity, ID, value, and template field editable.",
         "data": {
-          "helper_update_mode": "Template update"
+          "helper_update_mode": "Template update",
+          "boiler_temperature_calibration_template": "Boiler room-to-water calibration"
         },
         "data_description": {
-          "helper_update_mode": "Automatic preserves each template you edited and regenerates untouched helpers. Keep current means the helper is not used and every template stays unchanged. Force helper replaces generated and custom templates using the selected source entities."
+          "helper_update_mode": "Automatic preserves each template you edited and regenerates untouched helpers. Keep current means the helper is not used and every template stays unchanged. Force helper replaces generated and custom templates using the selected source entities.",
+          "boiler_temperature_calibration_template": "This is used only for a detected boiler climate. It converts the virtual room request (temperature) to the boiler water setpoint. The suggested recovery curve keeps the 25→40, 27→44, 30→47, and 33→50°C room-to-water targets, adds 1.5°C water per 1°C room gap while recovering, and limits that extra heat to 8°C. An old direct-pass-through default is automatically replaced in this form; any other saved formula is kept as your custom value."
         }
       },
       "entity_helper": {
@@ -2010,6 +2048,12 @@
     }
   },
   "selector": {
+    "motion_detection_logic": {
+      "options": {
+        "majority": "Majority",
+        "any_active": "Any active"
+      }
+    },
     "sensor_aggregation": {
       "options": {
         "average": "Robust average",

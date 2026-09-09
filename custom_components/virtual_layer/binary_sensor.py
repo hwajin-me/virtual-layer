@@ -35,9 +35,17 @@ DEFAULT_BINARY_SENSOR_VALUE = "off"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(virtual_schema(DEFAULT_BINARY_SENSOR_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
+    vol.Optional(CONF_MOTION_HOLD_MINUTES): vol.All(
+        vol.Coerce(int), vol.Range(min=0, max=24 * 60)
+    ),
+    vol.Optional(CONF_MOTION_DETECTION_LOGIC): vol.In({"majority", "any_active"}),
 }))
 BINARY_SENSOR_SCHEMA = vol.Schema(virtual_schema(DEFAULT_BINARY_SENSOR_VALUE, {
     vol.Optional(CONF_CLASS): cv.string,
+    vol.Optional(CONF_MOTION_HOLD_MINUTES): vol.All(
+        vol.Coerce(int), vol.Range(min=0, max=24 * 60)
+    ),
+    vol.Optional(CONF_MOTION_DETECTION_LOGIC): vol.In({"majority", "any_active"}),
 }))
 
 SERVICE_ON = "turn_on"

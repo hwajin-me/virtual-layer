@@ -215,6 +215,7 @@ DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE = (
     "0] | max %} "
     "{{ base_water_temperature + [recovery_boost, 8] | min }}"
 )
+LEGACY_DIRECT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE = "{{ temperature | float(0) }}"
 NUMERIC_OUTLIER_THRESHOLD = 3
 SENSOR_AGGREGATION_AVERAGE = "average"
 SENSOR_AGGREGATIONS = (
@@ -1030,6 +1031,8 @@ _AUTO_HELPER_PROFILE_FIELDS = (
     CONF_NATIVE_VALUE_TEMPLATES,
     CONF_COMMAND_ACTIONS_JSON,
     CONF_DOMAIN_OPTIONS_JSON,
+    CONF_MOTION_HOLD_MINUTES,
+    CONF_MOTION_DETECTION_LOGIC,
     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     *CLIMATE_FORM_FIELDS,
     *FAN_FORM_FIELDS,
@@ -1544,6 +1547,19 @@ def _helper_update_schema(
             )
         ] = TEMPLATE_SELECTOR
     return _complete_form_schema(vol.Schema(schema))
+
+
+def _boiler_calibration_form_default(value: Any) -> Any:
+    """Offer the recovery curve when editing an untouched legacy default.
+
+    A different value is an explicit user calibration and must remain intact.
+    """
+    if (
+        isinstance(value, str)
+        and value.strip() == LEGACY_DIRECT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+    ):
+        return DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+    return value
 
 
 def _helper_usage_schema(
@@ -2663,6 +2679,7 @@ LOCATION_SOURCE_DOMAINS = {"device_tracker", "geolocation", "person"}
 LOCATION_HELPER_DISTANCE_METERS = 300
 LOCATION_HELPER_PRIORITY_WINDOW_SECONDS = 30 * 60
 PRESENCE_MOTION_CLEAR_DELAY_SECONDS = 5 * 60
+MOTION_HOLD_MINUTES_MAX = 24 * 60
 PRESENCE_MOTION_DEVICE_CLASSES = frozenset({"motion", "presence"})
 SAFETY_BOOLEAN_DEVICE_CLASSES = frozenset(
     {
@@ -2834,6 +2851,77 @@ def _setup_schema(
     if include_entity_toggle:
         schema[vol.Optional(CONF_ADD_FIRST_ENTITY, default=False)] = cv.boolean
     return _complete_form_schema(vol.Schema(schema))
+
+
+def _motion_hold_schema(defaults: Mapping) -> vol.Schema:
+    """Build the dedicated per-entity motion-recognition settings step."""
+    return _complete_form_schema(
+        vol.Schema(
+            {
+                vol.Required(
+                    CONF_MOTION_HOLD_MINUTES,
+                    default=_motion_hold_minutes_default(defaults),
+                ): vol.All(
+                    vol.Coerce(int), vol.Range(min=0, max=MOTION_HOLD_MINUTES_MAX)
+                ),
+                vol.Required(
+                    CONF_MOTION_DETECTION_LOGIC,
+                    default=defaults.get(CONF_MOTION_DETECTION_LOGIC, "majority"),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=["majority", "any_active"],
+                        translation_key="motion_detection_logic",
+                    )
+                ),
+            }
+        )
+    )
+
+
+def _is_automatic_motion_helper(defaults: Mapping) -> bool:
+    """Return whether defaults contain the generated composite-motion helper."""
+    if defaults.get(CONF_PLATFORM) != "binary_sensor":
+        return False
+    try:
+        options = _parse_domain_options(defaults.get(CONF_DOMAIN_OPTIONS_JSON))
+    except InvalidJson:
+        return False
+    return options.get(CONF_CLASS) == "motion" and "all_off_since" in _text_default(
+        defaults.get(CONF_VALUE_TEMPLATE)
+    )
+
+
+def _apply_motion_hold_minutes(
+    defaults: Mapping, value: Any, logic: Any = "majority"
+) -> dict[str, Any]:
+    """Apply selected motion settings while preserving user-authored helpers."""
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError, OverflowError) as err:
+        raise InvalidDomainOptions from err
+    if not 0 <= minutes <= MOTION_HOLD_MINUTES_MAX:
+        raise InvalidDomainOptions
+    if logic not in {"majority", "any_active"}:
+        raise InvalidDomainOptions
+    result = dict(defaults)
+    current_logic = result.get(CONF_MOTION_DETECTION_LOGIC, "majority")
+    if current_logic not in {"majority", "any_active"}:
+        current_logic = "majority"
+    current_delay = _motion_hold_minutes_default(result) * 60
+    result[CONF_MOTION_HOLD_MINUTES] = minutes
+    result[CONF_MOTION_DETECTION_LOGIC] = logic
+    source_entities = _stored_entity_ids(result.get(CONF_SOURCE_ENTITIES_TEXT))
+    variables, seen = [], set()
+    for entity_id in source_entities:
+        variables.append(_source_variable_name(entity_id, seen))
+    current_template = _text_default(result.get(CONF_VALUE_TEMPLATE))
+    if current_template == _presence_motion_helper_template(
+        source_entities, variables, "motion", current_delay, current_logic
+    ):
+        result[CONF_VALUE_TEMPLATE] = _presence_motion_helper_template(
+            source_entities, variables, "motion", minutes * 60, logic
+        )
+    return result
 
 
 def _normalized_group_name(value) -> str:
@@ -4344,6 +4432,55 @@ def _build_entity_config(
                     domain_options[field_name] = value
             elif value is not None:
                 domain_options[field_name] = value
+
+    # The hold time is deliberately a dedicated UI-only control rather than a
+    # binary-sensor platform option. It is encoded into an automatic helper so
+    # the runtime remains compatible with existing stored entity records.
+    if (
+        platform == "binary_sensor"
+        and domain_options.get(CONF_CLASS) == "motion"
+        and CONF_MOTION_HOLD_MINUTES in user_input
+    ):
+        try:
+            motion_hold_minutes = int(user_input[CONF_MOTION_HOLD_MINUTES])
+        except (TypeError, ValueError, OverflowError) as err:
+            raise InvalidDomainOptions from err
+        if not 0 <= motion_hold_minutes <= MOTION_HOLD_MINUTES_MAX:
+            raise InvalidDomainOptions
+        detection_logic = user_input.get(CONF_MOTION_DETECTION_LOGIC, "majority")
+        if detection_logic not in {"majority", "any_active"}:
+            raise InvalidDomainOptions
+        variable_names = []
+        existing_variables: set[str] = set()
+        for source_entity_id in source_entities:
+            variable_names.append(
+                _source_variable_name(source_entity_id, existing_variables)
+            )
+        current_template = entity.get(CONF_VALUE_TEMPLATE, "")
+        current_hold_seconds = _motion_hold_minutes_default(
+            {CONF_VALUE_TEMPLATE: current_template}
+        ) * 60
+        generated_template = _presence_motion_helper_template(
+            source_entities,
+            variable_names,
+            "motion",
+            current_hold_seconds,
+            detection_logic,
+        )
+        # Changing the setting updates an automatic helper but never replaces
+        # a user-authored state template.
+        if current_template == generated_template:
+            entity[CONF_VALUE_TEMPLATE] = _presence_motion_helper_template(
+                source_entities,
+                variable_names,
+                "motion",
+                motion_hold_minutes * 60,
+                detection_logic,
+            )
+        domain_options.pop(CONF_MOTION_HOLD_MINUTES, None)
+        domain_options.pop(CONF_MOTION_DETECTION_LOGIC, None)
+        entity[CONF_MOTION_HOLD_MINUTES] = motion_hold_minutes
+        entity[CONF_MOTION_DETECTION_LOGIC] = detection_logic
     entity.update(domain_options)
 
     polygon_geojson_value = user_input.get(CONF_POLYGON_GEOJSON_JSON)
@@ -5534,12 +5671,27 @@ def _safety_boolean_helper_template(variable_names: list[str]) -> str:
 def _presence_motion_helper_template(
     entity_ids: list[str],
     variable_names: list[str],
+    device_class: str,
+    motion_hold_seconds: int = PRESENCE_MOTION_CLEAR_DELAY_SECONDS,
+    detection_logic: str = "majority",
 ) -> str:
-    """Build a majority detector which clears after every source is off for 5 minutes."""
+    """Build a majority helper, with a configurable clear delay for motion only."""
     active_checks = ", ".join(
         f"(({variable_name} | lower) in {sorted(BOOLEAN_TRUE_STATES)!r})"
         for variable_name in variable_names
     )
+    active_condition = (
+        "(active | count) > 0"
+        if detection_logic == "any_active"
+        else "(active | count) > " + str(len(variable_names)) + " / 2"
+    )
+    majority = (
+        "{% set active = [" + active_checks + "] | select | list %}"
+        "{% if " + active_condition + " %}true"
+    )
+    if device_class == "presence":
+        return majority + "{% else %}false{% endif %}"
+
     off_checks = ", ".join(
         f"(({variable_name} | lower) == 'off')" for variable_name in variable_names
     )
@@ -5559,14 +5711,33 @@ def _presence_motion_helper_template(
         + str(len(variable_names))
         + " %}"
         "{% set all_off_since = [" + last_changed_values + "] | max %}"
-        "{% if (active | count) > " + str(len(variable_names)) + " / 2 %}true"
+        "{% if " + active_condition + " %}true"
         "{% elif this is not none and this.state == 'on' and "
         "((active | count) > 0 or not all_off or "
         "(as_timestamp(now()) - all_off_since) < "
-        + str(PRESENCE_MOTION_CLEAR_DELAY_SECONDS)
+        + str(motion_hold_seconds)
         + ") %}true"
         "{% else %}false{% endif %}"
     )
+
+
+def _motion_hold_minutes_default(defaults: Mapping) -> int:
+    """Recover the generated motion helper's delay for a reopened form."""
+    configured = defaults.get(CONF_MOTION_HOLD_MINUTES)
+    if not isinstance(configured, bool):
+        try:
+            configured = int(configured)
+        except (TypeError, ValueError, OverflowError):
+            configured = None
+        if configured is not None and 0 <= configured <= MOTION_HOLD_MINUTES_MAX:
+            return configured
+    template = _text_default(defaults.get(CONF_VALUE_TEMPLATE))
+    match = re.search(r"\) < (\d+)\s*\) %\}true", template)
+    if match:
+        seconds = int(match.group(1))
+        if 0 <= seconds <= MOTION_HOLD_MINUTES_MAX * 60 and seconds % 60 == 0:
+            return seconds // 60
+    return PRESENCE_MOTION_CLEAR_DELAY_SECONDS // 60
 
 
 def _source_state_is_number(entity_id: str, state) -> bool:
@@ -8487,6 +8658,7 @@ def _reference_entity_defaults(
         defaults[CONF_VALUE_TEMPLATE] = _presence_motion_helper_template(
             entity_ids,
             variable_names,
+            presence_or_motion_class,
         )
     elif platform == "binary_sensor" and safety_boolean_sources:
         defaults[CONF_VALUE_TEMPLATE] = _safety_boolean_helper_template(variable_names)
@@ -9534,6 +9706,13 @@ def _entity_form_defaults(
         )
     elif platform == "air_quality":
         defaults[CONF_MATTER_AIR_QUALITY] = _matter_air_quality_default(defaults)
+    elif platform == "binary_sensor":
+        motion_hold_minutes = domain_options.pop(CONF_MOTION_HOLD_MINUTES, None)
+        if motion_hold_minutes is not None:
+            defaults[CONF_MOTION_HOLD_MINUTES] = motion_hold_minutes
+        detection_logic = domain_options.pop(CONF_MOTION_DETECTION_LOGIC, None)
+        if detection_logic is not None:
+            defaults[CONF_MOTION_DETECTION_LOGIC] = detection_logic
     defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
     return defaults
 
@@ -9627,6 +9806,7 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
         self._matter_fan_speed_source: str | None = None
         self._fan_source_role_choices: dict[str, tuple[str, ...]] = {}
         self._fan_source_roles: dict[str, str] = {}
+        self._motion_hold_configured = False
 
     @staticmethod
     @callback
@@ -10060,6 +10240,13 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
 
     async def async_step_entity(self, user_input=None):
         """Add the first UI-managed virtual entity."""
+        if (
+            user_input is None
+            and not self._motion_hold_configured
+            and self._entity_defaults is not None
+            and _is_automatic_motion_helper(self._entity_defaults)
+        ):
+            return await self.async_step_motion_hold()
         errors = _flow_errors(self, "entity")
         if user_input is not None:
             user_input = _flatten_entity_form_sections(user_input)
@@ -10143,6 +10330,26 @@ class VirtualFlowHandler(config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
             errors=errors,
         )
 
+    async def async_step_motion_hold(self, user_input=None):
+        """Choose how long this generated motion helper remains detected."""
+        errors = _flow_errors(self, "motion_hold")
+        if user_input is not None:
+            try:
+                self._entity_defaults = _apply_motion_hold_minutes(
+                    self._entity_defaults or {},
+                    user_input[CONF_MOTION_HOLD_MINUTES],
+                    user_input[CONF_MOTION_DETECTION_LOGIC],
+                )
+                self._motion_hold_configured = True
+                return await self.async_step_entity()
+            except (InvalidDomainOptions, KeyError):
+                errors[CONF_MOTION_HOLD_MINUTES] = "invalid_domain_options"
+        return self.async_show_form(
+            step_id="motion_hold",
+            data_schema=_motion_hold_schema(self._entity_defaults or {}),
+            errors=errors,
+        )
+
     async def async_step_import(self, import_data):
         """Reject non-UI import. Virtual Layer is UI-only."""
         return self.async_abort(reason="import_not_supported")
@@ -10181,6 +10388,8 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         self._edit_matter_fan_speed_source: str | None = None
         self._edit_fan_source_role_choices: dict[str, tuple[str, ...]] = {}
         self._edit_fan_source_roles: dict[str, str] = {}
+        self._add_motion_hold_configured = False
+        self._edit_motion_hold_configured = False
 
     async def async_step_init(self, user_input=None):
         errors = _flow_errors(self, "init")
@@ -10631,6 +10840,13 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
 
     async def async_step_entity(self, user_input=None):
         """Add a UI-managed virtual entity."""
+        if (
+            user_input is None
+            and not self._add_motion_hold_configured
+            and self._entity_defaults is not None
+            and _is_automatic_motion_helper(self._entity_defaults)
+        ):
+            return await self.async_step_motion_hold()
         errors = _flow_errors(self, "entity")
         if user_input is not None:
             user_input = _flatten_entity_form_sections(user_input)
@@ -10707,6 +10923,26 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="entity",
             data_schema=_entity_schema(user_input or self._entity_defaults),
+            errors=errors,
+        )
+
+    async def async_step_motion_hold(self, user_input=None):
+        """Choose the hold time for a newly added motion helper."""
+        errors = _flow_errors(self, "motion_hold")
+        if user_input is not None:
+            try:
+                self._entity_defaults = _apply_motion_hold_minutes(
+                    self._entity_defaults or {},
+                    user_input[CONF_MOTION_HOLD_MINUTES],
+                    user_input[CONF_MOTION_DETECTION_LOGIC],
+                )
+                self._add_motion_hold_configured = True
+                return await self.async_step_entity()
+            except (InvalidDomainOptions, KeyError):
+                errors[CONF_MOTION_HOLD_MINUTES] = "invalid_domain_options"
+        return self.async_show_form(
+            step_id="motion_hold",
+            data_schema=_motion_hold_schema(self._entity_defaults or {}),
             errors=errors,
         )
 
@@ -11147,8 +11383,10 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="edit_entity_helper",
             data_schema=_helper_update_schema(
-                self._edit_current_defaults.get(
-                    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                _boiler_calibration_form_default(
+                    self._edit_current_defaults.get(
+                        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                    )
                 )
                 if (
                     self._edit_current_defaults
@@ -11263,6 +11501,14 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         errors = _flow_errors(self, "edit_entity")
         if self._edit_device_name is None or self._edit_index is None:
             return await self.async_step_select_entity()
+
+        if (
+            user_input is None
+            and not self._edit_motion_hold_configured
+            and self._entity_defaults is not None
+            and _is_automatic_motion_helper(self._entity_defaults)
+        ):
+            return await self.async_step_edit_motion_hold()
 
         if user_input is not None:
             user_input = _flatten_entity_form_sections(user_input)
@@ -11445,6 +11691,26 @@ class VirtualOptionsFlowHandler(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id="edit_entity",
             data_schema=_entity_schema(defaults),
+            errors=errors,
+        )
+
+    async def async_step_edit_motion_hold(self, user_input=None):
+        """Update the hold time for an existing generated motion helper."""
+        errors = _flow_errors(self, "edit_motion_hold")
+        if user_input is not None:
+            try:
+                self._entity_defaults = _apply_motion_hold_minutes(
+                    self._entity_defaults or {},
+                    user_input[CONF_MOTION_HOLD_MINUTES],
+                    user_input[CONF_MOTION_DETECTION_LOGIC],
+                )
+                self._edit_motion_hold_configured = True
+                return await self.async_step_edit_entity()
+            except (InvalidDomainOptions, KeyError):
+                errors[CONF_MOTION_HOLD_MINUTES] = "invalid_domain_options"
+        return self.async_show_form(
+            step_id="edit_motion_hold",
+            data_schema=_motion_hold_schema(self._entity_defaults or {}),
             errors=errors,
         )
 
