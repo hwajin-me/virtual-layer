@@ -161,7 +161,7 @@
               "dawarich_history_limit": "dawarich_history 속성에 유지할 최근 지점 요약의 수입니다(1–100).",
               "dawarich_person": "선택 사항인 Home Assistant Person을 Dawarich Family 구성원과 연결합니다. /api/v1/families/locations를 사용하며 Person 표시 이름과 가족 구성원 이름이 일치해야 합니다.",
               "presence_classification": "복합 tracker에서 활성화하면 Wi‑Fi/ESPresense 재실은 home, BLE 거리는 front_door, zone.home과의 GPS 거리는 near_home·away·far_away로 분류합니다.",
-              "matter_light_type": "가상 조명 계약을 선택합니다: 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상입니다. 여러 소스를 묶으면 생성된 헬퍼가 모든 전구가 공통으로 지원하는 모드만 노출합니다. 예를 들어 RGB 전구와 색온도 전구가 모두 색온도를 지원하면 색온도 조명이 됩니다. 의도적으로 제어 범위를 제한하려면 더 작은 계약을 선택하세요. 효과와 깜빡임은 노출하지 않습니다.",
+              "matter_light_type": "가상 조명의 최대 기능을 선택합니다: 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상입니다. 전구를 묶으면 생성된 헬퍼가 가장 적은 지원 프로필을 사용합니다. RGB와 색온도 전구는 색온도 조명이 되고, 켜기/끄기 전용 전구가 하나라도 있으면 가상 조명은 켜기/끄기만 지원합니다. 효과와 깜빡임은 노출하지 않습니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다."
             }
           },
@@ -883,7 +883,7 @@
               "dawarich_history_limit": "엔티티 속성으로 유지할 최근 지점 요약의 수입니다(1–100).",
               "dawarich_person": "표시 이름으로 Dawarich Family 구성원과 연결할 선택 Person입니다.",
               "presence_classification": "Wi‑Fi/ESPresense는 home, BLE 거리는 front_door, zone.home과의 GPS 거리는 near_home·away·far_away로 분류합니다.",
-              "matter_light_type": "가상 조명 계약을 선택합니다: 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상입니다. 여러 소스를 묶으면 생성된 헬퍼가 모든 전구가 공통으로 지원하는 모드만 노출합니다. 예를 들어 RGB 전구와 색온도 전구가 모두 색온도를 지원하면 색온도 조명이 됩니다. 의도적으로 제어 범위를 제한하려면 더 작은 계약을 선택하세요. 효과와 깜빡임은 노출하지 않습니다.",
+              "matter_light_type": "가상 조명의 최대 기능을 선택합니다: 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상입니다. 전구를 묶으면 생성된 헬퍼가 가장 적은 지원 프로필을 사용합니다. RGB와 색온도 전구는 색온도 조명이 되고, 켜기/끄기 전용 전구가 하나라도 있으면 가상 조명은 켜기/끄기만 지원합니다. 효과와 깜빡임은 노출하지 않습니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다."
             }
           },
@@ -1529,7 +1529,7 @@
               "dawarich_history_limit": "엔티티 속성으로 유지할 최근 지점 요약의 수입니다(1–100).",
               "dawarich_person": "표시 이름으로 Dawarich Family 구성원과 연결할 선택 Person입니다.",
               "presence_classification": "Wi‑Fi/ESPresense는 home, BLE 거리는 front_door, zone.home과의 GPS 거리는 near_home·away·far_away로 분류합니다.",
-              "matter_light_type": "가상 조명 계약을 선택합니다: 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상입니다. 여러 소스를 묶으면 생성된 헬퍼가 모든 전구가 공통으로 지원하는 모드만 노출합니다. 예를 들어 RGB 전구와 색온도 전구가 모두 색온도를 지원하면 색온도 조명이 됩니다. 의도적으로 제어 범위를 제한하려면 더 작은 계약을 선택하세요. 효과와 깜빡임은 노출하지 않습니다.",
+              "matter_light_type": "가상 조명의 최대 기능을 선택합니다: 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상입니다. 전구를 묶으면 생성된 헬퍼가 가장 적은 지원 프로필을 사용합니다. RGB와 색온도 전구는 색온도 조명이 되고, 켜기/끄기 전용 전구가 하나라도 있으면 가상 조명은 켜기/끄기만 지원합니다. 효과와 깜빡임은 노출하지 않습니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다."
             }
           },

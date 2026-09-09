@@ -90,6 +90,7 @@ from custom_components.virtual_layer.config_flow import (
     _async_build_entity_config,
     _auto_helper_profile,
     _apply_fan_source_roles,
+    _apply_media_player_source_priorities,
     _apply_matter_fan_level_helper,
     _apply_matter_fan_percentage_helper,
     _build_device_config,
@@ -124,10 +125,12 @@ from custom_components.virtual_layer.config_flow import (
     _managed_device_choices,
     _matter_fan_source_levels,
     _merged_native_template,
-    _matter_light_type_for_source_states,
+    _lowest_light_capability,
     _native_reference_templates,
     _native_source_helper_default,
     _native_source_template,
+    _media_player_priority_template,
+    _media_player_source_priority_schema,
     _needs_domain_specific_form,
     _normalize_attribute_mapping,
     _normalize_reference_entity_ids,
@@ -182,6 +185,7 @@ from custom_components.virtual_layer.const import (
     CONF_MAX,
     CONF_MIN,
     CONF_MODEL,
+    CONF_MEDIA_PLAYER_SOURCE_PRIORITIES,
     CONF_NATIVE_TEMPLATES,
     CONF_PERSISTENT,
     CONF_PRESENCE_CLASSIFICATION,
@@ -755,6 +759,23 @@ def test_humidifier_and_humidity_sensor_convert_to_one_average_sensor(hass):
         "state_class": "measurement",
         "unit_of_measurement": "%",
     }
+
+
+def test_cross_domain_sensor_conversion_uses_native_fallback_unit(hass):
+    """Missing optional native unit metadata must retain the catalog fallback."""
+    hass.states.async_set("climate.living_room", "heat", {"current_temperature": 21})
+    hass.states.async_set(
+        "sensor.hallway_temperature",
+        "22",
+        {"device_class": "temperature", "unit_of_measurement": "°C"},
+    )
+
+    choice = _sensor_conversion_choices(
+        ["climate.living_room", "sensor.hallway_temperature"], hass
+    )["temperature"]
+
+    assert choice[4] == "°C"
+    assert choice[6] == ((1.0, 0.0), (1.0, 0.0))
 
 
 @pytest.mark.parametrize(
@@ -1838,36 +1859,52 @@ def test_sparse_native_attribute_tracks_all_selected_sources(hass):
     )
 
 
-def test_composite_light_helpers_expose_only_shared_color_controls(hass):
-    """RGB-capable and CT bulbs must not advertise unsupported RGB control."""
-    first = "light.rgb_and_ct"
-    second = "light.ct_only"
+def test_combined_light_keeps_brightness_control_when_a_source_is_unavailable(hass):
+    """One sleeping bulb must not make an otherwise healthy group unusable."""
+    entity_ids = ["light.ready", "light.sleeping"]
     hass.states.async_set(
-        first,
+        entity_ids[0],
         "on",
-        {"supported_color_modes": ["hs", "color_temp"], "brightness": 100},
+        {"supported_color_modes": ["color_temp"], "brightness": 128},
     )
-    hass.states.async_set(
-        second,
-        "on",
-        {"supported_color_modes": ["color_temp"], "brightness": 200},
-    )
-    states = [hass.states.get(first), hass.states.get(second)]
+    hass.states.async_set(entity_ids[1], "unavailable")
 
-    assert _matter_light_type_for_source_states(states) == "color_temperature"
-    template = _native_reference_templates("light", [first, second], states)[
-        "supported_color_modes"
-    ]
-    assert Template(template, hass).async_render(parse_result=True) == ["color_temp"]
+    defaults = _reference_entity_defaults(hass, entity_ids)
+    native = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert Template(native["is_on"], hass).async_render(parse_result=True) is True
+    assert Template(native["brightness"], hass).async_render(parse_result=True) == 128
+    assert Template(
+        defaults[CONF_AVAILABILITY_TEMPLATE], hass
+    ).async_render(parse_result=True) is True
 
-    # A source losing color-temperature support reduces the virtual entity to
-    # on/off instead of passing an invalid colour command.
-    hass.states.async_set(
-        first,
-        "on",
-        {"supported_color_modes": ["hs", "brightness"], "brightness": 100},
-    )
-    assert Template(template, hass).async_render(parse_result=True) == ["onoff"]
+
+@pytest.mark.parametrize(
+    ("first_modes", "second_modes", "expected"),
+    [
+        (["hs"], ["hs"], "extended_color"),
+        (["hs"], ["color_temp"], "color_temperature"),
+        (["hs"], ["onoff"], "on_off"),
+    ],
+)
+def test_composite_light_uses_the_least_capable_profile(
+    hass, first_modes, second_modes, expected
+):
+    """RGB+CT becomes CT; a toggle source reduces the whole group to on/off."""
+    entity_ids = ["light.rgb", "light.other"]
+    hass.states.async_set(entity_ids[0], "on", {"supported_color_modes": first_modes})
+    hass.states.async_set(entity_ids[1], "on", {"supported_color_modes": second_modes})
+    states = [hass.states.get(entity_id) for entity_id in entity_ids]
+
+    assert _lowest_light_capability(states) == expected
+    defaults = _reference_entity_defaults(hass, entity_ids)
+    assert defaults[CONF_MATTER_LIGHT_TYPE] == expected
+    assert Template(
+        defaults[CONF_NATIVE_VALUE_TEMPLATES]["supported_color_modes"], hass
+    ).async_render(parse_result=True) == {
+        "extended_color": ["hs", "xy", "color_temp"],
+        "color_temperature": ["color_temp"],
+        "on_off": ["onoff"],
+    }[expected]
 
 
 def test_native_multi_source_helpers_use_property_semantics(hass):
@@ -2483,7 +2520,6 @@ def test_multiple_media_players_with_on_off_snapshots_use_state_helper(hass):
         hass,
         ["media_player.tv", "media_player.apple_tv"],
     )
-
     assert defaults[CONF_PLATFORM] == "media_player"
     assert "values[0]" in defaults[CONF_VALUE_TEMPLATE]
     assert (
@@ -2493,6 +2529,59 @@ def test_multiple_media_players_with_on_off_snapshots_use_state_helper(hass):
         == "off"
     )
 
+
+def test_media_player_property_priority_prefers_active_source_then_falls_back(hass):
+    hass.states.async_set("media_player.samsung_tv", "on", {"media_title": "TV"})
+    hass.states.async_set("media_player.apple_tv", "playing", {"media_title": "Apple"})
+
+    template = _media_player_priority_template(
+        "media_title", ["media_player.apple_tv", "media_player.samsung_tv"]
+    )
+    assert Template(template, hass).async_render() == "Apple"
+
+    hass.states.async_set("media_player.apple_tv", "off", {"media_title": "Apple"})
+    assert Template(template, hass).async_render() == "TV"
+
+    applied = _apply_media_player_source_priorities(
+        {CONF_NATIVE_VALUE_TEMPLATES: {}},
+        {"media_title": ["media_player.apple_tv", "media_player.samsung_tv"]},
+        ["media_player.samsung_tv", "media_player.apple_tv"],
+    )
+    assert applied[CONF_MEDIA_PLAYER_SOURCE_PRIORITIES] == {
+        "media_title": ["media_player.apple_tv", "media_player.samsung_tv"]
+    }
+    assert "media_title" in applied[CONF_NATIVE_VALUE_TEMPLATES]
+
+    # A stale title on an off Apple TV must never eclipse the selected TV.
+    assert Template(applied[CONF_NATIVE_VALUE_TEMPLATES]["media_title"], hass).async_render() == "TV"
+
+
+def test_media_player_priority_schema_limits_each_picker_to_configured_sources():
+    schema = _media_player_source_priority_schema(
+        ["media_player.samsung_tv", "media_player.apple_tv"]
+    )
+    media_title_selector = next(
+        validator
+        for marker, validator in schema.schema.items()
+        if getattr(marker, "schema", marker) == "media_title"
+    )
+    assert media_title_selector.config["include_entities"] == [
+        "media_player.samsung_tv",
+        "media_player.apple_tv",
+    ]
+
+
+def test_clearing_media_player_priority_resets_only_generated_helper():
+    generated = _media_player_priority_template(
+        "media_title", ["media_player.apple_tv", "media_player.samsung_tv"]
+    )
+    reset = _apply_media_player_source_priorities(
+        {CONF_NATIVE_VALUE_TEMPLATES: {"media_title": generated}},
+        {"media_title": []},
+        ["media_player.samsung_tv", "media_player.apple_tv"],
+    )
+    assert reset[CONF_MEDIA_PLAYER_SOURCE_PRIORITIES] == {}
+    assert "media_player.samsung_tv" in reset[CONF_NATIVE_VALUE_TEMPLATES]["media_title"]
 
 def test_xiaomi_fan_uses_number_speed_only_for_favorite_and_manual_modes(hass):
     fan_entity_id = "fan.air_purifier_purifier_1"

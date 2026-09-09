@@ -1119,35 +1119,44 @@ HUMIDIFIER_ACTION_VALUES = ("off", "humidifying", "drying", "idle")
 HUMIDIFIER_CLASS_VALUES = ("humidifier", "dehumidifier")
 MATTER_LIGHT_TYPES = ("on_off", "dimmable", "color_temperature", "extended_color")
 
+# Light colour modes form a control hierarchy for a composite virtual light.
+# RGB-capable bulbs can participate in a colour-temperature group, while an
+# on/off-only member deliberately reduces the whole group to on/off.
+_LIGHT_CAPABILITY_RANK = {
+    "on_off": 0,
+    "dimmable": 1,
+    "color_temperature": 2,
+    "extended_color": 3,
+}
+_LIGHT_CAPABILITY_MODES = {
+    "on_off": ["onoff"],
+    "dimmable": ["brightness"],
+    "color_temperature": ["color_temp"],
+    "extended_color": ["hs", "xy", "color_temp"],
+}
 
-def _matter_light_type_for_source_states(states: Collection) -> str:
-    """Return the safest Matter light contract shared by all sources.
 
-    A virtual light proxies one command to every selected source.  Its default
-    must therefore describe their common control surface, rather than the
-    (usually richer) first source.  In particular an RGB + colour-temperature
-    group that both advertise ``color_temp`` becomes a colour-temperature
-    light, so Home Assistant never offers an RGB command to the CT-only member.
-    """
-    source_modes: list[set[str]] = []
-    for state in states:
-        modes = state.attributes.get("supported_color_modes", ())
-        if not isinstance(modes, (list, tuple, set)):
-            modes = ()
-        source_modes.append({str(mode) for mode in modes})
-    if not source_modes:
-        return "dimmable"
-
-    common_modes = set.intersection(*source_modes)
-    if "color_temp" in common_modes:
-        return "color_temperature"
-    if common_modes & {"hs", "xy", "rgb", "rgbw", "rgbww"}:
+def _light_source_capability(state) -> str:
+    """Classify a source light into its highest usable control profile."""
+    raw_modes = state.attributes.get("supported_color_modes", ())
+    modes = {str(mode) for mode in raw_modes} if isinstance(raw_modes, (list, tuple, set)) else set()
+    if modes & {"hs", "xy", "rgb", "rgbw", "rgbww"}:
         return "extended_color"
-    if "brightness" in common_modes or all(
-        "brightness" in state.attributes for state in states
-    ):
+    if "color_temp" in modes:
+        return "color_temperature"
+    if "brightness" in modes or "brightness" in state.attributes:
         return "dimmable"
     return "on_off"
+
+
+def _lowest_light_capability(states: Collection) -> str:
+    """Return the least capable profile represented by selected light sources."""
+    if not states:
+        return "dimmable"
+    return min(
+        (_light_source_capability(state) for state in states),
+        key=_LIGHT_CAPABILITY_RANK.__getitem__,
+    )
 
 _DOMAIN_OPTION_RESERVED_KEYS = {
     ATTR_ENTITY_ID,
@@ -1241,6 +1250,88 @@ POLYGON_DISTANCE_SELECTOR = selector.NumberSelector(
 def _native_property_selector(platform: str, property_name: str):
     """Return a useful editor while keeping native values template-backed."""
     return TEMPLATE_SELECTOR
+
+
+def _media_player_source_priority_schema(
+    source_entities: Collection[str], defaults: Mapping | None = None
+) -> vol.Schema:
+    """Choose ordered source fallbacks for each media-player property."""
+    defaults = defaults or {}
+    sources = list(source_entities)
+    schema = {}
+    for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES["media_player"]:
+        selected = defaults.get(property_name, [])
+        selected = [item for item in selected if item in sources]
+        schema[vol.Optional(property_name, default=selected)] = selector.EntitySelector(
+            selector.EntitySelectorConfig(
+                domain="media_player",
+                include_entities=sources,
+                multiple=True,
+                reorder=True,
+            )
+        )
+    return _complete_form_schema(vol.Schema(schema))
+
+
+def _media_player_priority_template(property_name: str, entity_ids: list[str]) -> str:
+    """Use an active player first, then ordered sources with usable values."""
+    attribute_name = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(
+        property_name, property_name
+    )
+    is_state = property_name in {"media_state", *NATIVE_TEMPLATE_STATE_PROPERTIES}
+    candidate = "states(entity_id)" if is_state else f"state_attr(entity_id, {attribute_name!r})"
+    inactive_values = "['unknown', 'unavailable', '', 'off', 'idle']" if is_state else "['unknown', 'unavailable', '']"
+    fallback = repr(_plain_options(_native_source_helper_default("media_player", property_name)))
+    # Apple TV often remains ``on`` while a TV input is being watched.  Only
+    # a player with an actual playback session wins the first pass; a second
+    # pass still makes every configured source a safe fallback.
+    return (
+        "{% set ns = namespace(value=none) %}"
+        f"{{% for entity_id in {entity_ids!r} %}}"
+        f"{{% set candidate = {candidate} %}}"
+        "{% if ns.value is none and states(entity_id) in ['playing', 'paused', 'buffering'] "
+        "and candidate is not none and candidate not in ['unknown', 'unavailable', ''] %}"
+        "{% set ns.value = candidate %}{% endif %}{% endfor %}"
+        f"{{% for entity_id in {entity_ids!r} %}}"
+        f"{{% set candidate = {candidate} %}}"
+        "{% if ns.value is none and states(entity_id) not in "
+        "['off', 'idle', 'unknown', 'unavailable'] and candidate is not none "
+        f"and candidate not in {inactive_values} %}}"
+        "{% set ns.value = candidate %}{% endif %}{% endfor %}"
+        f"{{{{ ns.value if ns.value is not none else {fallback} }}}}"
+    )
+
+
+def _apply_media_player_source_priorities(
+    defaults: Mapping,
+    priorities: Mapping[str, Any],
+    source_entities: Collection[str],
+) -> dict[str, Any]:
+    """Persist explicit media property priorities and their generated helpers."""
+    result = dict(defaults)
+    allowed = set(source_entities)
+    normalized = {}
+    templates = dict(_native_template_mapping(result.get(CONF_NATIVE_VALUE_TEMPLATES)))
+    for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES["media_player"]:
+        values = priorities.get(property_name, [])
+        if not isinstance(values, list):
+            continue
+        values = [item for item in values if isinstance(item, str) and item in allowed]
+        if values:
+            normalized[property_name] = values
+            templates[property_name] = _media_player_priority_template(property_name, values)
+        elif "states(entity_id) in ['playing', 'paused', 'buffering']" in templates.get(
+            property_name, ""
+        ):
+            # This is one of our generated helpers, not a hand-written
+            # template. Reset it to the normal configured source order when
+            # the user clears the property-specific override.
+            templates[property_name] = _media_player_priority_template(
+                property_name, list(source_entities)
+            )
+    result[CONF_MEDIA_PLAYER_SOURCE_PRIORITIES] = normalized
+    result[CONF_NATIVE_VALUE_TEMPLATES] = templates
+    return result
 
 
 _FORM_FIELD_EXAMPLES: dict[str, Any] = {
@@ -1809,6 +1900,119 @@ def _sensor_state_sources_support_numeric_conversion(entity_ids, hass) -> bool:
     return True
 
 
+def _typed_measurement_properties(
+    entity_id: str, hass=None
+) -> dict[str, tuple[str, str | None, str, str]] | None:
+    """Describe typed, numeric measurements one source can contribute.
+
+    ``None`` means a state-backed source whose device class is not available
+    yet.  The caller may still expose a native-domain conversion choice, then
+    validates it once Home Assistant has supplied the source metadata.
+    """
+    domain = entity_id.split(".", 1)[0]
+    if domain in {"sensor", "number"}:
+        if hass is None:
+            return None
+        state = hass.states.get(entity_id)
+        device_class = state.attributes.get("device_class") if state else None
+        if not isinstance(device_class, str) or not device_class:
+            return {}
+        return {device_class: ("state", "unit_of_measurement", "", "direct")}
+
+    properties = {}
+    for (
+        attribute,
+        device_class,
+        unit_attribute,
+        fallback_unit,
+        conversion,
+    ) in _SENSOR_CONVERSION_PROPERTIES.get(domain, ()):
+        if device_class:
+            # Catalog order defines the canonical property. A climate's
+            # current temperature is a measurement; its setpoint is not.
+            properties.setdefault(
+                device_class,
+                (attribute, unit_attribute, fallback_unit, conversion),
+            )
+    return properties
+
+
+def _cross_domain_sensor_conversion_choices(
+    entity_ids: tuple[str, ...], hass=None
+) -> dict[
+    str,
+    tuple[
+        tuple[str, ...],
+        tuple[str, ...],
+        str,
+        None,
+        str,
+        str,
+        tuple[tuple[float, float], ...],
+    ],
+]:
+    """Return safe sensor conversions for differently-shaped source domains."""
+    if len({entity_id.split(".", 1)[0] for entity_id in entity_ids}) < 2:
+        return {}
+
+    source_properties = [
+        _typed_measurement_properties(entity_id, hass) for entity_id in entity_ids
+    ]
+    known_classes = [set(properties) for properties in source_properties if properties]
+    if not known_classes:
+        return {}
+
+    choices = {}
+    for device_class in sorted(set.intersection(*known_classes)):
+        descriptors = [
+            properties.get(device_class)
+            if properties is not None
+            else ("state", "unit_of_measurement", "", "direct")
+            for properties in source_properties
+        ]
+        if any(descriptor is None for descriptor in descriptors):
+            continue
+        source_attributes = tuple(descriptor[0] for descriptor in descriptors)
+        conversions = {descriptor[3] for descriptor in descriptors}
+        if conversions <= {"direct", "percent_clamped"}:
+            conversion = "percent_clamped" if "percent_clamped" in conversions else "direct"
+        elif len(conversions) == 1:
+            conversion = conversions.pop()
+        else:
+            continue
+
+        if hass is None:
+            unit = next((descriptor[2] for descriptor in descriptors if descriptor[2]), "")
+            transforms = tuple((1.0, 0.0) for _entity_id in entity_ids)
+        else:
+            source_units = [
+                (
+                    state.attributes.get(descriptor[1]) or descriptor[2]
+                    if descriptor[1]
+                    else descriptor[2]
+                )
+                for state, descriptor in zip(
+                    (hass.states.get(entity_id) for entity_id in entity_ids),
+                    descriptors,
+                    strict=True,
+                )
+            ]
+            profile = _sensor_unit_conversion_transforms(source_units, device_class)
+            if profile is None:
+                continue
+            unit, transforms = profile
+        choices[device_class] = (
+            entity_ids,
+            source_attributes,
+            device_class,
+            None,
+            unit,
+            conversion,
+            transforms,
+        )
+    return choices
+
+
 def _sensor_conversion_choices(
     entity_ids: Collection[str],
     hass=None,
@@ -1908,120 +2112,15 @@ def _sensor_conversion_choices(
                     conversion,
                     transforms,
                 )
-        # Different entity domains can expose the same measurement under
-        # different native attribute names (or, for sensor, as state). Match
-        # those forms by typed sensor device class rather than attribute name.
-        # This covers climate + temperature sensor, humidifier + humidity
-        # sensor, and compatible native-domain composites without accepting
-        # arbitrary attributes.
-        if len({entity_id.split(".", 1)[0] for entity_id in entity_ids}) > 1:
-            candidate_properties: list[
-                dict[str, tuple[str, str | None, str, str]] | None
-            ] = []
-            for entity_id in entity_ids:
-                domain = entity_id.split(".", 1)[0]
-                if domain == "sensor":
-                    if hass is None:
-                        candidate_properties.append(None)
-                        continue
-                    state = hass.states.get(entity_id)
-                    device_class = (
-                        str(state.attributes.get("device_class"))
-                        if state and state.attributes.get("device_class")
-                        else None
-                    )
-                    candidate_properties.append(
-                        {
-                            device_class: ("state", "unit_of_measurement", "", "direct")
-                        }
-                        if device_class
-                        else {}
-                    )
-                    continue
-                native_properties = {}
-                for (
-                    attribute,
-                    device_class,
-                    unit_attribute,
-                    fallback_unit,
-                    conversion,
-                ) in _SENSOR_CONVERSION_PROPERTIES.get(domain, ()):
-                    if device_class:
-                        # Keep the catalog's ordering: for example, a climate
-                        # temperature sensor should follow current temperature,
-                        # not a setpoint that happens to share its class.
-                        native_properties.setdefault(
-                            device_class,
-                            (attribute, unit_attribute, fallback_unit, conversion),
-                        )
-                candidate_properties.append(native_properties)
-            known_classes = [
-                set(properties)
-                for properties in candidate_properties
-                if properties is not None
-            ]
-            shared_classes = set.intersection(*known_classes) if known_classes else set()
-            for device_class in sorted(shared_classes):
-                descriptors = [
-                    properties.get(device_class)
-                    if properties is not None
-                    else ("state", "unit_of_measurement", "", "direct")
-                    for properties in candidate_properties
-                ]
-                # A sensor has no static type before its state is available.
-                # The native side still makes this a valid target-domain choice;
-                # the runtime-state path below verifies the actual class.
-                if any(descriptor is None for descriptor in descriptors):
-                    continue
-                source_attributes = tuple(descriptor[0] for descriptor in descriptors)
-                conversions = {descriptor[3] for descriptor in descriptors}
-                if conversions <= {"direct", "percent_clamped"}:
-                    # Native humidity values are bounded percentages; applying
-                    # the same safety bound to a sensor's state is valid.
-                    conversion = "percent_clamped" if "percent_clamped" in conversions else "direct"
-                elif len(conversions) == 1:
-                    conversion = conversions.pop()
-                else:
-                    continue
-                if hass is None:
-                    unit = next(
-                        (descriptor[2] for descriptor in descriptors if descriptor[2]),
-                        "",
-                    )
-                    transforms = tuple((1.0, 0.0) for _entity_id in entity_ids)
-                else:
-                    source_units = []
-                    for state, descriptor in zip(
-                        (hass.states.get(entity_id) for entity_id in entity_ids),
-                        descriptors,
-                        strict=True,
-                    ):
-                        if state is None:
-                            break
-                        unit_attribute = descriptor[1]
-                        source_units.append(
-                            state.attributes.get(unit_attribute)
-                            if unit_attribute
-                            else descriptor[2]
-                        )
-                    profile = _sensor_unit_conversion_transforms(
-                        source_units, device_class
-                    ) if len(source_units) == len(entity_ids) else None
-                    if profile is None:
-                        continue
-                    unit, transforms = profile
-                choices.setdefault(
-                    device_class,
-                    (
-                        entity_ids,
-                        source_attributes,
-                        device_class,
-                        None,
-                        unit,
-                        conversion,
-                        transforms,
-                    ),
-                )
+        choices.update(
+            {
+                device_class: choice
+                for device_class, choice in _cross_domain_sensor_conversion_choices(
+                    entity_ids, hass
+                ).items()
+                if device_class not in choices
+            }
+        )
         return choices
     for entity_id in entity_ids:
         domain = entity_id.split(".", 1)[0]
@@ -3002,6 +3101,20 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 }
             },
         )
+    if platform == "media_player":
+        source_entities = _stored_entity_ids(
+            defaults.get(CONF_SOURCE_ENTITIES_TEXT, "")
+        )
+        if len(source_entities) > 1 and all(
+            entity_id.startswith("media_player.") for entity_id in source_entities
+        ):
+            schema[vol.Optional(CONF_MEDIA_PLAYER_SOURCE_PRIORITIES, default=dict)] = section(
+                _media_player_source_priority_schema(
+                    source_entities,
+                    defaults.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITIES),
+                ),
+                {"collapsed": False},
+            )
     return _complete_form_schema(vol.Schema(schema, extra=vol.ALLOW_EXTRA))
 
 
@@ -3899,6 +4012,23 @@ def _build_entity_config(
                 native_templates["target_temperature_step"] = _literal_template(
                     float(temperature_step)
                 )
+    if platform == "media_player":
+        priorities = user_input.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITIES)
+        if priorities is not None:
+            if not isinstance(priorities, Mapping):
+                raise InvalidDomainOptions
+            source_entities = _stored_entity_ids(
+                user_input.get(CONF_SOURCE_ENTITIES_TEXT, "")
+            )
+            applied = _apply_media_player_source_priorities(
+                {CONF_NATIVE_VALUE_TEMPLATES: native_templates},
+                priorities,
+                source_entities,
+            )
+            native_templates = applied[CONF_NATIVE_VALUE_TEMPLATES]
+            entity[CONF_MEDIA_PLAYER_SOURCE_PRIORITIES] = applied[
+                CONF_MEDIA_PLAYER_SOURCE_PRIORITIES
+            ]
     if native_templates:
         entity[CONF_NATIVE_TEMPLATES] = native_templates
 
@@ -5553,6 +5683,18 @@ def _native_reference_templates(
         return {}
     templates = {}
     for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()):
+        if platform == "light" and property_name == "is_on" and len(entity_ids) > 1:
+            # A combined light remains controllable while one physical bulb is
+            # offline.  Its state is on when any responding source is on;
+            # unknown/unavailable sources are excluded rather than treated as
+            # an explicit off response.
+            templates[property_name] = (
+                "{% set values = ["
+                + ", ".join(f"states({entity_id!r})" for entity_id in entity_ids)
+                + "] | reject('in', ['unknown', 'unavailable', 'none', '', none]) | list %}"
+                "{{ (values | select('eq', 'on') | list | count) > 0 }}"
+            )
+            continue
         source_templates = [
             _native_source_template(
                 entity_id,
@@ -5635,22 +5777,6 @@ def _merged_native_template(
         template.removeprefix("{{").removesuffix("}}").strip()
         for template in source_templates
     ]
-    if platform == "light" and property_name == "supported_color_modes":
-        # A command issued to a composite light is sent to every source.  List
-        # union would advertise RGB merely because one source has it, even if
-        # another source only accepts colour temperature.  Keep only modes all
-        # sources advertise; Home Assistant requires onoff to stand alone.
-        return (
-            "{% set ns = namespace(common=none) %}"
-            "{% for items in ["
-            + ", ".join(expressions)
-            + "] %}{% set modes = items if items is list else ['onoff'] %}"
-            "{% if ns.common is none %}{% set ns.common = modes %}"
-            "{% else %}{% set ns.common = ns.common | select('in', modes) | list %}"
-            "{% endif %}{% endfor %}"
-            "{% set modes = ns.common if ns.common else ['onoff'] %}"
-            "{{ modes | reject('eq', 'onoff') | list if modes | count > 1 else modes }}"
-        )
     if property_name in NATIVE_TEMPLATE_BOOLEAN_ANY_PROPERTIES:
         return (
             "{% set values = ["
@@ -7830,7 +7956,19 @@ def _reference_entity_defaults(
     if source_icon := _source_icon(hass, entity_ids[0], first_state):
         defaults[CONF_ICON] = source_icon
     if platform == "light":
-        defaults[CONF_MATTER_LIGHT_TYPE] = _matter_light_type_for_source_states(states)
+        defaults[CONF_MATTER_LIGHT_TYPE] = _lowest_light_capability(states)
+        if len(states) > 1:
+            # Do not mark the entire virtual bulb unavailable because one
+            # member is asleep, delayed, or temporarily disconnected. The
+            # per-source debug entities retain the individual diagnosis.
+            defaults[CONF_AVAILABILITY_TEMPLATE] = (
+                "{{ "
+                + " or ".join(
+                    f"states({entity_id!r}) not in ['unknown', 'unavailable']"
+                    for entity_id in entity_ids
+                )
+                + " }}"
+            )
     if fan_number_profile is not None:
         fan_index, number_index = fan_number_profile
         defaults[CONF_AVAILABILITY_TEMPLATE] = _xiaomi_fan_availability_template(
@@ -8302,6 +8440,16 @@ def _reference_entity_defaults(
         defaults[CONF_NATIVE_VALUE_TEMPLATES] = _native_template_defaults(
             platform,
             {CONF_NATIVE_VALUE_TEMPLATES: native_templates},
+        )
+    if platform == "light" and len(states) > 1:
+        # The selected Matter type remains an explicit config-flow control,
+        # but the generated helper never advertises a mode beyond the least
+        # capable selected source.  This makes RGB + colour-temperature a
+        # colour-temperature virtual bulb, and any on/off source an on/off
+        # virtual bulb.
+        capability = _lowest_light_capability(states)
+        defaults[CONF_NATIVE_VALUE_TEMPLATES]["supported_color_modes"] = (
+            _literal_template(_LIGHT_CAPABILITY_MODES[capability])
         )
 
     return defaults
@@ -8982,6 +9130,9 @@ def _entity_form_defaults(
         ),
         CONF_NATIVE_TEMPLATES_JSON: _json_default(additional_native_templates),
         CONF_NATIVE_VALUE_TEMPLATES: native_value_templates,
+        CONF_MEDIA_PLAYER_SOURCE_PRIORITIES: _mapping_or_empty(
+            entity.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITIES)
+        ),
         CONF_COMMAND_ACTIONS_JSON: _json_default(
             repair_legacy_template_data(entity.get(CONF_COMMAND_ACTIONS))
         ),
