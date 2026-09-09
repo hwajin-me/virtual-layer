@@ -43,8 +43,10 @@ from homeassistant.helpers.script import Script
 from homeassistant.helpers.script_variables import ScriptRunVariables
 from homeassistant.helpers.template import Template, TemplateError
 from homeassistant.util import slugify
+from homeassistant.util import dt as dt_util
 
 from .const import *
+from .device_metadata import configuration_url_or_none
 
 _LOGGER = logging.getLogger(__name__)
 _VIRTUAL_ENTITY_COMMAND_NAMES = frozenset().union(
@@ -143,6 +145,18 @@ def nonnegative_int(value) -> int:
     return cv.positive_int(value)
 
 
+def pull_interval_seconds(value) -> int:
+    """Validate integer seconds that Home Assistant can actually schedule."""
+    try:
+        seconds = nonnegative_int(value)
+        if isinstance(value, float) and value != seconds:
+            raise vol.Invalid("interval must be whole seconds")
+        dt_util.utcnow() + timedelta(seconds=seconds)
+    except (TypeError, ValueError, OverflowError) as err:
+        raise vol.Invalid("interval is outside the supported time range") from err
+    return seconds
+
+
 def number_float(value) -> float:
     """Coerce a number without accepting booleans as 0/1."""
     if isinstance(value, bool):
@@ -203,7 +217,7 @@ def virtual_schema(default_initial_value: str, extra_attrs):
         vol.Optional(CONF_AVAILABILITY_TEMPLATE): cv.string,
         vol.Optional(CONF_EVENT_HOOKS, default=list): vol.All(cv.ensure_list, [dict]),
         vol.Optional(CONF_PERSISTENT, default=DEFAULT_PERSISTENT): cv.boolean,
-        vol.Optional(CONF_PULL_INTERVAL, default=0): nonnegative_int,
+        vol.Optional(CONF_PULL_INTERVAL, default=0): pull_interval_seconds,
         vol.Optional(CONF_SOURCE_ENTITIES, default=list): vol.All(
             cv.ensure_list, [cv.entity_id]
         ),
@@ -410,10 +424,11 @@ class VirtualEntity(RestoreEntity):
                     (CONF_SW_VERSION, "sw_version"),
                     (CONF_HW_VERSION, "hw_version"),
                     (CONF_SERIAL_NUMBER, "serial_number"),
-                    (CONF_CONFIGURATION_URL, "configuration_url"),
                 ):
                     if config.get(config_key):
                         device_info[info_key] = config[config_key]
+                if url := configuration_url_or_none(config.get(CONF_CONFIGURATION_URL)):
+                    device_info["configuration_url"] = url
                 self._attr_device_info = DeviceInfo(**device_info)
 
         _LOGGER.debug("VirtualEntity %s created", self._attr_name)

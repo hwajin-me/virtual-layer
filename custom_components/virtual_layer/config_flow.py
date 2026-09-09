@@ -68,7 +68,9 @@ from .climate_options import (
     migrate_legacy_climate_attributes,
 )
 from .const import *
+from .device_metadata import configuration_url_or_none, valid_parent_device
 from .entity import (
+    pull_interval_seconds,
     VirtualEntity,
     nonnegative_int,
     positive_tick,
@@ -4225,9 +4227,15 @@ def _build_entity_config(
         CONF_PERSISTENT: user_input[CONF_PERSISTENT],
     }
 
-    icon = _text_default(user_input.get(CONF_ICON)).strip()
+    raw_icon = user_input.get(CONF_ICON)
+    if raw_icon is not None and not isinstance(raw_icon, str):
+        raise InvalidFieldValue(CONF_ICON)
+    icon = _text_default(raw_icon).strip()
     if icon:
-        entity[CONF_ICON] = icon
+        try:
+            entity[CONF_ICON] = cv.icon(icon)
+        except vol.Invalid as err:
+            raise InvalidFieldValue(CONF_ICON) from err
 
     icon_template = repair_legacy_enum_template(
         _text_default(user_input.get(CONF_ICON_TEMPLATE)).strip()
@@ -4279,9 +4287,10 @@ def _build_entity_config(
         entity[CONF_TEMPLATE_SOURCES] = template_sources
 
     try:
-        pull_interval = nonnegative_int(user_input.get(CONF_PULL_INTERVAL, 0) or 0)
+        value = user_input.get(CONF_PULL_INTERVAL, 0)
+        pull_interval = pull_interval_seconds(0 if value in (None, "") else value)
     except vol.Invalid as err:
-        raise InvalidDomainOptions from err
+        raise InvalidFieldValue(CONF_PULL_INTERVAL) from err
     if pull_interval:
         entity[CONF_PULL_INTERVAL] = pull_interval
 
@@ -4887,7 +4896,7 @@ def _ensure_entity_key(
 
 
 def _build_device_config(
-    user_input: dict[str, Any], device_name: str
+    user_input: dict[str, Any], device_name: str, hass: HomeAssistant | None = None
 ) -> dict[str, Any]:
     """Build Home Assistant device metadata from the UI form."""
     device_id = _text_default(user_input.get(CONF_DEVICE_ID)).strip() or str(
@@ -4910,6 +4919,12 @@ def _build_device_config(
     }
     for form_field, config_field in optional_fields.items():
         value = _text_default(user_input.get(form_field)).strip()
+        if form_field == CONF_DEVICE_CONFIGURATION_URL and value:
+            if configuration_url_or_none(value) is None:
+                raise InvalidConfigurationUrl
+        if form_field == CONF_DEVICE_VIA_DEVICE_ID and value and hass is not None:
+            if not valid_parent_device(hass, value, device_id):
+                raise InvalidFieldValue(CONF_DEVICE_VIA_DEVICE_ID)
         if value:
             device[config_field] = value
     return device
@@ -10831,7 +10846,7 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
                     user_input,
                     (self._reference_defaults if self._add_use_template_helper else {}),
                 )
-                device_config = _build_device_config(user_input, device_name)
+                device_config = _build_device_config(user_input, device_name, self.hass)
                 options = _append_ui_entity(
                     {ATTR_DEVICES: {}, ATTR_DEVICE_ATTRIBUTES: {}},
                     device_name,
@@ -10857,6 +10872,10 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
                 errors[_domain_options_error_field(user_input)] = (
                     "invalid_domain_options"
                 )
+            except InvalidFieldValue as err:
+                errors[err.field_name] = err.error_code
+            except InvalidConfigurationUrl:
+                errors[CONF_DEVICE_CONFIGURATION_URL] = "invalid_configuration_url"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -10994,7 +11013,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 new_device_name = _make_device_name(
                     user_input[CONF_DEVICE_NAME],
                 ).strip()
-                device_config = _build_device_config(user_input, new_device_name)
+                device_config = _build_device_config(user_input, new_device_name, self.hass)
                 options = _replace_ui_device(
                     self.config_entry.options,
                     self._managed_device_name,
@@ -11003,6 +11022,10 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                     self.hass,
                 )
                 return self.async_create_entry(data=options)
+            except InvalidFieldValue as err:
+                errors[err.field_name] = err.error_code
+            except InvalidConfigurationUrl:
+                errors[CONF_DEVICE_CONFIGURATION_URL] = "invalid_configuration_url"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except InvalidEntitySelection:
@@ -11443,7 +11466,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                     user_input,
                     (self._reference_defaults if self._add_use_template_helper else {}),
                 )
-                device_config = _build_device_config(user_input, device_name)
+                device_config = _build_device_config(user_input, device_name, self.hass)
                 options = _append_ui_entity(
                     self.config_entry.options,
                     device_name,
@@ -11465,6 +11488,10 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 errors[_domain_options_error_field(user_input)] = (
                     "invalid_domain_options"
                 )
+            except InvalidFieldValue as err:
+                errors[err.field_name] = err.error_code
+            except InvalidConfigurationUrl:
+                errors[CONF_DEVICE_CONFIGURATION_URL] = "invalid_configuration_url"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -12273,7 +12300,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                         )
                     ),
                 )
-                device_config = _build_device_config(user_input, device_name)
+                device_config = _build_device_config(user_input, device_name, self.hass)
                 self._resolve_edit_selection()
                 options = _replace_ui_entity(
                     self.config_entry.options,
@@ -12300,6 +12327,10 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 errors[_domain_options_error_field(user_input)] = (
                     "invalid_domain_options"
                 )
+            except InvalidFieldValue as err:
+                errors[err.field_name] = err.error_code
+            except InvalidConfigurationUrl:
+                errors[CONF_DEVICE_CONFIGURATION_URL] = "invalid_configuration_url"
             except MissingDeviceName:
                 errors[CONF_DEVICE_NAME] = "required"
             except MissingEntityName:
@@ -12371,6 +12402,22 @@ class MissingDeviceName(exceptions.HomeAssistantError):
 
 class MissingEntityName(exceptions.HomeAssistantError):
     """Error indicating missing entity name."""
+
+
+class InvalidFieldValue(exceptions.HomeAssistantError):
+    """A form field contains a value that cannot be used at runtime."""
+
+    def __init__(self, field_name):
+        self.field_name = field_name
+        self.error_code = {
+            CONF_ICON: "invalid_icon",
+            CONF_PULL_INTERVAL: "invalid_pull_interval",
+            CONF_DEVICE_VIA_DEVICE_ID: "invalid_parent_device",
+        }[field_name]
+
+
+class InvalidConfigurationUrl(exceptions.HomeAssistantError):
+    """An optional device configuration URL is invalid."""
 
 
 class InvalidJson(exceptions.HomeAssistantError):

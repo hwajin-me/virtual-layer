@@ -5,10 +5,14 @@
       "import_not_supported": "File-based configuration is not supported. Add virtual entities from the integration UI."
     },
     "error": {
+      "invalid_icon": "Enter an icon in prefix:name format, or leave it empty.",
+      "invalid_pull_interval": "Enter non-negative whole seconds within the supported date range. Use 0 to disable periodic updates.",
+      "invalid_parent_device": "Select an existing parent device without a circular relationship, or clear the selection.",
       "group_name_used": "That device name is already in use, try another.",
       "invalid_json": "Enter a valid YAML object.",
       "invalid_template": "Fix the Jinja template syntax. In YAML fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
       "invalid_entity_id": "Enter valid entity IDs.",
+      "invalid_configuration_url": "Enter a valid http://, https://, or homeassistant:// URL, or leave it empty.",
       "source_unavailable": "The selected source entity is no longer available. Go back and select it again.",
       "incompatible_sensor_sources": "The selected sources do not use compatible device classes or units for one combined sensor measurement.",
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
@@ -120,7 +124,7 @@
               "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
               "device_hw_version": "Optional hardware version shown in the Home Assistant device registry.",
               "device_serial_number": "Optional serial number shown in the Home Assistant device registry.",
-              "device_configuration_url": "Optional URL opened from the Home Assistant device registry.",
+              "device_configuration_url": "Optional http://, https://, or homeassistant:// URL opened from the Home Assistant device registry. Leave empty if unused.",
               "device_suggested_area": "Optional area hint shown when Home Assistant creates the device.",
               "device_via_device_id": "Optional parent device this virtual device is connected through."
             }
@@ -875,9 +879,13 @@
   },
   "options": {
     "error": {
+      "invalid_icon": "Enter an icon in prefix:name format, or leave it empty.",
+      "invalid_pull_interval": "Enter non-negative whole seconds within the supported date range. Use 0 to disable periodic updates.",
+      "invalid_parent_device": "Select an existing parent device without a circular relationship, or clear the selection.",
       "invalid_json": "Enter a valid YAML object.",
       "invalid_template": "Fix the Jinja template syntax. In YAML fields, check the template value for each key; the failing key is recorded in the Home Assistant log.",
       "invalid_entity_id": "Enter valid entity IDs.",
+      "invalid_configuration_url": "Enter a valid http://, https://, or homeassistant:// URL, or leave it empty.",
       "source_unavailable": "The selected source entity is no longer available. Go back and select it again.",
       "incompatible_sensor_sources": "The selected sources do not use compatible device classes or units for one combined sensor measurement.",
       "helper_update_failed": "Automatic helper update failed. Current values were kept; review and edit the templates below.",
@@ -948,7 +956,7 @@
           "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
           "device_hw_version": "Optional hardware version shown in the Home Assistant device registry.",
           "device_serial_number": "Optional serial number shown in the Home Assistant device registry.",
-          "device_configuration_url": "Optional URL opened from the Home Assistant device registry.",
+          "device_configuration_url": "Optional http://, https://, or homeassistant:// URL opened from the Home Assistant device registry. Leave empty if unused.",
           "device_suggested_area": "Optional area hint shown when Home Assistant creates the device.",
           "device_via_device_id": "Optional parent device this virtual device is connected through."
         }
@@ -1038,7 +1046,7 @@
               "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
               "device_hw_version": "Optional hardware version shown in the Home Assistant device registry.",
               "device_serial_number": "Optional serial number shown in the Home Assistant device registry.",
-              "device_configuration_url": "Optional URL opened from the Home Assistant device registry.",
+              "device_configuration_url": "Optional http://, https://, or homeassistant:// URL opened from the Home Assistant device registry. Leave empty if unused.",
               "device_suggested_area": "Optional area hint shown when Home Assistant creates the device.",
               "device_via_device_id": "Optional parent device this virtual device is connected through."
             }
@@ -1704,7 +1712,7 @@
               "device_sw_version": "Optional software version shown in the Home Assistant device registry.",
               "device_hw_version": "Optional hardware version shown in the Home Assistant device registry.",
               "device_serial_number": "Optional serial number shown in the Home Assistant device registry.",
-              "device_configuration_url": "Optional URL opened from the Home Assistant device registry.",
+              "device_configuration_url": "Optional http://, https://, or homeassistant:// URL opened from the Home Assistant device registry. Leave empty if unused.",
               "device_suggested_area": "Optional area hint shown when Home Assistant creates the device.",
               "device_via_device_id": "Optional parent device this virtual device is connected through."
             }

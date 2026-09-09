@@ -543,6 +543,22 @@ async def test_config_flow_create_modify_runtime():
         await hass.async_block_till_done()
         assert entry.state.value == "loaded"
 
+        # Legacy placeholder URLs must survive both incremental updates and
+        # a full setup without preventing primary/companion registration.
+        legacy_options = copy.deepcopy(dict(entry.options))
+        for metadata in legacy_options["device_attributes"].values():
+            metadata["configuration_url"] = "-"
+            metadata["via_device_id"] = "missing-parent"
+        for records in legacy_options["devices"].values():
+            records[0]["icon"] = {"bad": "icon"}
+            records[0]["pull_interval"] = 2**63
+            records.append({"platform": [], "name": "Broken domain"})
+        hass.config_entries.async_update_entry(entry, options=legacy_options)
+        await hass.async_block_till_done()
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.state.value == "loaded"
+
         created_state = hass.states.get("sensor.docker_flow_pm25")
         assert created_state is not None
         assert float(created_state.state) == 15.0
@@ -619,6 +635,10 @@ async def test_config_flow_create_modify_runtime():
         assert result["step_id"] == "edit_entity"
         edit_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
         edit_defaults[CONF_ENTITY_NAME] = "Docker PM2.5 Maximum"
+        edit_defaults["device_configuration_url"] = ""
+        edit_defaults["device_via_device_id"] = ""
+        edit_defaults["icon"] = "mdi:air-filter"
+        edit_defaults["pull_interval"] = 0
         edit_defaults["entity_id"] = "sensor.docker_flow_pm25_max"
 
         invalid_defaults = dict(edit_defaults)

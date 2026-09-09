@@ -85,6 +85,22 @@ async def test_air_quality_bridge_sensor_is_categorical_and_grouped(hass, tmp_pa
         assert helper.async_render() == "unknown"
 
 
+@pytest.mark.parametrize("value", [None, "-", True, False, 1.5, 2**63, float("inf"), [], {}])
+def test_stored_invalid_interval_disables_polling(value):
+    entity = _normalize_common_entity_config(
+        {CONF_PLATFORM: "sensor", CONF_PULL_INTERVAL: value}, "Device", 0,
+    )
+    assert entity[CONF_PULL_INTERVAL] == 0
+
+
+@pytest.mark.parametrize("value", [None, "-", 42, [], {"icon": "mdi:test"}])
+def test_stored_invalid_icon_is_ignored(value):
+    entity = _normalize_common_entity_config(
+        {CONF_PLATFORM: "sensor", "icon": value}, "Device", 0,
+    )
+    assert "icon" not in entity
+
+
 def test_make_entity_id_uses_the_domain_prefix_for_prefixed_names():
     assert _make_entity_id("sensor", "+Kitchen Temperature") == (
         "sensor.kitchen_temperature"

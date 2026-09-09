@@ -28,6 +28,7 @@ from homeassistant.util import slugify
 
 from .const import *
 from .entity import (
+    pull_interval_seconds,
     repair_legacy_enum_template,
     repair_legacy_template_data,
     virtual_schema,
@@ -461,6 +462,14 @@ def _normalize_common_entity_config(entity, device_name, index):
     if not isinstance(name, str) or not name.strip():
         entity.pop(CONF_NAME, None)
 
+    if CONF_ICON in entity:
+        try:
+            if not isinstance(entity[CONF_ICON], str):
+                raise vol.Invalid("icon must be text")
+            entity[CONF_ICON] = cv.icon(entity[CONF_ICON].strip())
+        except vol.Invalid:
+            entity.pop(CONF_ICON, None)
+
     initial_value = entity.get(CONF_INITIAL_VALUE)
     if CONF_INITIAL_VALUE in entity and initial_value is None:
         _LOGGER.warning(
@@ -686,16 +695,11 @@ def _normalize_common_entity_config(entity, device_name, index):
     if isinstance(polygon, Mapping):
         entity[CONF_POLYGONAL_ZONE] = repair_legacy_template_data(dict(polygon))
 
-    pull_interval = entity.get(CONF_PULL_INTERVAL)
-    if pull_interval is not None:
-        if isinstance(pull_interval, bool):
-            pull_interval = 0
-        else:
-            try:
-                pull_interval = int(pull_interval)
-            except (TypeError, ValueError, OverflowError):
-                pull_interval = 0
-        entity[CONF_PULL_INTERVAL] = max(0, pull_interval)
+    if CONF_PULL_INTERVAL in entity:
+        try:
+            entity[CONF_PULL_INTERVAL] = pull_interval_seconds(entity[CONF_PULL_INTERVAL])
+        except vol.Invalid:
+            entity[CONF_PULL_INTERVAL] = 0
 
     for key, default in (
         (CONF_INITIAL_AVAILABILITY, DEFAULT_AVAILABILITY),
@@ -1309,6 +1313,13 @@ class BlendedCfg:
                         "Skipping invalid entity config for device %s at index %s",
                         device_name,
                         index,
+                    )
+                    changed = True
+                    continue
+                if not isinstance(entity.get(CONF_PLATFORM), str):
+                    _LOGGER.warning(
+                        "Skipping invalid entity domain for device %s at index %s",
+                        device_name, index,
                     )
                     changed = True
                     continue

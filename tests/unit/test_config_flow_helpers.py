@@ -5902,6 +5902,20 @@ def test_build_device_config_supports_device_registry_metadata():
     }
 
 
+@pytest.mark.parametrize("url", ["-", "example.test", "https://", "ftp://example.test"])
+def test_build_device_config_rejects_invalid_configuration_url(url):
+    from custom_components.virtual_layer.config_flow import InvalidConfigurationUrl
+
+    with pytest.raises(InvalidConfigurationUrl):
+        _build_device_config({CONF_DEVICE_CONFIGURATION_URL: url}, "Laundry")
+
+
+@pytest.mark.parametrize("url", ["", "  ", "http://example.test", "https://example.test/path", "homeassistant://config/devices"])
+def test_build_device_config_accepts_optional_configuration_url(url):
+    device = _build_device_config({CONF_DEVICE_CONFIGURATION_URL: url}, "Laundry")
+    assert device.get(CONF_CONFIGURATION_URL) == (url.strip() or None)
+
+
 def test_build_device_config_generates_device_id_independently_from_name():
     first = _build_device_config(_entity_input(), "Laundry")
     second = _build_device_config(_entity_input(), "Laundry")
@@ -5948,6 +5962,21 @@ def test_build_entity_config_adds_number_defaults():
 
     assert entity[CONF_MIN] == 0
     assert entity[CONF_MAX] == 100
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    (CONF_ICON, "-"), (CONF_ICON, {"icon": "mdi:test"}),
+    (CONF_PULL_INTERVAL, -1), (CONF_PULL_INTERVAL, True),
+    (CONF_PULL_INTERVAL, False), (CONF_PULL_INTERVAL, 1.5),
+    (CONF_PULL_INTERVAL, 2**63), (CONF_PULL_INTERVAL, float("inf")),
+    (CONF_PULL_INTERVAL, "NaN"), (CONF_PULL_INTERVAL, []),
+])
+def test_build_entity_config_rejects_unusable_common_values(field, value):
+    from custom_components.virtual_layer.config_flow import InvalidFieldValue
+
+    with pytest.raises(InvalidFieldValue) as err:
+        _build_entity_config(_entity_input({field: value}))
+    assert err.value.field_name == field
 
 
 def test_build_entity_config_supports_attribute_sources_and_pull_interval():

@@ -235,6 +235,33 @@ async def _choose_add_template_helper(
     return result
 
 
+@pytest.mark.parametrize(("field", "value", "error"), [
+    (CONF_ICON, "-", "invalid_icon"),
+    ("pull_interval", 2**63, "invalid_pull_interval"),
+    ("device_via_device_id", "missing-parent", "invalid_parent_device"),
+])
+async def test_edit_flow_rejects_bad_common_value_and_allows_correction(hass, field, value, error):
+    selected = {CONF_PLATFORM: "sensor", CONF_NAME: "Selected", ATTR_ENTITY_KEY: "selected"}
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {"Room": [selected]}},
+    )
+    entry.add_to_hass(hass)
+    manager = hass.config_entries.options
+    result = await manager.async_init(entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY})
+    result = await manager.async_configure(
+        result["flow_id"], {CONF_ENTITY_KEY: json.dumps(["key", "selected"], separators=(",", ":"))},
+    )
+    result = await manager.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: []})
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    result = await manager.async_configure(result["flow_id"], {**defaults, field: value})
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"][field] == error
+    assert entry.options[ATTR_DEVICES]["Room"][0] == selected
+    result = await manager.async_configure(result["flow_id"], defaults)
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
 @pytest.mark.parametrize("change", ["reorder", "delete", "modify", "move"])
 async def test_edit_flow_rechecks_selected_entity_before_save(hass, change):
     """An open editor cannot overwrite another record or a concurrent edit."""
@@ -3740,6 +3767,16 @@ async def test_options_flow_manages_shared_device_metadata_without_editing_entit
     assert result["step_id"] == "edit_device"
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
     assert defaults[CONF_DEVICE_ID] == "laundry-old"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {**defaults, "device_configuration_url": "-"},
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {
+        "device_configuration_url": "invalid_configuration_url",
+    }
+    assert entry.options[ATTR_DEVICE_ATTRIBUTES]["Laundry"][ATTR_DEVICE_ID] == "laundry-old"
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -7551,6 +7588,109 @@ async def test_setup_entry_registers_same_name_devices_separately_by_id(
     assert second is not None
     assert first.id != second.id
     assert first.name == second.name == "Washer"
+
+
+@pytest.mark.parametrize("url", ["-", "https://", "example.test", "https://example.test/device"])
+async def test_setup_entry_recovers_legacy_configuration_url(hass, tmp_path, monkeypatch, url):
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(tmp_path / "virtual_layer.meta.json"),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "Environment Sensor"},
+        options={
+            ATTR_DEVICES: {"Environment Sensor": [{
+                CONF_PLATFORM: "sensor", CONF_NAME: "Temperature",
+                ATTR_ENTITY_ID: "sensor.environment_temperature",
+                CONF_CONFIGURATION_URL: url,
+            }]},
+            ATTR_DEVICE_ATTRIBUTES: {"Environment Sensor": {
+                ATTR_DEVICE_ID: "environment", CONF_CONFIGURATION_URL: url,
+            }},
+        },
+    )
+    entry.add_to_hass(hass)
+    for _ in range(2):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        device = dr.async_get(hass).async_get_device(
+            identifiers={(COMPONENT_DOMAIN, "environment")},
+        )
+        assert device is not None
+        assert device.configuration_url == (
+            url if url == "https://example.test/device" else None
+        )
+        for entity_id in ("sensor.environment_temperature", "sensor.environment_temperature_info"):
+            assert hass.states.get(entity_id) is not None
+            assert er.async_get(hass).async_get(entity_id).device_id == device.id
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("bad_platform", [[], {}, True, 7])
+async def test_bad_common_values_do_not_block_healthy_entities(
+    hass, tmp_path, monkeypatch, bad_platform,
+):
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(tmp_path / "virtual_layer.meta.json"),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Recovery"},
+        options={ATTR_DEVICES: {"Recovery": [
+            {CONF_PLATFORM: bad_platform, CONF_NAME: "Broken", "command_actions": {"turn_on": []}},
+            {CONF_PLATFORM: "sensor", CONF_NAME: "Recovered", ATTR_ENTITY_ID: "sensor.recovered",
+             CONF_INITIAL_VALUE: "12", "icon": {"bad": "icon"}, "pull_interval": 2**63},
+            {CONF_PLATFORM: "switch", CONF_NAME: "Healthy", ATTR_ENTITY_ID: "switch.healthy"},
+        ]}},
+    )
+    entry.add_to_hass(hass)
+    for _ in range(2):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.recovered").state == "12"
+        assert hass.states.get("switch.healthy") is not None
+        registry = er.async_get(hass)
+        assert registry.async_get("sensor.recovered").device_id == registry.async_get("sensor.recovered_info").device_id
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("relationship", ["missing", "self", "descendant", "valid"])
+async def test_device_parent_validation_and_legacy_recovery(hass, tmp_path, monkeypatch, relationship):
+    from custom_components.virtual_layer.config_flow import _build_device_config, InvalidFieldValue
+
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(tmp_path / "virtual_layer.meta.json"),
+    )
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Child"},
+        options={ATTR_DEVICES: {"Child": []}, ATTR_DEVICE_ATTRIBUTES: {
+            "Child": {ATTR_DEVICE_ID: "child"},
+        }},
+    )
+    entry.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    child = registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(COMPONENT_DOMAIN, "child")})
+    parent = registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={("test", "parent")})
+    parent_id = parent.id
+    if relationship == "self":
+        parent_id = child.id
+    elif relationship == "missing":
+        parent_id = "missing-parent"
+    elif relationship == "descendant":
+        registry.async_update_device(parent.id, via_device_id=child.id)
+    form = {CONF_DEVICE_ID: "child", "device_via_device_id": parent_id}
+    if relationship == "valid":
+        assert _build_device_config(form, "Child", hass)[CONF_VIA_DEVICE_ID] == parent_id
+    else:
+        with pytest.raises(InvalidFieldValue) as err:
+            _build_device_config(form, "Child", hass)
+        assert err.value.field_name == "device_via_device_id"
+    entry.options[ATTR_DEVICE_ATTRIBUTES]["Child"][CONF_VIA_DEVICE_ID] = parent_id
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert registry.async_get(child.id).via_device_id == (parent_id if relationship == "valid" else None)
 
 
 async def test_setup_entry_syncs_metadata_and_allows_clearing_device_area(

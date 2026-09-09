@@ -47,6 +47,7 @@ from .cfg import (
     _delete_meta_data,
 )
 from .const import *
+from .device_metadata import configuration_url_or_none, valid_parent_device
 from .entity import STARTUP_SOURCE_GRACE_ALLOWED, repair_legacy_enum_template
 
 _LOGGER = logging.getLogger(__name__)
@@ -975,6 +976,14 @@ def _device_registry_updates_for_config(
         (CONF_VIA_DEVICE_ID, "via_device_id"),
     ):
         desired[registry_key] = device.get(config_key)
+
+    desired["configuration_url"] = configuration_url_or_none(
+        device.get(CONF_CONFIGURATION_URL)
+    )
+    if not valid_parent_device(
+        hass, desired["via_device_id"], device.get(ATTR_DEVICE_ID)
+    ):
+        desired["via_device_id"] = None
 
     for registry_key, value in desired.items():
         current = getattr(registry_entry, registry_key, None) if registry_entry else None
@@ -2396,10 +2405,11 @@ async def _async_get_or_create_virtual_device_in_registry(
     for config_key, info_key in (
         (CONF_HW_VERSION, "hw_version"),
         (CONF_SERIAL_NUMBER, "serial_number"),
-        (CONF_CONFIGURATION_URL, "configuration_url"),
     ):
         if device.get(config_key):
             device_info[info_key] = device[config_key]
+    if url := configuration_url_or_none(device.get(CONF_CONFIGURATION_URL)):
+        device_info["configuration_url"] = url
     device_entry = registry.async_get_or_create(**device_info)
     updates = _device_registry_updates_for_config(hass, device, device_entry)
     if updates:
