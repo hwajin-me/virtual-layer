@@ -1119,6 +1119,36 @@ HUMIDIFIER_ACTION_VALUES = ("off", "humidifying", "drying", "idle")
 HUMIDIFIER_CLASS_VALUES = ("humidifier", "dehumidifier")
 MATTER_LIGHT_TYPES = ("on_off", "dimmable", "color_temperature", "extended_color")
 
+
+def _matter_light_type_for_source_states(states: Collection) -> str:
+    """Return the safest Matter light contract shared by all sources.
+
+    A virtual light proxies one command to every selected source.  Its default
+    must therefore describe their common control surface, rather than the
+    (usually richer) first source.  In particular an RGB + colour-temperature
+    group that both advertise ``color_temp`` becomes a colour-temperature
+    light, so Home Assistant never offers an RGB command to the CT-only member.
+    """
+    source_modes: list[set[str]] = []
+    for state in states:
+        modes = state.attributes.get("supported_color_modes", ())
+        if not isinstance(modes, (list, tuple, set)):
+            modes = ()
+        source_modes.append({str(mode) for mode in modes})
+    if not source_modes:
+        return "dimmable"
+
+    common_modes = set.intersection(*source_modes)
+    if "color_temp" in common_modes:
+        return "color_temperature"
+    if common_modes & {"hs", "xy", "rgb", "rgbw", "rgbww"}:
+        return "extended_color"
+    if "brightness" in common_modes or all(
+        "brightness" in state.attributes for state in states
+    ):
+        return "dimmable"
+    return "on_off"
+
 _DOMAIN_OPTION_RESERVED_KEYS = {
     ATTR_ENTITY_ID,
     ATTR_ENTITY_KEY,
@@ -5605,6 +5635,22 @@ def _merged_native_template(
         template.removeprefix("{{").removesuffix("}}").strip()
         for template in source_templates
     ]
+    if platform == "light" and property_name == "supported_color_modes":
+        # A command issued to a composite light is sent to every source.  List
+        # union would advertise RGB merely because one source has it, even if
+        # another source only accepts colour temperature.  Keep only modes all
+        # sources advertise; Home Assistant requires onoff to stand alone.
+        return (
+            "{% set ns = namespace(common=none) %}"
+            "{% for items in ["
+            + ", ".join(expressions)
+            + "] %}{% set modes = items if items is list else ['onoff'] %}"
+            "{% if ns.common is none %}{% set ns.common = modes %}"
+            "{% else %}{% set ns.common = ns.common | select('in', modes) | list %}"
+            "{% endif %}{% endfor %}"
+            "{% set modes = ns.common if ns.common else ['onoff'] %}"
+            "{{ modes | reject('eq', 'onoff') | list if modes | count > 1 else modes }}"
+        )
     if property_name in NATIVE_TEMPLATE_BOOLEAN_ANY_PROPERTIES:
         return (
             "{% set values = ["
@@ -7784,20 +7830,7 @@ def _reference_entity_defaults(
     if source_icon := _source_icon(hass, entity_ids[0], first_state):
         defaults[CONF_ICON] = source_icon
     if platform == "light":
-        source_modes = set(first_state.attributes.get("supported_color_modes", []))
-        defaults[CONF_MATTER_LIGHT_TYPE] = (
-            "extended_color"
-            if source_modes & {"hs", "xy"}
-            else "color_temperature"
-            if "color_temp" in source_modes
-            else "dimmable"
-            if (
-                "brightness" in source_modes
-                or source_modes - {"onoff"}
-                or "brightness" in first_state.attributes
-            )
-            else "on_off"
-        )
+        defaults[CONF_MATTER_LIGHT_TYPE] = _matter_light_type_for_source_states(states)
     if fan_number_profile is not None:
         fan_index, number_index = fan_number_profile
         defaults[CONF_AVAILABILITY_TEMPLATE] = _xiaomi_fan_availability_template(

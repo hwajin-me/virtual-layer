@@ -161,7 +161,7 @@
               "dawarich_history_limit": "Number of recent point summaries to retain in the dawarich_history attribute (1–100).",
               "dawarich_person": "Optional Home Assistant Person matched to a Dawarich Family member. This uses /api/v1/families/locations; the Person display name must match the family member name.",
               "presence_classification": "When enabled for a combined tracker, Wi-Fi/ESPresense presence is home; BLE distance is front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
-              "matter_light_type": "Select the maximum Matter lighting capability: on/off, dimming, color temperature, or extended HS/XY color. A supported-color-modes template may safely expose a smaller subset. Effects and flash are never exposed.",
+              "matter_light_type": "Choose the virtual light contract: on/off, dimming, color temperature, or extended HS/XY color. For multiple sources, the generated helper exposes only modes shared by every bulb; for example RGB bulbs plus color-temperature bulbs become a color-temperature light when that is their common mode. Choose a smaller contract to deliberately limit controls. Effects and flash are never exposed.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls."
             }
           },
@@ -883,7 +883,7 @@
               "dawarich_history_limit": "Recent point summaries retained as an entity attribute (1–100).",
               "dawarich_person": "Optional Person matched to a Dawarich Family member by display name.",
               "presence_classification": "Wi-Fi/ESPresense means home; BLE distance means front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
-              "matter_light_type": "Select the Matter lighting contract. It strictly limits the entity to on/off, dimming, color temperature, or extended HS/XY color capabilities. Effects and flash are never exposed.",
+              "matter_light_type": "Choose the virtual light contract: on/off, dimming, color temperature, or extended HS/XY color. For multiple sources, the generated helper exposes only modes shared by every bulb; for example RGB bulbs plus color-temperature bulbs become a color-temperature light when that is their common mode. Choose a smaller contract to deliberately limit controls. Effects and flash are never exposed.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls."
             }
           },
@@ -1529,7 +1529,7 @@
               "dawarich_history_limit": "Recent point summaries retained as an entity attribute (1–100).",
               "dawarich_person": "Optional Person matched to a Dawarich Family member by display name.",
               "presence_classification": "Wi-Fi/ESPresense means home; BLE distance means front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
-              "matter_light_type": "Select the Matter lighting contract. It strictly limits the entity to on/off, dimming, color temperature, or extended HS/XY color capabilities. Effects and flash are never exposed.",
+              "matter_light_type": "Choose the virtual light contract: on/off, dimming, color temperature, or extended HS/XY color. For multiple sources, the generated helper exposes only modes shared by every bulb; for example RGB bulbs plus color-temperature bulbs become a color-temperature light when that is their common mode. Choose a smaller contract to deliberately limit controls. Effects and flash are never exposed.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls."
             }
           },

@@ -124,6 +124,7 @@ from custom_components.virtual_layer.config_flow import (
     _managed_device_choices,
     _matter_fan_source_levels,
     _merged_native_template,
+    _matter_light_type_for_source_states,
     _native_reference_templates,
     _native_source_helper_default,
     _native_source_template,
@@ -1835,6 +1836,38 @@ def test_sparse_native_attribute_tracks_all_selected_sources(hass):
     assert (
         Template(templates["brightness"], hass).async_render(parse_result=True) == 150
     )
+
+
+def test_composite_light_helpers_expose_only_shared_color_controls(hass):
+    """RGB-capable and CT bulbs must not advertise unsupported RGB control."""
+    first = "light.rgb_and_ct"
+    second = "light.ct_only"
+    hass.states.async_set(
+        first,
+        "on",
+        {"supported_color_modes": ["hs", "color_temp"], "brightness": 100},
+    )
+    hass.states.async_set(
+        second,
+        "on",
+        {"supported_color_modes": ["color_temp"], "brightness": 200},
+    )
+    states = [hass.states.get(first), hass.states.get(second)]
+
+    assert _matter_light_type_for_source_states(states) == "color_temperature"
+    template = _native_reference_templates("light", [first, second], states)[
+        "supported_color_modes"
+    ]
+    assert Template(template, hass).async_render(parse_result=True) == ["color_temp"]
+
+    # A source losing color-temperature support reduces the virtual entity to
+    # on/off instead of passing an invalid colour command.
+    hass.states.async_set(
+        first,
+        "on",
+        {"supported_color_modes": ["hs", "brightness"], "brightness": 100},
+    )
+    assert Template(template, hass).async_render(parse_result=True) == ["onoff"]
 
 
 def test_native_multi_source_helpers_use_property_semantics(hass):
