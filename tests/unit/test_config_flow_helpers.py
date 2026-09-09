@@ -57,6 +57,7 @@ from custom_components.virtual_layer.config_flow import (
     CONF_ENTITY_NAME,
     CONF_EVENT_HOOKS_JSON,
     CONF_MATTER_LIGHT_TYPE,
+    CONF_MATTER_AIR_QUALITY,
     CONF_NATIVE_TEMPLATES_JSON,
     CONF_NATIVE_VALUE_TEMPLATES,
     CONF_POLYGON_GEOJSON_JSON,
@@ -1049,6 +1050,29 @@ def test_air_quality_source_offers_pollutant_sensor_classes(hass):
         ) == pytest.approx(hass.states.get("air_quality.home").attributes[attribute])
 
 
+def test_air_quality_helpers_only_copy_valid_matter_quality_levels(hass):
+    """A legacy PM2.5 state must not become Matter's quality enum."""
+    hass.states.async_set("air_quality.legacy", "12.5")
+    hass.states.async_set(
+        "air_quality.matter",
+        "25",
+        {"air_quality": "very poor"},
+    )
+
+    templates = _native_reference_templates(
+        "air_quality",
+        ["air_quality.legacy", "air_quality.matter"],
+        [
+            hass.states.get("air_quality.legacy"),
+            hass.states.get("air_quality.matter"),
+        ],
+    )
+
+    assert Template(templates["air_quality"], hass).async_render(
+        parse_result=True
+    ) == "very_poor"
+
+
 def test_scaled_sensor_conversion_keeps_missing_attribute_unknown(hass):
     hass.states.async_set("light.source", "on", {})
     defaults = _reference_entity_defaults(hass, ["light.source"], "sensor")
@@ -1373,6 +1397,47 @@ def test_light_form_persists_matter_device_type():
         )
     )
     assert entity[CONF_MATTER_LIGHT_TYPE] == "extended_color"
+
+
+def test_air_quality_form_offers_and_persists_direct_matter_level():
+    schema = _entity_schema({CONF_PLATFORM: "air_quality"})
+    outer = {marker.schema: validator for marker, validator in schema.schema.items()}
+    domain = _section_validators(schema, CONF_DOMAIN_SETTINGS)
+    assert domain[CONF_MATTER_AIR_QUALITY].config["options"] == [
+        "source",
+        "unknown",
+        "good",
+        "fair",
+        "moderate",
+        "poor",
+        "very_poor",
+        "extremely_poor",
+    ]
+
+    _device_name, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "air_quality",
+                CONF_MATTER_AIR_QUALITY: "good",
+                CONF_NATIVE_VALUE_TEMPLATES: {"air_quality": "{{ 'poor' }}"},
+            }
+        )
+    )
+    assert entity[CONF_NATIVE_TEMPLATES]["air_quality"] == "{{ 'good' }}"
+    assert CONF_MATTER_AIR_QUALITY not in entity
+
+    _device_name, source_entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "air_quality",
+                CONF_MATTER_AIR_QUALITY: "source",
+                CONF_NATIVE_VALUE_TEMPLATES: {"air_quality": "{{ states('sensor.aqi') }}"},
+            }
+        )
+    )
+    assert source_entity[CONF_NATIVE_TEMPLATES]["air_quality"] == (
+        "{{ states('sensor.aqi') }}"
+    )
 
 
 def _native_helper_sample(platform: str, property_name: str, index: int):
@@ -2569,6 +2634,27 @@ def test_media_player_priority_schema_limits_each_picker_to_configured_sources()
         "media_player.samsung_tv",
         "media_player.apple_tv",
     ]
+
+
+def test_media_player_priority_controls_are_exposed_in_the_entity_config_form():
+    schema = _entity_schema(
+        {
+            CONF_PLATFORM: "media_player",
+            CONF_SOURCE_ENTITIES_TEXT: (
+                "media_player.samsung_tv\nmedia_player.apple_tv\nmedia_player.homepod"
+            ),
+        }
+    )
+    priority_section = next(
+        validator
+        for marker, validator in schema.schema.items()
+        if getattr(marker, "schema", marker) == CONF_MEDIA_PLAYER_SOURCE_PRIORITIES
+    )
+    priority_fields = {
+        getattr(marker, "schema", marker)
+        for marker in priority_section.schema.schema
+    }
+    assert set(DOMAIN_NATIVE_TEMPLATE_PROPERTIES["media_player"]) == priority_fields
 
 
 def test_clearing_media_player_priority_resets_only_generated_helper():

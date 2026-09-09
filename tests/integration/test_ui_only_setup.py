@@ -4904,6 +4904,9 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
         {
             CONF_PLATFORM: "light",
             "matter_light_type": "dimmable",
+            "light_response_delay": 2,
+            "light_response_retries": 2,
+            "light_ignore_unresponsive": True,
             CONF_NAME: "Kitchen Lamp",
             ATTR_ENTITY_ID: "light.virtual_kitchen_lamp",
             CONF_INITIAL_VALUE: "on",

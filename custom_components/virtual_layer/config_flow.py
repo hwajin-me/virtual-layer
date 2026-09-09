@@ -132,6 +132,7 @@ CONF_DEVICE_DETAILS = "device_details"
 CONF_ADVANCED_SETTINGS = "advanced_settings"
 CONF_DOMAIN_SETTINGS = "domain_settings"
 CONF_MATTER_LIGHT_TYPE = "matter_light_type"
+CONF_MATTER_AIR_QUALITY = "matter_air_quality"
 CONF_COMMAND_ACTIONS_JSON = "command_actions_json"
 CONF_DEVICE_NAME = "device_name"
 CONF_DEVICE_ID = "device_id"
@@ -1118,6 +1119,16 @@ TEMPERATURE_UNIT_VALUES = ("°C", "°F", "K")
 HUMIDIFIER_ACTION_VALUES = ("off", "humidifying", "drying", "idle")
 HUMIDIFIER_CLASS_VALUES = ("humidifier", "dehumidifier")
 MATTER_LIGHT_TYPES = ("on_off", "dimmable", "color_temperature", "extended_color")
+MATTER_AIR_QUALITY_LEVELS = (
+    "source",
+    "unknown",
+    "good",
+    "fair",
+    "moderate",
+    "poor",
+    "very_poor",
+    "extremely_poor",
+)
 
 # Light colour modes form a control hierarchy for a composite virtual light.
 # RGB-capable bulbs can participate in a colour-temperature group, while an
@@ -2771,6 +2782,21 @@ def _climate_temperature_step_default(defaults: Mapping) -> str:
     return "source"
 
 
+def _matter_air_quality_default(defaults: Mapping) -> str:
+    """Return the direct Matter level when the stored template is static."""
+    template = _native_template_mapping(defaults.get(CONF_NATIVE_VALUE_TEMPLATES)).get(
+        "air_quality", ""
+    )
+    if isinstance(template, str):
+        match = re.fullmatch(
+            r"\s*\{\{\s*['\"]?(unknown|good|fair|moderate|poor|very_poor|extremely_poor)['\"]?\s*\}\}\s*",
+            template,
+        )
+        if match:
+            return match.group(1)
+    return "source"
+
+
 def _native_template_defaults(
     platform: str,
     defaults: Mapping,
@@ -3056,6 +3082,35 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 mode=selector.SelectSelectorMode.DROPDOWN,
             )
         )
+        domain_schema.update(
+            {
+                vol.Optional(
+                    CONF_LIGHT_RESPONSE_DELAY,
+                    default=defaults.get(CONF_LIGHT_RESPONSE_DELAY, 2),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=30)),
+                vol.Optional(
+                    CONF_LIGHT_RESPONSE_RETRIES,
+                    default=defaults.get(CONF_LIGHT_RESPONSE_RETRIES, 2),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=10)),
+                vol.Optional(
+                    CONF_LIGHT_IGNORE_UNRESPONSIVE,
+                    default=defaults.get(CONF_LIGHT_IGNORE_UNRESPONSIVE, True),
+                ): cv.boolean,
+            }
+        )
+    elif platform == "air_quality":
+        domain_schema[
+            vol.Required(
+                CONF_MATTER_AIR_QUALITY,
+                default=_matter_air_quality_default(defaults),
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(MATTER_AIR_QUALITY_LEVELS),
+                translation_key="matter_air_quality",
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
     elif platform == "climate":
         domain_schema[
             vol.Required(
@@ -3135,6 +3190,8 @@ def _needs_domain_specific_form(user_input) -> bool:
         )
     if platform == "light":
         return CONF_MATTER_LIGHT_TYPE not in user_input
+    if platform == "air_quality":
+        return CONF_MATTER_AIR_QUALITY not in user_input
     return False
 
 
@@ -4012,6 +4069,12 @@ def _build_entity_config(
                 native_templates["target_temperature_step"] = _literal_template(
                     float(temperature_step)
                 )
+    if platform == "air_quality":
+        matter_air_quality = user_input.get(CONF_MATTER_AIR_QUALITY, "source")
+        if matter_air_quality not in MATTER_AIR_QUALITY_LEVELS:
+            raise InvalidDomainOptions
+        if matter_air_quality != "source":
+            native_templates["air_quality"] = _literal_template(matter_air_quality)
     if platform == "media_player":
         priorities = user_input.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITIES)
         if priorities is not None:
@@ -4048,6 +4111,36 @@ def _build_entity_config(
         if matter_light_type not in MATTER_LIGHT_TYPES:
             raise InvalidDomainOptions
         domain_options[CONF_MATTER_LIGHT_TYPE] = matter_light_type
+        for field_name, maximum in (
+            (CONF_LIGHT_RESPONSE_DELAY, 30),
+            (CONF_LIGHT_RESPONSE_RETRIES, 10),
+        ):
+            try:
+                value = int(user_input.get(field_name, 2))
+            except (TypeError, ValueError, OverflowError) as err:
+                raise InvalidDomainOptions from err
+            if not 0 <= value <= maximum:
+                raise InvalidDomainOptions
+            domain_options[field_name] = value
+        domain_options[CONF_LIGHT_IGNORE_UNRESPONSIVE] = cv.boolean(
+            user_input.get(CONF_LIGHT_IGNORE_UNRESPONSIVE, True)
+        )
+        if (
+            not domain_options[CONF_LIGHT_IGNORE_UNRESPONSIVE]
+            and len(source_entities) > 1
+        ):
+            # This is the strict alternative to the generated resilient
+            # multi-light availability helper. It is deliberately explicit:
+            # a user can require every selected bulb to answer before showing
+            # the virtual light as available.
+            entity[CONF_AVAILABILITY_TEMPLATE] = (
+                "{{ "
+                + " and ".join(
+                    f"states({entity_id!r}) not in ['unknown', 'unavailable']"
+                    for entity_id in source_entities
+                )
+                + " }}"
+            )
     elif platform == "climate":
         for field_name in CLIMATE_MODE_LIST_FIELDS:
             if field_name in user_input:
@@ -5560,6 +5653,23 @@ def _native_source_template(
     """Build a native-property helper from a source state when possible."""
     attributes = state.attributes
     source_platform = entity_id.split(".", 1)[0]
+    if property_name == "air_quality":
+        # Legacy Home Assistant air-quality entities expose PM2.5 as their
+        # state, while Matter requires an overall categorical value. Prefer a
+        # dedicated source attribute when present, otherwise the state, but
+        # never pass a concentration through as a Matter quality enum.
+        source_value = (
+            f"state_attr({entity_id!r}, 'air_quality')"
+            if "air_quality" in attributes
+            else f"states({entity_id!r})"
+        )
+        return (
+            "{% set value = ("
+            + source_value
+            + " | string | lower | replace('-', '_') | replace(' ', '_')) %}"
+            "{{ value if value in ['unknown', 'good', 'fair', 'moderate', "
+            "'poor', 'very_poor', 'extremely_poor'] else 'unknown' }}"
+        )
     attribute_name = property_name
     if attribute_name not in attributes:
         attribute_name = NATIVE_TEMPLATE_ATTRIBUTE_ALIASES.get(property_name, "")
@@ -5683,6 +5793,26 @@ def _native_reference_templates(
         return {}
     templates = {}
     for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()):
+        if property_name == "air_quality" and len(entity_ids) > 1:
+            source_values = [
+                (
+                    f"state_attr({entity_id!r}, 'air_quality')"
+                    if "air_quality" in state.attributes
+                    else f"states({entity_id!r})"
+                )
+                for entity_id, state in zip(entity_ids, states, strict=True)
+            ]
+            templates[property_name] = (
+                "{% set ns = namespace(value='unknown') %}"
+                "{% for source in ["
+                + ", ".join(source_values)
+                + "] %}{% set value = source | string | lower "
+                "| replace('-', '_') | replace(' ', '_') %}"
+                "{% if ns.value == 'unknown' and value in ['good', 'fair', "
+                "'moderate', 'poor', 'very_poor', 'extremely_poor'] %}"
+                "{% set ns.value = value %}{% endif %}{% endfor %}{{ ns.value }}"
+            )
+            continue
         if platform == "light" and property_name == "is_on" and len(entity_ids) > 1:
             # A combined light remains controllable while one physical bulb is
             # offline.  Its state is on when any responding source is on;
@@ -9260,6 +9390,8 @@ def _entity_form_defaults(
             CONF_MATTER_LIGHT_TYPE,
             "dimmable",
         )
+    elif platform == "air_quality":
+        defaults[CONF_MATTER_AIR_QUALITY] = _matter_air_quality_default(defaults)
     defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
     return defaults
 

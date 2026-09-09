@@ -35,6 +35,7 @@ from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import get_entity_configs
@@ -97,6 +98,13 @@ BASE_SCHEMA = virtual_schema(DEFAULT_LIGHT_VALUE, {
         default=lambda: list(DEFAULT_INITIAL_EFFECT_LIST),
     ): cv.ensure_list,
     vol.Optional(CONF_MATTER_LIGHT_TYPE): vol.In(MATTER_LIGHT_COLOR_MODES),
+    vol.Optional(CONF_LIGHT_RESPONSE_DELAY, default=2): vol.All(
+        vol.Coerce(int), vol.Range(min=0, max=30)
+    ),
+    vol.Optional(CONF_LIGHT_RESPONSE_RETRIES, default=2): vol.All(
+        vol.Coerce(int), vol.Range(min=0, max=10)
+    ),
+    vol.Optional(CONF_LIGHT_IGNORE_UNRESPONSIVE, default=True): cv.boolean,
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
@@ -240,6 +248,10 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._attr_color_temp_kelvin = None
         self._attr_effect = None
         self._attr_effect_list = None
+        self._response_delay = config.get(CONF_LIGHT_RESPONSE_DELAY, 2)
+        self._response_retries = config.get(CONF_LIGHT_RESPONSE_RETRIES, 2)
+        self._ignore_unresponsive = config.get(CONF_LIGHT_IGNORE_UNRESPONSIVE, True)
+        self._response_refresh_cancel = None
         matter_type = config.get(CONF_MATTER_LIGHT_TYPE)
         if matter_type:
             self._matter_color_modes = set(MATTER_LIGHT_COLOR_MODES[matter_type])
@@ -456,6 +468,7 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._attr_is_on = True
         self._update_attributes()
         self.async_write_ha_state()
+        self._schedule_source_reconciliation()
 
     def _apply_turn_on_values(self, kwargs: dict[str, Any]) -> None:
         """Validate and stage light service values before publishing state."""
@@ -517,6 +530,44 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._attr_is_on = False
         self._update_attributes()
         self.async_write_ha_state()
+        self._schedule_source_reconciliation()
+
+    def _preserve_optimistic_command_state(self, command, args, kwargs) -> bool:
+        """Keep a command value visible until slow source bulbs can report it."""
+        return bool(
+            self._source_entities
+            and command in {"turn_on", "turn_off"}
+            and self._response_delay > 0
+        )
+
+    def _schedule_source_reconciliation(self) -> None:
+        """Refresh a composite light after slow or sleeping bulbs have replied."""
+        if not self._source_entities or self._response_delay <= 0:
+            return
+        if self._response_refresh_cancel is not None:
+            self._response_refresh_cancel()
+        attempts = 0
+
+        def _refresh(_now) -> None:
+            nonlocal attempts
+            self._apply_templates()
+            attempts += 1
+            if attempts <= self._response_retries:
+                self._response_refresh_cancel = async_call_later(
+                    self.hass, self._response_delay, _refresh
+                )
+            else:
+                self._response_refresh_cancel = None
+
+        self._response_refresh_cancel = async_call_later(
+            self.hass, self._response_delay, _refresh
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._response_refresh_cancel is not None:
+            self._response_refresh_cancel()
+            self._response_refresh_cancel = None
+        await super().async_will_remove_from_hass()
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         aliases = {
