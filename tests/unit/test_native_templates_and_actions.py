@@ -707,14 +707,18 @@ def test_climate_keeps_last_hvac_modes_for_empty_transient_template(rendered):
     assert entity.hvac_modes == [HVACMode.OFF, HVACMode.COOL]
 
 
-def test_climate_extracts_hvac_modes_from_rendered_source_state(hass):
+@pytest.mark.parametrize("expression", [
+    "states.climate.source",
+    "state_attr('climate.source', 'hvac_modes')",
+])
+def test_climate_extracts_hvac_modes_from_rendered_source_state(hass, expression):
     hass.states.async_set(
         "climate.source",
         "off",
         {"hvac_modes": [HVACMode.OFF, HVACMode.COOL, HVACMode.DRY]},
     )
     rendered_source = Template(
-        "{{ states.climate.source }}",
+        "{{ " + expression + " }}",
         hass,
     ).async_render(parse_result=True)
     entity = VirtualClimate(
@@ -731,6 +735,45 @@ def test_climate_extracts_hvac_modes_from_rendered_source_state(hass):
 
     assert entity._apply_native_template_value("hvac_modes", rendered_source)
     assert entity.hvac_modes == [HVACMode.OFF, HVACMode.COOL, HVACMode.DRY]
+
+
+@pytest.mark.parametrize("modes", [
+    [HVACMode.OFF, HVACMode.COOL],
+    ["off", HVACMode.COOL],
+])
+def test_climate_enum_source_modes_restore_and_refresh(hass, caplog, modes):
+    hass.states.async_set("climate.source", "cool", {"hvac_modes": modes})
+    entity = VirtualClimate(CLIMATE_SCHEMA(_base(
+        "climate.enum_source", "off", hvac_modes=["off", "heat"],
+        **{CONF_NATIVE_TEMPLATES: {
+            "hvac_modes": "{{ state_attr('climate.source', 'hvac_modes') }}",
+        }},
+    )), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    assert entity._apply_restore_prerequisite_templates()
+    assert entity.hvac_modes == [HVACMode.OFF, HVACMode.COOL]
+    hass.states.async_set("climate.source", "heat", {
+        "hvac_modes": [HVACMode.OFF, HVACMode.HEAT],
+    })
+    entity._apply_templates()
+    assert entity.hvac_modes == [HVACMode.OFF, HVACMode.HEAT]
+    assert "Unable to render" not in caplog.text
+
+
+@pytest.mark.parametrize("rendered", [
+    "[<HVACMode.OFF: 'off'>, 'invalid']",
+    "[<HVACMode.OFF: 'off'>, 'off']",
+    "[<HVACMode.OFF: 'off'>, invalid]",
+])
+def test_climate_enum_list_keeps_validation(rendered):
+    entity = VirtualClimate(CLIMATE_SCHEMA(_base(
+        "climate.invalid_enum_source", "off", hvac_modes=["off", "heat"],
+    )), False)
+    entity._create_state(entity._config)
+    with pytest.raises(ValueError):
+        entity._apply_native_template_value("hvac_modes", rendered)
+    assert entity.hvac_modes == [HVACMode.OFF, HVACMode.HEAT]
 
 
 def test_climate_repairs_legacy_enum_repr_native_template(hass):

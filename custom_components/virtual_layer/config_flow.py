@@ -2935,8 +2935,13 @@ def _motion_hold_schema(defaults: Mapping) -> vol.Schema:
                 vol.Required(
                     CONF_MOTION_HOLD_MINUTES,
                     default=_motion_hold_minutes_default(defaults),
-                ): vol.All(
-                    detection_minutes
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        max=MOTION_HOLD_MINUTES_MAX,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
                 ),
                 vol.Required(
                     CONF_MOTION_DETECTION_LOGIC,

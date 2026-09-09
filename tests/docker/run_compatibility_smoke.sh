@@ -18,6 +18,8 @@ from pathlib import Path
 
 import yaml
 from homeassistant import bootstrap, loader
+from homeassistant.components.climate import HVACMode
+from homeassistant.helpers.data_entry_flow import FlowManagerResourceView
 from homeassistant.components.camera import CameraEntityFeature
 from homeassistant.components.light import ColorMode, LightEntityFeature
 from homeassistant.components.sensor import DEVICE_CLASS_UNITS
@@ -48,6 +50,7 @@ from custom_components.virtual_layer.config_flow import (
     HELPER_UPDATE_FORCE,
     _apply_sensor_conversion_defaults,
     _flatten_entity_form_sections,
+    _motion_hold_schema,
     _sensor_conversion_choices,
 )
 from custom_components.virtual_layer.const import (
@@ -161,6 +164,33 @@ async def test_sensor_conversion_runtime():
     try:
         from homeassistant.helpers.template import Template
         from custom_components.virtual_layer.air_quality_options import LEVELS, generate
+
+        # UI response serialization happens after the flow manager advances.
+        # Custom validators here strand the browser on the previous form.
+        FlowManagerResourceView(None)._prepare_result_json({
+            "type": FlowResultType.FORM,
+            "data_schema": _motion_hold_schema({}),
+        })
+        hass.states.async_set("climate.enum_source", "cool", {
+            "hvac_modes": [HVACMode.OFF, HVACMode.COOL],
+        })
+        enum_climate = VirtualClimate(CLIMATE_SCHEMA({
+            "name": "Enum Climate", "entity_id": "climate.enum_virtual",
+            "initial_value": "off", "hvac_modes": ["off", "heat"],
+            "native_templates": {
+                "hvac_modes": "{{ state_attr('climate.enum_source', 'hvac_modes') }}",
+            },
+        }), False)
+        enum_climate.hass = hass
+        enum_climate.async_schedule_update_ha_state = lambda *args, **kwargs: None
+        enum_climate._create_state(enum_climate._config)
+        assert enum_climate._apply_restore_prerequisite_templates()
+        assert enum_climate.hvac_modes == [HVACMode.OFF, HVACMode.COOL]
+        hass.states.async_set("climate.enum_source", "heat", {
+            "hvac_modes": [HVACMode.OFF, HVACMode.HEAT],
+        })
+        enum_climate._apply_templates()
+        assert enum_climate.hvac_modes == [HVACMode.OFF, HVACMode.HEAT]
 
         hass.states.async_set("sensor.aq_a", "0.005", {"unit_of_measurement": "mg/m³"})
         hass.states.async_set("sensor.aq_b", "25", {"unit_of_measurement": "μg/m³"})
@@ -315,6 +345,8 @@ async def configure_flow(manager, result, user_input):
     """Submit one real Home Assistant config/options flow step."""
     result = await manager.async_configure(result["flow_id"], user_input)
     assert not result.get("errors"), result.get("errors")
+    if result.get("data_schema") is not None:
+        FlowManagerResourceView(manager)._prepare_result_json(result)
     return result
 
 

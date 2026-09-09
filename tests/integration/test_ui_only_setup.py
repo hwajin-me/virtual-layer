@@ -30,6 +30,7 @@ from homeassistant.core import Context, CoreState, State
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers.template import Template
+from homeassistant.helpers.data_entry_flow import FlowManagerResourceView
 from homeassistant.helpers.translation import async_get_translations
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -6161,6 +6162,58 @@ async def test_options_flow_can_edit_all_climate_modes(hass):
     assert saved_templates["preset_modes"] == "{{ ['none', 'eco'] }}"
     assert saved_templates["swing_mode"] == "{{ 'auto' }}"
     assert saved_templates["swing_horizontal_mode"] == "{{ 'right' }}"
+
+
+@pytest.mark.parametrize(
+    "policy", [HELPER_UPDATE_AUTO, HELPER_UPDATE_KEEP, HELPER_UPDATE_FORCE]
+)
+async def test_edit_three_occupancy_sources_helper_policy(hass, policy):
+    """Submit the presence helper form through HA's schema validation."""
+    sources = [f"binary_sensor.presence_{index}" for index in (6, 7, 8)]
+    for source in sources:
+        hass.states.async_set(source, "off", {"device_class": "occupancy"})
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "Presence Sensor"},
+        options={ATTR_DEVICES: {"Presence Sensor": [{
+            CONF_PLATFORM: "binary_sensor",
+            CONF_NAME: "Occupancy",
+            ATTR_ENTITY_ID: "binary_sensor.combined_presence",
+            CONF_INITIAL_VALUE: "off",
+            CONF_CLASS: "occupancy",
+            CONF_SOURCE_ENTITIES: sources,
+        }]}},
+    )
+    entry.add_to_hass(hass)
+    manager = hass.config_entries.options
+    result = await manager.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY}
+    )
+    result = await manager.async_configure(
+        result["flow_id"], {CONF_ENTITY_KEY: _entity_key("Presence Sensor", 0)}
+    )
+    result = await manager.async_configure(
+        result["flow_id"], {
+            CONF_REFERENCE_ENTITY_ID: sources,
+            CONF_TARGET_DEVICE_NAME: "Presence Sensor",
+        }
+    )
+    assert result["step_id"] == "edit_entity_helper"
+    result = await manager.async_configure(
+        result["flow_id"], {CONF_HELPER_UPDATE_MODE: policy}
+    )
+    assert not result.get("errors")
+    # The HTTP view serializes the form only after the manager advances its
+    # current step. A failure here leaves the browser on the helper form.
+    json.dumps(FlowManagerResourceView(manager)._prepare_result_json(result))
+    result = await _accept_binary_detection_defaults(hass, result)
+    assert result["step_id"] == "edit_entity"
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    result = await manager.async_configure(result["flow_id"], defaults)
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    stored = _first_stored_entity(result)
+    assert stored[CONF_SOURCE_ENTITIES] == sources
+    assert CONF_HELPER_UPDATE_MODE not in stored
 
 
 async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_entities(

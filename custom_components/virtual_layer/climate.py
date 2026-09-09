@@ -98,6 +98,23 @@ def _safe_hvac_mode(value) -> HVACMode | None:
 
 def _rendered_hvac_modes(value):
     """Extract HVAC modes from native lists or rendered source state objects."""
+    if isinstance(value, str) and value.strip().startswith("["):
+        # HA source attributes can contain StrEnum members. Jinja prints their
+        # repr inside lists, which HA's result parser cannot turn into a list.
+        # Parse the complete result so invalid or duplicate members still reach
+        # the normal HVAC validation instead of silently being dropped.
+        rendered = re.sub(
+            r"<HVACMode\.[A-Z_]+:\s*(['\"])([a-z_]+)\1>",
+            lambda match: repr(match.group(2)),
+            value.strip(),
+        )
+        try:
+            parsed = ast.literal_eval(rendered)
+        except (SyntaxError, ValueError):
+            pass
+        else:
+            if isinstance(parsed, list):
+                value = parsed
     attributes = getattr(value, "attributes", None)
     if isinstance(attributes, Mapping):
         return attributes.get(CONF_HVAC_MODES)
