@@ -36,6 +36,75 @@ from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stock_actions", [False, True])
+async def test_light_group_parallel_commands_keep_virtual_target(hass, stock_actions):
+    sources = ["light.group_first", "light.group_second"]
+    for source in sources:
+        hass.states.async_set(source, "off", {"brightness": 10})
+    actions = {
+        command: [{"action": f"light.{command}", "target": {ATTR_ENTITY_ID: sources},
+                   "data": "{{ command_data }}"}]
+        for command in ("turn_on", "turn_off")
+    } if stock_actions else {}
+    entity = VirtualLight(LIGHT_SCHEMA(_base(
+        "light.group_target", "off", source_entities=sources,
+        light_response_delay=0, command_actions=actions,
+        native_templates={"is_on": "{{ false }}", "brightness": "{{ 10 }}"},
+    )), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    entity._schedule_state_update = Mock()
+    calls = []
+    both_started = asyncio.Event()
+
+    async def handle(call):
+        calls.append(call)
+        if len(calls) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), 1)
+
+    hass.services.async_register("light", "turn_on", handle)
+    hass.services.async_register("light", "turn_off", handle)
+    await entity.async_turn_on(brightness=180)
+    assert len(calls) == 2
+    assert all(call.data["brightness"] == 180 for call in calls)
+    assert {source for call in calls for source in call.data[ATTR_ENTITY_ID]} == set(sources)
+    entity._apply_templates()
+    assert entity.is_on
+    assert entity.brightness == 180
+    await entity.async_turn_off()
+    assert len(calls) == 4
+    entity._apply_templates()
+    assert not entity.is_on
+
+
+@pytest.mark.asyncio
+async def test_light_group_failed_member_does_not_block_other_members(hass):
+    from homeassistant.exceptions import HomeAssistantError
+
+    sources = ["light.broken", "light.healthy"]
+    entity = VirtualLight(LIGHT_SCHEMA(_base(
+        "light.failure_group", "off", source_entities=sources, light_response_delay=0,
+    )), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    entity._schedule_state_update = Mock()
+    healthy_calls = []
+
+    async def handle(call):
+        if "light.broken" in call.data[ATTR_ENTITY_ID]:
+            raise HomeAssistantError("bulb unavailable")
+        healthy_calls.append(call.data["brightness"])
+
+    hass.services.async_register("light", "turn_on", handle)
+    await asyncio.gather(entity.async_turn_on(brightness=50), entity.async_turn_on(brightness=200))
+    assert healthy_calls == [50, 200]
+    assert entity.brightness == 200
+
+
 @pytest.mark.parametrize("profile", ["dimmable", "color_temperature", "extended_color"])
 def test_matter_light_preserves_brightness_only_fallback(profile):
     entity = VirtualLight(
@@ -46,6 +115,133 @@ def test_matter_light_preserves_brightness_only_fallback(profile):
     entity._native_templates_applied()
     assert entity.supported_color_modes == {ColorMode.BRIGHTNESS}
     assert entity.color_mode in {None, ColorMode.BRIGHTNESS}
+
+
+@pytest.mark.asyncio
+async def test_light_group_opposite_command_cycle_does_not_deadlock(hass):
+    entity = VirtualLight(LIGHT_SCHEMA(_base(
+        "light.cycle_group", "off", source_entities=["light.first", "light.second"],
+        light_response_delay=0,
+    )), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    entity._schedule_state_update = Mock()
+
+    async def handle(call):
+        await entity.async_turn_off()
+
+    hass.services.async_register("light", "turn_on", handle)
+    await asyncio.wait_for(entity.async_turn_on(brightness=120), 1)
+    assert entity.is_on
+    assert entity.brightness == 120
+
+
+@pytest.mark.asyncio
+async def test_light_group_new_command_cancels_inflight_refresh(hass):
+    sources = ["light.first", "light.second"]
+    for source in sources:
+        hass.states.async_set(source, "off")
+    entity = VirtualLight(LIGHT_SCHEMA(_base(
+        "light.cancel_group", "off", source_entities=sources,
+    )), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    entity._schedule_state_update = Mock()
+    calls = AsyncMock()
+    hass.services.async_register("light", "turn_on", calls)
+    hass.services.async_register("light", "turn_off", calls)
+    started = asyncio.Event()
+
+    async def update(hass, source):
+        started.set()
+        await asyncio.Event().wait()
+
+    with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()), patch(
+        "custom_components.virtual_layer.light.async_update_entity", side_effect=update
+    ):
+        await entity.async_turn_on(brightness=100)
+        task = entity._group_refresh_task = asyncio.create_task(
+            entity._async_refresh_group(entity._group_revision, 2)
+        )
+        await asyncio.wait_for(started.wait(), 1)
+        calls.reset_mock()
+        await asyncio.wait_for(entity.async_turn_off(), 1)
+        await asyncio.gather(task, return_exceptions=True)
+        assert task.cancelled()
+        assert calls.await_count == 2
+        assert all(call.args[0].service == "turn_off" for call in calls.await_args_list)
+        assert not entity.is_on
+
+
+@pytest.mark.asyncio
+async def test_light_group_retries_only_mismatched_members_and_discards_old_target(hass):
+    sources = ["light.fast", "light.slow"]
+    for source in sources:
+        hass.states.async_set(source, "off")
+    entity = VirtualLight(LIGHT_SCHEMA(_base(
+        "light.retry_group", "off", source_entities=sources,
+    )), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    entity._schedule_state_update = Mock()
+    calls = []
+
+    async def handle(call):
+        source = call.data[ATTR_ENTITY_ID][0]
+        calls.append((source, call.service, call.data.get("brightness")))
+        if source == "light.fast":
+            hass.states.async_set(source, "on" if call.service == "turn_on" else "off",
+                                  {"brightness": call.data.get("brightness")})
+
+    hass.services.async_register("light", "turn_on", handle)
+    hass.services.async_register("light", "turn_off", handle)
+    with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()), patch(
+        "custom_components.virtual_layer.light.async_update_entity", new_callable=AsyncMock
+    ) as update:
+        await entity.async_turn_on(brightness=150)
+        revision = entity._group_revision
+        calls.clear()
+        await entity._async_refresh_group(revision, 1)
+        assert calls == [("light.slow", "turn_on", 150)]
+        update.assert_awaited_once_with(hass, "light.slow")
+        assert entity.brightness == 150
+
+        await entity.async_turn_off()
+        calls.clear()
+        await entity._async_refresh_group(revision, 1)
+        assert calls == []  # The old brightness target must never be replayed.
+        assert not entity.is_on
+
+
+@pytest.mark.asyncio
+async def test_light_group_refresh_accepts_physical_response_without_resending(hass):
+    sources = ["light.first", "light.second"]
+    for source in sources:
+        hass.states.async_set(source, "off")
+    entity = VirtualLight(LIGHT_SCHEMA(_base(
+        "light.update_group", "off", source_entities=sources,
+    )), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    entity._schedule_state_update = Mock()
+    calls = AsyncMock()
+    hass.services.async_register("light", "turn_on", calls)
+
+    async def update(hass, source):
+        hass.states.async_set(source, "on", {"brightness": 99})
+
+    with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()), patch(
+        "custom_components.virtual_layer.light.async_update_entity", side_effect=update
+    ):
+        await entity.async_turn_on(brightness=100)
+        calls.reset_mock()
+        await entity._async_refresh_group(entity._group_revision, 2)
+        calls.assert_not_awaited()
+        assert entity.brightness == 100  # Reporting tolerance is not target drift.
 
 
 def test_matter_light_color_mode_implies_brightness_without_duplicate_mode():

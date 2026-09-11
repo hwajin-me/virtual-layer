@@ -177,7 +177,8 @@
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "climate_temperature_step": "Temperature adjustment step",
-              "media_player_source_priority": "Media source priority"
+              "media_player_source_priority": "Media source priority",
+              "configure_air_quality_rules": "Customize air-quality rules"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -197,10 +198,11 @@
               "presence_classification": "When enabled for a combined tracker, Wi-Fi/ESPresense presence is home; BLE distance is front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
               "matter_light_type": "Choose the maximum virtual-light capability: on/off, dimming, color temperature, or extended HS/XY color. When combining bulbs, the generated helper uses the least capable profile: RGB plus color-temperature becomes color temperature, and any on/off-only bulb makes the virtual light on/off only. Effects and flash are never exposed.",
               "light_response_delay": "Seconds to retain a requested light value before reading source states again (0–30).",
-              "light_response_retries": "Additional delayed source-state reads after a light command (0–10).",
+              "light_response_retries": "For light groups, refresh source devices and resend the latest command only to bulbs that have not reached the target (0–10 retries). A new command cancels old retries. Single-source lights only re-read state.",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
-              "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties."
+              "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
+              "configure_air_quality_rules": "Default converts source categories or AQI automatically. Concentration-only sources remain unknown, never assumed good. Check to configure thresholds/formulas. Original sensors are unchanged."
             }
           },
           "native_value_templates": {
@@ -815,7 +817,7 @@
       },
       "air_quality_setup": {
         "title": "Air-quality measurement setup",
-        "description": "Set sources, units and thresholds together. Category mappings, attributes and calibration are optional advanced settings. Thresholds are user-defined, not automatic health standards.",
+        "description": "Profile inference: {profile}. Empty fields are prefilled using source device_class, IDs and names. Review units and thresholds before saving. PM presets do not calculate time averages; local display bands such as radon are not official health categories. Existing inputs are retained.",
         "data": {
           "sources": "Air-quality sources",
           "unit": "Boundary unit",
@@ -1099,7 +1101,8 @@
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "climate_temperature_step": "Temperature adjustment step",
-              "media_player_source_priority": "Media source priority"
+              "media_player_source_priority": "Media source priority",
+              "configure_air_quality_rules": "Customize air-quality rules"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -1119,10 +1122,11 @@
               "presence_classification": "Wi-Fi/ESPresense means home; BLE distance means front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
               "matter_light_type": "Choose the maximum virtual-light capability: on/off, dimming, color temperature, or extended HS/XY color. When combining bulbs, the generated helper uses the least capable profile: RGB plus color-temperature becomes color temperature, and any on/off-only bulb makes the virtual light on/off only. Effects and flash are never exposed.",
               "light_response_delay": "Seconds to retain a requested light value before reading source states again (0–30).",
-              "light_response_retries": "Additional delayed source-state reads after a light command (0–10).",
+              "light_response_retries": "For light groups, refresh source devices and resend the latest command only to bulbs that have not reached the target (0–10 retries). A new command cancels old retries. Single-source lights only re-read state.",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
-              "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties."
+              "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
+              "configure_air_quality_rules": "Default converts source categories or AQI automatically. Concentration-only sources remain unknown, never assumed good. Check to configure thresholds/formulas. Original sensors are unchanged."
             }
           },
           "native_value_templates": {
@@ -1765,7 +1769,8 @@
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "climate_temperature_step": "Temperature adjustment step",
-              "media_player_source_priority": "Media source priority"
+              "media_player_source_priority": "Media source priority",
+              "configure_air_quality_rules": "Customize air-quality rules"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -1785,10 +1790,11 @@
               "presence_classification": "Wi-Fi/ESPresense means home; BLE distance means front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
               "matter_light_type": "Choose the maximum virtual-light capability: on/off, dimming, color temperature, or extended HS/XY color. When combining bulbs, the generated helper uses the least capable profile: RGB plus color-temperature becomes color temperature, and any on/off-only bulb makes the virtual light on/off only. Effects and flash are never exposed.",
               "light_response_delay": "Seconds to retain a requested light value before reading source states again (0–30).",
-              "light_response_retries": "Additional delayed source-state reads after a light command (0–10).",
+              "light_response_retries": "For light groups, refresh source devices and resend the latest command only to bulbs that have not reached the target (0–10 retries). A new command cancels old retries. Single-source lights only re-read state.",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
-              "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties."
+              "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
+              "configure_air_quality_rules": "Default converts source categories or AQI automatically. Concentration-only sources remain unknown, never assumed good. Check to configure thresholds/formulas. Original sensors are unchanged."
             }
           },
           "native_value_templates": {
@@ -2471,7 +2477,7 @@
       },
       "air_quality_setup": {
         "title": "Air-quality measurement setup",
-        "description": "Set sources, units and thresholds together. Category mappings, attributes and calibration are optional advanced settings. Thresholds are user-defined, not automatic health standards.",
+        "description": "Profile inference: {profile}. Empty fields are prefilled using source device_class, IDs and names. Review units and thresholds before saving. PM presets do not calculate time averages; local display bands such as radon are not official health categories. Existing inputs are retained.",
         "data": {
           "sources": "Air-quality sources",
           "unit": "Boundary unit",
@@ -2533,7 +2539,7 @@
       },
       "edit_air_quality_setup": {
         "title": "Air-quality measurement setup",
-        "description": "Set sources, units and thresholds together. Category mappings, attributes and calibration are optional advanced settings. Thresholds are user-defined, not automatic health standards.",
+        "description": "Profile inference: {profile}. Empty fields are prefilled using source device_class, IDs and names. Review units and thresholds before saving. PM presets do not calculate time averages; local display bands such as radon are not official health categories. Existing inputs are retained.",
         "data": {
           "sources": "Air-quality sources",
           "unit": "Boundary unit",
@@ -2689,7 +2695,8 @@
         "source": "Source categories",
         "measurement": "Measurement boundaries",
         "fixed": "Fixed category",
-        "custom": "Custom Jinja"
+        "custom": "Custom Jinja",
+        "automatic": "Automatic (default)"
       }
     },
     "air_quality_aggregation": {
@@ -2710,7 +2717,9 @@
         "μg/m³": "μg/m³",
         "mg/m³": "mg/m³",
         "ppm": "ppm",
-        "ppb": "ppb"
+        "ppb": "ppb",
+        "Bq/m³": "Bq/m³",
+        "pCi/L": "pCi/L"
       }
     },
     "air_quality_grade": {
@@ -2762,7 +2771,9 @@
         "nitrogen_monoxide": "NO",
         "sulphur_dioxide": "SO₂",
         "volatile_organic_compounds": "VOC (mass concentration)",
-        "volatile_organic_compounds_parts": "VOC (volume ratio)"
+        "volatile_organic_compounds_parts": "VOC (volume ratio)",
+        "radon": "Radon",
+        "formaldehyde": "Formaldehyde"
       }
     }
   },

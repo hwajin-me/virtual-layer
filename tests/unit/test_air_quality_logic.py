@@ -23,6 +23,39 @@ def measurement(**overrides):
     }
 
 
+@pytest.mark.parametrize("state,attrs,expected", [
+    ("excellent", {}, "good"),
+    ("unhealthy", {}, "very_poor"),
+    ("0", {"unit_of_measurement": "mg/m³"}, "unknown"),
+    ("0", {"device_class": "aqi"}, "good"),
+    ("49.9", {"device_class": "aqi"}, "good"),
+    ("50", {"device_class": "aqi"}, "fair"),
+    ("150", {"device_class": "aqi"}, "moderate"),
+    ("500", {"device_class": "aqi", "unit_of_measurement": "AQI"}, "extremely_poor"),
+    ("501", {"device_class": "aqi"}, "unknown"),
+    ("nan", {"device_class": "aqi"}, "unknown"),
+    ("0", {"air_quality": "very poor"}, "very_poor"),
+    ("unavailable", {"air_quality": "good"}, "unknown"),
+    ("12", {"air_quality_index": 250}, "poor"),
+])
+def test_automatic_air_quality_matches_bridge_without_guessing_concentrations(hass, state, attrs, expected):
+    hass.states.async_set("sensor.source", state, attrs)
+    original = hass.states.get("sensor.source")
+    helper = Template(aq.generate({"mode": "automatic", "sources": ["sensor.source"]}), hass)
+    assert helper.async_render() == expected
+    assert hass.states.get("sensor.source") is original
+
+
+def test_automatic_air_quality_aggregates_live_categories_and_handles_no_sources(hass):
+    assert Template(aq.generate({"mode": "automatic", "sources": []}), hass).async_render() == "unknown"
+    hass.states.async_set("sensor.a", "fair")
+    hass.states.async_set("sensor.b", "hazardous")
+    helper = Template(aq.generate({"mode": "automatic", "sources": ["sensor.a", "sensor.b"]}), hass)
+    assert helper.async_render() == "extremely_poor"
+    hass.states.async_set("sensor.b", "unavailable")
+    assert helper.async_render() == "fair"
+
+
 async def test_compact_setup_preserves_advanced_values_through_errors_and_back(hass):
     from custom_components.virtual_layer.config_flow import VirtualFlowHandler
 
@@ -281,14 +314,14 @@ async def test_numeric_formaldehyde_source_defaults_to_measurement(hass, device_
     })
     flow = VirtualFlowHandler()
     flow.hass = hass
-    flow._entity_defaults = {"platform": "air_quality", CONF_SOURCE_ENTITIES_TEXT: source_id}
+    flow._entity_defaults = {"platform": "air_quality", CONF_SOURCE_ENTITIES_TEXT: source_id, "configure_air_quality_rules": True}
     result = await flow.async_step_air_quality()
     assert result["data_schema"]({})["mode"] == "measurement"
     result = await flow.async_step_air_quality({"mode": "measurement"})
     defaults = result["data_schema"]({f"boundary_{i}": i * 10 for i in range(1, 6)})
     assert defaults["unit"] == "mg/m³"
     assert defaults["advanced"]["quantity"] == (
-        "volatile_organic_compounds" if device_class == "volatile_organic_compounds" else "any"
+        device_class if device_class in ("volatile_organic_compounds", "formaldehyde") else "any"
     )
 
 
@@ -321,6 +354,8 @@ def test_quantity_filter_follows_live_device_class(hass, quantity):
         else ("ppm" if quantity == "volatile_organic_compounds_parts" else "μg/m³")
     )
     source_unit = None if unit == "unitless" else unit
+    if quantity == "radon":
+        unit = source_unit = "Bq/m³"
     recipe = measurement(unit=unit, quantity=quantity)
     hass.states.async_set(
         "sensor.pm25",
@@ -335,6 +370,60 @@ def test_quantity_filter_follows_live_device_class(hass, quantity):
         {"device_class": "temperature", "unit_of_measurement": source_unit},
     )
     assert helper.async_render() == "unknown"
+
+
+@pytest.mark.parametrize("entity_id,name,declared,expected", [
+    ("sensor.bedroom_pm2_5", "Bedroom", None, "pm25"),
+    ("sensor.bedroom_pm10", "Bedroom", None, "pm10"),
+    ("sensor.environment", "거실 라돈", None, "radon"),
+    ("sensor.hcho", "Formaldehyde", None, "formaldehyde"),
+    ("sensor.pm10", "PM2.5", "carbon_dioxide", "carbon_dioxide"),
+    ("sensor.pm10", "PM2.5", None, None),
+    ("sensor.pm10", "PM2.5", "temperature", None),
+    ("sensor.random", "Environment Sensor", None, None),
+    ("sensor.pm100", "Sensor", None, None),
+])
+def test_air_quality_profile_name_inference(hass, entity_id, name, declared, expected):
+    hass.states.async_set(entity_id, "0", {"friendly_name": name, "device_class": declared})
+    assert aq.infer_quantity(hass.states.get(entity_id)) == expected
+
+
+@pytest.mark.parametrize("quantity,unit,factor", [
+    ("pm25", "μg/m³", 1), ("pm25", "mg/m³", 0.001),
+    ("pm10", "μg/m³", 1), ("radon", "Bq/m³", 1),
+    ("radon", "pCi/L", 1 / 37), ("formaldehyde", "μg/m³", 1000),
+    ("carbon_dioxide", "ppb", 1000), ("aqi", "unitless", 1),
+])
+async def test_preset_fills_all_required_fields_and_preserves_edits(hass, quantity, unit, factor):
+    from custom_components.virtual_layer.config_flow import VirtualFlowHandler
+    source = f"sensor.{quantity}"
+    hass.states.async_set(source, "0", {"device_class": quantity, "unit_of_measurement": None if unit == "unitless" else unit})
+    flow = VirtualFlowHandler()
+    flow.hass = hass
+    flow._aq_edit = False
+    flow._aq_pending = {"mode": "measurement", "sources": [source]}
+    result = await flow.async_step_air_quality_setup()
+    values = result["data_schema"]({})
+    assert values["sources"] == [source]
+    assert values["unit"] == unit
+    assert [values[f"boundary_{i}"] for i in range(1, 6)] == pytest.approx(
+        [v * factor for v in aq.STARTER_PROFILES[quantity][1]])
+    result = await flow.async_step_air_quality_setup(values)
+    assert result["step_id"] == "air_quality_review"
+    assert result["description_placeholders"]["result"] == "good"
+    existing = {**flow._aq_pending, "thresholds": [1, 2, 3, 4, 5], "levels": ["poor"] * 6}
+    filled, _ = aq.prefill_measurement(existing, [hass.states.get(source)])
+    assert filled["thresholds"] == [1, 2, 3, 4, 5]
+    assert filled["levels"] == ["poor"] * 6
+
+
+def test_prefill_rejects_mixed_sources_and_explicit_other_quantity(hass):
+    hass.states.async_set("sensor.pm25", "1", {"device_class": "pm25"})
+    hass.states.async_set("sensor.radon", "1", {"device_class": "radon"})
+    states = [hass.states.get("sensor.pm25"), hass.states.get("sensor.radon")]
+    assert "thresholds" not in aq.prefill_measurement({}, states)[0]
+    assert "thresholds" not in aq.prefill_measurement({"quantity": "radon"}, states[:1])[0]
+    assert "thresholds" not in aq.prefill_measurement({"attribute": "other"}, states[:1])[0]
 
 
 async def test_flow_rejects_mixed_pollutants_before_calculation(hass):

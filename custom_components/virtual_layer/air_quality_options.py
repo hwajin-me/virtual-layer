@@ -1,6 +1,7 @@
 """UI-only air-quality recipes and editable Jinja helper generation."""
 
 import math
+import re
 from collections.abc import Mapping
 from itertools import pairwise
 
@@ -10,11 +11,13 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import selector
 
 LEVELS = ("good", "fair", "moderate", "poor", "very_poor", "extremely_poor")
-MODES = ("source", "measurement", "fixed", "custom")
-UNITS = ("unitless", "μg/m³", "mg/m³", "ppm", "ppb")
+MODES = ("automatic", "source", "measurement", "fixed", "custom")
+UNITS = ("unitless", "μg/m³", "mg/m³", "ppm", "ppb", "Bq/m³", "pCi/L")
 REDUCERS = ("per_source", "mean", "median", "minimum", "maximum")
 QUANTITIES = (
     "any",
+    "radon",
+    "formaldehyde",
     "pm1",
     "pm25",
     "pm10",
@@ -46,7 +49,9 @@ NATIVE_MEASUREMENT_CLASSES = {
 
 def validate_quantity_unit(quantity, unit):
     allowed = UNITS
-    if quantity in ("pm1", "pm25", "pm10", "volatile_organic_compounds"):
+    if quantity == "radon":
+        allowed = ("Bq/m³", "pCi/L")
+    elif quantity in ("pm1", "pm25", "pm10", "volatile_organic_compounds"):
         allowed = ("μg/m³", "mg/m³")
     elif quantity == "aqi":
         allowed = ("unitless",)
@@ -56,6 +61,80 @@ def validate_quantity_unit(quantity, unit):
         allowed = ("μg/m³", "mg/m³", "ppm", "ppb")
     if unit not in allowed:
         raise vol.Invalid("Unit does not match measured quantity")
+
+
+# Editable display bands, not a certification or exposure assessment. PM bands
+# borrow EPA concentration breakpoints, without calculating a time-averaged AQI.
+# Radon bands are local multiples of 37 Bq/m³, NOT official six-level categories.
+STARTER_PROFILES = {
+    "pm25": ("μg/m³", (9, 35.4, 55.4, 125.4, 225.4), "EPA PM2.5 concentration breakpoints; no time averaging"),
+    "pm10": ("μg/m³", (54, 154, 254, 354, 424), "EPA PM10 concentration breakpoints; no time averaging"),
+    "carbon_monoxide": ("ppm", (4.4, 9.4, 12.4, 15.4, 30.4), "EPA CO concentration breakpoints; no time averaging"),
+    "nitrogen_dioxide": ("ppb", (53, 100, 360, 649, 1249), "EPA NO2 concentration breakpoints; no time averaging"),
+    "aqi": ("unitless", (50, 150, 250, 350, 450), "matterbridge-hass 1.5.0 AQI mapping"),
+    "radon": ("Bq/m³", (37, 74, 148, 296, 592), "Local radon display bands; not official health categories"),
+    "formaldehyde": ("mg/m³", (0.02, 0.04, 0.08, 0.16, 0.32), "Local editable display bands; not health limits"),
+    "carbon_dioxide": ("ppm", (600, 800, 1000, 1500, 2000), "Local editable display bands; not health limits"),
+    "volatile_organic_compounds": ("μg/m³", (100, 200, 400, 800, 1600), "Local editable display bands; not health limits"),
+}
+NAME_HINTS = {
+    "pm25": r"(?:pm|particulate[ _-]*matter)[ _.-]*2[ _.-]*5|초미세먼지",
+    "pm10": r"(?:pm|particulate[ _-]*matter)[ _.-]*10",
+    "pm1": r"pm[ _.-]*1(?![0-9])",
+    "radon": r"radon|라돈",
+    "formaldehyde": r"formaldehyde|hcho|포름알데히드",
+    "carbon_dioxide": r"carbon[ _-]*dioxide|co2|co₂|이산화탄소",
+    "carbon_monoxide": r"carbon[ _-]*monoxide|co|일산화탄소",
+    "nitrogen_dioxide": r"nitrogen[ _-]*dioxide|no2|no₂|이산화질소",
+    "volatile_organic_compounds": r"tvoc|voc|휘발성",
+    "aqi": r"aqi|air[ _-]*quality[ _-]*index",
+}
+
+
+def infer_quantity(state):
+    """Metadata wins; ambiguous token matches never guess a pollutant."""
+    declared = state.attributes.get("device_class")
+    if declared:
+        return declared if declared in QUANTITIES[1:] else None
+    name = f"{state.entity_id.split('.', 1)[-1]} {state.attributes.get('friendly_name', '')}".lower()
+    matches = {key for key, pattern in NAME_HINTS.items()
+               if re.search(r"(?<![a-z0-9])(?:" + pattern + r")(?![a-z0-9])", name)}
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def prefill_measurement(defaults, states):
+    """Fill only absent fields; never rewrite stored or rejected user values."""
+    result = dict(defaults)
+    if result.get("attribute"):
+        return result, "Explicit attribute selected; no assumptions from the primary state."
+    quantities = {infer_quantity(state) for state in states if state is not None}
+    if len(quantities) != 1 or None in quantities or not states or any(state is None for state in states):
+        return result, "No unambiguous profile; enter your own thresholds."
+    quantity = next(iter(quantities))
+    if result.get("quantity", "any") not in ("any", quantity):
+        return result, "Selected quantity differs from source metadata; no preset applied."
+    if quantity not in STARTER_PROFILES:
+        return result, "No preset for this measurement; enter your own thresholds."
+    unit, thresholds, label = STARTER_PROFILES[quantity]
+    source_unit = str(states[0].attributes.get("unit_of_measurement") or unit).replace("µ", "μ")
+    target_unit = result.get("unit")
+    if target_unit is None:
+        target_unit = source_unit if source_unit in UNITS else unit
+        result["unit"] = target_unit
+    factors = {("μg/m³", "mg/m³"): 0.001, ("mg/m³", "μg/m³"): 1000,
+               ("ppm", "ppb"): 1000, ("ppb", "ppm"): 0.001,
+               ("Bq/m³", "pCi/L"): 1 / 37, ("pCi/L", "Bq/m³"): 37}
+    factor = 1 if target_unit == unit else factors.get((unit, target_unit))
+    if factor is None:
+        return result, "Preset unit is incompatible; enter your own thresholds."
+    if not result.get("quantity") or result["quantity"] == "any":
+        # Name-only inference cannot satisfy a strict device_class filter.
+        result["quantity"] = quantity if all(s.attributes.get("device_class") == quantity for s in states) else "any"
+    if "thresholds" not in result:
+        result["thresholds"] = [round(value * factor, 10) for value in thresholds]
+    if quantity == "aqi":
+        result.setdefault("boundary_rule", "lower_inclusive")
+    return result, f"{quantity} / {target_unit}: {label}"
 
 
 def calculation_schema(defaults):
@@ -183,9 +262,11 @@ def normalize(recipe):
             raise vol.Invalid("Invalid fixed level")
         return {**result, "fixed": recipe["fixed"]}
     sources = recipe.get("sources")
-    if not isinstance(sources, list) or not 1 <= len(sources) <= 64:
+    if not isinstance(sources, list) or not (0 if mode == "automatic" else 1) <= len(sources) <= 64:
         raise vol.Invalid("Select 1 to 64 sources")
     sources = list(dict.fromkeys(cv.entity_id(value) for value in sources))
+    if mode == "automatic":
+        return {"mode": mode, "sources": sources}
     attribute = recipe.get("attribute", "")
     if not isinstance(attribute, str) or len(attribute) > 255:
         raise vol.Invalid("Invalid attribute")
@@ -322,6 +403,30 @@ def generate(recipe):
         return None
     if mode == "fixed":
         return "{{ " + repr(recipe["fixed"]) + " }}"
+    if mode == "automatic":
+        # Match matterbridge-hass 1.5.0 category aliases and its AQI scale,
+        # not concentration thresholds or numeric Matter enum values.
+        aliases = {**{level: level for level in LEVELS},
+                   "excellent": "good", "healthy": "good", "fine": "good",
+                   "unhealthy_for_sensitive_groups": "poor", "unhealthy": "very_poor",
+                   "very_unhealthy": "extremely_poor", "hazardous": "extremely_poor"}
+        return (
+            "{% set ns = namespace(rank=-1) %}{% for entity_id in " + repr(recipe["sources"]) + " %}"
+            "{% if states(entity_id) not in ['unknown', 'unavailable'] %}"
+            "{% set raw = state_attr(entity_id, 'air_quality') %}"
+            "{% set raw = states(entity_id) if raw is none else raw %}"
+            "{% set category = " + repr(aliases) + ".get(raw | string | trim | lower | replace('-', '_') | replace(' ', '_')) %}"
+            "{% set rank = -1 %}{% if category is not none %}"
+            "{% set rank = " + repr(list(LEVELS)) + ".index(category) %}"
+            "{% else %}{% set index = state_attr(entity_id, 'air_quality_index') %}"
+            "{% if index is none and state_attr(entity_id, 'device_class') == 'aqi' "
+            "and state_attr(entity_id, 'unit_of_measurement') in [none, '', 'AQI'] %}"
+            "{% set index = states(entity_id) %}{% endif %}"
+            "{% if index is not boolean and is_number(index) and 0 <= (index | float) <= 500 %}"
+            "{% set rank = ((index | float) / 100 + 0.5) | round(0, 'floor') | int %}"
+            "{% endif %}{% endif %}{% if rank > ns.rank %}{% set ns.rank = rank %}{% endif %}"
+            "{% endif %}{% endfor %}{{ " + repr(list(LEVELS)) + "[ns.rank] if ns.rank >= 0 else 'unknown' }}"
+        )
     attribute = recipe["attribute"]
     quantity_check = ""
     if mode == "measurement" and not attribute and recipe["quantity"] != "any":
@@ -355,6 +460,8 @@ def generate(recipe):
             "mg/m³": {"μg/m³": 0.001, "mg/m³": 1},
             "ppm": {"ppm": 1, "ppb": 0.001},
             "ppb": {"ppm": 1000, "ppb": 1},
+            "Bq/m³": {"Bq/m³": 1, "pCi/L": 37},
+            "pCi/L": {"Bq/m³": 1 / 37, "pCi/L": 1},
         }[recipe["unit"]]
         if recipe["unit"] == "unitless" and recipe["quantity"] == "aqi":
             # HA sources may explicitly label the dimensionless AQI index.

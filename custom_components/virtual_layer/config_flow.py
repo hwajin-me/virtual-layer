@@ -3266,6 +3266,8 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         ),
     }
     domain_schema = {}
+    if platform == "air_quality":
+        domain_schema[vol.Optional("configure_air_quality_rules", default=False)] = selector.BooleanSelector()
     if platform == "device_tracker":
         domain_schema.update(
             {
@@ -10046,11 +10048,18 @@ class _AirQualityLogicFlow:
     def _aq_needs_setup(self, defaults, edit=False):
         return (isinstance(defaults, Mapping)
                 and defaults.get(CONF_PLATFORM) == "air_quality"
-                and getattr(self, "_aq_completed", None) != self._aq_signature(defaults, edit))
+                and (defaults.get("configure_air_quality_rules")
+                     or getattr(self, "_aq_completed", None) != self._aq_signature(defaults, edit)))
 
     async def _aq_mode_step(self, user_input=None, *, edit=False):
         defaults = self._entity_defaults or {}
         stored = defaults.get(CONF_AIR_QUALITY_LOGIC)
+        if user_input is None and not edit and not defaults.get("configure_air_quality_rules"):
+            self._aq_edit = False
+            return await self._aq_finish({
+                "mode": "automatic",
+                "sources": _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT)),
+            })
         try:
             recipe = aq_options.normalize(stored)
         except (TypeError, ValueError, vol.Invalid):
@@ -10078,6 +10087,11 @@ class _AirQualityLogicFlow:
                 # editable rather than guessing that it can be regenerated.
                 recipe = {"mode": "custom"}
         recipe.setdefault("sources", _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT)))
+        if (user_input is None and edit and recipe["mode"] == "automatic"
+                and not defaults.get("configure_air_quality_rules")):
+            self._aq_edit = True
+            recipe["sources"] = _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT))
+            return await self._aq_finish(recipe)
         errors = {}
         if user_input is not None:
             mode = user_input.get("mode")
@@ -10086,6 +10100,8 @@ class _AirQualityLogicFlow:
             else:
                 self._aq_pending = {**recipe, "mode": mode}
                 self._aq_edit = edit
+                if mode == "automatic":
+                    return await self._aq_finish({"mode": mode, "sources": recipe["sources"]})
                 if mode == "custom":
                     return await self._aq_finish({"mode": "custom"})
                 if mode == "measurement":
@@ -10101,6 +10117,11 @@ class _AirQualityLogicFlow:
     async def _aq_setup_step(self, user_input=None):
         """Validate the compact form using the same source and recipe rules."""
         errors = {}
+        if user_input is None:
+            self._aq_pending, _ = aq_options.prefill_measurement(
+                self._aq_pending,
+                [self.hass.states.get(entity_id) for entity_id in self._aq_pending.get("sources", [])],
+            )
         if user_input is not None:
             try:
                 values = dict(user_input)
@@ -10126,6 +10147,10 @@ class _AirQualityLogicFlow:
         return self.async_show_form(
             step_id="edit_air_quality_setup" if self._aq_edit else "air_quality_setup",
             data_schema=aq_options.setup_schema(self._aq_pending), errors=errors,
+            description_placeholders={"profile": aq_options.prefill_measurement(
+                self._aq_pending,
+                [self.hass.states.get(entity_id) for entity_id in self._aq_pending.get("sources", [])],
+            )[1]},
         )
 
     async def async_step_air_quality_setup(self, user_input=None):
@@ -10176,6 +10201,8 @@ class _AirQualityLogicFlow:
                         "mg/m³": {"μg/m³", "mg/m³"},
                         "ppm": {"ppm", "ppb"},
                         "ppb": {"ppm", "ppb"},
+                        "Bq/m³": {"Bq/m³", "pCi/L"},
+                        "pCi/L": {"Bq/m³", "pCi/L"},
                     }
                     if any(
                         str(state.attributes.get("unit_of_measurement") or "").replace("µ", "μ")
@@ -10323,6 +10350,7 @@ class _AirQualityLogicFlow:
         # The recipe has already populated the editable template. A stale
         # legacy dropdown must never override edits made on the next screen.
         defaults.pop(CONF_MATTER_AIR_QUALITY, None)
+        defaults["configure_air_quality_rules"] = False
         self._entity_defaults = defaults
         self._aq_completed = self._aq_signature(defaults, self._aq_edit)
         if self._aq_edit:

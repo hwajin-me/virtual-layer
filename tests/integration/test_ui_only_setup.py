@@ -10191,6 +10191,36 @@ async def test_options_updates_preserve_unrelated_entities(hass, tmp_path, monke
     assert hass.states.get("tag.stable_tag") is None
 
 
+async def test_air_quality_default_skips_rules_and_preserves_source(hass, tmp_path, monkeypatch):
+    import asyncio
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file",
+                        lambda hass: str(tmp_path / "automatic-air.meta.json"))
+    hass.states.async_set("sensor.original_aqi", "150", {"device_class": "aqi", "unit_of_measurement": "AQI"})
+    original = hass.states.get("sensor.original_aqi")
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "auto_air"}, options={ATTR_DEVICES: {}})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: ["sensor.original_aqi"]})
+    result = await _choose_add_template_helper(hass, result, target_entity_type="air_quality")
+    assert result["step_id"] == "entity"
+    values = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert values["configure_air_quality_rules"] is False
+    values[ATTR_ENTITY_ID] = "air_quality.automatic_test"
+    assert Template(values[CONF_NATIVE_VALUE_TEMPLATES]["air_quality"], hass).async_render() == "moderate"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert hass.states.get("sensor.original_aqi") is original
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    await asyncio.sleep(0.1)
+    await hass.async_block_till_done()
+    assert hass.states.get("air_quality.automatic_test").state == "moderate"
+    bridge = hass.states.get("sensor.automatic_test_air_quality")
+    assert bridge.state == "moderate"
+    assert "unit_of_measurement" not in bridge.attributes
+    assert hass.states.get("sensor.original_aqi") is original
+
+
 async def test_air_quality_uses_a_dedicated_matter_configuration_step(hass):
     hass.states.async_set("air_quality.living_room", "good")
     entry = MockConfigEntry(
@@ -10210,6 +10240,10 @@ async def test_air_quality_uses_a_dedicated_matter_configuration_step(hass):
     )
     result = await _choose_add_template_helper(hass, result)
     assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "entity"
+    manual = _flatten_entity_form_sections(result["data_schema"]({}))
+    manual["configure_air_quality_rules"] = True
+    result = await hass.config_entries.options.async_configure(result["flow_id"], manual)
     assert result["step_id"] == "air_quality"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"mode": "fixed"},
@@ -10302,8 +10336,12 @@ async def test_add_formaldehyde_air_quality_preserves_same_named_sensor(hass, tm
         result = await hass.config_entries.options.async_configure(result["flow_id"], {"confirm": True})
     else:
         result = await _choose_add_template_helper(hass, result, target_entity_type="air_quality")
+    assert result["step_id"] == "entity"
+    manual = _flatten_entity_form_sections(result["data_schema"]({}))
+    manual["configure_air_quality_rules"] = True
+    result = await hass.config_entries.options.async_configure(result["flow_id"], manual)
     assert result["step_id"] == "air_quality"
-    assert result["data_schema"]({})["mode"] == "measurement"
+    assert result["data_schema"]({})["mode"] == "automatic"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"mode": "measurement"})
     # Synthetic thresholds test the plumbing, not a health/exposure standard.
     result = await hass.config_entries.options.async_configure(result["flow_id"], {
@@ -10380,6 +10418,10 @@ async def test_air_quality_measurement_recipe_precedes_templates_and_validates(h
     result = await _choose_add_template_helper(
         hass, result, target_entity_type="air_quality",
     )
+    assert result["step_id"] == "entity"
+    manual = _flatten_entity_form_sections(result["data_schema"]({}))
+    manual["configure_air_quality_rules"] = True
+    result = await hass.config_entries.options.async_configure(result["flow_id"], manual)
     assert result["step_id"] == "air_quality"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"mode": "measurement"},

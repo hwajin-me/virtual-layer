@@ -45,6 +45,28 @@ and manage them from `Settings > Devices & services > Virtual Layer`.
 - Optional Home Assistant Jinja templates for custom state, availability, and
   attributes
 - Periodic pull refresh for composite entities
+- Light groups with two or more light sources dispatch default commands to
+  each bulb in parallel. After a group command, the virtual light retains its
+  requested power, brightness and color; delayed member reports update
+  diagnostics and availability without replacing that target. Consecutive
+  group commands are dispatched in order. Custom action sequences remain
+  supported, including `optimistic: false` for source-authoritative behavior.
+  After default group actions finish, response-delay/retry settings trigger
+  device updates and bounded command retries for members that still differ
+  from the requested power, brightness or color. New commands cancel old
+  retries; successful members are not resent commands. Transitions receive
+  their requested duration before checking. The ignore-unresponsive option
+  skips command retries to unknown/unavailable members. A device update request
+  depends on the physical integration's polling support and does not guarantee
+  that an offline bulb can be reached.
+  Mixed RGB/colour-temperature groups expose the colour-temperature profile.
+  HA converts Kelvin requests to HS/RGB/XY or calibrated RGBWW for each bulb;
+  reconciliation checks the resulting native channels instead of requiring
+  RGB-only bulbs to report Kelvin. Re-forwarded requests contain only the
+  modern Kelvin descriptor, avoiding duplicate legacy mired fields rejected
+  by HA. RGB input to a CT-only group is a white-temperature approximation,
+  not full RGB colour reproduction. Matter cluster/unit conversion remains
+  the responsibility of the installed bridge plugin.
 - Korean and English UI translations
 - Integration icons and brand assets
 
@@ -502,8 +524,21 @@ and covers include tilt position and tilt actions. For example, a vacuum can
 template its activity, battery level, fan speed list, current fan speed, and
 supported feature set without editing JSON.
 
-Air-quality entities have dedicated **Air quality logic** steps before the
-template editor, in both creation and editing.
+New air-quality entities default to **Automatic**, skipping the rule wizard.
+Source categories (including matterbridge-hass aliases) and explicit AQI values
+are converted into categorical strings for the separate bridge sensor. Multiple
+known sources use the worst category. Unavailable sources are skipped; no valid
+category means unknown. Concentrations alone are not AQI and are never silently
+classified as good, including zero concentration readings.
+The automatic AQI conversion mirrors matterbridge-hass 1.5.0's 0–500 linear
+mapping (`floor(AQI / 100 + 0.5)` selects one of six categories), not a health
+standard or a concentration-to-AQI formula. Values outside 0–500 are unknown.
+See the [upstream converter](https://github.com/Luligu/matterbridge-hass/blob/1.5.0/src/converters.ts).
+Choose **Customize air-quality rules** on the final entity form to opt into
+thresholds, formulas, fixed grades or custom Jinja. Existing custom rules are
+preserved. Automatic mode does not modify the original source sensor or the
+external Matterbridge configuration; the Air Quality Regex setup below still
+applies.
 
 Keep existing PM2.5 and other measurement entities: selecting Air Quality while
 editing a sensor/number opens a confirmation to add a separate categorical
@@ -516,6 +551,23 @@ by preview and the final template editor. Quantity, category mappings, missing
 value policies and calibration are grouped in a collapsed advanced section.
 Saved advanced values are retained when reopening the form. Preview offers
 continue, refresh, or return to that same settings screen.
+When optional measurement setup opens, missing thresholds and units are prefilled
+for PM2.5, PM10, CO, NO2, AQI, radon, formaldehyde, CO2 and VOC mass.
+Source `device_class` takes precedence over token-based entity-ID/friendly-name
+hints (including Korean names). Conflicting hints, mixed pollutants, explicit
+attribute inputs and unsupported profiles do not guess thresholds. Existing
+values, including rejected edits, remain untouched. Names identify a proposed
+profile, not trustworthy physical units: validate source metadata before saving.
+Mass and gas-ratio prefixes are converted only within compatible unit families;
+radon additionally supports Bq/m³ and pCi/L (1 pCi/L = 37 Bq/m³).
+PM/CO/NO2 presets borrow [EPA concentration breakpoints](https://aqs.epa.gov/aqsweb/documents/codetables/aqi_breakpoints.html)
+but do not perform required time averaging or calculate official AQI. Radon
+uses local display bands 37/74/148/296/592 Bq/m³, not official six-level health
+categories. EPA's [radon guidance](https://www.epa.gov/radiation/radionuclide-basics-radon)
+does not define these six bands. Formaldehyde, CO2 and VOC presets are explicitly
+local editable display bands, not safety or exposure limits. No source sensor
+is changed by this prefill. Unrecognized sources still require user-defined
+thresholds rather than fabricating a pollutant profile.
 Generated PM2.5/PM10 helpers can read matching numeric sensor states, including
 mass-unit conversion. Unmeasured concentrations are unknown (`None`), not zero.
 Old customized templates are not silently rewritten; review them when upgrading.
@@ -549,8 +601,8 @@ updates preserve customized templates; force-helper regenerates them, while
 keep-current retains them. This supplies an overall category in addition to
 concentration values; configuring a Matter bridge remains a separate task.
 
-Measurement configuration follows **Input sources → Calculation → Thresholds
-and grades → Preview → Template editor**. Source-category mode skips numeric
+Optional measurement configuration follows **Combined settings → Preview →
+Template editor**. Source-category mode skips numeric
 calculation and thresholds; fixed mode asks only for a category before preview.
 Custom Jinja continues directly to the template editor. Preview uses current
 Home Assistant values without saving or changing entity states. You can refresh

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import logging
 import math
+import asyncio
+import copy
 from collections.abc import Callable
 from typing import Any
 
@@ -30,17 +32,20 @@ from homeassistant.components.light import (
 from homeassistant.components.light import (
     DOMAIN as PLATFORM_DOMAIN,
 )
+from homeassistant.components.light.const import DATA_COMPONENT as LIGHT_COMPONENT
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.util import color as color_util
 
 from . import get_entity_configs
 from .const import *
-from .entity import VirtualEntity, nonnegative_int, virtual_schema
+from .entity import VirtualEntity, nonnegative_int, virtual_schema, _COMMAND_ACTION_CHAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -253,6 +258,14 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._ignore_unresponsive = config.get(CONF_LIGHT_IGNORE_UNRESPONSIVE, True)
         self._response_refresh_cancel = None
         self._response_pending = False
+        self._group_command_lock = asyncio.Lock()
+        self._group_authoritative = False
+        self._group_revision = 0
+        self._group_dispatching = False
+        self._group_refresh_task = None
+        self._group_retry_sources = None
+        self._group_target = None
+        self._group_removed = False
         matter_type = config.get(CONF_MATTER_LIGHT_TYPE)
         if matter_type:
             self._matter_color_modes = set(MATTER_LIGHT_COLOR_MODES[matter_type])
@@ -541,9 +554,242 @@ class VirtualLight(VirtualEntity, LightEntity):
             and self._response_delay > 0
         )
 
+    def _group_sources(self):
+        return list(dict.fromkeys(
+            source for source in self._source_entities
+            if isinstance(source, str) and source.startswith("light.")
+            and source != self.entity_id
+        ))
+
+    def _command_action_spec(self, command):
+        spec = super()._command_action_spec(command)
+        sources = self._group_sources()
+        if len(sources) < 2 or command not in {"turn_on", "turn_off"}:
+            return spec
+        # Upgrade only the exact stock pass-through action. Independently
+        # configured scripts (including optimistic:false) remain authoritative.
+        stock = [{"action": f"light.{command}",
+                  "target": {ATTR_ENTITY_ID: sources},
+                  "data": "{{ command_data }}"}]
+        if spec is not None and spec != (stock, True):
+            return spec
+        return ([{"parallel": [
+            {"sequence": [{"action": f"light.{command}",
+                           "target": {ATTR_ENTITY_ID: source},
+                           "data": "{{ command_data }}",
+                           "continue_on_error": True}]}
+            for source in (self._group_retry_sources if self._group_retry_sources is not None else sources)
+        ]}], True)
+
+    def _has_stock_group_action(self, command):
+        spec = super()._command_action_spec(command)
+        return spec is None or spec == ([{
+            "action": f"light.{command}",
+            "target": {ATTR_ENTITY_ID: self._group_sources()},
+            "data": "{{ command_data }}",
+        }], True)
+
+    def _command_service_data(self, command, method, args, kwargs):
+        data = super()._command_service_data(command, method, args, kwargs)
+        # Core passes a compatibility mired value to LightEntity methods.
+        # Re-entering the public service with both descriptors is invalid.
+        if "color_temp_kelvin" in data:
+            data.pop("color_temp", None)
+            data.pop("kelvin", None)
+        return data
+
+    def _validate_command_action(self, command, args, kwargs):
+        if command not in {"turn_on", "turn_off"}:
+            return
+        if ATTR_EFFECT in kwargs or ATTR_FLASH in kwargs:
+            raise ValueError("Matter-compatible lights do not support effects or flash")
+        transition = kwargs.get("transition", 0)
+        if (isinstance(transition, bool) or not isinstance(transition, (int, float))
+                or not math.isfinite(transition) or transition < 0):
+            raise ValueError("transition must be a finite nonnegative number")
+        if command == "turn_on":
+            names = ("_attr_brightness", "_attr_color_mode", "_attr_effect", *self._COLOR_ATTRIBUTES)
+            snapshot = {name: getattr(self, name) for name in names}
+            try:
+                self._apply_turn_on_values(kwargs)
+            finally:
+                for name, value in snapshot.items():
+                    setattr(self, name, value)
+
+    async def _async_run_command_action(self, command, method, args, kwargs):
+        if len(self._group_sources()) < 2 or command not in {"turn_on", "turn_off"}:
+            return await super()._async_run_command_action(command, method, args, kwargs)
+        # A callback may invoke the opposite command on this same group. Do
+        # not wait for a lock already held by its own action chain.
+        if self._group_removed or any(
+            entity == id(self) for entity, _command in _COMMAND_ACTION_CHAIN.get()
+        ):
+            return False
+        self._validate_command_action(command, args, kwargs)
+        self._group_revision += 1
+        revision = self._group_revision
+        self._cancel_group_refresh()
+        async with self._group_command_lock:
+            if self._group_removed:
+                return False
+            spec = self._command_action_spec(command)
+            if spec is not None and not spec[1]:
+                self._group_authoritative = False
+                self._group_target = None
+                self._response_pending = False
+                return await super()._async_run_command_action(command, method, args, kwargs)
+            # Validate and publish the virtual target before dispatch. Source
+            # reports arriving while actions run cannot replace this target.
+            self._group_dispatching = True
+            try:
+                await method(self, *args, **kwargs)
+                self._group_authoritative = True
+                if self._has_stock_group_action(command):
+                    try:
+                        async with asyncio.timeout(10):
+                            await super()._async_run_command_action(command, method, args, kwargs)
+                    except TimeoutError:
+                        _LOGGER.debug("Grouped light command timed out for %s", self.entity_id)
+                else:
+                    await super()._async_run_command_action(command, method, args, kwargs)
+            finally:
+                self._group_dispatching = False
+            if revision == self._group_revision and self._has_stock_group_action(command):
+                data = self._command_service_data(command, method, args, kwargs)
+                self._group_target = (command, method, copy.deepcopy(data))
+                self._schedule_group_refresh(revision, self._response_retries)
+            return False  # The native method has already published the target.
+
+    def _cancel_group_refresh(self):
+        if self._response_refresh_cancel is not None:
+            self._response_refresh_cancel()
+            self._response_refresh_cancel = None
+        if self._group_refresh_task is not None:
+            self._group_refresh_task.cancel()
+
+    def _group_source_matches(self, source, command, data):
+        state = self.hass.states.get(source)
+        expected = "off" if command == "turn_off" or data.get("brightness") == 0 else "on"
+        if state is None or state.state != expected:
+            return False
+        if expected == "off":
+            return True
+        data = dict(data)
+        modes = state.attributes.get("supported_color_modes", [])
+        if ("color_temp_kelvin" in data and isinstance(modes, (list, tuple, set))
+                and "color_temp" not in modes):
+            kelvin = data.pop("color_temp_kelvin")
+            if "rgbww" in modes:
+                minimum = state.attributes.get("min_color_temp_kelvin")
+                maximum = state.attributes.get("max_color_temp_kelvin")
+                # Core uses the entity's white-channel calibration even when
+                # no CT mode exists; those bounds are then absent from state.
+                component = self.hass.data.get(LIGHT_COMPONENT)
+                physical = component.get_entity(source) if component is not None else None
+                if physical is not None:
+                    minimum = physical.min_color_temp_kelvin
+                    maximum = physical.max_color_temp_kelvin
+                if (not isinstance(minimum, (int, float))
+                        or not isinstance(maximum, (int, float))
+                        or not 0 < minimum < maximum):
+                    return False
+                data["rgbww_color"] = color_util.color_temperature_to_rgbww(
+                    kelvin, data.get("brightness", state.attributes.get("brightness", 255)),
+                    minimum, maximum,
+                )
+            elif set(modes) & {"hs", "rgb", "rgbw", "xy"}:
+                # HA emulates Kelvin via HS, then translates to the bulb's
+                # native mode. Match that representation, not a Kelvin state
+                # attribute which RGB-only bulbs never report.
+                hs = color_util.color_temperature_to_hs(kelvin)
+                if "hs" in modes:
+                    data["hs_color"] = hs
+                elif "rgb" in modes:
+                    data["rgb_color"] = color_util.color_hs_to_RGB(*hs)
+                elif "rgbw" in modes:
+                    data["rgbw_color"] = color_util.color_rgb_to_rgbw(
+                        *color_util.color_hs_to_RGB(*hs)
+                    )
+                else:
+                    data["xy_color"] = color_util.color_hs_to_xy(*hs)
+            else:
+                return False
+        for name, tolerance in (("brightness", 2), ("color_temp_kelvin", 50)):
+            if name in data:
+                actual = state.attributes.get(name)
+                if not isinstance(actual, (int, float)) or isinstance(actual, bool):
+                    return False
+                if not math.isfinite(actual) or abs(actual - data[name]) > tolerance:
+                    return False
+        for name in ("hs_color", "xy_color", "rgb_color", "rgbw_color", "rgbww_color"):
+            if name in data:
+                actual = state.attributes.get(name)
+                if not isinstance(actual, (list, tuple)) or len(actual) != len(data[name]):
+                    return False
+                tolerance = 0.005 if name == "xy_color" else 2
+                if any(not isinstance(a, (int, float)) or not math.isfinite(a)
+                       or abs(a - b) > tolerance for a, b in zip(actual, data[name])):
+                    return False
+        return True
+
+    def _schedule_group_refresh(self, revision, retries):
+        if self._response_delay <= 0 or self._group_removed:
+            return
+        transition = self._group_target[2].get("transition", 0)
+        delay = max(self._response_delay, float(transition) + self._response_delay)
+
+        def refresh(_now):
+            self._response_refresh_cancel = None
+            if revision == self._group_revision and not self._group_removed:
+                self._group_refresh_task = self.hass.async_create_task(
+                    self._async_refresh_group(revision, retries)
+                )
+
+        self._response_refresh_cancel = async_call_later(self.hass, delay, refresh)
+
+    async def _async_refresh_group(self, revision, retries):
+        async with self._group_command_lock:
+            if revision != self._group_revision or self._group_removed:
+                return
+            command, method, data = self._group_target
+            pending = [source for source in self._group_sources()
+                       if not self._group_source_matches(source, command, data)]
+
+            async def refresh(source):
+                try:
+                    async with asyncio.timeout(10):
+                        await async_update_entity(self.hass, source)
+                except Exception:
+                    _LOGGER.debug("Unable to refresh grouped light %s", source)
+
+            await asyncio.gather(*(refresh(source) for source in pending))
+            if revision != self._group_revision or self._group_removed:
+                return
+            pending = [source for source in pending
+                       if not self._group_source_matches(source, command, data)]
+            if retries and pending:
+                self._group_retry_sources = [
+                    source for source in pending
+                    if not self._ignore_unresponsive
+                    or ((state := self.hass.states.get(source)) is not None
+                        and state.state not in {"unknown", "unavailable"})
+                ]
+                try:
+                    if self._group_retry_sources:
+                        async with asyncio.timeout(10):
+                            await super()._async_run_command_action(command, method, (), data)
+                except TimeoutError:
+                    _LOGGER.debug("Grouped light retry timed out for %s", self.entity_id)
+                finally:
+                    self._group_retry_sources = None
+            self._response_pending = False
+            self._apply_templates()
+            if pending and retries and revision == self._group_revision:
+                self._schedule_group_refresh(revision, retries - 1)
+
     def _schedule_source_reconciliation(self) -> None:
         """Refresh a composite light after slow or sleeping bulbs have replied."""
-        if not self._source_entities or self._response_delay <= 0:
+        if self._group_dispatching or not self._source_entities or self._response_delay <= 0:
             return
         if self._response_refresh_cancel is not None:
             self._response_refresh_cancel()
@@ -570,9 +816,32 @@ class VirtualLight(VirtualEntity, LightEntity):
         """Defer source events as well as immediate post-command rendering."""
         if self._response_pending:
             return
-        super()._apply_templates()
+        if not self._group_authoritative:
+            super()._apply_templates()
+            return
+        # Continue refreshing availability, capabilities and diagnostics while
+        # retaining the group's requested power, level and color values.
+        native = self._native_templates
+        value = self._value_template
+        self._value_template = None
+        self._native_templates = {
+            key: template for key, template in native.items()
+            if key not in {"state", "is_on", "brightness", "color_mode",
+                           "hs_color", "xy_color", "rgb_color", "rgbw_color",
+                           "rgbww_color", "color_temp", "color_temp_kelvin"}
+        }
+        try:
+            super()._apply_templates()
+        finally:
+            self._native_templates = native
+            self._value_template = value
 
     async def async_will_remove_from_hass(self) -> None:
+        self._group_removed = True
+        self._group_revision += 1
+        self._cancel_group_refresh()
+        if self._group_refresh_task is not None:
+            await asyncio.gather(self._group_refresh_task, return_exceptions=True)
         self._response_pending = False
         if self._response_refresh_cancel is not None:
             self._response_refresh_cancel()
