@@ -56,6 +56,53 @@ def test_automatic_air_quality_aggregates_live_categories_and_handles_no_sources
     assert helper.async_render() == "fair"
 
 
+def test_partial_recipe_form_preserves_intervals_and_explicit_invalid_input():
+    saved = measurement(levels=list(reversed(aq.LEVELS)))
+    recipe = aq.recipe_from_form("measurement", {**saved, "boundary_2": 21})
+    assert recipe["thresholds"] == [10, 21, 30, 40, 50]
+    assert recipe["levels"] == saved["levels"]
+    for field in ("boundary_2", "grade_2"):
+        with pytest.raises(vol.Invalid):
+            aq.recipe_from_form("measurement", {**saved, field: None})
+
+
+@pytest.mark.parametrize("advanced", [None, {}, {"offset": 1}])
+async def test_partial_compact_setup_keeps_saved_advanced_recipe(hass, advanced):
+    from custom_components.virtual_layer.config_flow import VirtualFlowHandler
+
+    hass.states.async_set("sensor.pm25", "25", {"sample": 5})
+    flow = VirtualFlowHandler()
+    flow.hass = hass
+    flow._aq_edit = False
+    saved = aq.normalize(measurement(
+        attribute="sample", aggregation="worst", missing="unknown",
+        multiplier=2, levels=list(reversed(aq.LEVELS)),
+    ))
+    flow._aq_pending = saved
+    submitted = {"boundary_2": 10}
+    if advanced is not None:
+        submitted["advanced"] = advanced
+    result = await flow.async_step_air_quality_setup(submitted)
+    assert result["errors"] == {"base": "invalid_air_quality_logic"}
+    result = await flow.async_step_air_quality_setup({"boundary_2": 21})
+    assert result["step_id"] == "air_quality_review"
+    for key in ("attribute", "aggregation", "missing", "multiplier", "levels"):
+        assert flow._aq_pending[key] == saved[key]
+    assert flow._aq_pending["offset"] == (1 if advanced else 0)
+    assert flow._aq_pending["thresholds"] == [10, 21, 30, 40, 50]
+    assert result["description_placeholders"]["result"] == (
+        "very_poor" if advanced else "extremely_poor"
+    )
+
+
+@pytest.mark.parametrize("levels", [None, [], ["poor"]])
+def test_damaged_grade_defaults_still_offer_all_six_controls(levels):
+    values = aq.setup_schema(measurement(levels=levels))({})
+    assert all(f"grade_{i}" in values["advanced"] for i in range(1, 7))
+    if levels:
+        assert values["advanced"]["grade_1"] == "poor"
+
+
 async def test_compact_setup_preserves_advanced_values_through_errors_and_back(hass):
     from custom_components.virtual_layer.config_flow import VirtualFlowHandler
 

@@ -549,7 +549,10 @@ You can also use **Add entity** directly.
 Measurement setup uses one screen for sources, units and thresholds, followed
 by preview and the final template editor. Quantity, category mappings, missing
 value policies and calibration are grouped in a collapsed advanced section.
-Saved advanced values are retained when reopening the form. Preview offers
+Saved advanced values are retained when reopening the form, submitting only
+changed fields, or correcting validation errors. An omitted field keeps its
+previous value; an explicitly invalid value is rejected rather than silently
+replaced with a default. Preview offers
 continue, refresh, or return to that same settings screen.
 When optional measurement setup opens, missing thresholds and units are prefilled
 for PM2.5, PM10, CO, NO2, AQI, radon, formaldehyde, CO2 and VOC mass.

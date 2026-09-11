@@ -3221,7 +3221,10 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         ): str,
         vol.Optional(CONF_DEVICE_DETAILS, default=dict): section(
             device_details_schema,
-            {"collapsed": True},
+            {"collapsed": not (
+                _text_default(defaults.get(CONF_DEVICE_CONFIGURATION_URL)).strip()
+                and configuration_url_or_none(defaults.get(CONF_DEVICE_CONFIGURATION_URL)) is None
+            )},
         ),
         vol.Required(
             CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")
@@ -5169,7 +5172,13 @@ def _with_existing_device_defaults(
         (CONF_SUGGESTED_AREA, CONF_DEVICE_SUGGESTED_AREA),
         (CONF_VIA_DEVICE_ID, CONF_DEVICE_VIA_DEVICE_ID),
     ):
-        updated_defaults[form_field] = _text_default(device.get(config_field))
+        if config_field == CONF_CONFIGURATION_URL:
+            # Runtime already ignores malformed legacy URLs. Do not copy one
+            # into an add form and block adding an unrelated entity. Reusing
+            # the Device keeps its persisted metadata unchanged.
+            updated_defaults[form_field] = configuration_url_or_none(device.get(config_field)) or ""
+        else:
+            updated_defaults[form_field] = _text_default(device.get(config_field))
     return updated_defaults
 
 
@@ -10130,9 +10139,8 @@ class _AirQualityLogicFlow:
                     raise vol.Invalid("Invalid advanced settings")
                 values.update(advanced)
                 # Retain all input across validation errors, not just sources.
-                self._aq_pending.update(values)
-                self._aq_pending["thresholds"] = [values.get(f"boundary_{i}") for i in range(1, 6)]
-                self._aq_pending["levels"] = [values.get(f"grade_{i}", self._aq_pending.get("levels", aq_options.LEVELS)[i - 1]) for i in range(1, 7)]
+                values = aq_options.measurement_form_values({**self._aq_pending, **values})
+                self._aq_pending = dict(values)
                 result = await self._aq_sources_step(values)
                 errors = result.get("errors", {})
                 if not errors:
@@ -10164,7 +10172,7 @@ class _AirQualityLogicFlow:
         mode = self._aq_pending["mode"]
         if user_input is not None:
             try:
-                sources = aq_options.normalize_sources(mode, user_input)
+                sources = aq_options.normalize_sources(mode, {**self._aq_pending, **user_input})
             except (TypeError, ValueError, vol.Invalid):
                 errors["base"] = "invalid_air_quality_logic"
                 self._aq_pending.update(user_input)
@@ -10312,8 +10320,7 @@ class _AirQualityLogicFlow:
                 errors["base"] = "invalid_air_quality_logic"
                 self._aq_pending = {**pending, **user_input}
                 if pending["mode"] == "measurement":
-                    self._aq_pending["thresholds"] = [user_input.get(f"boundary_{i}") for i in range(1, 6)]
-                    self._aq_pending["levels"] = [user_input.get(f"grade_{i}", aq_options.LEVELS[i-1]) for i in range(1, 7)]
+                    self._aq_pending = aq_options.measurement_form_values(self._aq_pending)
             else:
                 self._aq_pending = recipe
                 return await self._aq_review_step()

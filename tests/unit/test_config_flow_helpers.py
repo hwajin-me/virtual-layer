@@ -5916,6 +5916,32 @@ def test_build_device_config_accepts_optional_configuration_url(url):
     assert device.get(CONF_CONFIGURATION_URL) == (url.strip() or None)
 
 
+@pytest.mark.parametrize("url,expected", [
+    ("-", ""), ("https://", ""), (None, ""),
+    (" https://example.test/device ", "https://example.test/device"),
+    ("homeassistant://config/devices", "homeassistant://config/devices"),
+])
+def test_existing_device_url_prefill_does_not_block_entity_add(url, expected):
+    from copy import deepcopy
+    from custom_components.virtual_layer.config_flow import _with_existing_device_defaults
+
+    options = {ATTR_DEVICES: {"Device": []}, ATTR_DEVICE_ATTRIBUTES: {"Device": {
+        ATTR_DEVICE_ID: "stable-id", CONF_CONFIGURATION_URL: url,
+    }}}
+    snapshot = deepcopy(options)
+    defaults = _with_existing_device_defaults({}, options, "Device")
+    assert defaults[CONF_DEVICE_CONFIGURATION_URL] == expected
+    assert _build_device_config(defaults, "Device").get(CONF_CONFIGURATION_URL) == (expected or None)
+    assert options == snapshot
+
+
+@pytest.mark.parametrize("url,collapsed", [("-", False), ("https://", False), ("", True), ("https://example.test", True)])
+def test_invalid_device_url_is_visible_in_entity_form(url, collapsed):
+    schema = _entity_schema(_entity_input({CONF_DEVICE_CONFIGURATION_URL: url}))
+    sections = {key.schema: value for key, value in schema.schema.items()}
+    assert sections[CONF_DEVICE_DETAILS].options["collapsed"] is collapsed
+
+
 def test_build_device_config_generates_device_id_independently_from_name():
     first = _build_device_config(_entity_input(), "Laundry")
     second = _build_device_config(_entity_input(), "Laundry")

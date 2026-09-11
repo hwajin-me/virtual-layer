@@ -10383,6 +10383,10 @@ async def test_edit_air_quality_never_saves_before_final_form(hass, source_loade
         ATTR_ENTITY_ID: sensor_id, ATTR_ENTITY_KEY: "formaldehyde-original",
         CONF_INITIAL_VALUE: 0.05, CONF_SOURCE_ENTITIES: ["sensor.physical_formaldehyde"],
     }]}}
+    options[ATTR_DEVICE_ATTRIBUTES] = {"Detector": {
+        ATTR_DEVICE_ID: "stable-detector", CONF_NAME: "Detector",
+        CONF_CONFIGURATION_URL: "-",
+    }}
     entry = MockConfigEntry(domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "formaldehyde"}, options=deepcopy(options))
     entry.add_to_hass(hass)
@@ -10404,11 +10408,13 @@ async def test_edit_air_quality_never_saves_before_final_form(hass, source_loade
         # Default path must finish on the next submit, never revisit type or
         # confirmation screens, and must append rather than replace.
         values = _flatten_entity_form_sections(result["data_schema"]({}))
+        assert values["device_configuration_url"] == ""
         result = await hass.config_entries.options.async_configure(result["flow_id"], values)
         assert result["type"] == FlowResultType.CREATE_ENTRY
         records = [item for items in entry.options[ATTR_DEVICES].values() for item in items]
         assert len(records) == 2
         assert options[ATTR_DEVICES]["Detector"][0] in records
+        assert entry.options[ATTR_DEVICE_ATTRIBUTES] == options[ATTR_DEVICE_ATTRIBUTES]
 
 
 async def test_air_quality_measurement_recipe_precedes_templates_and_validates(hass):

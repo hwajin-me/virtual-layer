@@ -228,7 +228,8 @@ def logic_schema(mode, defaults):
             UNITS, "air_quality_unit"
         )
         thresholds = defaults.get("thresholds", [])
-        levels = defaults.get("levels", LEVELS)
+        thresholds = thresholds if isinstance(thresholds, (list, tuple)) else []
+        levels = measurement_form_values(defaults)["levels"]
         for index in range(5):
             marker = vol.Required(
                 f"boundary_{index + 1}",
@@ -385,13 +386,30 @@ def review_schema(mode):
     )
 
 
+def measurement_form_values(values):
+    """Overlay submitted fields without resetting untouched saved intervals.
+
+    Explicit empty/invalid input must survive so validation can reject it.
+    Missing entries in damaged legacy arrays remain repairable in the form.
+    """
+    result = dict(values)
+    for key, prefix, defaults in (
+        ("thresholds", "boundary", [None] * 5),
+        ("levels", "grade", LEVELS),
+    ):
+        previous = values.get(key)
+        previous = previous if isinstance(previous, (list, tuple)) else []
+        result[key] = [
+            values.get(f"{prefix}_{i + 1}", previous[i] if i < len(previous) else default)
+            for i, default in enumerate(defaults)
+        ]
+    return result
+
+
 def recipe_from_form(mode, values):
     recipe = {**values, "mode": mode}
     if mode == "measurement":
-        recipe["thresholds"] = [values.get(f"boundary_{i}") for i in range(1, 6)]
-        recipe["levels"] = [
-            values.get(f"grade_{i}", LEVELS[i - 1]) for i in range(1, 7)
-        ]
+        recipe = measurement_form_values(recipe)
     return normalize(recipe)
 
 
