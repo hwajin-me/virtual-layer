@@ -541,10 +541,10 @@ external Matterbridge configuration; the Air Quality Regex setup below still
 applies.
 
 Keep existing PM2.5 and other measurement entities: selecting Air Quality while
-editing a sensor/number opens a confirmation to add a separate categorical
+editing a sensor/number directly prepares a separate categorical
 entity on the same Device, using the original virtual measurement as its source.
-The original configuration and identity remain unchanged. Declining returns to
-type selection; confirming only opens configuration, with persistence at final save.
+The original configuration and identity always remain unchanged. There is no
+confirmation step or replacement option; persistence happens only at final save.
 You can also use **Add entity** directly.
 Measurement setup uses one screen for sources, units and thresholds, followed
 by preview and the final template editor. Quantity, category mappings, missing

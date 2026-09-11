@@ -11764,7 +11764,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
         if user_input is not None:
             target_platform = user_input[CONF_TARGET_ENTITY_TYPE]
             if original_platform in ("sensor", "number") and target_platform == "air_quality":
-                return await self.async_step_air_quality_add_confirm()
+                return await self._async_add_air_quality_from_measurement()
             try:
                 self._reference_defaults = _reference_entity_defaults(
                     self.hass,
@@ -11813,9 +11813,8 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
             errors=errors,
         )
 
-    async def async_step_air_quality_add_confirm(self, user_input=None):
-        """Branch an edit into a new category without replacing its measurement."""
-        errors = {}
+    async def _async_add_air_quality_from_measurement(self):
+        """Always preserve the measurement and prepare a separate category."""
         try:
             self._resolve_edit_selection()
             entity = _get_ui_entity(self.config_entry.options, self._edit_device_name, self._edit_index)
@@ -11824,29 +11823,31 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 raise InvalidEntitySelection
         except InvalidEntitySelection:
             return await self.async_step_select_entity()
-        if user_input is not None:
-            if not user_input.get("confirm", False):
-                return await self.async_step_edit_entity_type()
-            try:
-                defaults = _reference_entity_defaults(self.hass, [source_id], "air_quality", ("air_quality",))
-            except InvalidEntityReference:
-                errors["base"] = "source_unavailable"
-            else:
-                self._reference_defaults = defaults
-                defaults = _with_existing_device_defaults(defaults, self.config_entry.options, self._edit_device_name)
-                defaults[CONF_ENTITY_NAME] = f"{entity.get(CONF_NAME, source_id)} - Air Quality"
-                defaults[ATTR_ENTITY_ID] = "air_quality." + source_id.split(".", 1)[1]
-                self._entity_defaults = _complete_domain_form_defaults(defaults)
-                self._add_source_entities = [source_id]
-                self._add_use_template_helper = True
-                self._edit_source_entities = None
-                self._aq_completed = None
-                return await self.async_step_air_quality()
-        return self.async_show_form(
-            step_id="air_quality_add_confirm",
-            data_schema=vol.Schema({vol.Required("confirm", default=False): selector.BooleanSelector()}),
-            description_placeholders={"entity_id": source_id}, errors=errors,
-        )
+        try:
+            defaults = _reference_entity_defaults(self.hass, [source_id], "air_quality", ("air_quality",))
+        except InvalidEntityReference:
+            result = await self.async_step_edit_entity_source()
+            result["errors"] = {"base": "source_unavailable"}
+            return result
+        self._reference_defaults = defaults
+        defaults = _with_existing_device_defaults(defaults, self.config_entry.options, self._edit_device_name)
+        defaults[CONF_ENTITY_NAME] = f"{entity.get(CONF_NAME, source_id)} - Air Quality"
+        defaults[ATTR_ENTITY_ID] = "air_quality." + source_id.split(".", 1)[1]
+        self._entity_defaults = _complete_domain_form_defaults(defaults)
+        self._add_source_entities = [source_id]
+        self._add_use_template_helper = True
+        # This flow now owns a new entity, not a pending replacement. Clear
+        # the edit routing state so later forms cannot return to type selection.
+        self._edit_source_entities = None
+        self._edit_device_name = None
+        self._edit_index = None
+        self._edit_selection_key = None
+        self._edit_entity_snapshot = None
+        self._edit_current_defaults = None
+        self._edit_target_platform = None
+        self._edit_original_platform = None
+        self._aq_completed = None
+        return await self.async_step_air_quality()
 
     async def async_step_edit_sensor_conversion(self, user_input=None):
         """Choose the native measurement used by an edited virtual sensor."""
@@ -12194,7 +12195,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
             )
         if (user_input is not None and user_input.get(CONF_PLATFORM) == "air_quality"
                 and (self._edit_entity_snapshot or {}).get(CONF_PLATFORM) in ("sensor", "number")):
-            return await self.async_step_air_quality_add_confirm()
+            return await self._async_add_air_quality_from_measurement()
         if user_input is not None and self._aq_needs_setup(user_input, True):
             self._entity_defaults = _complete_domain_form_defaults(user_input)
             return await self.async_step_edit_air_quality()

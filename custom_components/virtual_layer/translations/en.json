@@ -2465,16 +2465,6 @@
           "next_action": "Return to a settings step without losing values or refresh the preview. Continue does not save until you submit the final entity form."
         }
       },
-      "air_quality_add_confirm": {
-        "title": "Keep measurement and add air quality",
-        "description": "Keep {entity_id} unchanged. Add a separate air-quality entity on the same Device using its measurement. Nothing is saved until the final entity form.",
-        "data": {
-          "confirm": "Continue to configure separate air quality"
-        },
-        "data_description": {
-          "confirm": "Check to continue. Submit unchecked to return to type selection without changes."
-        }
-      },
       "air_quality_setup": {
         "title": "Air-quality measurement setup",
         "description": "Profile inference: {profile}. Empty fields are prefilled using source device_class, IDs and names. Review units and thresholds before saving. PM presets do not calculate time averages; local display bands such as radon are not official health categories. Existing inputs are retained.",

@@ -10331,9 +10331,8 @@ async def test_add_formaldehyde_air_quality_preserves_same_named_sensor(hass, tm
     if via_edit:
         result = await hass.config_entries.options.async_configure(
             result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "air_quality"})
-        assert result["step_id"] == "air_quality_add_confirm"
+        assert result["step_id"] == "entity"
         assert len(entry.options[ATTR_DEVICES]["Detector"]) == 1
-        result = await hass.config_entries.options.async_configure(result["flow_id"], {"confirm": True})
     else:
         result = await _choose_add_template_helper(hass, result, target_entity_type="air_quality")
     assert result["step_id"] == "entity"
@@ -10370,13 +10369,17 @@ async def test_add_formaldehyde_air_quality_preserves_same_named_sensor(hass, tm
     assert hass.states.get(air_id).state == "good"
 
 
-async def test_edit_formaldehyde_air_quality_confirmation_can_return_without_changes(hass):
+@pytest.mark.parametrize("source_loaded", [True, False])
+@pytest.mark.parametrize("domain", ["sensor", "number"])
+async def test_edit_air_quality_never_saves_before_final_form(hass, source_loaded, domain):
     from copy import deepcopy
 
-    sensor_id = "sensor.formaldehyde_detector_formaldehyde_detector_living_room_formaldehyde"
+    sensor_id = f"{domain}.formaldehyde_detector_formaldehyde_detector_living_room_formaldehyde"
     hass.states.async_set("sensor.physical_formaldehyde", "0.05", {"unit_of_measurement": "mg/m³"})
+    if source_loaded:
+        hass.states.async_set(sensor_id, "0.05", {"unit_of_measurement": "mg/m³"})
     options = {ATTR_DEVICES: {"Detector": [{
-        CONF_PLATFORM: "sensor", CONF_NAME: "Living Room Formaldehyde",
+        CONF_PLATFORM: domain, CONF_NAME: "Living Room Formaldehyde",
         ATTR_ENTITY_ID: sensor_id, ATTR_ENTITY_KEY: "formaldehyde-original",
         CONF_INITIAL_VALUE: 0.05, CONF_SOURCE_ENTITIES: ["sensor.physical_formaldehyde"],
     }]}}
@@ -10393,11 +10396,19 @@ async def test_edit_formaldehyde_air_quality_confirmation_can_return_without_cha
     assert result["step_id"] == "edit_entity_type"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "air_quality"})
-    assert result["step_id"] == "air_quality_add_confirm"
-    assert result["data_schema"]({})["confirm"] is False
-    result = await hass.config_entries.options.async_configure(result["flow_id"], {"confirm": False})
-    assert result["step_id"] == "edit_entity_type"
+    assert result["step_id"] == ("entity" if source_loaded else "edit_entity_source")
+    if not source_loaded:
+        assert result["errors"] == {"base": "source_unavailable"}
     assert entry.options == options
+    if source_loaded:
+        # Default path must finish on the next submit, never revisit type or
+        # confirmation screens, and must append rather than replace.
+        values = _flatten_entity_form_sections(result["data_schema"]({}))
+        result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        records = [item for items in entry.options[ATTR_DEVICES].values() for item in items]
+        assert len(records) == 2
+        assert options[ATTR_DEVICES]["Detector"][0] in records
 
 
 async def test_air_quality_measurement_recipe_precedes_templates_and_validates(hass):
