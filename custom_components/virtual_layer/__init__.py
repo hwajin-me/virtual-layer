@@ -401,6 +401,9 @@ async def async_setup_entry(
         platform.domain: platform
         for platform in async_get_platforms(hass, COMPONENT_DOMAIN)
         if platform.config_entry is entry
+        # HA retains historical platform objects after a full unload. Only
+        # reuse platforms belonging to this entry's current setup generation.
+        and platform.domain in (previous_group or {}).get("loaded_platforms", [])
     } if incremental else {}
     if incremental:
         _async_remove_entity_id_guard(hass, entry.entry_id)

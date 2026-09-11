@@ -10191,34 +10191,178 @@ async def test_options_updates_preserve_unrelated_entities(hass, tmp_path, monke
     assert hass.states.get("tag.stable_tag") is None
 
 
-async def test_air_quality_default_skips_rules_and_preserves_source(hass, tmp_path, monkeypatch):
+@pytest.mark.parametrize("source_value,source_class,source_unit,expected", [
+    ("150", "aqi", "AQI", "moderate"),
+    ("54.07", "radon", "Bq/m³", "fair"),
+    ("40", "pm25", "μg/m³", "moderate"),
+    ("15", "pm1", "μg/m³", "moderate"),
+    ("0.05", "ozone", "ppm", "moderate"),
+    ("3", "benzene", "μg/m³", "moderate"),
+    ("0.3", "ammonia", "ppm", "moderate"),
+    ("0.015", "hydrogen_sulfide", "ppm", "moderate"),
+    ("150", "etvoc", "ppb", "moderate"),
+])
+@pytest.mark.parametrize("per_source", [False, True])
+async def test_air_quality_default_skips_rules_and_preserves_source(hass, tmp_path, monkeypatch, source_value, source_class, source_unit, expected, per_source):
     import asyncio
+    from copy import deepcopy
+    from custom_components.virtual_layer.const import CONF_AIR_QUALITY_LOGIC
     monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file",
                         lambda hass: str(tmp_path / "automatic-air.meta.json"))
-    hass.states.async_set("sensor.original_aqi", "150", {"device_class": "aqi", "unit_of_measurement": "AQI"})
-    original = hass.states.get("sensor.original_aqi")
+    source_id = f"sensor.original_{source_class}"
+    source_attributes = {"device_class": source_class, "unit_of_measurement": source_unit}
+    if source_class in {"benzene", "ammonia", "hydrogen_sulfide", "etvoc"}:
+        # These inputs have names/units, not invented HA device classes.
+        source_attributes.pop("device_class")
+        source_attributes["friendly_name"] = source_class
+    hass.states.async_set(source_id, source_value, source_attributes)
+    original = hass.states.get(source_id)
+    hass.states.async_set("sensor.second_pm1", "1", {"device_class": "pm1", "unit_of_measurement": "μg/m³"})
+    source_ids = [source_id, "sensor.second_pm1"] if per_source else [source_id]
     entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "auto_air"}, options={ATTR_DEVICES: {}})
     entry.add_to_hass(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY})
-    result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: ["sensor.original_aqi"]})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: source_ids})
+    if result["step_id"] == "sensor_conversion":
+        result = await hass.config_entries.options.async_configure(result["flow_id"], result["data_schema"]({}))
     result = await _choose_add_template_helper(hass, result, target_entity_type="air_quality")
     assert result["step_id"] == "entity"
     values = _flatten_entity_form_sections(result["data_schema"]({}))
+    if values[CONF_PLATFORM] != "air_quality":
+        values[CONF_PLATFORM] = "air_quality"
+        result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+        assert result["step_id"] == "entity"
+        values = _flatten_entity_form_sections(result["data_schema"]({}))
     assert values["configure_air_quality_rules"] is False
+    values["air_quality_per_source"] = per_source
     values[ATTR_ENTITY_ID] = "air_quality.automatic_test"
-    assert Template(values[CONF_NATIVE_VALUE_TEMPLATES]["air_quality"], hass).async_render() == "moderate"
+    assert Template(values[CONF_NATIVE_VALUE_TEMPLATES]["air_quality"], hass).async_render() == expected
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert hass.states.get("sensor.original_aqi") is original
+    assert hass.states.get(source_id) is original
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     await asyncio.sleep(0.1)
     await hass.async_block_till_done()
-    assert hass.states.get("air_quality.automatic_test").state == "moderate"
+    assert hass.states.get("air_quality.automatic_test").state == expected
     bridge = hass.states.get("sensor.automatic_test_air_quality")
-    assert bridge.state == "moderate"
+    assert bridge.state == expected
     assert "unit_of_measurement" not in bridge.attributes
-    assert hass.states.get("sensor.original_aqi") is original
+    child = hass.states.get(f"sensor.automatic_test_{source_id.replace('.', '_')}_air_quality")
+    if per_source:
+        assert child.state == expected
+        assert child.attributes["source_entity_id"] == source_id
+        assert "unit_of_measurement" not in child.attributes
+        registry = er.async_get(hass)
+        assert registry.async_get(child.entity_id).device_id == registry.async_get(bridge.entity_id).device_id
+        second_id = "sensor.automatic_test_sensor_second_pm1_air_quality"
+        assert hass.states.get(second_id).state == "good"
+        # Disabling the option must clean up both generated sensors, not sources.
+        options = deepcopy(dict(entry.options))
+        for records in options[ATTR_DEVICES].values():
+            for record in records:
+                if record.get(ATTR_ENTITY_ID) == "air_quality.automatic_test":
+                    record[CONF_AIR_QUALITY_LOGIC]["per_source"] = False
+        hass.config_entries.async_update_entry(entry, options=options)
+        await hass.async_block_till_done()
+        assert hass.states.get(child.entity_id) is None
+        assert hass.states.get(second_id) is None
+        assert registry.async_get(child.entity_id) is None
+        assert hass.states.get("sensor.second_pm1").state == "1"
+    else:
+        assert child is None
+    assert hass.states.get(source_id) is original
+
+
+@pytest.mark.parametrize("scope", [None, "combined", "sources", "leaves"])
+async def test_new_measurement_flow_creates_aqi_without_air_quality_step(hass, tmp_path, monkeypatch, scope):
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "auto-sensor.meta.json"))
+    hass.states.async_set("sensor.physical_pm25", "5", {"device_class": "pm25", "unit_of_measurement": "μg/m³"})
+    original = hass.states.get("sensor.physical_pm25")
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "air"}, options={ATTR_DEVICES: {}})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: ["sensor.physical_pm25"]})
+    result = await _choose_add_template_helper(hass, result, target_entity_type="sensor")
+    assert result["step_id"] == "entity"
+    values = _flatten_entity_form_sections(result["data_schema"]({}))
+    values[ATTR_ENTITY_ID] = "sensor.ui_pm25"
+    if scope:
+        values["configure_air_quality_sources"] = True
+        result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+        assert result["step_id"] == "air_quality_scope"
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {
+            "scope": scope, "sources": ["sensor.physical_pm25"], "missing": "skip"})
+        assert result["step_id"] == "air_quality_source_rules"
+        source = "sensor.ui_pm25" if scope == "combined" else "sensor.physical_pm25"
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {"source": source, "action": "edit"})
+        assert result["step_id"] == "air_quality_setup"
+        values = result["data_schema"]({})
+        values.update({f"boundary_{i+1}": value for i, value in enumerate([1, 2, 3, 4, 10])})
+        result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+        assert result["step_id"] == "air_quality_source_rules"
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {"source": source, "action": "continue"})
+        assert result["step_id"] == "entity"
+        values = _flatten_entity_form_sections(result["data_schema"]({}))
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.ui_pm25").state == "5"
+    assert hass.states.get("sensor.ui_pm25_aqi").state == ("very_poor" if scope else "good")
+    assert hass.states.get("sensor.physical_pm25") is original
+    if scope:
+        from custom_components.virtual_layer.config_flow import _entity_form_defaults
+        record = next(iter(entry.options[ATTR_DEVICES].values()))[0]
+        assert record["air_quality_logic"]["measurements"][0]["thresholds"] == [1, 2, 3, 4, 10]
+        assert _entity_form_defaults(next(iter(entry.options[ATTR_DEVICES])), record)["air_quality_logic"] == record["air_quality_logic"]
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.ui_pm25_aqi").state == "very_poor"
+
+
+@pytest.mark.parametrize("scope", ["sources", "leaves"])
+async def test_direct_air_quality_source_profile_persists_and_drives_companion(hass, tmp_path, monkeypatch, scope):
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "source-rules.meta.json"))
+    hass.states.async_set("sensor.physical_pm25", "15", {"device_class": "pm25", "unit_of_measurement": "μg/m³"})
+    original = hass.states.get("sensor.physical_pm25")
+    options = {ATTR_DEVICES: {}}
+    reference_id = "sensor.physical_pm25"
+    if scope == "leaves":
+        reference_id = "sensor.combined_pm25"
+        hass.states.async_set(reference_id, "15", {"device_class": "pm25", "unit_of_measurement": "μg/m³"})
+        options = {ATTR_DEVICES: {"Existing": [{CONF_PLATFORM: "sensor", CONF_NAME: "Combined PM25",
+            ATTR_ENTITY_ID: reference_id, CONF_SOURCE_ENTITIES: ["sensor.physical_pm25"],
+            CONF_VALUE_TEMPLATE: "{{ states('sensor.physical_pm25') }}", "device_class": "pm25", "unit_of_measurement": "μg/m³"}]}}
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "air"}, options=options)
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: [reference_id]})
+    result = await _choose_add_template_helper(hass, result, target_entity_type="air_quality")
+    values = _flatten_entity_form_sections(result["data_schema"]({}))
+    values.update({ATTR_ENTITY_ID: "air_quality.ui_profile", "configure_air_quality_sources": True, "air_quality_per_source": True})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert result["step_id"] == "air_quality_scope"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {
+        "scope": scope, "sources": [reference_id], "missing": "skip"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"source": "sensor.physical_pm25", "action": "edit"})
+    values = result["data_schema"]({})
+    values.update({f"boundary_{i+1}": value for i, value in enumerate([20, 30, 40, 50, 60])})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"source": "sensor.physical_pm25", "action": "continue"})
+    assert result["step_id"] == "entity"
+    values = _flatten_entity_form_sections(result["data_schema"]({}))
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("air_quality.ui_profile").state == "good"
+    assert hass.states.get("sensor.ui_profile_air_quality").state == "good"
+    assert hass.states.get("sensor.ui_profile_sensor_physical_pm25_air_quality").state == "good"
+    assert hass.states.get("sensor.physical_pm25") is original
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("air_quality.ui_profile").state == "good"
 
 
 async def test_air_quality_uses_a_dedicated_matter_configuration_step(hass):

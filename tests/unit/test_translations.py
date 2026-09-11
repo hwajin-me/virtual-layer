@@ -209,7 +209,10 @@ def test_entity_forms_have_descriptions_for_every_dynamic_field_in_both_language
         expected_sections = set()
         expected_section_fields = {}
         for platform in VIRTUAL_ENTITY_DOMAINS:
-            schema = _entity_schema({CONF_PLATFORM: platform})
+            defaults = {CONF_PLATFORM: platform}
+            if platform == "air_quality":
+                defaults["air_quality_logic"] = {"mode": "automatic"}
+            schema = _entity_schema(defaults)
             for marker, validator in schema.schema.items():
                 field = str(getattr(marker, "schema", marker))
                 nested = getattr(validator, "schema", None)

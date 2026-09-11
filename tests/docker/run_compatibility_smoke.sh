@@ -553,6 +553,11 @@ async def test_config_flow_create_modify_runtime():
             records[0]["icon"] = {"bad": "icon"}
             records[0]["pull_interval"] = 2**63
             records.append({"platform": [], "name": "Broken domain"})
+            records.append({
+                "platform": "sensor", "name": "Malformed legacy metadata",
+                "entity_id": "sensor.docker_bad_metadata", "initial_value": "5",
+                "attributes": {"device_class": ["pm25"], "unit_of_measurement": ["μg/m³"], "state_class": {}},
+            })
         hass.config_entries.async_update_entry(entry, options=legacy_options)
         await hass.async_block_till_done()
         assert await hass.config_entries.async_reload(entry.entry_id)
@@ -565,6 +570,12 @@ async def test_config_flow_create_modify_runtime():
         assert created_state.attributes["device_class"] == "pm25"
         assert created_state.attributes["state_class"] == "measurement"
         assert created_state.attributes["unit_of_measurement"] == "μg/m³"
+        assert hass.states.get("sensor.docker_bad_metadata").state == "5"
+        assert hass.states.get("sensor.docker_bad_metadata_aqi") is None
+        aqi_state = hass.states.get("sensor.docker_flow_pm25_aqi")
+        assert aqi_state.state == "fair", aqi_state
+        assert "device_class" not in aqi_state.attributes
+        assert "unit_of_measurement" not in aqi_state.attributes
 
         # Saving unrelated entity changes must preserve the running source
         # template and its state, including when a new platform is introduced.
@@ -592,7 +603,8 @@ async def test_config_flow_create_modify_runtime():
         assert created_registry_entry.device_id is not None
         original_unique_id = created_registry_entry.unique_id
         device_id = created_registry_entry.device_id
-        for suffix in ("info", "debug1", "debug2"):
+        aqi_unique_id = registry.async_get("sensor.docker_flow_pm25_aqi").unique_id
+        for suffix in ("info", "debug1", "debug2", "aqi"):
             companion_id = f"sensor.docker_flow_pm25_{suffix}"
             assert hass.states.get(companion_id) is not None
             companion_entry = registry.async_get(companion_id)
@@ -667,7 +679,8 @@ async def test_config_flow_create_modify_runtime():
         assert modified_registry_entry.unique_id == original_unique_id
         assert modified_registry_entry.device_id == device_id
         assert registry.async_get("sensor.docker_flow_pm25") is None
-        for suffix in ("info", "debug1", "debug2"):
+        assert registry.async_get(f"{modified_id}_aqi").unique_id == aqi_unique_id
+        for suffix in ("info", "debug1", "debug2", "aqi"):
             assert registry.async_get(f"sensor.docker_flow_pm25_{suffix}") is None
             companion_id = f"{modified_id}_{suffix}"
             companion_entry = registry.async_get(companion_id)
@@ -681,6 +694,12 @@ async def test_config_flow_create_modify_runtime():
         )
         await hass.async_block_till_done()
         assert float(hass.states.get(modified_id).state) == 30.0
+        hass.states.async_set(source_ids[1], "0.06", {"device_class": "pm25", "unit_of_measurement": "mg/m³"})
+        await hass.async_block_till_done()
+        await asyncio.sleep(0.1)
+        await hass.async_block_till_done()
+        assert float(hass.states.get(modified_id).state) == 60.0
+        assert hass.states.get(f"{modified_id}_aqi").state == "poor"
 
         for source_id in source_ids:
             hass.states.async_set(
@@ -690,6 +709,9 @@ async def test_config_flow_create_modify_runtime():
             )
         await hass.async_block_till_done()
         assert hass.states.get(modified_id).state == "unavailable"
+        await asyncio.sleep(0.1)
+        await hass.async_block_till_done()
+        assert hass.states.get(f"{modified_id}_aqi").state == "unknown"
 
         hass.states.async_set(
             source_ids[0],
@@ -709,6 +731,47 @@ async def test_config_flow_create_modify_runtime():
             runtime_entity._value_template,
         )
         assert recovered_state.attributes["available"] is True
+        await asyncio.sleep(0.1)
+        await hass.async_block_till_done()
+        assert hass.states.get(f"{modified_id}_aqi").state == "fair"
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert registry.async_get(f"{modified_id}_aqi").unique_id == aqi_unique_id
+        assert hass.states.get(f"{modified_id}_aqi_aqi") is None
+        # Exercise the new source-specific UI using the real HA FlowManager.
+        result = await options_flow.async_init(entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY})
+        result = await configure_flow(options_flow, result, {CONF_ENTITY_KEY: entity_key})
+        result = await configure_flow(options_flow, result, {CONF_REFERENCE_ENTITY_ID: source_ids})
+        result = await configure_flow(options_flow, result, {
+            CONF_SENSOR_CONVERSION: "state", CONF_SENSOR_AGGREGATION: "maximum"})
+        result = await configure_flow(options_flow, result, {CONF_HELPER_UPDATE_MODE: "keep_current"})
+        assert result["step_id"] == "edit_entity"
+        values = _flatten_entity_form_sections(result["data_schema"]({}))
+        values["configure_air_quality_sources"] = True
+        result = await configure_flow(options_flow, result, values)
+        assert result["step_id"] == "air_quality_scope"
+        result = await configure_flow(options_flow, result, {
+            "scope": "sources", "sources": source_ids, "missing": "skip"})
+        assert result["step_id"] == "air_quality_source_rules"
+        result = await configure_flow(options_flow, result, {"source": source_ids[0], "action": "edit"})
+        assert result["step_id"] == "edit_air_quality_setup"
+        values = result["data_schema"]({})
+        values.update({f"boundary_{index+1}": value for index, value in enumerate([100, 200, 300, 400, 500])})
+        result = await configure_flow(options_flow, result, values)
+        assert result["step_id"] == "air_quality_source_rules"
+        result = await configure_flow(options_flow, result, {"source": source_ids[0], "action": "continue"})
+        assert result["step_id"] == "edit_entity"
+        values = _flatten_entity_form_sections(result["data_schema"]({}))
+        result = await configure_flow(options_flow, result, values)
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        await hass.async_block_till_done()
+        assert float(hass.states.get(modified_id).state) == 25.0
+        assert hass.states.get(f"{modified_id}_aqi").state == "good"
+        assert registry.async_get(f"{modified_id}_aqi").unique_id == aqi_unique_id
+        reloaded = await hass.config_entries.async_reload(entry.entry_id)
+        assert reloaded, (entry.state, entry.reason)
+        await hass.async_block_till_done()
+        assert hass.states.get(f"{modified_id}_aqi").state == "good"
     finally:
         await hass.async_stop()
 

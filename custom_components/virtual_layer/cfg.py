@@ -24,9 +24,11 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.helpers import config_validation as cv
+from homeassistant.core import State
 from homeassistant.util import slugify
 
 from .const import *
+from . import air_quality_options as aq_options
 from .entity import (
     pull_interval_seconds,
     repair_legacy_enum_template,
@@ -1061,6 +1063,56 @@ class BlendedCfg:
         )
 
         sensor_entities = self._entities.setdefault("sensor", [])
+        if platform == "sensor":
+            # Build from configuration, not startup ordering or a restored state.
+            # Existing UI entries receive the same companion on their next load.
+            attributes = dict(entity.get(CONF_ATTRIBUTES, {}))
+            attributes["friendly_name"] = entity[CONF_NAME]
+            device_class = entity.get(CONF_CLASS) or attributes.get("device_class")
+            metadata_valid = device_class is None or isinstance(device_class, str)
+            attributes["device_class"] = device_class
+            unit = entity.get(CONF_UNIT_OF_MEASUREMENT) or attributes.get("unit_of_measurement")
+            metadata_valid = metadata_valid and (unit is None or isinstance(unit, str))
+            if not unit and metadata_valid:
+                unit = import_module(".sensor", __package__).UNITS_OF_MEASUREMENT.get(device_class)
+            attributes["unit_of_measurement"] = unit
+            snapshot = State(entity_id, str(entity.get(CONF_INITIAL_VALUE, "unknown")), attributes)
+            recipe = None
+            try:
+                if CONF_AIR_QUALITY_LOGIC in entity:
+                    recipe = aq_options.rebind_combined(entity[CONF_AIR_QUALITY_LOGIC], entity_id)
+            except (TypeError, ValueError, vol.Invalid):
+                pass
+            if recipe is not None or (metadata_valid and aq_options.infer_quantity(snapshot) is not None):
+                recipe = recipe or aq_options.automatic_recipe([entity_id], [snapshot])
+                companion_unique_id = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}aqi"
+                companion_id = self._reserve_entity_id(
+                    "sensor", f"sensor.{object_id}_aqi", companion_unique_id,
+                )
+                if companion_id is not None:
+                    sensor_entities.append({
+                        **{key: entity[key] for key in (
+                            CONF_MANUFACTURER, CONF_MODEL, CONF_SW_VERSION,
+                            CONF_HW_VERSION, CONF_SERIAL_NUMBER, CONF_CONFIGURATION_URL,
+                            CONF_SUGGESTED_AREA, CONF_VIA_DEVICE_ID,
+                        ) if key in entity},
+                        CONF_NAME: f"{entity[CONF_NAME]} Air Quality",
+                        ATTR_ENTITY_ID: companion_id,
+                        ATTR_UNIQUE_ID: companion_unique_id,
+                        ATTR_DEVICE_ID: device_id,
+                        CONF_INITIAL_VALUE: "unknown",
+                        CONF_INITIAL_AVAILABILITY: True,
+                        CONF_PERSISTENT: False,
+                        CONF_SOURCE_ENTITIES: recipe.get("sources", [entity_id]),
+                        CONF_VALUE_TEMPLATE: aq_options.generate(recipe),
+                        CONF_ICON: "mdi:air-filter",
+                        CONF_ATTRIBUTES: {
+                            "virtual_entity_id": entity_id,
+                            "source_entity_id": entity_id,
+                            "sensor_type": "matter_air_quality",
+                            "air_quality_logic": recipe,
+                        },
+                    })
         if platform == "air_quality":
             # matterbridge-hass consumes sensor states, not air_quality domain
             # attributes. Keep this categorical: numeric 0..6 is interpreted
@@ -1094,6 +1146,35 @@ class BlendedCfg:
                 },
                 CONF_ICON: "mdi:air-filter",
             })
+            recipe = entity.get(CONF_AIR_QUALITY_LOGIC, {})
+            bridge_sensor = sensor_entities[-1]
+            if isinstance(recipe, Mapping) and recipe.get("mode") == "automatic" and recipe.get("per_source") is True:
+                try:
+                    recipe = aq_options.normalize(recipe)
+                except (TypeError, ValueError, vol.Invalid):
+                    recipe = {"sources": []}
+                for source_id in recipe["sources"]:
+                    source_key = source_id.replace(".", "_")
+                    child_unique_id = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}air_quality_{source_id}"
+                    child_id = self._reserve_entity_id(
+                        "sensor", f"sensor.{object_id}_{source_key}_air_quality", child_unique_id,
+                    )
+                    child_recipe = {"mode": "automatic", "sources": [source_id], "measurements": [
+                        item for item in recipe.get("measurements", []) if item["sources"] == [source_id]
+                    ]}
+                    sensor_entities.append({
+                        **bridge_sensor,
+                        CONF_NAME: f"{entity[CONF_NAME]} - {_diagnostic_source_name(self._hass, source_id)} - Air Quality",
+                        ATTR_ENTITY_ID: child_id,
+                        ATTR_UNIQUE_ID: child_unique_id,
+                        CONF_SOURCE_ENTITIES: [source_id],
+                        CONF_VALUE_TEMPLATE: aq_options.generate(child_recipe),
+                        CONF_ATTRIBUTES: {
+                            "virtual_entity_id": entity_id,
+                            "source_entity_id": source_id,
+                            "sensor_type": "matter_air_quality",
+                        },
+                    })
         if platform == "vacuum" and entity.get("battery_level") is not None:
             battery_unique_id = (
                 f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}battery"
@@ -1283,6 +1364,7 @@ class BlendedCfg:
         )
         changed = False
         seen_entity_keys = set()
+        diagnostic_parents = []
 
         _LOGGER.debug(
             "Loaded %s metadata records and %s Devices for %s",
@@ -1507,10 +1589,15 @@ class BlendedCfg:
                 if platform not in self._entities:
                     self._entities[platform] = []
                 self._entities[platform].append(entity)
-                self._append_diagnostic_sensors(entity, platform)
+                diagnostic_parents.append((entity, platform))
                 self._meta_data.update({
                     entity_key: entity_meta
                 })
+
+        # Reserve every configured entity before generated companions so a
+        # companion can never steal a later configured entity's explicit ID.
+        for entity, platform in diagnostic_parents:
+            self._append_diagnostic_sensors(entity, platform)
 
         # Create orphaned list. If we have anything here we need to update
         # the saved meta data.

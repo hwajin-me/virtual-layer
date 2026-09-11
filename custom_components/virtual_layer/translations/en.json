@@ -71,7 +71,7 @@
       },
       "entity": {
         "title": "Add Virtual Entity",
-        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls.",
+        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed <entity_id>_aqi categorical sensor named <name> Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",
@@ -178,7 +178,9 @@
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "climate_temperature_step": "Temperature adjustment step",
               "media_player_source_priority": "Media source priority",
-              "configure_air_quality_rules": "Customize air-quality rules"
+              "configure_air_quality_rules": "Customize air-quality rules",
+              "air_quality_per_source": "Create one air-quality sensor per source",
+              "configure_air_quality_sources": "Configure air quality per source"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -202,7 +204,9 @@
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
-              "configure_air_quality_rules": "Default converts source categories or AQI automatically. Concentration-only sources remain unknown, never assumed good. Check to configure thresholds/formulas. Original sensors are unchanged."
+              "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are not official health standards. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
+              "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
+              "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration."
             }
           },
           "native_value_templates": {
@@ -876,6 +880,32 @@
             }
           }
         }
+      },
+      "air_quality_scope": {
+        "title": "Air-quality assessment scope",
+        "description": "Original sensors are unchanged. Assessing a combined value can differ from taking the worst source grade. Leaf expansion uses the configuration at save time; revisit this step after topology changes.",
+        "data": {
+          "scope": "Scope",
+          "sources": "Source entities",
+          "missing": "Missing values"
+        },
+        "data_description": {
+          "scope": "Combined: the virtual sensor result. Sources: each selected sensor. Leaves: recursively expand configured Virtual Layer sources and deduplicate.",
+          "sources": "Entities for source or leaf assessment. Combined assessment uses the current virtual sensor instead.",
+          "missing": "Skip: assess valid sources only. Unknown: one unclassifiable source makes the overall grade unknown."
+        }
+      },
+      "air_quality_source_rules": {
+        "title": "Per-source boundaries and grades",
+        "description": "Select and edit each source independently. Other profiles are preserved. Continue and save the final entity form to apply. Presets are editable display bands, not health standards.",
+        "data": {
+          "source": "Source to configure",
+          "action": "Action"
+        },
+        "data_description": {
+          "source": "Identified by name and entity ID. Boundaries apply only to this source state or its selected attribute.",
+          "action": "Edit units, boundaries, grades and formulas. Reset only this source to inferred defaults. Continue returns to entity settings."
+        }
       }
     }
   },
@@ -995,7 +1025,7 @@
       },
       "edit_entity": {
         "title": "Edit Virtual Entity",
-        "description": "Update this virtual entity and save the new configuration. After changing the entity domain, submit once to load its domain-specific controls.",
+        "description": "Update this virtual entity and save the new configuration. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed <entity_id>_aqi categorical sensor named <name> Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",
@@ -1102,7 +1132,9 @@
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "climate_temperature_step": "Temperature adjustment step",
               "media_player_source_priority": "Media source priority",
-              "configure_air_quality_rules": "Customize air-quality rules"
+              "configure_air_quality_rules": "Customize air-quality rules",
+              "air_quality_per_source": "Create one air-quality sensor per source",
+              "configure_air_quality_sources": "Configure air quality per source"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -1126,7 +1158,9 @@
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
-              "configure_air_quality_rules": "Default converts source categories or AQI automatically. Concentration-only sources remain unknown, never assumed good. Check to configure thresholds/formulas. Original sensors are unchanged."
+              "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are not official health standards. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
+              "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
+              "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration."
             }
           },
           "native_value_templates": {
@@ -1663,7 +1697,7 @@
       },
       "entity": {
         "title": "Add Virtual Entity",
-        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls.",
+        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed <entity_id>_aqi categorical sensor named <name> Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",
@@ -1770,7 +1804,9 @@
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "climate_temperature_step": "Temperature adjustment step",
               "media_player_source_priority": "Media source priority",
-              "configure_air_quality_rules": "Customize air-quality rules"
+              "configure_air_quality_rules": "Customize air-quality rules",
+              "air_quality_per_source": "Create one air-quality sensor per source",
+              "configure_air_quality_sources": "Configure air quality per source"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -1794,7 +1830,9 @@
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
-              "configure_air_quality_rules": "Default converts source categories or AQI automatically. Concentration-only sources remain unknown, never assumed good. Check to configure thresholds/formulas. Original sensors are unchanged."
+              "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are not official health standards. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
+              "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
+              "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration."
             }
           },
           "native_value_templates": {
@@ -2588,6 +2626,32 @@
             }
           }
         }
+      },
+      "air_quality_scope": {
+        "title": "Air-quality assessment scope",
+        "description": "Original sensors are unchanged. Assessing a combined value can differ from taking the worst source grade. Leaf expansion uses the configuration at save time; revisit this step after topology changes.",
+        "data": {
+          "scope": "Scope",
+          "sources": "Source entities",
+          "missing": "Missing values"
+        },
+        "data_description": {
+          "scope": "Combined: the virtual sensor result. Sources: each selected sensor. Leaves: recursively expand configured Virtual Layer sources and deduplicate.",
+          "sources": "Entities for source or leaf assessment. Combined assessment uses the current virtual sensor instead.",
+          "missing": "Skip: assess valid sources only. Unknown: one unclassifiable source makes the overall grade unknown."
+        }
+      },
+      "air_quality_source_rules": {
+        "title": "Per-source boundaries and grades",
+        "description": "Select and edit each source independently. Other profiles are preserved. Continue and save the final entity form to apply. Presets are editable display bands, not health standards.",
+        "data": {
+          "source": "Source to configure",
+          "action": "Action"
+        },
+        "data_description": {
+          "source": "Identified by name and entity ID. Boundaries apply only to this source state or its selected attribute.",
+          "action": "Edit units, boundaries, grades and formulas. Reset only this source to inferred defaults. Continue returns to entity settings."
+        }
       }
     }
   },
@@ -2763,7 +2827,24 @@
         "volatile_organic_compounds": "VOC (mass concentration)",
         "volatile_organic_compounds_parts": "VOC (volume ratio)",
         "radon": "Radon",
-        "formaldehyde": "Formaldehyde"
+        "formaldehyde": "Formaldehyde",
+        "benzene": "Benzene (C₆H₆)",
+        "ammonia": "Ammonia (NH₃)",
+        "hydrogen_sulfide": "Hydrogen sulfide (H₂S)"
+      }
+    },
+    "air_quality_scope": {
+      "options": {
+        "combined": "Combined measurement",
+        "sources": "Worst selected source",
+        "leaves": "Worst leaf source"
+      }
+    },
+    "air_quality_source_action": {
+      "options": {
+        "edit": "Edit",
+        "reset": "Reset this source",
+        "continue": "Continue"
       }
     }
   },

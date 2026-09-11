@@ -89,6 +89,8 @@ def _as_state_class(value) -> SensorStateClass | None:
 def _as_device_class(value):
     if value in (None, ""):
         return None
+    if not isinstance(value, str):
+        raise ValueError("Sensor device class must be a string")
     try:
         return SensorDeviceClass(value)
     except ValueError:
@@ -203,12 +205,18 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         super().__init__(config, PLATFORM_DOMAIN, old_style)
 
         legacy_attributes = config.get(CONF_ATTRIBUTES, {})
-        self._attr_device_class = _as_device_class(
-            config.get(CONF_CLASS, legacy_attributes.get(ATTR_DEVICE_CLASS))
-        )
-        self._attr_state_class = _as_state_class(
-            config.get(CONF_STATE_CLASS, legacy_attributes.get(CONF_STATE_CLASS))
-        )
+        try:
+            self._attr_device_class = _as_device_class(
+                config.get(CONF_CLASS, legacy_attributes.get(ATTR_DEVICE_CLASS))
+            )
+        except (TypeError, ValueError):
+            self._attr_device_class = None
+        try:
+            self._attr_state_class = _as_state_class(
+                config.get(CONF_STATE_CLASS, legacy_attributes.get(CONF_STATE_CLASS))
+            )
+        except (TypeError, ValueError):
+            self._attr_state_class = None
         self._attr_icon = config.get(CONF_ICON)
         self._domain_options = generic_entity_options(config)
         self._attr_options = config.get("options")
@@ -219,6 +227,8 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             or legacy_attributes.get(ATTR_UNIT_OF_MEASUREMENT)
             or None
         )
+        if not isinstance(self._attr_native_unit_of_measurement, (str, type(None))):
+            self._attr_native_unit_of_measurement = None
         if (
             not self._attr_native_unit_of_measurement
             and self._attr_device_class in UNITS_OF_MEASUREMENT
@@ -293,6 +303,13 @@ class VirtualSensor(VirtualEntity, SensorEntity):
 
     def _update_attributes(self):
         super()._update_attributes()
+        for name, value in (
+            (ATTR_DEVICE_CLASS, self._attr_device_class),
+            (ATTR_UNIT_OF_MEASUREMENT, self._attr_native_unit_of_measurement),
+            (CONF_STATE_CLASS, self._attr_state_class),
+        ):
+            if value is None:
+                self._attr_extra_state_attributes.pop(name, None)
         self._attr_extra_state_attributes.update({
             name: value for name, value in (
                 (ATTR_DEVICE_CLASS, self._attr_device_class),

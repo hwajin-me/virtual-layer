@@ -35,7 +35,7 @@ from homeassistant.components.light import (
 from homeassistant.components.light.const import DATA_COMPONENT as LIGHT_COMPONENT
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity_component import async_update_entity
@@ -738,6 +738,7 @@ class VirtualLight(VirtualEntity, LightEntity):
         transition = self._group_target[2].get("transition", 0)
         delay = max(self._response_delay, float(transition) + self._response_delay)
 
+        @callback
         def refresh(_now):
             self._response_refresh_cancel = None
             if revision == self._group_revision and not self._group_removed:
@@ -796,6 +797,7 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._response_pending = True
         attempts = 0
 
+        @callback
         def _refresh(_now) -> None:
             nonlocal attempts
             self._response_pending = False

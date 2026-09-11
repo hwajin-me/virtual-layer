@@ -30,7 +30,13 @@ QUANTITIES = (
     "sulphur_dioxide",
     "volatile_organic_compounds",
     "volatile_organic_compounds_parts",
+    "benzene",
+    "ammonia",
+    "hydrogen_sulfide",
 )
+
+# Integration-specific quantities, not invented Home Assistant device classes.
+CUSTOM_QUANTITIES = frozenset({"benzene", "ammonia", "hydrogen_sulfide"})
 
 # PM0.1 and N2O have no matching standard sensor device class. Their named
 # attributes remain usable; never alias PM1 to PM0.1 or NO2 to N2O.
@@ -67,6 +73,14 @@ def validate_quantity_unit(quantity, unit):
 # borrow EPA concentration breakpoints, without calculating a time-averaged AQI.
 # Radon bands are local multiples of 37 Bq/m³, NOT official six-level categories.
 STARTER_PROFILES = {
+    "benzene": ("μg/m³", (1, 2, 5, 10, 20), "Local benzene display bands; not health limits"),
+    "ammonia": ("ppm", (0.1, 0.2, 0.5, 1, 2), "Local ammonia display bands; not health limits"),
+    "hydrogen_sulfide": ("ppm", (0.005, 0.01, 0.02, 0.05, 0.1), "Local hydrogen sulfide display bands; not health limits"),
+    "pm1": ("μg/m³", (5, 10, 20, 35, 55), "Local PM1 display bands; not PM2.5 AQI or health limits"),
+    "ozone": ("ppb", (20, 40, 60, 80, 100), "Local editable display bands; not health limits"),
+    "sulphur_dioxide": ("ppb", (20, 40, 80, 160, 320), "Local editable display bands; not health limits"),
+    "nitrogen_monoxide": ("ppb", (20, 40, 80, 160, 320), "Local editable display bands; not health limits"),
+    "volatile_organic_compounds_parts": ("ppb", (50, 100, 200, 400, 800), "Local editable display bands; not equivalent to VOC mass or health limits"),
     "pm25": ("μg/m³", (9, 35.4, 55.4, 125.4, 225.4), "EPA PM2.5 concentration breakpoints; no time averaging"),
     "pm10": ("μg/m³", (54, 154, 254, 354, 424), "EPA PM10 concentration breakpoints; no time averaging"),
     "carbon_monoxide": ("ppm", (4.4, 9.4, 12.4, 15.4, 30.4), "EPA CO concentration breakpoints; no time averaging"),
@@ -80,13 +94,19 @@ STARTER_PROFILES = {
 NAME_HINTS = {
     "pm25": r"(?:pm|particulate[ _-]*matter)[ _.-]*2[ _.-]*5|초미세먼지",
     "pm10": r"(?:pm|particulate[ _-]*matter)[ _.-]*10",
-    "pm1": r"pm[ _.-]*1(?![0-9])",
+    "pm1": r"(?:pm|particulate[ _-]*matter)[ _.-]*1(?:[_.]0)?(?![0-9]|[_.][0-9])",
     "radon": r"radon|라돈",
     "formaldehyde": r"formaldehyde|hcho|포름알데히드",
     "carbon_dioxide": r"carbon[ _-]*dioxide|co2|co₂|이산화탄소",
-    "carbon_monoxide": r"carbon[ _-]*monoxide|co|일산화탄소",
+    "carbon_monoxide": r"carbon[ _-]*monoxide|co(?![ _-]*[0-9₂])|일산화탄소",
     "nitrogen_dioxide": r"nitrogen[ _-]*dioxide|no2|no₂|이산화질소",
-    "volatile_organic_compounds": r"tvoc|voc|휘발성",
+    "nitrogen_monoxide": r"nitrogen[ _-]*monoxide|nitric[ _-]*oxide|일산화질소",
+    "sulphur_dioxide": r"sulphur[ _-]*dioxide|sulfur[ _-]*dioxide|so2|so₂|이산화황",
+    "ozone": r"ozone|o3|o₃|오존",
+    "volatile_organic_compounds": r"e[ _-]*tvoc|tvoc|voc|휘발성",
+    "benzene": r"benzene|c6h6|c₆h₆|벤젠",
+    "ammonia": r"ammonia|nh3|nh₃|암모니아",
+    "hydrogen_sulfide": r"hydrogen[ _-]*sulfide|hydrogen[ _-]*sulphide|h2s|h₂s|황화수소",
     "aqi": r"aqi|air[ _-]*quality[ _-]*index",
 }
 
@@ -99,6 +119,8 @@ def infer_quantity(state):
     name = f"{state.entity_id.split('.', 1)[-1]} {state.attributes.get('friendly_name', '')}".lower()
     matches = {key for key, pattern in NAME_HINTS.items()
                if re.search(r"(?<![a-z0-9])(?:" + pattern + r")(?![a-z0-9])", name)}
+    if matches == {"volatile_organic_compounds"} and state.attributes.get("unit_of_measurement") in ("ppm", "ppb"):
+        return "volatile_organic_compounds_parts"
     return next(iter(matches)) if len(matches) == 1 else None
 
 
@@ -128,13 +150,77 @@ def prefill_measurement(defaults, states):
     if factor is None:
         return result, "Preset unit is incompatible; enter your own thresholds."
     if not result.get("quantity") or result["quantity"] == "any":
-        # Name-only inference cannot satisfy a strict device_class filter.
-        result["quantity"] = quantity if all(s.attributes.get("device_class") == quantity for s in states) else "any"
+        # Custom quantities explicitly support classless sources. Other
+        # name-only inference cannot satisfy a strict device_class filter.
+        result["quantity"] = quantity if quantity in CUSTOM_QUANTITIES or all(s.attributes.get("device_class") == quantity for s in states) else "any"
     if "thresholds" not in result:
         result["thresholds"] = [round(value * factor, 10) for value in thresholds]
     if quantity == "aqi":
         result.setdefault("boundary_rule", "lower_inclusive")
     return result, f"{quantity} / {target_unit}: {label}"
+
+
+def automatic_recipe(sources, states, previous=None):
+    """Classify each pollutant separately; never average unlike concentrations."""
+    previous = previous or {}
+    saved = {item["sources"][0]: item for item in previous.get("measurements", [])}
+    measurements = []
+    for entity_id, state in zip(sources, states, strict=True):
+        if entity_id in saved:
+            measurements.append(saved[entity_id])
+            continue
+        if state is None or infer_quantity(state) not in STARTER_PROFILES:
+            continue
+        # AQI already has bounded 0..500 handling in the category converter.
+        if infer_quantity(state) == "aqi":
+            continue
+        if str(state.attributes.get("unit_of_measurement") or "").replace("µ", "μ") not in UNITS:
+            continue
+        values, _ = prefill_measurement({"mode": "measurement", "sources": [entity_id]}, [state])
+        if "thresholds" in values:
+            measurements.append(normalize(values))
+    return normalize({"mode": "automatic", "sources": sources, "measurements": measurements,
+                      "per_source": previous.get("per_source", False),
+                      "scope": previous.get("scope", "sources"),
+                      "missing": previous.get("missing", "skip")})
+
+
+def expand_sources(sources, source_map):
+    """Expand configured virtual dependencies once, rejecting cycles and excess."""
+    leaves = []
+    visited = set()
+    def visit(entity_id, path):
+        if entity_id in path or len(path) >= 16:
+            raise vol.Invalid("Cyclic or excessively deep source graph")
+        if entity_id in visited:
+            return
+        children = source_map.get(entity_id, [])
+        if not isinstance(children, (list, tuple, set)) or len(children) > 64:
+            raise vol.Invalid("Invalid source graph")
+        if children:
+            for child in children:
+                visit(cv.entity_id(child), (*path, entity_id))
+        elif entity_id not in leaves:
+            leaves.append(entity_id)
+            if len(leaves) > 64:
+                raise vol.Invalid("Too many source entities")
+        visited.add(entity_id)
+        if len(visited) > 1024:
+            raise vol.Invalid("Source graph is too large")
+    for entity_id in sources:
+        visit(cv.entity_id(entity_id), ())
+    return leaves
+
+
+def rebind_combined(recipe, entity_id):
+    """A measurement-result recipe follows the stable parent after an ID edit."""
+    recipe = normalize(recipe)
+    if recipe.get("scope") != "combined":
+        return recipe
+    profiles = recipe.get("measurements", [])
+    return normalize({**recipe, "sources": [entity_id], "measurements": [
+        {**profiles[0], "sources": [entity_id]}
+    ] if profiles else []})
 
 
 def calculation_schema(defaults):
@@ -267,7 +353,37 @@ def normalize(recipe):
         raise vol.Invalid("Select 1 to 64 sources")
     sources = list(dict.fromkeys(cv.entity_id(value) for value in sources))
     if mode == "automatic":
-        return {"mode": mode, "sources": sources}
+        result = {"mode": mode, "sources": sources}
+        for key, allowed in (
+            ("scope", ("combined", "sources", "leaves")),
+            ("missing", ("skip", "unknown")),
+        ):
+            if key in recipe:
+                if recipe[key] not in allowed:
+                    raise vol.Invalid("Invalid automatic source policy")
+                result[key] = recipe[key]
+        if result.get("scope") == "combined" and len(sources) != 1:
+            raise vol.Invalid("Combined measurement requires one source")
+        if "per_source" in recipe:
+            if not isinstance(recipe["per_source"], bool):
+                raise vol.Invalid("Invalid per-source setting")
+            result["per_source"] = recipe["per_source"]
+        if "measurements" in recipe:
+            measurements = recipe["measurements"]
+            if not isinstance(measurements, list) or len(measurements) > len(sources):
+                raise vol.Invalid("Invalid automatic measurement profiles")
+            normalized = []
+            seen = set()
+            for item in measurements:
+                if not isinstance(item, Mapping) or item.get("mode") != "measurement":
+                    raise vol.Invalid("Expected a measurement profile")
+                item = normalize(item)
+                if len(item["sources"]) != 1 or item["sources"][0] not in sources or item["sources"][0] in seen:
+                    raise vol.Invalid("Invalid profile source")
+                seen.add(item["sources"][0])
+                normalized.append(item)
+            result["measurements"] = normalized
+        return result
     attribute = recipe.get("attribute", "")
     if not isinstance(attribute, str) or len(attribute) > 255:
         raise vol.Invalid("Invalid attribute")
@@ -428,9 +544,25 @@ def generate(recipe):
                    "excellent": "good", "healthy": "good", "fine": "good",
                    "unhealthy_for_sensitive_groups": "poor", "unhealthy": "very_poor",
                    "very_unhealthy": "extremely_poor", "hazardous": "extremely_poor"}
-        return (
-            "{% set ns = namespace(rank=-1) %}{% for entity_id in " + repr(recipe["sources"]) + " %}"
+        # Macros isolate each measurement's namespace from the overall rank.
+        profiles = recipe.get("measurements", [])
+        macros = "".join(
+            "{% macro measurement_" + str(i) + "() %}" + generate(item) + "{% endmacro %}"
+            for i, item in enumerate(profiles)
+        )
+        overrides = "{% set overrides = {" + ", ".join(
+            repr(item["sources"][0]) + ": measurement_" + str(i) + "() | trim"
+            for i, item in enumerate(profiles)
+        ) + "} %}"
+        return macros + (
+            overrides + "{% set ns = namespace(rank=-1, missing=false) %}{% for entity_id in " + repr(recipe["sources"]) + " %}"
+            "{% set rank = -1 %}"
             "{% if states(entity_id) not in ['unknown', 'unavailable'] %}"
+            "{% if entity_id in overrides %}"
+            "{% set category = overrides[entity_id] %}"
+            "{% if category in " + repr(list(LEVELS)) + " %}"
+            "{% set rank = " + repr(list(LEVELS)) + ".index(category) %}{% endif %}"
+            "{% else %}"
             "{% set raw = state_attr(entity_id, 'air_quality') %}"
             "{% set raw = states(entity_id) if raw is none else raw %}"
             "{% set category = " + repr(aliases) + ".get(raw | string | trim | lower | replace('-', '_') | replace(' ', '_')) %}"
@@ -442,8 +574,12 @@ def generate(recipe):
             "{% set index = states(entity_id) %}{% endif %}"
             "{% if index is not boolean and is_number(index) and 0 <= (index | float) <= 500 %}"
             "{% set rank = ((index | float) / 100 + 0.5) | round(0, 'floor') | int %}"
-            "{% endif %}{% endif %}{% if rank > ns.rank %}{% set ns.rank = rank %}{% endif %}"
-            "{% endif %}{% endfor %}{{ " + repr(list(LEVELS)) + "[ns.rank] if ns.rank >= 0 else 'unknown' }}"
+            "{% endif %}{% endif %}{% endif %}{% endif %}"
+            "{% if rank > ns.rank %}{% set ns.rank = rank %}{% endif %}"
+            "{% if rank < 0 %}{% set ns.missing = true %}{% endif %}"
+            "{% endfor %}{{ " + repr(list(LEVELS)) + "[ns.rank] if ns.rank >= 0"
+            + (" and not ns.missing" if recipe.get("missing") == "unknown" else "")
+            + " else 'unknown' }}"
         )
     attribute = recipe["attribute"]
     quantity_check = ""
@@ -451,6 +587,12 @@ def generate(recipe):
         quantity_check = " and state_attr(entity_id, 'device_class') == " + repr(
             recipe["quantity"]
         )
+        if recipe["quantity"] in CUSTOM_QUANTITIES:
+            # Explicit UI quantity supplies semantics for classless gas sensors.
+            # Never reinterpret a sensor declaring a different device class.
+            quantity_check = " and state_attr(entity_id, 'device_class') in " + repr(
+                [None, "", recipe["quantity"]]
+            )
     read = f"state_attr(entity_id, {attribute!r})" if attribute else "states(entity_id)"
     if mode == "source" and not attribute:
         read = "state_attr(entity_id, 'air_quality') if state_attr(entity_id, 'air_quality') is not none else states(entity_id)"

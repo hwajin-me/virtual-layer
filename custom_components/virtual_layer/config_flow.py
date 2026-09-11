@@ -3269,8 +3269,13 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         ),
     }
     domain_schema = {}
+    if platform in ("sensor", "air_quality"):
+        domain_schema[vol.Optional("configure_air_quality_sources", default=False)] = selector.BooleanSelector()
     if platform == "air_quality":
         domain_schema[vol.Optional("configure_air_quality_rules", default=False)] = selector.BooleanSelector()
+        recipe = defaults.get(CONF_AIR_QUALITY_LOGIC, {})
+        if isinstance(recipe, Mapping) and recipe.get("mode") == "automatic":
+            domain_schema[vol.Optional("air_quality_per_source", default=recipe.get("per_source", False))] = selector.BooleanSelector()
     if platform == "device_tracker":
         domain_schema.update(
             {
@@ -4374,9 +4379,12 @@ def _build_entity_config(
             raise InvalidDomainOptions
         if matter_air_quality != "source":
             native_templates["air_quality"] = _literal_template(matter_air_quality)
+    if platform in ("sensor", "air_quality"):
         if CONF_AIR_QUALITY_LOGIC in user_input:
             try:
                 recipe = aq_options.normalize(user_input[CONF_AIR_QUALITY_LOGIC])
+                if recipe["mode"] == "automatic":
+                    recipe = aq_options.normalize({**recipe, "per_source": user_input.get("air_quality_per_source", recipe.get("per_source", False))})
             except (TypeError, ValueError, vol.Invalid) as err:
                 raise InvalidDomainOptions from err
             recipe["generated_template"] = aq_options.generate(recipe)
@@ -5148,6 +5156,7 @@ def _with_existing_device_defaults(
     defaults: dict[str, Any],
     options: dict[str, Any],
     device_name: str | None,
+    hass: HomeAssistant | None = None,
 ) -> dict[str, Any]:
     """Overlay an existing Device's stable identity onto entity-form defaults."""
     if not device_name or device_name == NEW_DEVICE_TARGET:
@@ -5177,6 +5186,11 @@ def _with_existing_device_defaults(
             # into an add form and block adding an unrelated entity. Reusing
             # the Device keeps its persisted metadata unchanged.
             updated_defaults[form_field] = configuration_url_or_none(device.get(config_field)) or ""
+        elif config_field == CONF_VIA_DEVICE_ID and hass is not None:
+            parent = _text_default(device.get(config_field))
+            updated_defaults[form_field] = parent if parent and valid_parent_device(
+                hass, parent, updated_defaults[CONF_DEVICE_ID]
+            ) else ""
         else:
             updated_defaults[form_field] = _text_default(device.get(config_field))
     return updated_defaults
@@ -8648,7 +8662,7 @@ def _reference_entity_defaults(
         CONF_SOURCE_ENTITIES_TEXT: "\n".join(entity_ids),
         CONF_AVAILABILITY_TEMPLATE: (
             "{{ "
-            + " and ".join(
+            + (" or " if platform == "air_quality" else " and ").join(
                 f"states({entity_id!r}) not in ['unknown', 'unavailable']"
                 for entity_id in entity_ids
             )
@@ -9972,6 +9986,8 @@ def _entity_form_defaults(
         if detection_logic is not None:
             defaults[CONF_MOTION_DETECTION_LOGIC] = detection_logic
     defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
+    if platform == "sensor" and CONF_AIR_QUALITY_LOGIC in entity:
+        defaults[CONF_AIR_QUALITY_LOGIC] = _mapping_or_empty(entity[CONF_AIR_QUALITY_LOGIC])
     return defaults
 
 
@@ -10049,6 +10065,86 @@ def _log_unhandled_flow_errors(cls):
 class _AirQualityLogicFlow:
     """Share recipe steps across initial setup, options-add and options-edit."""
 
+    async def async_step_air_quality_scope(self, user_input=None):
+        """Choose explicit measurement-result or independent-source semantics."""
+        pending = self._aq_pending
+        sensor = self._entity_defaults.get(CONF_PLATFORM) == "sensor"
+        scopes = ("combined", "sources", "leaves") if sensor else ("sources", "leaves")
+        errors = {}
+        if user_input is not None:
+            try:
+                scope = user_input["scope"]
+                if scope not in scopes:
+                    raise vol.Invalid("Invalid scope")
+                sources = list(user_input.get("sources", pending.get("sources", [])))
+                if scope == "combined":
+                    defaults = self._entity_defaults
+                    parent_id = defaults.get(ATTR_ENTITY_ID) or _default_virtual_entity_id_for_sources(
+                        "sensor", defaults.get(CONF_ENTITY_NAME, ""),
+                        _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT)), defaults.get(CONF_DEVICE_NAME, ""))
+                    sources = [cv.entity_id(parent_id)]
+                    if pending.get("scope") == "combined":
+                        pending = aq_options.rebind_combined(pending, sources[0])
+                elif scope == "leaves":
+                    graph = {}
+                    for entry in self.hass.config_entries.async_entries(COMPONENT_DOMAIN):
+                        for records in _mapping_or_empty(entry.options.get(ATTR_DEVICES)).values():
+                            if not isinstance(records, list):
+                                continue
+                            for record in records:
+                                if isinstance(record, Mapping) and isinstance(record.get(ATTR_ENTITY_ID), str):
+                                    graph[record[ATTR_ENTITY_ID]] = _stored_entity_ids(record.get(CONF_SOURCE_ENTITIES))
+                    sources = aq_options.expand_sources(sources, graph)
+                if not sources:
+                    raise vol.Invalid("Select a source")
+                profiles = [item for item in pending.get("measurements", [])
+                            if item.get("sources", [None])[0] in sources]
+                self._aq_pending = aq_options.automatic_recipe(sources,
+                    [self.hass.states.get(item) for item in sources],
+                    {**pending, "measurements": profiles, "scope": scope, "missing": user_input.get("missing", "skip")})
+                if scope == "combined" and not self._aq_pending["measurements"]:
+                    originals = _stored_entity_ids(self._entity_defaults.get(CONF_SOURCE_ENTITIES_TEXT))
+                    states = [self.hass.states.get(item) for item in originals]
+                    values, _ = aq_options.prefill_measurement({"mode": "measurement", "sources": sources}, states)
+                    if "thresholds" in values:
+                        self._aq_pending["measurements"] = [aq_options.normalize(values)]
+                return await self.async_step_air_quality_source_rules()
+            except (KeyError, TypeError, ValueError, vol.Invalid):
+                errors["base"] = "invalid_air_quality_logic"
+        return self.async_show_form(step_id="air_quality_scope", errors=errors, data_schema=vol.Schema({
+            vol.Required("scope", default=pending.get("scope", "combined" if sensor else "sources")): aq_options.choice(scopes, "air_quality_scope"),
+            vol.Optional("sources", default=pending.get("sources", [])): selector.EntitySelector(selector.EntitySelectorConfig(multiple=True)),
+            vol.Required("missing", default=pending.get("missing", "skip")): aq_options.choice(("skip", "unknown"), "air_quality_missing"),
+        }))
+
+    async def async_step_air_quality_source_rules(self, user_input=None):
+        """Edit one source without replacing any other source's custom profile."""
+        pending = self._aq_pending
+        errors = {}
+        if user_input is not None:
+            source = user_input.get("source")
+            action = user_input.get("action")
+            if action == "continue":
+                return await self._aq_finish(pending)
+            if source not in pending["sources"] or action not in ("edit", "reset"):
+                errors["base"] = "invalid_air_quality_logic"
+            else:
+                profile = next((item for item in pending.get("measurements", []) if item["sources"] == [source]), None)
+                if action == "reset":
+                    pending["measurements"] = [item for item in pending.get("measurements", []) if item["sources"] != [source]]
+                    self._aq_pending = aq_options.automatic_recipe(pending["sources"], [self.hass.states.get(item) for item in pending["sources"]], pending)
+                else:
+                    self._aq_profile_parent = pending
+                    self._aq_profile_source = source
+                    self._aq_pending = dict(profile) if profile else {"mode": "measurement", "sources": [source]}
+                    return await self._aq_setup_step()
+        choices = [{"value": source, "label": f"{self.hass.states.get(source).name if self.hass.states.get(source) else source} ({source})"}
+                   for source in pending["sources"]]
+        return self.async_show_form(step_id="air_quality_source_rules", errors=errors, data_schema=vol.Schema({
+            vol.Required("source", default=pending["sources"][0]): selector.SelectSelector(selector.SelectSelectorConfig(options=choices)),
+            vol.Required("action", default="edit"): aq_options.choice(("edit", "reset", "continue"), "air_quality_source_action"),
+        }))
+
     def _aq_signature(self, defaults, edit=False):
         return (edit, getattr(self, "_edit_selection_key", None) if edit else None,
                 defaults.get(CONF_PLATFORM),
@@ -10056,16 +10152,33 @@ class _AirQualityLogicFlow:
 
     def _aq_needs_setup(self, defaults, edit=False):
         return (isinstance(defaults, Mapping)
-                and defaults.get(CONF_PLATFORM) == "air_quality"
-                and (defaults.get("configure_air_quality_rules")
-                     or getattr(self, "_aq_completed", None) != self._aq_signature(defaults, edit)))
+                and defaults.get(CONF_PLATFORM) in ("sensor", "air_quality")
+                and (defaults.get("configure_air_quality_sources") or (
+                    defaults.get(CONF_PLATFORM) == "air_quality" and (
+                        defaults.get("configure_air_quality_rules")
+                        or getattr(self, "_aq_completed", None) != self._aq_signature(defaults, edit)))))
 
     async def _aq_mode_step(self, user_input=None, *, edit=False):
         defaults = self._entity_defaults or {}
         stored = defaults.get(CONF_AIR_QUALITY_LOGIC)
+        if user_input is None and defaults.get("configure_air_quality_sources"):
+            self._aq_edit = edit
+            try:
+                pending = aq_options.normalize(stored)
+            except (TypeError, ValueError, vol.Invalid):
+                pending = {}
+            self._aq_pending = pending if pending.get("mode") == "automatic" else {
+                "mode": "automatic", "sources": _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT))}
+            self._aq_profile_source = None
+            return await self.async_step_air_quality_scope()
         if user_input is None and not edit and not defaults.get("configure_air_quality_rules"):
             self._aq_edit = False
+            try:
+                previous = aq_options.normalize(stored)
+            except (TypeError, ValueError, vol.Invalid):
+                previous = {}
             return await self._aq_finish({
+                **(previous if previous.get("mode") == "automatic" else {}),
                 "mode": "automatic",
                 "sources": _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT)),
             })
@@ -10110,7 +10223,7 @@ class _AirQualityLogicFlow:
                 self._aq_pending = {**recipe, "mode": mode}
                 self._aq_edit = edit
                 if mode == "automatic":
-                    return await self._aq_finish({"mode": mode, "sources": recipe["sources"]})
+                    return await self._aq_finish(self._aq_pending)
                 if mode == "custom":
                     return await self._aq_finish({"mode": "custom"})
                 if mode == "measurement":
@@ -10138,6 +10251,8 @@ class _AirQualityLogicFlow:
                 if not isinstance(advanced, Mapping):
                     raise vol.Invalid("Invalid advanced settings")
                 values.update(advanced)
+                if getattr(self, "_aq_profile_source", None) and values.get("sources", [self._aq_profile_source]) != [self._aq_profile_source]:
+                    raise vol.Invalid("A source profile cannot change its owner")
                 # Retain all input across validation errors, not just sources.
                 values = aq_options.measurement_form_values({**self._aq_pending, **values})
                 self._aq_pending = dict(values)
@@ -10323,6 +10438,13 @@ class _AirQualityLogicFlow:
                     self._aq_pending = aq_options.measurement_form_values(self._aq_pending)
             else:
                 self._aq_pending = recipe
+                if getattr(self, "_aq_profile_source", None):
+                    parent = self._aq_profile_parent
+                    parent["measurements"] = [item for item in parent.get("measurements", [])
+                                              if item["sources"] != [self._aq_profile_source]] + [recipe]
+                    self._aq_pending = parent
+                    self._aq_profile_source = None
+                    return await self.async_step_air_quality_source_rules()
                 return await self._aq_review_step()
         return self.async_show_form(
             step_id="edit_air_quality_logic" if self._aq_edit else "air_quality_logic",
@@ -10331,11 +10453,47 @@ class _AirQualityLogicFlow:
 
     async def _aq_finish(self, recipe):
         defaults = _complete_domain_form_defaults(self._entity_defaults or {})
+        if recipe["mode"] == "automatic":
+            recipe = {**recipe, "per_source": defaults.get(
+                "air_quality_per_source", recipe.get("per_source", False)
+            )}
+            recipe = aq_options.automatic_recipe(
+                recipe["sources"],
+                [self.hass.states.get(entity_id) for entity_id in recipe["sources"]],
+                recipe,
+            )
+            if defaults.get(CONF_PLATFORM) == "air_quality" and defaults.get("configure_air_quality_sources"):
+                defaults[CONF_SOURCE_ENTITIES_TEXT] = "\n".join(recipe["sources"])
         generated = aq_options.generate(recipe)
+        if defaults.get(CONF_PLATFORM) == "sensor":
+            defaults[CONF_AIR_QUALITY_LOGIC] = recipe
+            defaults["configure_air_quality_sources"] = False
+            self._entity_defaults = defaults
+            self._aq_completed = self._aq_signature(defaults, self._aq_edit)
+            return await (self.async_step_edit_entity() if self._aq_edit else self.async_step_entity())
         native = dict(defaults.get(CONF_NATIVE_VALUE_TEMPLATES, {}))
         old_defaults = (getattr(self, "_edit_current_defaults", None) or defaults) if self._aq_edit else defaults
         old_recipe = old_defaults.get(CONF_AIR_QUALITY_LOGIC, {})
         old_recipe = old_recipe if isinstance(old_recipe, Mapping) else {}
+        if recipe["mode"] == "automatic":
+            # Only replace recognized generated availability helpers, never a
+            # separately customized expression or a keep-current policy.
+            candidates = {""}
+            for source_ids in (recipe["sources"], old_recipe.get("sources", []),
+                               _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT))):
+                if not source_ids:
+                    continue
+                candidates.update("{{ " + joiner.join(
+                    f"states({item!r}) not in ['unknown', 'unavailable']" for item in source_ids
+                ) + " }}" for joiner in (" and ", " or "))
+                candidates.add("{{ ([" + ", ".join(f"states({item!r}) | is_number" for item in source_ids)
+                               + "] | select | list | count) > 0 }}")
+            if (defaults.get(CONF_AVAILABILITY_TEMPLATE, "") in candidates
+                    and getattr(self, "_edit_helper_update_mode", HELPER_UPDATE_AUTO) != HELPER_UPDATE_KEEP):
+                joiner = " and " if recipe.get("missing") == "unknown" else " or "
+                defaults[CONF_AVAILABILITY_TEMPLATE] = "{{ " + (joiner.join(
+                    f"states({item!r}) not in ['unknown', 'unavailable']" for item in recipe["sources"]
+                ) or "true") + " }}"
         old_template = _native_template_mapping(old_defaults.get(CONF_NATIVE_VALUE_TEMPLATES)).get("air_quality", "")
         policy = getattr(self, "_edit_helper_update_mode", HELPER_UPDATE_AUTO) if self._aq_edit else HELPER_UPDATE_AUTO
         customized = bool(old_template and (
@@ -10358,6 +10516,7 @@ class _AirQualityLogicFlow:
         # legacy dropdown must never override edits made on the next screen.
         defaults.pop(CONF_MATTER_AIR_QUALITY, None)
         defaults["configure_air_quality_rules"] = False
+        defaults["configure_air_quality_sources"] = False
         self._entity_defaults = defaults
         self._aq_completed = self._aq_signature(defaults, self._aq_edit)
         if self._aq_edit:
@@ -11127,6 +11286,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                     {},
                     self.config_entry.options,
                     self._add_target_device_name,
+                    self.hass,
                 )
                 return await self.async_step_entity()
             except (
@@ -11275,6 +11435,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 defaults,
                 self.config_entry.options,
                 self._add_target_device_name,
+                self.hass,
             )
             self._add_fan_source_role_choices = (
                 _fan_source_role_choices(
@@ -11837,7 +11998,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
             result["errors"] = {"base": "source_unavailable"}
             return result
         self._reference_defaults = defaults
-        defaults = _with_existing_device_defaults(defaults, self.config_entry.options, self._edit_device_name)
+        defaults = _with_existing_device_defaults(defaults, self.config_entry.options, self._edit_device_name, self.hass)
         defaults[CONF_ENTITY_NAME] = f"{entity.get(CONF_NAME, source_id)} - Air Quality"
         defaults[ATTR_ENTITY_ID] = "air_quality." + source_id.split(".", 1)[1]
         self._entity_defaults = _complete_domain_form_defaults(defaults)
@@ -11940,6 +12101,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
             self._entity_defaults,
             self.config_entry.options,
             self._edit_target_device_name,
+            self.hass,
         )
 
     async def async_step_edit_entity_helper(self, user_input=None):
@@ -12034,6 +12196,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                     fallback_defaults,
                     self.config_entry.options,
                     self._edit_target_device_name,
+                    self.hass,
                 )
                 target_platform = self._reference_defaults.get(CONF_PLATFORM)
                 if target_platform in VIRTUAL_ENTITY_DOMAINS:

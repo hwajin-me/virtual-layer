@@ -528,8 +528,58 @@ New air-quality entities default to **Automatic**, skipping the rule wizard.
 Source categories (including matterbridge-hass aliases) and explicit AQI values
 are converted into categorical strings for the separate bridge sensor. Multiple
 known sources use the worst category. Unavailable sources are skipped; no valid
-category means unknown. Concentrations alone are not AQI and are never silently
-classified as good, including zero concentration readings.
+category means unknown. Recognized concentration sources now receive separate
+starter measurement profiles automatically (listed below). Each pollutant is
+classified in its own unit, then the worst available category is used; unlike
+concentrations are never averaged. Source units must be present and compatible.
+Unsupported measurements remain unknown. These are configurable display bands,
+not a calculated official AQI or a health/safety certification. Generated Jinja
+contains the applied thresholds and can be edited. Existing automatic entries
+acquire profiles when edited and saved; custom templates are preserved.
+In automatic mode, enable **Create one air-quality sensor per source** on the
+entity form to additionally generate one categorical sensor per selected source.
+Each evaluates only its own source, not the aggregate. IDs end in `_air_quality`
+and include the parent object ID and source domain/object ID; source ordering
+does not change their identity. They share the virtual Device and are removed
+when the option is disabled or the parent is deleted. Original sensors remain.
+These are generated companions, not separately editable configuration entries;
+their thresholds come from the saved automatic profiles. For independent manual
+rules, create a separate Air Quality entity with that single source instead.
+The integration does not change Matterbridge endpoint grouping or regex settings.
+
+UI-managed virtual measurement sensors also receive an automatic companion on
+load: `sensor.<measurement_object_id>_aqi`, named `<measurement name> Air Quality`.
+This applies to both newly created and existing Virtual Layer sensors with a
+recognized air-quality device class or unambiguous ID/name. Original and unrelated
+Home Assistant sensors are not modified. Companions share the parent's Device,
+follow its identity/name changes and disappear when the parent is deleted or no
+longer represents an air-quality measurement. They are runtime-derived, not
+independent options entries, and never recursively generate more companions.
+All explicitly configured IDs are reserved first; collisions receive a different
+generated ID instead of overwriting a user entity. Their states are category
+strings, **not numeric AQI**; no `aqi` device class or concentration unit is set.
+Recognized but unsupported units produce `unknown`, not a fabricated good grade.
+The applied recipe is visible in the companion's `air_quality_logic` attribute.
+Existing explicit Air Quality entities and their `_air_quality` IDs are retained.
+Both sensor and Air Quality forms expose **Configure air quality per source**.
+The original measurement sensor is never converted or overwritten. Choose the
+combined virtual measurement, each selected source, or the deduplicated leaf
+sources of configured Virtual Layer composites. Combined measurements retain
+the sensor's configured reducer; independent sources use the worst valid grade.
+Leaf expansion is explicit and saved as a snapshot; reopen the scope step after
+changing the upstream topology. Cyclic or excessive graphs are rejected.
+
+Select a source by name and entity ID to edit its unit, optional attribute, five
+boundaries, six grade assignments, and calibration formula. Other source profiles
+remain intact. Reset affects only the selected profile. Unsupported measurements
+require explicit compatible units and boundaries rather than invented defaults.
+Missing-source policy can skip invalid values or make the overall grade unknown.
+Finish the source editor and save the final entity form to apply. Sensor recipes
+configure the managed `_aqi` companion without changing the parent's templates;
+combined-result profiles follow parent entity-ID changes. Existing custom Jinja
+remains governed by the selected helper update policy.
+Configure Matterbridge Air Quality Regex to match the actual new IDs (for example
+`^sensor\.bedroom_pm25_aqi$`); adding `_aqi` does not configure the bridge itself.
 The automatic AQI conversion mirrors matterbridge-hass 1.5.0's 0–500 linear
 mapping (`floor(AQI / 100 + 0.5)` selects one of six categories), not a health
 standard or a concentration-to-AQI formula. Values outside 0–500 are unknown.
@@ -555,7 +605,25 @@ previous value; an explicitly invalid value is rejected rather than silently
 replaced with a default. Preview offers
 continue, refresh, or return to that same settings screen.
 When optional measurement setup opens, missing thresholds and units are prefilled
-for PM2.5, PM10, CO, NO2, AQI, radon, formaldehyde, CO2 and VOC mass.
+for PM1.0, PM2.5, PM10, CO, NO2, AQI, radon, formaldehyde, CO2, ozone,
+SO2, NO and VOC (mass or parts). PM1 is never treated as PM0.1 or PM2.5.
+Additional local display bands are PM1 (μg/m³): 5/10/20/35/55;
+ozone (ppb): 20/40/60/80/100; SO2 and NO (ppb): 20/40/80/160/320;
+VOC parts (ppb): 50/100/200/400/800. These are editable local conventions,
+not official exposure limits. Gas mass and ppm/ppb are not interchangeable;
+use explicit manual rules for units outside a profile's supported family.
+Benzene (C6H6/C₆H₆), ammonia (NH3/NH₃) and hydrogen sulfide (H2S/H₂S)
+are integration-specific quantities, not new HA device classes or native Matter
+concentration clusters. Their local display bands are benzene (μg/m³):
+1/2/5/10/20; ammonia (ppm): 0.1/0.2/0.5/1/2; hydrogen sulfide (ppm):
+0.005/0.01/0.02/0.05/0.1. These are configurable display conventions,
+not safety limits or replacements for dedicated gas alarms. Their grades can
+use the same automatic and per-source categorical sensor helpers.
+TVOC/eTVOC names use the VOC mass or parts profile according to the supplied
+unit; eTVOC remains an estimated reading, not a chemically specific measurement.
+Unitless VOC indices are not treated as concentrations. O3/O₃, CO and NO2/NO₂
+aliases are recognized. Atmospheric pressure and PIR stay native pressure and
+motion entities; neither contributes an air-pollution grade.
 Source `device_class` takes precedence over token-based entity-ID/friendly-name
 hints (including Korean names). Conflicting hints, mixed pollutants, explicit
 attribute inputs and unsupported profiles do not guess thresholds. Existing
@@ -770,6 +838,7 @@ matrix runs under `tests/integration`:
 
 ```sh
 tests/docker/run_compatibility_smoke.sh
+sh tests/docker/run_light_interoperability.sh
 ```
 
 Open `http://localhost:8123`, finish Home Assistant onboarding if needed, then

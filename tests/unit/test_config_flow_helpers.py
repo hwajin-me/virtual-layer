@@ -5399,6 +5399,26 @@ def test_reference_entity_defaults_preserves_water_usage_class_and_unit(hass):
     }
 
 
+@pytest.mark.parametrize("source_id,state,device_class,unit,platform", [
+    ("sensor.air_pressure", "1013.25", "atmospheric_pressure", "hPa", "sensor"),
+    ("binary_sensor.pir", "on", "motion", None, "binary_sensor"),
+])
+def test_environment_context_keeps_native_pressure_and_pir_helpers(hass, source_id, state, device_class, unit, platform):
+    attrs = {"device_class": device_class}
+    if unit:
+        attrs.update(unit_of_measurement=unit, state_class="measurement")
+    hass.states.async_set(source_id, state, attrs)
+    original = hass.states.get(source_id)
+    defaults = _reference_entity_defaults(hass, [source_id])
+    assert defaults[CONF_PLATFORM] == platform
+    options = _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON])
+    assert options["class"] == device_class
+    if unit:
+        assert options["unit_of_measurement"] == unit
+    Template(defaults[CONF_VALUE_TEMPLATE], hass).ensure_valid()
+    assert hass.states.get(source_id) is original
+
+
 def test_reference_entity_defaults_accepts_standard_energy_sensor(hass):
     """Copying a normal Energy dashboard sensor must not fail the source step."""
     hass.states.async_set(

@@ -71,7 +71,7 @@
       },
       "entity": {
         "title": "가상 엔티티 추가",
-        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다.",
+        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 <entity_id>_aqi 등급 센서가 자동 생성되며 이름은 <이름> Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
         "data": {
           "device_name": "장치 이름",
           "entity_name": "엔티티 이름",
@@ -178,7 +178,9 @@
               "light_ignore_unresponsive": "응답 없는 전구 무시",
               "climate_temperature_step": "온도 조절 간격",
               "media_player_source_priority": "미디어 소스 우선순위",
-              "configure_air_quality_rules": "공기질 판정 기준 직접 설정"
+              "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
+              "air_quality_per_source": "소스별 1:1 공기질 센서 생성",
+              "configure_air_quality_sources": "원본별 공기질 세부 설정"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -202,7 +204,9 @@
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
-              "configure_air_quality_rules": "기본값은 원본 등급 또는 AQI를 자동 변환합니다. 농도만 있으면 unknown이며 임의로 좋음으로 판정하지 않습니다. 체크하면 직접 역치·계산식을 설정합니다. 원본 sensor는 변경하지 않습니다."
+              "configure_air_quality_rules": "PM1.0·PM2.5·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 공식 건강 기준이 아닙니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
+              "air_quality_per_source": "종합 공기질과 원본 센서를 유지하면서 이 Device에 각 소스만 판정하는 등급 센서를 추가합니다. 각 센서의 자동 프로필을 사용하며 미지원 측정값은 unknown입니다. Matterbridge Air Quality Regex와 endpoint 그룹 설정은 별도로 필요합니다.",
+              "configure_air_quality_sources": "원본 센서는 유지됩니다. 합산 측정값 또는 각 원본별로 단위·속성·5개 역치·6개 등급·수식을 설정합니다. 서로 다른 오염물질은 평균하지 않고 최악 등급을 사용합니다."
             }
           },
           "native_value_templates": {
@@ -876,6 +880,32 @@
             }
           }
         }
+      },
+      "air_quality_scope": {
+        "title": "공기질 판정 대상",
+        "description": "원본은 변경하지 않습니다. 합산값 판정과 원본별 최악 등급 판정은 결과가 다를 수 있습니다. 하위 원본 펼치기는 저장 시점의 구성을 사용하며 이후 변경은 이 화면에서 다시 적용하세요.",
+        "data": {
+          "scope": "판정 대상",
+          "sources": "원본 엔티티",
+          "missing": "누락값 처리"
+        },
+        "data_description": {
+          "scope": "합산값: 가상 센서의 최종 수치. 원본별: 선택한 각 센서. 하위 원본: Virtual Layer 소스를 재귀적으로 펼쳐 중복 제거.",
+          "sources": "원본별·하위 원본 판정에 사용할 엔티티. 합산값 판정에서는 이 선택 대신 현재 가상 센서를 사용합니다.",
+          "missing": "건너뛰기: 유효한 원본만 판정. 알 수 없음: 하나라도 판정할 수 없으면 전체 등급을 알 수 없음으로 처리."
+        }
+      },
+      "air_quality_source_rules": {
+        "title": "원본별 역치와 등급",
+        "description": "각 원본을 선택하여 수정하세요. 다른 원본의 설정은 유지됩니다. 완료 후 최종 엔티티 화면에서 저장해야 적용됩니다. 사전값은 건강 기준이 아닌 수정 가능한 표시 기준입니다.",
+        "data": {
+          "source": "설정할 원본",
+          "action": "작업"
+        },
+        "data_description": {
+          "source": "이름과 엔티티 ID로 구분합니다. 선택한 원본의 측정값 또는 속성에만 역치를 적용합니다.",
+          "action": "수정: 단위·역치·등급·수식 편집. 초기화: 해당 원본만 자동 사전값으로 복원. 완료: 엔티티 설정으로 돌아가기."
+        }
       }
     }
   },
@@ -995,7 +1025,7 @@
       },
       "edit_entity": {
         "title": "가상 엔티티 수정",
-        "description": "가상 엔티티를 수정하고 새 구성을 저장합니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다.",
+        "description": "가상 엔티티를 수정하고 새 구성을 저장합니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 <entity_id>_aqi 등급 센서가 자동 생성되며 이름은 <이름> Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
         "data": {
           "device_name": "장치 이름",
           "entity_name": "엔티티 이름",
@@ -1102,7 +1132,9 @@
               "light_ignore_unresponsive": "응답 없는 전구 무시",
               "climate_temperature_step": "온도 조절 간격",
               "media_player_source_priority": "미디어 소스 우선순위",
-              "configure_air_quality_rules": "공기질 판정 기준 직접 설정"
+              "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
+              "air_quality_per_source": "소스별 1:1 공기질 센서 생성",
+              "configure_air_quality_sources": "원본별 공기질 세부 설정"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -1126,7 +1158,9 @@
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
-              "configure_air_quality_rules": "기본값은 원본 등급 또는 AQI를 자동 변환합니다. 농도만 있으면 unknown이며 임의로 좋음으로 판정하지 않습니다. 체크하면 직접 역치·계산식을 설정합니다. 원본 sensor는 변경하지 않습니다."
+              "configure_air_quality_rules": "PM1.0·PM2.5·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 공식 건강 기준이 아닙니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
+              "air_quality_per_source": "종합 공기질과 원본 센서를 유지하면서 이 Device에 각 소스만 판정하는 등급 센서를 추가합니다. 각 센서의 자동 프로필을 사용하며 미지원 측정값은 unknown입니다. Matterbridge Air Quality Regex와 endpoint 그룹 설정은 별도로 필요합니다.",
+              "configure_air_quality_sources": "원본 센서는 유지됩니다. 합산 측정값 또는 각 원본별로 단위·속성·5개 역치·6개 등급·수식을 설정합니다. 서로 다른 오염물질은 평균하지 않고 최악 등급을 사용합니다."
             }
           },
           "native_value_templates": {
@@ -1663,7 +1697,7 @@
       },
       "entity": {
         "title": "가상 엔티티 추가",
-        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다.",
+        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 <entity_id>_aqi 등급 센서가 자동 생성되며 이름은 <이름> Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
         "data": {
           "device_name": "장치 이름",
           "entity_name": "엔티티 이름",
@@ -1770,7 +1804,9 @@
               "light_ignore_unresponsive": "응답 없는 전구 무시",
               "climate_temperature_step": "온도 조절 간격",
               "media_player_source_priority": "미디어 소스 우선순위",
-              "configure_air_quality_rules": "공기질 판정 기준 직접 설정"
+              "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
+              "air_quality_per_source": "소스별 1:1 공기질 센서 생성",
+              "configure_air_quality_sources": "원본별 공기질 세부 설정"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -1794,7 +1830,9 @@
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
-              "configure_air_quality_rules": "기본값은 원본 등급 또는 AQI를 자동 변환합니다. 농도만 있으면 unknown이며 임의로 좋음으로 판정하지 않습니다. 체크하면 직접 역치·계산식을 설정합니다. 원본 sensor는 변경하지 않습니다."
+              "configure_air_quality_rules": "PM1.0·PM2.5·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 공식 건강 기준이 아닙니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
+              "air_quality_per_source": "종합 공기질과 원본 센서를 유지하면서 이 Device에 각 소스만 판정하는 등급 센서를 추가합니다. 각 센서의 자동 프로필을 사용하며 미지원 측정값은 unknown입니다. Matterbridge Air Quality Regex와 endpoint 그룹 설정은 별도로 필요합니다.",
+              "configure_air_quality_sources": "원본 센서는 유지됩니다. 합산 측정값 또는 각 원본별로 단위·속성·5개 역치·6개 등급·수식을 설정합니다. 서로 다른 오염물질은 평균하지 않고 최악 등급을 사용합니다."
             }
           },
           "native_value_templates": {
@@ -2588,6 +2626,32 @@
             }
           }
         }
+      },
+      "air_quality_scope": {
+        "title": "공기질 판정 대상",
+        "description": "원본은 변경하지 않습니다. 합산값 판정과 원본별 최악 등급 판정은 결과가 다를 수 있습니다. 하위 원본 펼치기는 저장 시점의 구성을 사용하며 이후 변경은 이 화면에서 다시 적용하세요.",
+        "data": {
+          "scope": "판정 대상",
+          "sources": "원본 엔티티",
+          "missing": "누락값 처리"
+        },
+        "data_description": {
+          "scope": "합산값: 가상 센서의 최종 수치. 원본별: 선택한 각 센서. 하위 원본: Virtual Layer 소스를 재귀적으로 펼쳐 중복 제거.",
+          "sources": "원본별·하위 원본 판정에 사용할 엔티티. 합산값 판정에서는 이 선택 대신 현재 가상 센서를 사용합니다.",
+          "missing": "건너뛰기: 유효한 원본만 판정. 알 수 없음: 하나라도 판정할 수 없으면 전체 등급을 알 수 없음으로 처리."
+        }
+      },
+      "air_quality_source_rules": {
+        "title": "원본별 역치와 등급",
+        "description": "각 원본을 선택하여 수정하세요. 다른 원본의 설정은 유지됩니다. 완료 후 최종 엔티티 화면에서 저장해야 적용됩니다. 사전값은 건강 기준이 아닌 수정 가능한 표시 기준입니다.",
+        "data": {
+          "source": "설정할 원본",
+          "action": "작업"
+        },
+        "data_description": {
+          "source": "이름과 엔티티 ID로 구분합니다. 선택한 원본의 측정값 또는 속성에만 역치를 적용합니다.",
+          "action": "수정: 단위·역치·등급·수식 편집. 초기화: 해당 원본만 자동 사전값으로 복원. 완료: 엔티티 설정으로 돌아가기."
+        }
       }
     }
   },
@@ -2763,7 +2827,24 @@
         "volatile_organic_compounds": "VOC (질량 농도)",
         "volatile_organic_compounds_parts": "VOC (부피비)",
         "radon": "라돈",
-        "formaldehyde": "포름알데히드"
+        "formaldehyde": "포름알데히드",
+        "benzene": "벤젠 (C₆H₆)",
+        "ammonia": "암모니아 (NH₃)",
+        "hydrogen_sulfide": "황화수소 (H₂S)"
+      }
+    },
+    "air_quality_scope": {
+      "options": {
+        "combined": "합산 측정값",
+        "sources": "각 원본의 최악 등급",
+        "leaves": "하위 원본의 최악 등급"
+      }
+    },
+    "air_quality_source_action": {
+      "options": {
+        "edit": "수정",
+        "reset": "이 원본 초기화",
+        "continue": "완료"
       }
     }
   },
