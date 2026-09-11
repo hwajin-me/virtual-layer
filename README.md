@@ -563,6 +563,22 @@ Mass-unit equivalents are converted automatically; gas mass-to-ppm conversion is
 not guessed. Unsupported units, missing readings and unidentified quantities
 remain unknown. Existing custom thresholds are retained. Existing managed
 companions without a custom recipe pick up these defaults on reload.
+Generated `_aqi` companions also complete missing automatic measurement rules
+when source units/device classes become available after startup (including
+metadata supplied by native templates). This runtime repair does not rewrite
+stored configuration or existing measurement overrides. Sources with genuinely
+missing/incompatible units are not assumed to use ppm. Without any previously
+valid grade the result remains unknown. Once a valid grade exists, air_quality
+entities and all generated categorical companions retain it through source
+outages, invalid results and reloads, regardless of the legacy persistence flag.
+`air_quality_stale: true` marks a retained result, not a current air measurement;
+`air_quality_last_valid_at` preserves its last valid classification time.
+`air_quality_partial` and `air_quality_missing_sources` identify partial coverage.
+Available sources continue to be classified with the recipe's missing-value
+policy (normally skip); cached stale grades do not outvote live sources.
+Fresh valid results replace the retained grade and clear the stale flag. A bridge
+that ignores these diagnostic attributes may display an old grade without a
+freshness warning; do not treat a retained good grade as proof of safe air.
 The [Sensor entity contract](https://developers.home-assistant.io/docs/core/entity/sensor/)
 distinguishes numeric AQI from textual categories, date from timestamp/uptime,
 and numeric state classes from enum states. Virtual Layer preserves these types
@@ -665,12 +681,31 @@ Mass and gas-ratio prefixes are converted only within compatible unit families;
 radon additionally supports Bq/m³ and pCi/L (1 pCi/L = 37 Bq/m³).
 PM/CO/NO2 presets borrow [EPA concentration breakpoints](https://aqs.epa.gov/aqsweb/documents/codetables/aqi_breakpoints.html)
 but do not perform required time averaging or calculate official AQI. Radon
-uses local display bands 37/74/148/296/592 Bq/m³, not official six-level health
+uses local display boundaries 50/75/100/125/148 Bq/m³: below 50 is `good`,
+50–<75 `fair`, 75–<100 `moderate`, 100–<125 `poor`, 125–<148 `very_poor`,
+and 148 or above `extremely_poor`. These are not official six-level health
 categories. EPA's [radon guidance](https://www.epa.gov/radiation/radionuclide-basics-radon)
 does not define these six bands. Formaldehyde, CO2 and VOC presets are explicitly
-local editable display bands, not safety or exposure limits. No source sensor
+local editable display bands, not safety or exposure limits. CO₂ defaults are
+below 600 ppm `good`, 600–<800 `fair`, 800–<1100 `moderate`,
+1100–<1400 `poor`, 1400–<2000 `very_poor`, and 2000 or above `extremely_poor`.
+Existing user thresholds and comparison rules are preserved. No source sensor
 is changed by this prefill. Unrecognized sources still require user-defined
 thresholds rather than fabricating a pollutant profile.
+Floor area alone does not scale these concentration boundaries. Indoor display
+defaults for HCHO are 0.02/0.04/0.06/0.08/0.10 mg/m³ and for TVOC mass are
+200/300/500/750/950 μg/m³; equality enters the worse band. TVOC's lower bands
+are more permissive than the previous profile while its upper bands, and HCHO's
+upper bands, are stricter. These are local display choices, not official grades:
+the [WHO HCHO reference](https://www.who.int/teams/environment-climate-change-and-health/air-quality-and-health/health-impacts/types-of-pollutants)
+uses a 30-minute average, which this instantaneous helper does not calculate.
+[UBA's TVOC advice](https://www.umweltbundesamt.de/en/topics/health/commissions-working-groups/german-committee-on-indoor-air-guide-values)
+identifies concentrations above 950 μg/m³ as a precautionary concern and says TVOC
+alone cannot assess health risk. The lower four TVOC boundaries are local choices,
+not UBA categories. TVOC/eTVOC in ppb retain a separate profile; mass and parts
+are not interchangeable without sensor-specific calibration. CO/NO₂ and other
+gas profiles are not relaxed based on home size; these helpers never replace
+certified smoke/CO alarms. Radon and CO₂ retain their user-requested defaults.
 Generated PM2.5/PM10 helpers can read matching numeric sensor states, including
 mass-unit conversion. Unmeasured concentrations are unknown (`None`), not zero.
 Old customized templates are not silently rewritten; review them when upgrading.

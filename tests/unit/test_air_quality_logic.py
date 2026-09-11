@@ -42,6 +42,15 @@ def test_every_named_quantity_has_a_starter_profile():
     assert set(aq.QUANTITIES) - {"any"} == set(aq.STARTER_PROFILES)
 
 
+@pytest.mark.parametrize("mode", ["automatic", "source"])
+def test_retained_stale_categories_do_not_outvote_live_sources(hass, mode):
+    sources = ["sensor.cached", "sensor.live"]
+    hass.states.async_set(sources[0], "extremely_poor", {"air_quality_stale": True})
+    hass.states.async_set(sources[1], "good")
+    recipe = {"mode": mode, "sources": sources, "aggregation": "worst", "missing": "skip"}
+    assert Template(aq.generate(recipe), hass).async_render() == "good"
+
+
 @pytest.mark.parametrize("quantity", list(aq.STARTER_PROFILES))
 def test_every_starter_prefills_and_renders_all_six_bands(hass, quantity):
     unit, boundaries, _ = aq.STARTER_PROFILES[quantity]
@@ -364,9 +373,56 @@ def test_automatic_profiles_classify_separate_pollutants_and_live_updates(hass):
     hass.states.async_set("sensor.radon", "0", {"device_class": "radon", "unit_of_measurement": "pCi/L"})
     assert helper.async_render() == "good"
     hass.states.async_set("sensor.radon", "4", {"device_class": "radon", "unit_of_measurement": "pCi/L"})
-    assert helper.async_render() == "moderate"
+    assert helper.async_render() == "extremely_poor"
     hass.states.async_set("sensor.radon", "4", {"device_class": "radon", "unit_of_measurement": "ppm"})
     assert helper.async_render() == "unknown"
+
+
+@pytest.mark.parametrize("value,grade", [(0, "good"), (49.99, "good"), (50, "fair"), (74.99, "fair"), (75, "moderate"), (99.99, "moderate"), (100, "poor"), (124.99, "poor"), (125, "very_poor"), (147.99, "very_poor"), (148, "extremely_poor"), (300, "extremely_poor")])
+def test_radon_requested_default_boundaries(hass, value, grade):
+    source = "sensor.radon"
+    hass.states.async_set(source, str(value), {"device_class": "radon", "unit_of_measurement": "Bq/m³"})
+    recipe = aq.automatic_recipe([source], [hass.states.get(source)])
+    assert Template(aq.generate(recipe), hass).async_render() == grade
+
+
+def test_radon_custom_boundary_rule_is_not_changed(hass):
+    hass.states.async_set("sensor.radon", "50", {"device_class": "radon", "unit_of_measurement": "Bq/m³"})
+    custom = measurement(sources=["sensor.radon"], quantity="radon", unit="Bq/m³", thresholds=[50, 75, 100, 125, 148])
+    values, _ = aq.prefill_measurement(custom, [hass.states.get("sensor.radon")])
+    assert "boundary_rule" not in values
+    assert Template(aq.generate(values), hass).async_render() == "good"
+
+
+@pytest.mark.parametrize("unit,factor", [("ppm", 1), ("ppb", 1000)])
+@pytest.mark.parametrize("value,grade", [(599.9, "good"), (600, "fair"), (799.9, "fair"), (800, "moderate"), (1099.9, "moderate"), (1100, "poor"), (1399.9, "poor"), (1400, "very_poor"), (1999.9, "very_poor"), (2000, "extremely_poor")])
+def test_co2_requested_default_boundaries(hass, unit, factor, value, grade):
+    source = "sensor.co2"
+    hass.states.async_set(source, str(value * factor), {"device_class": "carbon_dioxide", "unit_of_measurement": unit})
+    recipe = aq.automatic_recipe([source], [hass.states.get(source)])
+    assert Template(aq.generate(recipe), hass).async_render() == grade
+
+
+@pytest.mark.parametrize("quantity,unit,factor,boundaries", [
+    ("formaldehyde", "mg/m³", 1, [0.02, 0.04, 0.06, 0.08, 0.1]),
+    ("formaldehyde", "μg/m³", 1000, [0.02, 0.04, 0.06, 0.08, 0.1]),
+    ("volatile_organic_compounds", "μg/m³", 1, [200, 300, 500, 750, 950]),
+    ("volatile_organic_compounds", "mg/m³", 0.001, [200, 300, 500, 750, 950]),
+])
+def test_indoor_display_bands_boundaries_and_custom_preservation(hass, quantity, unit, factor, boundaries):
+    source = "sensor.indoor"
+    attrs = {"device_class": quantity, "unit_of_measurement": unit}
+    hass.states.async_set(source, "0", attrs)
+    state = hass.states.get(source)
+    recipe = aq.automatic_recipe([source], [state])
+    helper = Template(aq.generate(recipe), hass)
+    for index, boundary in enumerate(boundaries):
+        for value, expected in ((boundary - 0.00001, aq.LEVELS[index]), (boundary, aq.LEVELS[index + 1])):
+            hass.states.async_set(source, str(value * factor), attrs)
+            assert helper.async_render() == expected
+    recipe["measurements"][0]["thresholds"] = [1, 2, 3, 4, 5]
+    recipe["measurements"][0]["boundary_rule"] = "upper_inclusive"
+    assert aq.automatic_recipe([source], [state], recipe)["measurements"] == recipe["measurements"]
 
 
 @pytest.mark.parametrize("name,attrs,expected", [

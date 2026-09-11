@@ -711,7 +711,8 @@ async def test_config_flow_create_modify_runtime():
         assert hass.states.get(modified_id).state == "unavailable"
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
-        assert hass.states.get(f"{modified_id}_aqi").state == "unknown"
+        assert hass.states.get(f"{modified_id}_aqi").state == "poor"
+        assert hass.states.get(f"{modified_id}_aqi").attributes["air_quality_stale"] is True
 
         hass.states.async_set(
             source_ids[0],
@@ -789,8 +790,46 @@ async def test_config_flow_create_modify_runtime():
                 "unit_of_measurement": "μg/m³", "initial_value": "3",
                 "persistent": False,
             })
+        hass.states.async_set("sensor.docker_co2_input", "1093")
+        next(iter(options["devices"].values())).append({
+            "platform": "sensor", "entity_id": "sensor.docker_carbon_dioxide",
+            "name": "Docker Carbon Dioxide", "source_entities": ["sensor.docker_co2_input"],
+            "value_template": "{{ states('sensor.docker_co2_input') }}",
+            "native_templates": {
+                "device_class": "{{ state_attr('sensor.docker_co2_input', 'device_class') }}",
+                "unit_of_measurement": "{{ state_attr('sensor.docker_co2_input', 'unit_of_measurement') }}",
+            },
+        })
         hass.config_entries.async_update_entry(entry, options=options)
         await hass.async_block_till_done()
+        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "unknown"
+        hass.states.async_set("sensor.docker_co2_input", "1093", {
+            "device_class": "carbon_dioxide", "unit_of_measurement": "ppm",
+        })
+        await hass.async_block_till_done()
+        await asyncio.sleep(0.1)
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "moderate"
+        # Missing readings retain the last grade, visibly marked stale, even
+        # across a reload. A new valid reading clears the stale marker.
+        hass.states.async_set("sensor.docker_co2_input", "unavailable")
+        await hass.async_block_till_done()
+        await asyncio.sleep(0.1)
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "moderate"
+        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").attributes["air_quality_stale"] is True
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "moderate"
+        hass.states.async_set("sensor.docker_co2_input", "500", {
+            "device_class": "carbon_dioxide", "unit_of_measurement": "ppm",
+        })
+        await hass.async_block_till_done()
+        await asyncio.sleep(0.1)
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "good"
+        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").attributes["air_quality_stale"] is False
+        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").attributes["air_quality_logic"]["measurements"]
         for quantity in ("pm4", "nitrous_oxide"):
             assert hass.states.get(f"sensor.docker_{quantity}_aqi").state == "good"
         assert hass.states.get("sensor.docker_formaldehyde").state == "0.003"
@@ -802,6 +841,7 @@ async def test_config_flow_create_modify_runtime():
         for quantity in ("pm4", "nitrous_oxide"):
             assert hass.states.get(f"sensor.docker_{quantity}").state == "3"
             assert hass.states.get(f"sensor.docker_{quantity}_aqi").state == "good"
+        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "good"
     finally:
         await hass.async_stop()
 

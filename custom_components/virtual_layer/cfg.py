@@ -1102,7 +1102,7 @@ class BlendedCfg:
                         ATTR_DEVICE_ID: device_id,
                         CONF_INITIAL_VALUE: "unknown",
                         CONF_INITIAL_AVAILABILITY: True,
-                        CONF_PERSISTENT: False,
+                        CONF_PERSISTENT: True,
                         CONF_SOURCE_ENTITIES: recipe.get("sources", [entity_id]),
                         CONF_VALUE_TEMPLATE: aq_options.generate(recipe),
                         CONF_ICON: "mdi:air-filter",
@@ -1133,7 +1133,7 @@ class BlendedCfg:
                 ATTR_DEVICE_ID: device_id,
                 CONF_INITIAL_VALUE: "unknown",
                 CONF_INITIAL_AVAILABILITY: True,
-                CONF_PERSISTENT: False,
+                CONF_PERSISTENT: True,
                 CONF_SOURCE_ENTITIES: [entity_id],
                 CONF_VALUE_TEMPLATE: (
                     "{% set grade = states(" + repr(entity_id) + ") %}"

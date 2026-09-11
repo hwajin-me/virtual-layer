@@ -97,7 +97,7 @@ def validate_quantity_unit(quantity, unit):
 
 # Editable display bands, not a certification or exposure assessment. PM bands
 # borrow EPA concentration breakpoints, without calculating a time-averaged AQI.
-# Radon bands are local multiples of 37 Bq/m³, NOT official six-level categories.
+# Radon bands are user-requested display intervals, NOT official health categories.
 STARTER_PROFILES = {
     "benzene": ("μg/m³", (1, 2, 5, 10, 20), "Local benzene display bands; not health limits"),
     "ammonia": ("ppm", (0.1, 0.2, 0.5, 1, 2), "Local ammonia display bands; not health limits"),
@@ -114,10 +114,10 @@ STARTER_PROFILES = {
     "carbon_monoxide": ("ppm", (4.4, 9.4, 12.4, 15.4, 30.4), "EPA CO concentration breakpoints; no time averaging"),
     "nitrogen_dioxide": ("ppb", (53, 100, 360, 649, 1249), "EPA NO2 concentration breakpoints; no time averaging"),
     "aqi": ("unitless", (50, 150, 250, 350, 450), "matterbridge-hass 1.5.0 AQI mapping"),
-    "radon": ("Bq/m³", (37, 74, 148, 296, 592), "Local radon display bands; not official health categories"),
-    "formaldehyde": ("mg/m³", (0.02, 0.04, 0.08, 0.16, 0.32), "Local editable display bands; not health limits"),
-    "carbon_dioxide": ("ppm", (600, 800, 1000, 1500, 2000), "Local editable display bands; not health limits"),
-    "volatile_organic_compounds": ("μg/m³", (100, 200, 400, 800, 1600), "Local editable display bands; not health limits"),
+    "radon": ("Bq/m³", (50, 75, 100, 125, 148), "Local radon display bands: below 50 good, 148 or above extremely_poor; not official health categories"),
+    "formaldehyde": ("mg/m³", (0.02, 0.04, 0.06, 0.08, 0.10), "Local indoor HCHO display bands; WHO 0.1 mg/m³ is a 30-minute guideline, not an instantaneous six-grade scale"),
+    "carbon_dioxide": ("ppm", (600, 800, 1100, 1400, 2000), "Local CO2 display bands: 1100 or above poor, 1400 or above very_poor; not health limits"),
+    "volatile_organic_compounds": ("μg/m³", (200, 300, 500, 750, 950), "Local indoor TVOC display bands; UBA 950 μg/m³ precautionary reference is not a health threshold or six-grade scale"),
 }
 NAME_HINTS = {
     "pm25": r"(?:pm|particulate[ _-]*matter)[ _.-]*2[ _.-]*5|초미세먼지",
@@ -183,6 +183,8 @@ def prefill_measurement(defaults, states):
         # Custom quantities explicitly support classless sources. Other
         # name-only inference cannot satisfy a strict device_class filter.
         result["quantity"] = quantity if quantity in CUSTOM_QUANTITIES or all(s.attributes.get("device_class") == quantity for s in states) else "any"
+    if quantity in ("radon", "carbon_dioxide", "formaldehyde", "volatile_organic_compounds") and "thresholds" not in result:
+        result.setdefault("boundary_rule", "lower_inclusive")
     if "thresholds" not in result:
         result["thresholds"] = [round(value * factor, 10) for value in thresholds]
     if quantity == "aqi":
@@ -595,7 +597,7 @@ def generate(recipe):
         return macros + (
             overrides + "{% set ns = namespace(rank=-1, missing=false) %}{% for entity_id in " + repr(recipe["sources"]) + " %}"
             "{% set rank = -1 %}"
-            "{% if states(entity_id) not in ['unknown', 'unavailable'] %}"
+            "{% if states(entity_id) not in ['unknown', 'unavailable'] and not state_attr(entity_id, 'air_quality_stale') %}"
             "{% if entity_id in overrides %}"
             "{% set category = overrides[entity_id] %}"
             "{% if category in " + repr(list(LEVELS)) + " %}"
@@ -639,6 +641,7 @@ def generate(recipe):
         "{% for entity_id in " + repr(recipe["sources"]) + " %}"
         "{% set grade = 'unknown' %}"
         "{% if states(entity_id) not in ['unknown', 'unavailable']"
+        " and not state_attr(entity_id, 'air_quality_stale')"
         + quantity_check
         + " %}"
         "{% set value = " + read + " %}"

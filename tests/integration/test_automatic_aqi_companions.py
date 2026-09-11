@@ -11,9 +11,56 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.virtual_layer.const import (
     ATTR_DEVICES, ATTR_ENTITY_KEY, ATTR_GROUP_NAME, COMPONENT_DOMAIN,
     CONF_ATTRIBUTES, CONF_CLASS, CONF_INITIAL_VALUE, CONF_SOURCE_ENTITIES, CONF_VALUE_TEMPLATE,
+    CONF_NATIVE_TEMPLATES,
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize("saved_recipe", [False, True])
+async def test_companion_recovers_empty_recipe_when_native_metadata_arrives(hass, tmp_path, monkeypatch, saved_recipe):
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "late-meta.json"))
+    source = "sensor.physical_co2"
+    parent = "sensor.living_room_carbon_dioxide"
+    hass.states.async_set(source, "1093")
+    record = {CONF_PLATFORM: "sensor", ATTR_ENTITY_ID: parent,
+              CONF_NAME: "Living Room Carbon Dioxide", CONF_SOURCE_ENTITIES: [source],
+              CONF_VALUE_TEMPLATE: "{{ states('sensor.physical_co2') }}",
+              CONF_NATIVE_TEMPLATES: {
+                  "unit_of_measurement": "{{ state_attr('sensor.physical_co2', 'unit_of_measurement') }}",
+                  "device_class": "{{ state_attr('sensor.physical_co2', 'device_class') }}",
+              }}
+    if saved_recipe:
+        record["air_quality_logic"] = {"mode": "automatic", "sources": [parent], "measurements": []}
+    original = deepcopy(record)
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "late"},
+                            options={ATTR_DEVICES: {"Room": [record]}})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(parent + "_aqi").state == "unknown"
+    hass.states.async_set(source, "1093", {"unit_of_measurement": "ppm", "device_class": "carbon_dioxide"})
+    await hass.async_block_till_done()
+    await asyncio.sleep(0.1)
+    await hass.async_block_till_done()
+    assert hass.states.get(parent + "_aqi").state == "moderate"
+    assert hass.states.get(parent + "_aqi").attributes["air_quality_logic"]["measurements"]
+    assert hass.states.get(parent).state == "1093"
+    assert entry.options[ATTR_DEVICES]["Room"][0] == original
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(parent + "_aqi").state == "moderate"
+    hass.states.async_set(source, "500", {"unit_of_measurement": "ppm", "device_class": "carbon_dioxide"})
+    await hass.async_block_till_done()
+    await asyncio.sleep(0.1)
+    await hass.async_block_till_done()
+    assert hass.states.get(parent + "_aqi").state == "good"
+    hass.states.async_set(source, "500", {"unit_of_measurement": "m³", "device_class": "carbon_dioxide"})
+    await hass.async_block_till_done()
+    await asyncio.sleep(0.1)
+    await hass.async_block_till_done()
+    assert hass.states.get(parent + "_aqi").state == "good"
+    assert hass.states.get(parent + "_aqi").attributes["air_quality_stale"] is True
 
 
 @pytest.mark.parametrize("quantity", ["pm4", "nitrous_oxide"])
@@ -83,6 +130,9 @@ async def test_source_profile_edit_after_removed_platform_and_reload(hass, tmp_p
     ("benzene", "μg/m³", "3", "moderate"),
     ("aqi", "", "150", "moderate"),
     ("formaldehyde", "mg/m3", "0.003", "good"),
+    ("formaldehyde", "mg/m³", "0.07", "poor"),
+    ("volatile_organic_compounds", "μg/m³", "150", "good"),
+    ("volatile_organic_compounds", "μg/m³", "950", "extremely_poor"),
     ("pm25", "ug/m^3", "5", "good"),
     ("radon", "Bq/m3", "54.07", "fair"),
 ])

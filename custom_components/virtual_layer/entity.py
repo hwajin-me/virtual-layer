@@ -46,6 +46,7 @@ from homeassistant.util import slugify
 from homeassistant.util import dt as dt_util
 
 from .const import *
+from .air_quality_options import LEVELS as AIR_QUALITY_LEVELS
 from .device_metadata import configuration_url_or_none
 
 _LOGGER = logging.getLogger(__name__)
@@ -329,6 +330,18 @@ class VirtualEntity(RestoreEntity):
             config.get(CONF_ICON_TEMPLATE)
         )
         self._persistent = config.get(CONF_PERSISTENT)
+        self._is_air_quality = domain == "air_quality" or (
+            domain == "sensor"
+            and DIAGNOSTIC_UNIQUE_ID_MARKER in str(config.get(ATTR_UNIQUE_ID, ""))
+            and config.get(CONF_ATTRIBUTES, {}).get("sensor_type") == "matter_air_quality"
+        )
+        self._aq_rendering = False
+        self._aq_last_valid = None
+        self._aq_last_valid_at = None
+        self._aq_live_signature = None
+        self._aq_template_error = False
+        if self._is_air_quality:
+            self._persistent = True
         self._virtual_attributes = {
             name: value
             for name, value in dict(config.get(CONF_ATTRIBUTES, {})).items()
@@ -508,6 +521,9 @@ class VirtualEntity(RestoreEntity):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         state = await self.async_get_last_state()
+        if self._is_air_quality and state and state.state in AIR_QUALITY_LEVELS:
+            self._aq_last_valid = state.state
+            self._aq_last_valid_at = state.attributes.get("air_quality_last_valid_at") or state.last_updated.isoformat()
         if not self._persistent or not state:
             self._create_state(self._config)
         else:
@@ -600,6 +616,8 @@ class VirtualEntity(RestoreEntity):
 
     def _schedule_state_update(self, force_refresh: bool = False) -> None:
         """Schedule a state update safely from loop or executor contexts."""
+        if self._aq_rendering:
+            return
         on_hass_loop = self.hass is None or get_ident() == self.hass.loop_thread_id
         if on_hass_loop:
             self.async_schedule_update_ha_state(force_refresh=force_refresh)
@@ -1376,6 +1394,79 @@ class VirtualEntity(RestoreEntity):
 
     @callback
     def _apply_templates(self):
+        if not self._is_air_quality:
+            return self._apply_current_templates()
+        missing = []
+        source_states = []
+        upstream_missing = []
+        upstream_partial = False
+        for source in self._source_entities:
+            state = self.hass.states.get(source) if self.hass else None
+            source_states.append(state)
+            if state is None or state.state in ("unknown", "unavailable", "none", "") or state.attributes.get("air_quality_stale"):
+                missing.append(source)
+            if state is not None and state.attributes.get("air_quality_partial") is True:
+                upstream_partial = True
+                inherited = state.attributes.get("air_quality_missing_sources", [])
+                if isinstance(inherited, (list, tuple)):
+                    upstream_missing.extend(s for s in inherited[:64] if isinstance(s, str))
+        # A subset of live sources must be usable immediately, including during
+        # restart; do not wait for the normal all-sources startup grace period.
+        self._startup_source_grace = False
+        self._aq_rendering = True
+        self._aq_template_error = False
+        try:
+            self._apply_current_templates()
+            value = getattr(self, "_attr_state", None)
+            valid = isinstance(value, str) and value in AIR_QUALITY_LEVELS
+            all_missing = bool(self._source_entities) and len(missing) == len(self._source_entities)
+            availability_failed = self._attr_available is False and not missing
+            reason = (
+                "template_error" if self._aq_template_error else
+                "sources_unavailable" if all_missing else
+                "availability_false" if availability_failed else
+                "invalid_result" if not valid else None
+            )
+            stale = reason is not None
+            if stale and valid and self._aq_last_valid is None:
+                # A newly created bridge may first see an upstream retained
+                # grade. Inherit its history, never label it as a new reading.
+                for state in source_states:
+                    if state is not None and state.state == value and state.attributes.get("air_quality_stale") is True:
+                        self._aq_last_valid = value
+                        self._aq_last_valid_at = state.attributes.get("air_quality_last_valid_at")
+                        break
+            if not stale:
+                signature = (value, tuple(
+                    (state.entity_id, state.last_updated)
+                    for state in source_states if state is not None and state.entity_id not in missing
+                ))
+                if signature != self._aq_live_signature:
+                    self._aq_last_valid_at = dt_util.utcnow().isoformat()
+                    self._aq_live_signature = signature
+                self._aq_last_valid = value
+            elif self._aq_last_valid is not None:
+                self._attr_state = self._aq_last_valid
+                if self._platform_domain == "sensor":
+                    self._attr_native_value = self._aq_last_valid
+                elif "air_quality" in getattr(self, "_domain_options", {}):
+                    self._domain_options["air_quality"] = self._aq_last_valid
+            if self._aq_last_valid is not None:
+                self._attr_available = True
+            self._virtual_attributes.update({
+                "air_quality_stale": stale,
+                "air_quality_partial": (bool(missing) or upstream_partial) and not all_missing,
+                "air_quality_missing_sources": list(dict.fromkeys([*missing, *upstream_missing]))[:64],
+                "air_quality_last_valid_at": self._aq_last_valid_at,
+                "air_quality_fallback_reason": reason,
+            })
+            self._update_attributes()
+        finally:
+            self._aq_rendering = False
+        self._schedule_state_update()
+
+    @callback
+    def _apply_current_templates(self):
         changed = False
 
         self._restore_waiting_for_sources = (
@@ -1397,6 +1488,7 @@ class VirtualEntity(RestoreEntity):
                     self._attr_available = available
                     changed = True
             except (OverflowError, TemplateError, TypeError, ValueError) as e:
+                self._aq_template_error = True
                 _LOGGER.warning(
                     f"Unable to render availability template for {self.entity_id}: {e}"
                 )
@@ -1404,7 +1496,7 @@ class VirtualEntity(RestoreEntity):
         # Preserve the last valid state/native properties while a source is
         # unavailable. Generic attributes may still be useful for diagnostics.
         apply_state_templates = (
-            not (availability_rendered and not self._attr_available)
+            (self._is_air_quality or not (availability_rendered and not self._attr_available))
             and not self._restore_waiting_for_sources
         )
 
@@ -1427,6 +1519,7 @@ class VirtualEntity(RestoreEntity):
                 self.set_state(self._render_template(self._value_template))
                 changed = True
             except (OverflowError, TemplateError, TypeError, ValueError) as e:
+                self._aq_template_error = True
                 _LOGGER.warning(
                     f"Unable to render value template for {self.entity_id}: {e}"
                 )
@@ -1466,6 +1559,8 @@ class VirtualEntity(RestoreEntity):
                     ValueError,
                     vol.Invalid,
                 ) as e:
+                    if name in ("air_quality", "state", "value", "native_value", "available"):
+                        self._aq_template_error = True
                     _LOGGER.warning(
                         "Unable to render native template %s for %s: %s",
                         name,

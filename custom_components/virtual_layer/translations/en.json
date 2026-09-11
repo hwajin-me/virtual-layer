@@ -96,7 +96,7 @@
           "platform": "Home Assistant entity domain. Submit once after changing it to load the domain-specific controls and Jinja fields.",
           "initial_value": "Fallback state used before a template renders or when no value template is configured.",
           "initial_availability": "Initial availability used when no availability template is configured.",
-          "persistent": "Restore the last state after Home Assistant restarts. Disable it to return to the initial value.",
+          "persistent": "Restore the last state after Home Assistant restarts. Disable it to return to the initial value. Air-quality grades always retain their last valid result during outages and restart; air_quality_stale marks retained readings.",
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
           "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
@@ -897,7 +897,7 @@
       },
       "air_quality_source_rules": {
         "title": "Per-source boundaries and grades",
-        "description": "Select and edit each source independently. Other profiles are preserved. Continue and save the final entity form to apply. Presets are editable display bands, not health standards.",
+        "description": "Select and edit each source independently. Other profiles are preserved. Continue and save the final entity form to apply. Presets are editable display bands, not health standards. Floor area does not scale concentration boundaries. HCHO and TVOC mass defaults have stricter upper bands; TVOC mass has more permissive lower bands.",
         "data": {
           "source": "Source to configure",
           "action": "Action"
@@ -1050,7 +1050,7 @@
           "platform": "Home Assistant entity domain. Submit once after changing it to load the domain-specific controls and Jinja fields.",
           "initial_value": "Fallback state used before a template renders or when no value template is configured.",
           "initial_availability": "Initial availability used when no availability template is configured.",
-          "persistent": "Restore the last state after Home Assistant restarts. Disable it to return to the initial value.",
+          "persistent": "Restore the last state after Home Assistant restarts. Disable it to return to the initial value. Air-quality grades always retain their last valid result during outages and restart; air_quality_stale marks retained readings.",
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
           "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
@@ -1722,7 +1722,7 @@
           "platform": "Home Assistant entity domain. Submit once after changing it to load the domain-specific controls and Jinja fields.",
           "initial_value": "Fallback state used before a template renders or when no value template is configured.",
           "initial_availability": "Initial availability used when no availability template is configured.",
-          "persistent": "Restore the last state after Home Assistant restarts. Disable it to return to the initial value.",
+          "persistent": "Restore the last state after Home Assistant restarts. Disable it to return to the initial value. Air-quality grades always retain their last valid result during outages and restart; air_quality_stale marks retained readings.",
           "value_template": "Jinja template for the main entity state. Copying source entities generates a helper; an edited custom template is preserved during later source changes.",
           "availability_template": "Optional Jinja template that returns whether the virtual entity is available. Example expression (wrap it in Jinja delimiters): states(\"sensor.gateway\") not in [\"unknown\", \"unavailable\"] and is_state(\"input_boolean.enabled\", \"on\")",
           "source_entities_text": "Comma-separated or one entity ID per line. Changes trigger template updates.",
@@ -2643,7 +2643,7 @@
       },
       "air_quality_source_rules": {
         "title": "Per-source boundaries and grades",
-        "description": "Select and edit each source independently. Other profiles are preserved. Continue and save the final entity form to apply. Presets are editable display bands, not health standards.",
+        "description": "Select and edit each source independently. Other profiles are preserved. Continue and save the final entity form to apply. Presets are editable display bands, not health standards. Floor area does not scale concentration boundaries. HCHO and TVOC mass defaults have stricter upper bands; TVOC mass has more permissive lower bands.",
         "data": {
           "source": "Source to configure",
           "action": "Action"

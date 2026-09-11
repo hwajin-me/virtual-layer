@@ -10111,10 +10111,12 @@ async def test_air_quality_bridge_companion_updates_reloads_and_is_removed(hass,
     for grade in ("good", "fair", "moderate", "poor", "very_poor", "extremely_poor", "unknown", "good"):
         hass.states.async_set("sensor.aq_category_source", grade)
         await hass.async_block_till_done()
-        assert hass.states.get("air_quality.bridge_aq").state == grade
+        expected = "extremely_poor" if grade == "unknown" else grade
+        assert hass.states.get("air_quality.bridge_aq").state == expected
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
-        assert hass.states.get(bridge_id).state == grade
+        assert hass.states.get(bridge_id).state == expected
+        assert hass.states.get(bridge_id).attributes["air_quality_stale"] == (grade == "unknown")
         assert "unit_of_measurement" not in hass.states.get(bridge_id).attributes
     unique_id = bridge.unique_id
     assert await hass.config_entries.async_reload(entry.entry_id)
