@@ -648,7 +648,10 @@ def _async_remove_orphaned_diagnostic_registry_entries(hass, entry, entities) ->
         if DIAGNOSTIC_UNIQUE_ID_MARKER not in entity_entry.unique_id:
             continue
         generated_entity = active_generated_entities.get(entity_entry.unique_id)
-        if generated_entity is None:
+        if (generated_entity is None or (
+                isinstance(generated_entity.get(ATTR_ENTITY_ID), str)
+                and entity_entry.entity_id.split(".", 1)[0]
+                != generated_entity[ATTR_ENTITY_ID].split(".", 1)[0])):
             entity_registry.async_remove(entity_entry.entity_id)
             continue
 

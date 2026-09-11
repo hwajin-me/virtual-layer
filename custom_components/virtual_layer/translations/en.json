@@ -71,7 +71,7 @@
       },
       "entity": {
         "title": "Add Virtual Entity",
-        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed entity_id_aqi categorical sensor named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
+        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed air_quality.object_id_aqi entity named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged. matterbridge-hass 1.5.0 needs a separate sensor-domain compatibility entity.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",
@@ -1035,7 +1035,7 @@
       },
       "edit_entity": {
         "title": "Edit Virtual Entity",
-        "description": "Update this virtual entity and save the new configuration. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed entity_id_aqi categorical sensor named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
+        "description": "Update this virtual entity and save the new configuration. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed air_quality.object_id_aqi entity named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged. matterbridge-hass 1.5.0 needs a separate sensor-domain compatibility entity.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",
@@ -1707,7 +1707,7 @@
       },
       "entity": {
         "title": "Add Virtual Entity",
-        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed entity_id_aqi categorical sensor named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
+        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed air_quality.object_id_aqi entity named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged. matterbridge-hass 1.5.0 needs a separate sensor-domain compatibility entity.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",

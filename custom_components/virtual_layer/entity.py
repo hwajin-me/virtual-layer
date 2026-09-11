@@ -522,6 +522,11 @@ class VirtualEntity(RestoreEntity):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         state = await self.async_get_last_state()
+        if state is None and self._config.get("_aq_previous_entity_id"):
+            from homeassistant.helpers.restore_state import async_get
+            previous_id = self._config["_aq_previous_entity_id"]
+            stored = async_get(self.hass).last_states.get(previous_id)
+            state = stored.state if stored else self.hass.states.get(previous_id)
         if self._is_air_quality and state and state.state in AIR_QUALITY_LEVELS:
             self._aq_last_valid = state.state
             self._aq_last_valid_at = state.attributes.get("air_quality_last_valid_at") or state.last_updated.isoformat()
@@ -1401,7 +1406,8 @@ class VirtualEntity(RestoreEntity):
             return
         try:
             canonical = aq_options.generate(recipe)
-            generated = self._platform_domain == "sensor" and self._is_air_quality
+            generated = (self._is_air_quality
+                         and attributes.get("sensor_type") == "matter_air_quality")
             owns_value = generated or self._config.get(CONF_VALUE_TEMPLATE) == canonical
             owns_grade = self._config.get(CONF_NATIVE_TEMPLATES, {}).get("air_quality") == canonical
             if not (owns_value or owns_grade):

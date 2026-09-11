@@ -30,7 +30,7 @@ async def test_partial_sources_outage_reload_and_recovery(hass, tmp_path, monkey
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    target = "sensor.combined_pm25_aqi" if domain == "sensor" else "air_quality.combined_pm25"
+    target = "air_quality.combined_pm25_aqi" if domain == "sensor" else "air_quality.combined_pm25"
     assert hass.states.get(target).state in ("unknown", "unavailable")
 
     async def change(source, value):

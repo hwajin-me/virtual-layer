@@ -17,6 +17,46 @@ from custom_components.virtual_layer.const import (
 pytestmark = pytest.mark.integration
 
 
+async def test_legacy_sensor_aqi_migrates_domain_without_deleting_parent(hass, tmp_path, monkeypatch):
+    from homeassistant.core import State
+    from pytest_homeassistant_custom_component.common import mock_restore_cache
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "migration.json"))
+    hass.states.async_set("sensor.raw_co2", "1000", {"device_class": "carbon_dioxide", "unit_of_measurement": "ppm"})
+    record = {CONF_PLATFORM: "sensor", ATTR_ENTITY_ID: "sensor.room_co2", CONF_NAME: "Room CO2",
+              CONF_CLASS: "carbon_dioxide", CONF_UNIT_OF_MEASUREMENT: "ppm",
+              CONF_SOURCE_ENTITIES: ["sensor.raw_co2"],
+              CONF_VALUE_TEMPLATE: "{{ states('sensor.raw_co2') }}"}
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Air"},
+                            options={ATTR_DEVICES: {"Air": [record]}})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    registry = er.async_get(hass)
+    uid = registry.async_get("air_quality.room_co2_aqi").unique_id
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    registry.async_remove("air_quality.room_co2_aqi")
+    legacy = registry.async_get_or_create("sensor", COMPONENT_DOMAIN, uid,
+        suggested_object_id="room_co2_aqi", config_entry=entry)
+    registry.async_update_entity(legacy.entity_id, name="Custom AQ", icon="mdi:cloud")
+    mock_restore_cache(hass, [State(legacy.entity_id, "poor", {
+        "air_quality_last_valid_at": "2026-09-01T00:00:00+00:00", "air_quality_stale": True})])
+    hass.states.async_set("sensor.raw_co2", "unavailable")
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    migrated = registry.async_get("air_quality.room_co2_aqi")
+    assert migrated.unique_id == uid
+    assert migrated.name == "Custom AQ"
+    assert migrated.icon == "mdi:cloud"
+    assert registry.async_get(legacy.entity_id) is None
+    assert hass.states.get(legacy.entity_id) is None
+    assert registry.async_get("sensor.room_co2") is not None
+    assert hass.states.get("air_quality.room_co2_aqi").state == "poor"
+    assert hass.states.get("air_quality.room_co2_aqi").attributes["air_quality_stale"] is True
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert registry.async_get("air_quality.room_co2_aqi").unique_id == uid
+
+
 @pytest.mark.parametrize("device_class,name,eligible", [
     ("carbon_monoxide", "CO alarm", True), ("smoke", "Smoke alarm", True),
     ("gas", "Gas alarm", True), (None, "CO_DETECTOR 2 CO", True),
@@ -37,7 +77,7 @@ async def test_binary_air_alarm_companion(hass, tmp_path, monkeypatch, device_cl
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    companion = "sensor.virtual_alarm_aqi"
+    companion = "air_quality.virtual_alarm_aqi"
     if not eligible:
         assert hass.states.get(companion) is None
         return
@@ -69,7 +109,7 @@ async def test_binary_air_alarm_without_initial_response_is_not_good(hass, tmp_p
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    companion = hass.states.get("sensor.co_alarm_aqi")
+    companion = hass.states.get("air_quality.co_alarm_aqi")
     assert companion.state == "unknown"
     assert companion.attributes["air_quality_stale"] is True
 
@@ -95,7 +135,7 @@ async def test_classless_co_detector_zero_legacy_unit_survives_reload(hass, tmp_
         assert float(source.state) == 0
         assert source.attributes["unit_of_measurement"] == "ppm"
         assert source.attributes.get("device_class") is None
-        companion = hass.states.get(parent + "_aqi")
+        companion = hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi")
         assert companion is not None
         assert companion.state == "good"
         assert companion.attributes["air_quality_stale"] is False
@@ -125,26 +165,26 @@ async def test_unitless_composite_uses_its_value_with_consistent_source_units(ha
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.get(parent + "_aqi").state == ("unknown" if custom else expected)
+    assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == ("unknown" if custom else expected)
     assert "unit_of_measurement" not in hass.states.get(parent).attributes
     assert float(hass.states.get(parent).state) == sum(values) / 2
     if not custom:
-        assert hass.states.get(parent + "_aqi").attributes["air_quality_evaluation_basis"] == "combined_inherited_unit"
+        assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").attributes["air_quality_evaluation_basis"] == "combined_inherited_unit"
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
-        assert hass.states.get(parent + "_aqi").state == expected
+        assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == expected
         hass.states.async_set(sources[1], "unavailable")
         await hass.async_block_till_done()
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
-        assert hass.states.get(parent + "_aqi").state == expected
-        assert hass.states.get(parent + "_aqi").attributes["air_quality_stale"] is True
+        assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == expected
+        assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").attributes["air_quality_stale"] is True
         options = deepcopy(dict(entry.options))
         options[ATTR_DEVICES]["Room"][0][CONF_NATIVE_TEMPLATES]["unit_of_measurement"] = "{{ 'ppm' }}"
         hass.config_entries.async_update_entry(entry, options=options)
         await hass.async_block_till_done()
-        assert hass.states.get(parent + "_aqi").state == ("moderate" if quantity == "carbon_dioxide" else "fair")
-        assert hass.states.get(parent + "_aqi").attributes["air_quality_evaluation_basis"] == "configured"
+        assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == ("moderate" if quantity == "carbon_dioxide" else "fair")
+        assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").attributes["air_quality_evaluation_basis"] == "configured"
 
 
 @pytest.mark.parametrize("second_unit,parent_unit,expected", [
@@ -166,7 +206,7 @@ async def test_composite_unit_inheritance_does_not_guess_or_override(hass, tmp_p
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.composite_co2_aqi").state == expected
+    assert hass.states.get("air_quality.composite_co2_aqi").state == expected
     assert float(hass.states.get("sensor.composite_co2").state) == 1042.5
 
 
@@ -191,29 +231,29 @@ async def test_companion_recovers_empty_recipe_when_native_metadata_arrives(hass
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.get(parent + "_aqi").state == "unknown"
+    assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == "unknown"
     hass.states.async_set(source, "1093", {"unit_of_measurement": "ppm", "device_class": "carbon_dioxide"})
     await hass.async_block_till_done()
     await asyncio.sleep(0.1)
     await hass.async_block_till_done()
-    assert hass.states.get(parent + "_aqi").state == "moderate"
-    assert hass.states.get(parent + "_aqi").attributes["air_quality_logic"]["measurements"]
+    assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == "moderate"
+    assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").attributes["air_quality_logic"]["measurements"]
     assert hass.states.get(parent).state == "1093"
     assert entry.options[ATTR_DEVICES]["Room"][0] == original
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.get(parent + "_aqi").state == "moderate"
+    assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == "moderate"
     hass.states.async_set(source, "500", {"unit_of_measurement": "ppm", "device_class": "carbon_dioxide"})
     await hass.async_block_till_done()
     await asyncio.sleep(0.1)
     await hass.async_block_till_done()
-    assert hass.states.get(parent + "_aqi").state == "good"
+    assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == "good"
     hass.states.async_set(source, "500", {"unit_of_measurement": "m³", "device_class": "carbon_dioxide"})
     await hass.async_block_till_done()
     await asyncio.sleep(0.1)
     await hass.async_block_till_done()
-    assert hass.states.get(parent + "_aqi").state == "good"
-    assert hass.states.get(parent + "_aqi").attributes["air_quality_stale"] is True
+    assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == "good"
+    assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").attributes["air_quality_stale"] is True
 
 
 @pytest.mark.parametrize("quantity", ["pm4", "nitrous_oxide"])
@@ -227,7 +267,7 @@ async def test_documented_pollutant_companion_loads_with_custom_thresholds(hass,
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.get(parent + "_aqi").state == "good"
+    assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == "good"
     options = deepcopy(dict(entry.options))
     options[ATTR_DEVICES]["Room"][0]["air_quality_logic"] = {
         "mode": "automatic", "scope": "combined", "sources": [parent], "measurements": [{
@@ -235,11 +275,11 @@ async def test_documented_pollutant_companion_loads_with_custom_thresholds(hass,
             "thresholds": [0.1, 0.2, 0.3, 0.4, 0.5], "levels": list(LEVELS)}]}
     hass.config_entries.async_update_entry(entry, options=options)
     await hass.async_block_till_done()
-    assert hass.states.get(parent + "_aqi").state == "extremely_poor"
+    assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == "extremely_poor"
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     assert hass.states.get(parent).state == "3"
-    assert hass.states.get(parent + "_aqi").state == "extremely_poor"
+    assert hass.states.get(parent.replace("sensor.", "air_quality.", 1) + "_aqi").state == "extremely_poor"
 
 
 async def test_source_profile_edit_after_removed_platform_and_reload(hass, tmp_path, monkeypatch):
@@ -269,10 +309,10 @@ async def test_source_profile_edit_after_removed_platform_and_reload(hass, tmp_p
     hass.config_entries.async_update_entry(entry, options=options)
     await hass.async_block_till_done()
     assert hass.states.get("sensor.virtual_pm25").state == "25"
-    assert hass.states.get("sensor.virtual_pm25_aqi").state == "good"
+    assert hass.states.get("air_quality.virtual_pm25_aqi").state == "good"
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.virtual_pm25_aqi").state == "good"
+    assert hass.states.get("air_quality.virtual_pm25_aqi").state == "good"
     assert hass.states.get("sensor.physical").state == "25"
 
 
@@ -292,7 +332,7 @@ async def test_source_profile_edit_after_removed_platform_and_reload(hass, tmp_p
 async def test_existing_measurement_gets_live_companion_and_cleanup(hass, tmp_path, monkeypatch, quantity, unit, value, grade):
     monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "meta.json"))
     parent_id = f"sensor.virtual_{quantity}"
-    child_id = f"{parent_id}_aqi"
+    child_id = parent_id.replace("sensor.", "air_quality.", 1) + "_aqi"
     hass.states.async_set("sensor.physical", value)
     record = {
         CONF_PLATFORM: "sensor", ATTR_ENTITY_ID: parent_id,
@@ -327,7 +367,7 @@ async def test_existing_measurement_gets_live_companion_and_cleanup(hass, tmp_pa
     options = deepcopy(dict(entry.options))
     old_child_id = child_id
     parent_id = f"sensor.renamed_{quantity}"
-    child_id = parent_id + "_aqi"
+    child_id = parent_id.replace("sensor.", "air_quality.", 1) + "_aqi"
     options[ATTR_DEVICES]["Room"][0][ATTR_ENTITY_ID] = parent_id
     options[ATTR_DEVICES]["Room"][0][CONF_NAME] = f"Renamed {quantity}"
     hass.config_entries.async_update_entry(entry, options=options)
@@ -361,9 +401,9 @@ async def test_configured_aqi_id_wins_over_generated_companion(hass, tmp_path, m
     await hass.async_block_till_done()
     assert hass.states.get("sensor.pm25_aqi").state == "23"
 
-    children = [s for s in hass.states.async_all("sensor") if s.attributes.get("source_entity_id") == "sensor.pm25" and s.attributes.get("sensor_type") == "matter_air_quality"]
+    children = [s for s in hass.states.async_all("air_quality") if s.attributes.get("source_entity_id") == "sensor.pm25" and s.attributes.get("sensor_type") == "matter_air_quality"]
     assert len(children) == 1
-    assert children[0].entity_id != "sensor.pm25_aqi"
+    assert children[0].entity_id == "air_quality.pm25_aqi"
     assert children[0].state == "good"
     # A device-class change makes the source ineligible, cleaning up only its
     # generated companion even when its old name still contains PM2.5.
@@ -393,6 +433,6 @@ async def test_invalid_air_quality_metadata_does_not_block_device(hass, tmp_path
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert hass.states.get("sensor.legacy_pm25") is not None
-    assert hass.states.get("sensor.legacy_pm25_aqi") is None
-    assert hass.states.get("sensor.valid_pm1_aqi").state == "good"
+    assert hass.states.get("air_quality.legacy_pm25_aqi") is None
+    assert hass.states.get("air_quality.valid_pm1_aqi").state == "good"
     assert not any(record.levelno >= 40 for record in caplog.records)

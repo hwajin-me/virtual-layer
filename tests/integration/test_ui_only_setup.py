@@ -10312,7 +10312,7 @@ async def test_new_measurement_flow_creates_aqi_without_air_quality_step(hass, t
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert hass.states.get("sensor.ui_pm25").state == "5"
-    assert hass.states.get("sensor.ui_pm25_aqi").state == ("very_poor" if scope else "good")
+    assert hass.states.get("air_quality.ui_pm25_aqi").state == ("very_poor" if scope else "good")
     assert hass.states.get("sensor.physical_pm25") is original
     if scope:
         from custom_components.virtual_layer.config_flow import _entity_form_defaults
@@ -10321,7 +10321,7 @@ async def test_new_measurement_flow_creates_aqi_without_air_quality_step(hass, t
         assert _entity_form_defaults(next(iter(entry.options[ATTR_DEVICES])), record)["air_quality_logic"] == record["air_quality_logic"]
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
-        assert hass.states.get("sensor.ui_pm25_aqi").state == "very_poor"
+        assert hass.states.get("air_quality.ui_pm25_aqi").state == "very_poor"
 
 
 @pytest.mark.parametrize("scope", ["sources", "leaves"])

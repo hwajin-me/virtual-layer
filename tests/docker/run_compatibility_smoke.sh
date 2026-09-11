@@ -596,8 +596,8 @@ async def test_config_flow_create_modify_runtime():
         assert created_state.attributes["state_class"] == "measurement"
         assert created_state.attributes["unit_of_measurement"] == "μg/m³"
         assert hass.states.get("sensor.docker_bad_metadata").state == "5"
-        assert hass.states.get("sensor.docker_bad_metadata_aqi") is None
-        aqi_state = hass.states.get("sensor.docker_flow_pm25_aqi")
+        assert hass.states.get("air_quality.docker_bad_metadata_aqi") is None
+        aqi_state = hass.states.get("air_quality.docker_flow_pm25_aqi")
         assert aqi_state.state == "fair", aqi_state
         assert "device_class" not in aqi_state.attributes
         assert "unit_of_measurement" not in aqi_state.attributes
@@ -628,9 +628,11 @@ async def test_config_flow_create_modify_runtime():
         assert created_registry_entry.device_id is not None
         original_unique_id = created_registry_entry.unique_id
         device_id = created_registry_entry.device_id
-        aqi_unique_id = registry.async_get("sensor.docker_flow_pm25_aqi").unique_id
+        aqi_unique_id = registry.async_get("air_quality.docker_flow_pm25_aqi").unique_id
         for suffix in ("info", "debug1", "debug2", "aqi"):
             companion_id = f"sensor.docker_flow_pm25_{suffix}"
+            if suffix == "aqi":
+                companion_id = companion_id.replace("sensor.", "air_quality.", 1)
             assert hass.states.get(companion_id) is not None
             companion_entry = registry.async_get(companion_id)
             assert companion_entry is not None
@@ -704,10 +706,13 @@ async def test_config_flow_create_modify_runtime():
         assert modified_registry_entry.unique_id == original_unique_id
         assert modified_registry_entry.device_id == device_id
         assert registry.async_get("sensor.docker_flow_pm25") is None
-        assert registry.async_get(f"{modified_id}_aqi").unique_id == aqi_unique_id
+        assert registry.async_get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").unique_id == aqi_unique_id
         for suffix in ("info", "debug1", "debug2", "aqi"):
-            assert registry.async_get(f"sensor.docker_flow_pm25_{suffix}") is None
+            old_domain = "air_quality" if suffix == "aqi" else "sensor"
+            assert registry.async_get(f"{old_domain}.docker_flow_pm25_{suffix}") is None
             companion_id = f"{modified_id}_{suffix}"
+            if suffix == "aqi":
+                companion_id = companion_id.replace("sensor.", "air_quality.", 1)
             companion_entry = registry.async_get(companion_id)
             assert companion_entry is not None
             assert companion_entry.device_id == device_id
@@ -724,7 +729,7 @@ async def test_config_flow_create_modify_runtime():
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
         assert float(hass.states.get(modified_id).state) == 60.0
-        assert hass.states.get(f"{modified_id}_aqi").state == "poor"
+        assert hass.states.get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").state == "poor"
 
         for source_id in source_ids:
             hass.states.async_set(
@@ -736,8 +741,8 @@ async def test_config_flow_create_modify_runtime():
         assert hass.states.get(modified_id).state == "unavailable"
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
-        assert hass.states.get(f"{modified_id}_aqi").state == "poor"
-        assert hass.states.get(f"{modified_id}_aqi").attributes["air_quality_stale"] is True
+        assert hass.states.get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").state == "poor"
+        assert hass.states.get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").attributes["air_quality_stale"] is True
 
         hass.states.async_set(
             source_ids[0],
@@ -759,11 +764,11 @@ async def test_config_flow_create_modify_runtime():
         assert recovered_state.attributes["available"] is True
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
-        assert hass.states.get(f"{modified_id}_aqi").state == "fair"
+        assert hass.states.get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").state == "fair"
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
-        assert registry.async_get(f"{modified_id}_aqi").unique_id == aqi_unique_id
-        assert hass.states.get(f"{modified_id}_aqi_aqi") is None
+        assert registry.async_get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").unique_id == aqi_unique_id
+        assert hass.states.get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi_aqi") is None
         # Exercise the new source-specific UI using the real HA FlowManager.
         result = await options_flow.async_init(entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY})
         result = await configure_flow(options_flow, result, {CONF_ENTITY_KEY: entity_key})
@@ -792,13 +797,13 @@ async def test_config_flow_create_modify_runtime():
         assert result["type"] == FlowResultType.CREATE_ENTRY
         await hass.async_block_till_done()
         assert float(hass.states.get(modified_id).state) == 25.0
-        assert hass.states.get(f"{modified_id}_aqi").state == "good"
-        assert hass.states.get(f"{modified_id}_aqi").attributes["air_quality_logic"]["source_roots"] == source_ids
-        assert registry.async_get(f"{modified_id}_aqi").unique_id == aqi_unique_id
+        assert hass.states.get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").state == "good"
+        assert hass.states.get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").attributes["air_quality_logic"]["source_roots"] == source_ids
+        assert registry.async_get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").unique_id == aqi_unique_id
         reloaded = await hass.config_entries.async_reload(entry.entry_id)
         assert reloaded, (entry.state, entry.reason)
         await hass.async_block_till_done()
-        assert hass.states.get(f"{modified_id}_aqi").state == "good"
+        assert hass.states.get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").state == "good"
         # Regression for the screenshot: a valid 0.003 mg/m3 measurement
         # must acquire a category on load, without rewriting the source unit.
         options = copy.deepcopy(dict(entry.options))
@@ -827,46 +832,46 @@ async def test_config_flow_create_modify_runtime():
         })
         hass.config_entries.async_update_entry(entry, options=options)
         await hass.async_block_till_done()
-        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "unknown"
+        assert hass.states.get("air_quality.docker_carbon_dioxide_aqi").state == "unknown"
         hass.states.async_set("sensor.docker_co2_input", "1093", {
             "device_class": "carbon_dioxide", "unit_of_measurement": "ppm",
         })
         await hass.async_block_till_done()
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
-        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "moderate"
+        assert hass.states.get("air_quality.docker_carbon_dioxide_aqi").state == "moderate"
         # Missing readings retain the last grade, visibly marked stale, even
         # across a reload. A new valid reading clears the stale marker.
         hass.states.async_set("sensor.docker_co2_input", "unavailable")
         await hass.async_block_till_done()
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
-        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "moderate"
-        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").attributes["air_quality_stale"] is True
+        assert hass.states.get("air_quality.docker_carbon_dioxide_aqi").state == "moderate"
+        assert hass.states.get("air_quality.docker_carbon_dioxide_aqi").attributes["air_quality_stale"] is True
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
-        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "moderate"
+        assert hass.states.get("air_quality.docker_carbon_dioxide_aqi").state == "moderate"
         hass.states.async_set("sensor.docker_co2_input", "500", {
             "device_class": "carbon_dioxide", "unit_of_measurement": "ppm",
         })
         await hass.async_block_till_done()
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
-        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "good"
-        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").attributes["air_quality_stale"] is False
-        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").attributes["air_quality_logic"]["measurements"]
+        assert hass.states.get("air_quality.docker_carbon_dioxide_aqi").state == "good"
+        assert hass.states.get("air_quality.docker_carbon_dioxide_aqi").attributes["air_quality_stale"] is False
+        assert hass.states.get("air_quality.docker_carbon_dioxide_aqi").attributes["air_quality_logic"]["measurements"]
         for quantity in ("pm4", "nitrous_oxide"):
-            assert hass.states.get(f"sensor.docker_{quantity}_aqi").state == "good"
+            assert hass.states.get(f"air_quality.docker_{quantity}_aqi").state == "good"
         assert hass.states.get("sensor.docker_formaldehyde").state == "0.003"
         assert hass.states.get("sensor.docker_formaldehyde").attributes["unit_of_measurement"] == "mg/m3"
-        assert hass.states.get("sensor.docker_formaldehyde_aqi").state == "good"
+        assert hass.states.get("air_quality.docker_formaldehyde_aqi").state == "good"
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
-        assert hass.states.get("sensor.docker_formaldehyde_aqi").state == "good"
+        assert hass.states.get("air_quality.docker_formaldehyde_aqi").state == "good"
         for quantity in ("pm4", "nitrous_oxide"):
             assert hass.states.get(f"sensor.docker_{quantity}").state == "3"
-            assert hass.states.get(f"sensor.docker_{quantity}_aqi").state == "good"
-        assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "good"
+            assert hass.states.get(f"air_quality.docker_{quantity}_aqi").state == "good"
+        assert hass.states.get("air_quality.docker_carbon_dioxide_aqi").state == "good"
         hass.states.async_set("sensor.docker_co_raw", "6", {
             "device_class": "carbon_monoxide", "unit_of_measurement": "ppm",
         })
@@ -899,27 +904,27 @@ async def test_config_flow_create_modify_runtime():
         })
         hass.config_entries.async_update_entry(entry, options=options)
         await hass.async_block_till_done()
-        assert hass.states.get("sensor.docker_carbon_monoxide_aqi").state == "fair"
-        assert hass.states.get("sensor.docker_carbon_monoxide_aqi").attributes["air_quality_evaluation_basis"] == "combined_inherited_unit"
-        assert hass.states.get("sensor.docker_composite_co2_aqi").state == "moderate"
+        assert hass.states.get("air_quality.docker_carbon_monoxide_aqi").state == "fair"
+        assert hass.states.get("air_quality.docker_carbon_monoxide_aqi").attributes["air_quality_evaluation_basis"] == "combined_inherited_unit"
+        assert hass.states.get("air_quality.docker_composite_co2_aqi").state == "moderate"
         assert "unit_of_measurement" not in hass.states.get("sensor.docker_carbon_monoxide").attributes
-        assert hass.states.get("sensor.docker_co_detector_2_co_aqi").state == "good"
+        assert hass.states.get("air_quality.docker_co_detector_2_co_aqi").state == "good"
         assert hass.states.get("sensor.docker_co_detector_2_co").attributes["unit_of_measurement"] == "ppm"
         assert hass.states.get("sensor.docker_co_detector_2_co").attributes.get("device_class") is None
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
-        assert hass.states.get("sensor.docker_carbon_monoxide_aqi").state == "fair"
-        assert hass.states.get("sensor.docker_co_detector_2_co_aqi").state == "good"
+        assert hass.states.get("air_quality.docker_carbon_monoxide_aqi").state == "fair"
+        assert hass.states.get("air_quality.docker_co_detector_2_co_aqi").state == "good"
         assert float(hass.states.get("sensor.docker_co_detector_2_co").state) == 0
-        assert hass.states.get("sensor.docker_composite_co2_aqi").state == "moderate"
-        assert hass.states.get("sensor.docker_co_alarm_aqi").state == "good"
+        assert hass.states.get("air_quality.docker_composite_co2_aqi").state == "moderate"
+        assert hass.states.get("air_quality.docker_co_alarm_aqi").state == "good"
         for value, expected in [("on", "poor"), ("unavailable", "poor"), ("off", "good")]:
             hass.states.async_set("binary_sensor.docker_co_alarm_input", value)
             await hass.async_block_till_done()
             await asyncio.sleep(0.1)
             await hass.async_block_till_done()
-            assert hass.states.get("sensor.docker_co_alarm_aqi").state == expected
-            assert hass.states.get("sensor.docker_co_alarm_aqi").attributes["air_quality_stale"] is (value == "unavailable")
+            assert hass.states.get("air_quality.docker_co_alarm_aqi").state == expected
+            assert hass.states.get("air_quality.docker_co_alarm_aqi").attributes["air_quality_stale"] is (value == "unavailable")
     finally:
         await hass.async_stop()
 

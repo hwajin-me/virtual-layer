@@ -71,7 +71,7 @@
       },
       "entity": {
         "title": "가상 엔티티 추가",
-        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 entity_id_aqi 등급 센서가 자동 생성되며 이름은 이름 Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
+        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 air_quality.object_id_aqi 등급 엔티티가 자동 생성되며 이름은 이름 Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지됩니다. matterbridge-hass 1.5.0 연동에는 별도의 sensor 도메인 호환 엔티티가 필요합니다.",
         "data": {
           "device_name": "장치 이름",
           "entity_name": "엔티티 이름",
@@ -1035,7 +1035,7 @@
       },
       "edit_entity": {
         "title": "가상 엔티티 수정",
-        "description": "가상 엔티티를 수정하고 새 구성을 저장합니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 entity_id_aqi 등급 센서가 자동 생성되며 이름은 이름 Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
+        "description": "가상 엔티티를 수정하고 새 구성을 저장합니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 air_quality.object_id_aqi 등급 엔티티가 자동 생성되며 이름은 이름 Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지됩니다. matterbridge-hass 1.5.0 연동에는 별도의 sensor 도메인 호환 엔티티가 필요합니다.",
         "data": {
           "device_name": "장치 이름",
           "entity_name": "엔티티 이름",
@@ -1707,7 +1707,7 @@
       },
       "entity": {
         "title": "가상 엔티티 추가",
-        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 entity_id_aqi 등급 센서가 자동 생성되며 이름은 이름 Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
+        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 air_quality.object_id_aqi 등급 엔티티가 자동 생성되며 이름은 이름 Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지됩니다. matterbridge-hass 1.5.0 연동에는 별도의 sensor 도메인 호환 엔티티가 필요합니다.",
         "data": {
           "device_name": "장치 이름",
           "entity_name": "엔티티 이름",

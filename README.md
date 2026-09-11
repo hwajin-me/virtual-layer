@@ -606,7 +606,12 @@ and clears invalid numeric template values to unknown instead of publishing NaN
 or infinity. Display precision must be a nonnegative integer.
 
 UI-managed virtual measurement sensors also receive an automatic companion on
-load: `sensor.<measurement_object_id>_aqi`, named `<measurement name> Air Quality`.
+load: `air_quality.<measurement_object_id>_aqi`, named `<measurement name> Air Quality`.
+Legacy automatically generated `sensor.*_aqi` registry entries migrate to this
+domain on reload; original measurement sensors and independently configured
+entities are preserved. Generated identity and registry name/icon overrides are
+retained. Automations referencing the old sensor ID need updating; Recorder
+history is not moved to the new ID automatically.
 
 When editing a sensor's configured unit (including a native unit template), a
 **Handle existing values after a unit change** step appears before saving.
@@ -669,8 +674,10 @@ Finish the source editor and save the final entity form to apply. Sensor recipes
 configure the managed `_aqi` companion without changing the parent's templates;
 combined-result profiles follow parent entity-ID changes. Existing custom Jinja
 remains governed by the selected helper update policy.
-Configure Matterbridge Air Quality Regex to match the actual new IDs (for example
-`^sensor\.bedroom_pm25_aqi$`); adding `_aqi` does not configure the bridge itself.
+These automatic companions now use the `air_quality` domain. matterbridge-hass
+1.5.0's sensor-based mapping cannot be enabled for them by a regex change alone.
+For that mapping, explicitly configure a separate Air Quality entity and use its
+existing `sensor.*_air_quality` compatibility companion described below.
 The automatic AQI conversion mirrors matterbridge-hass 1.5.0's 0–500 linear
 mapping (`floor(AQI / 100 + 0.5)` selects one of six categories), not a health
 standard or a concentration-to-AQI formula. Values outside 0–500 are unknown.
