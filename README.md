@@ -577,6 +577,13 @@ outages, invalid results and reloads, regardless of the legacy persistence flag.
 Available sources continue to be classified with the recipe's missing-value
 policy (normally skip); cached stale grades do not outvote live sources.
 Fresh valid results replace the retained grade and clear the stale flag. A bridge
+inherits upstream partial coverage and retained timestamps. Template failures
+retain the previous grade with `air_quality_fallback_reason: template_error`;
+other reasons include `sources_unavailable`, `availability_false`, and
+`invalid_result`. Reevaluating unchanged inputs does not advance the last-valid
+timestamp. Late metadata can repair owned automatic helpers on explicit
+air_quality entities and per-source companions too; customized formulas are
+not replaced. A bridge
 that ignores these diagnostic attributes may display an old grade without a
 freshness warning; do not treat a retained good grade as proof of safe air.
 The [Sensor entity contract](https://developers.home-assistant.io/docs/core/entity/sensor/)

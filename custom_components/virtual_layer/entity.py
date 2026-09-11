@@ -47,6 +47,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import *
 from .air_quality_options import LEVELS as AIR_QUALITY_LEVELS
+from . import air_quality_options as aq_options
 from .device_metadata import configuration_url_or_none
 
 _LOGGER = logging.getLogger(__name__)
@@ -1392,10 +1393,40 @@ class VirtualEntity(RestoreEntity):
             return False
         raise ValueError(f"Expected a boolean, got {value!r}")
 
+    def _refresh_air_quality_defaults(self):
+        """Repair only owned helpers; never replace a user's custom formula."""
+        attributes = self._config.get(CONF_ATTRIBUTES, {})
+        recipe = attributes.get("air_quality_logic") or self._config.get(CONF_AIR_QUALITY_LOGIC)
+        if not isinstance(recipe, dict) or recipe.get("mode") != "automatic" or self.hass is None:
+            return
+        try:
+            canonical = aq_options.generate(recipe)
+            generated = self._platform_domain == "sensor" and self._is_air_quality
+            owns_value = generated or self._config.get(CONF_VALUE_TEMPLATE) == canonical
+            owns_grade = self._config.get(CONF_NATIVE_TEMPLATES, {}).get("air_quality") == canonical
+            if not (owns_value or owns_grade):
+                return
+            sources = recipe.get("sources", [])
+            live_recipe = aq_options.automatic_recipe(
+                sources, [self.hass.states.get(source) for source in sources], previous=recipe,
+            )
+            if live_recipe != getattr(self, "_aq_runtime_recipe", None):
+                helper = aq_options.generate(live_recipe)
+                if owns_value:
+                    self._value_template = helper
+                if owns_grade:
+                    self._native_templates["air_quality"] = helper
+                self._virtual_attributes["air_quality_logic"] = live_recipe
+                self._aq_runtime_recipe = live_recipe
+        except (TypeError, ValueError, vol.Invalid):
+            # Keep malformed legacy records loadable; fallback handles no grade.
+            return
+
     @callback
     def _apply_templates(self):
         if not self._is_air_quality:
             return self._apply_current_templates()
+        self._refresh_air_quality_defaults()
         missing = []
         source_states = []
         upstream_missing = []

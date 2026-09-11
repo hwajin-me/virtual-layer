@@ -42,7 +42,7 @@ from homeassistant.const import (
     UnitOfVolume,
     UnitOfVolumeFlowRate,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -57,7 +57,6 @@ from . import (
 from .const import *
 from .const import generic_entity_options
 from .entity import VirtualEntity, virtual_schema
-from . import air_quality_options as aq_options
 
 try:
     from homeassistant.const import UnitOfDensity, UnitOfRatio
@@ -251,36 +250,6 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             config.get(CONF_INITIAL_VALUE),
         )
         self._attr_state = self._attr_native_value
-
-    @callback
-    def _apply_templates(self):
-        # Generated companions can be constructed before a parent's native
-        # unit/device-class helpers have run. Complete missing defaults from
-        # live metadata on source events, rather than freezing an empty recipe.
-        unique_id = str(self._config.get(ATTR_UNIQUE_ID, ""))
-        attributes = self._config.get(CONF_ATTRIBUTES, {})
-        recipe = attributes.get("air_quality_logic")
-        if (
-            unique_id.endswith(DIAGNOSTIC_UNIQUE_ID_MARKER + "aqi")
-            and attributes.get("sensor_type") == "matter_air_quality"
-            and isinstance(recipe, dict)
-            and recipe.get("mode") == "automatic"
-            and self.hass is not None
-        ):
-            try:
-                sources = recipe.get("sources", [])
-                live_recipe = aq_options.automatic_recipe(
-                    sources, [self.hass.states.get(source) for source in sources],
-                    previous=recipe,
-                )
-                if live_recipe != getattr(self, "_aq_runtime_recipe", None):
-                    self._value_template = aq_options.generate(live_recipe)
-                    self._virtual_attributes["air_quality_logic"] = live_recipe
-                    self._aq_runtime_recipe = live_recipe
-            except (TypeError, ValueError, vol.Invalid):
-                # A damaged legacy recipe must not prevent other entities loading.
-                pass
-        return super()._apply_templates()
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)

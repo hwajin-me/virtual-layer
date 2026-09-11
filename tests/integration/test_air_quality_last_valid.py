@@ -104,3 +104,26 @@ async def test_template_failure_retains_history_and_recovers(hass, tmp_path, mon
     await hass.async_block_till_done()
     assert hass.states.get(target).attributes["air_quality_stale"] is False
     assert hass.states.get(target).attributes["air_quality_fallback_reason"] is None
+
+
+@pytest.mark.parametrize("custom", [False, True])
+async def test_late_metadata_repairs_parent_and_per_source_helpers_only(hass, tmp_path, monkeypatch, custom):
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "late-all.json"))
+    source = "sensor.late_co2"
+    hass.states.async_set(source, "1093")
+    recipe = {"mode": "automatic", "sources": [source], "measurements": [], "per_source": True}
+    helper = "{{ 'fair' }}" if custom else aq.generate(recipe)
+    record = {"platform": "air_quality", "entity_id": "air_quality.whole", "name": "Whole",
+              "source_entities": [source], "air_quality_logic": recipe,
+              "native_templates": {"air_quality": helper}}
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={"group_name": "lateall"}, options={"devices": {"Room": [record]}})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    hass.states.async_set(source, "1093", {"device_class": "carbon_dioxide", "unit_of_measurement": "ppm"})
+    await hass.async_block_till_done()
+    await asyncio.sleep(0.1)
+    await hass.async_block_till_done()
+    assert hass.states.get("air_quality.whole").state == ("fair" if custom else "moderate")
+    assert hass.states.get("sensor.whole_sensor_late_co2_air_quality").state == "moderate"
+    assert entry.options["devices"]["Room"][0]["native_templates"]["air_quality"] == helper

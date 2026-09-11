@@ -1173,6 +1173,7 @@ class BlendedCfg:
                             "virtual_entity_id": entity_id,
                             "source_entity_id": source_id,
                             "sensor_type": "matter_air_quality",
+                            "air_quality_logic": child_recipe,
                         },
                     })
         if platform == "vacuum" and entity.get("battery_level") is not None:
