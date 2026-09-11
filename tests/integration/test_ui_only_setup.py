@@ -1015,7 +1015,8 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
     )
     sensor._apply_templates()
     assert sensor.native_value == "13.0"
-    assert sensor.options == ["13.0"]
+    # Numeric energy sensors must not expose enum options.
+    assert sensor.options is None
     assert sensor.suggested_display_precision == 2
 
     hass.states.async_set(
@@ -10359,6 +10360,11 @@ async def test_direct_air_quality_source_profile_persists_and_drives_companion(h
     assert hass.states.get("air_quality.ui_profile").state == "good"
     assert hass.states.get("sensor.ui_profile_air_quality").state == "good"
     assert hass.states.get("sensor.ui_profile_sensor_physical_pm25_air_quality").state == "good"
+    if scope == "leaves":
+        record = next(record for records in entry.options[ATTR_DEVICES].values() for record in records
+                      if record.get(ATTR_ENTITY_ID) == "air_quality.ui_profile")
+        assert record["air_quality_logic"]["source_roots"] == ["sensor.combined_pm25"]
+        assert record["air_quality_logic"]["sources"] == ["sensor.physical_pm25"]
     assert hass.states.get("sensor.physical_pm25") is original
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()

@@ -751,7 +751,7 @@ async def test_config_flow_create_modify_runtime():
         result = await configure_flow(options_flow, result, values)
         assert result["step_id"] == "air_quality_scope"
         result = await configure_flow(options_flow, result, {
-            "scope": "sources", "sources": source_ids, "missing": "skip"})
+            "scope": "leaves", "sources": source_ids, "missing": "skip"})
         assert result["step_id"] == "air_quality_source_rules"
         result = await configure_flow(options_flow, result, {"source": source_ids[0], "action": "edit"})
         assert result["step_id"] == "edit_air_quality_setup"
@@ -767,11 +767,41 @@ async def test_config_flow_create_modify_runtime():
         await hass.async_block_till_done()
         assert float(hass.states.get(modified_id).state) == 25.0
         assert hass.states.get(f"{modified_id}_aqi").state == "good"
+        assert hass.states.get(f"{modified_id}_aqi").attributes["air_quality_logic"]["source_roots"] == source_ids
         assert registry.async_get(f"{modified_id}_aqi").unique_id == aqi_unique_id
         reloaded = await hass.config_entries.async_reload(entry.entry_id)
         assert reloaded, (entry.state, entry.reason)
         await hass.async_block_till_done()
         assert hass.states.get(f"{modified_id}_aqi").state == "good"
+        # Regression for the screenshot: a valid 0.003 mg/m3 measurement
+        # must acquire a category on load, without rewriting the source unit.
+        options = copy.deepcopy(dict(entry.options))
+        next(iter(options["devices"].values())).append({
+            "platform": "sensor", "entity_id": "sensor.docker_formaldehyde",
+            "name": "Docker Formaldehyde", "class": "formaldehyde",
+            "unit_of_measurement": "mg/m3", "initial_value": "0.003",
+            "persistent": False,
+        })
+        for quantity in ("pm4", "nitrous_oxide"):
+            next(iter(options["devices"].values())).append({
+                "platform": "sensor", "entity_id": f"sensor.docker_{quantity}",
+                "name": quantity, "class": quantity,
+                "unit_of_measurement": "μg/m³", "initial_value": "3",
+                "persistent": False,
+            })
+        hass.config_entries.async_update_entry(entry, options=options)
+        await hass.async_block_till_done()
+        for quantity in ("pm4", "nitrous_oxide"):
+            assert hass.states.get(f"sensor.docker_{quantity}_aqi").state == "good"
+        assert hass.states.get("sensor.docker_formaldehyde").state == "0.003"
+        assert hass.states.get("sensor.docker_formaldehyde").attributes["unit_of_measurement"] == "mg/m3"
+        assert hass.states.get("sensor.docker_formaldehyde_aqi").state == "good"
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.docker_formaldehyde_aqi").state == "good"
+        for quantity in ("pm4", "nitrous_oxide"):
+            assert hass.states.get(f"sensor.docker_{quantity}").state == "3"
+            assert hass.states.get(f"sensor.docker_{quantity}_aqi").state == "good"
     finally:
         await hass.async_stop()
 

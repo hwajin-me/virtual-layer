@@ -602,7 +602,7 @@ def test_numeric_native_templates_reject_boolean_values(hass):
     with pytest.raises(ValueError, match="coordinates"):
         VirtualDeviceTracker._validated_coordinates(True, 127)
     with pytest.raises(ValueError, match="boolean"):
-        entities_and_fields[8][0].set_state(True)
+        entities_and_fields[8][0].set(True)
 
 
 async def test_numeric_services_reject_boolean_values():
@@ -3100,6 +3100,7 @@ def test_tracker_openable_and_sensor_templates_update_native_properties(hass):
                 "legacy",
                 **{
                     CONF_NATIVE_TEMPLATES: {
+                        "device_class": "{{ 'enum' }}",
                         "options": "{{ ['eco', 'turbo'] }}",
                         "state": "{{ 'eco' }}",
                         "unit_of_measurement": "{{ 'mode' }}",
@@ -3124,7 +3125,7 @@ def test_tracker_openable_and_sensor_templates_update_native_properties(hass):
     assert lock.is_open is True
     assert sensor.options == ["eco", "turbo"]
     assert sensor.native_value == "eco"
-    assert sensor.native_unit_of_measurement == "mode"
+    assert sensor.native_unit_of_measurement is None
 
 
 def test_generic_domain_native_templates_follow_domain_state_contracts(hass):

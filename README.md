@@ -547,6 +547,28 @@ their thresholds come from the saved automatic profiles. For independent manual
 rules, create a separate Air Quality entity with that single source instead.
 The integration does not change Matterbridge endpoint grouping or regex settings.
 
+The official [Air quality integration](https://www.home-assistant.io/integrations/air_quality/)
+also provides pollutant threshold and smoke/gas/CO detection automation building
+blocks. These do not imply that a cleared smoke alarm is a measured good-air
+grade. Preserve native numeric measurement sensors and binary alarm sensors for
+those automations; generated categorical companions serve a separate purpose.
+All named quantities in the air-quality measurement selector have editable
+starter profiles, including PM4 and nitrous oxide (`nitrous_oxide`, N₂O).
+These are instantaneous display categories, not a health or exposure assessment:
+`good` does not certify safe air. PM4 uses explicitly labelled PM2.5-shaped proxy
+boundaries of 9, 35.4, 55.4, 125.4 and 225.4 μg/m³. N₂O uses local display
+boundaries of 1000, 2000, 4000, 8000 and 16000 μg/m³, unrelated to occupational
+exposure limits. Neither profile is an official pollutant-specific health scale.
+Mass-unit equivalents are converted automatically; gas mass-to-ppm conversion is
+not guessed. Unsupported units, missing readings and unidentified quantities
+remain unknown. Existing custom thresholds are retained. Existing managed
+companions without a custom recipe pick up these defaults on reload.
+The [Sensor entity contract](https://developers.home-assistant.io/docs/core/entity/sensor/)
+distinguishes numeric AQI from textual categories, date from timestamp/uptime,
+and numeric state classes from enum states. Virtual Layer preserves these types
+and clears invalid numeric template values to unknown instead of publishing NaN
+or infinity. Display precision must be a nonnegative integer.
+
 UI-managed virtual measurement sensors also receive an automatic companion on
 load: `sensor.<measurement_object_id>_aqi`, named `<measurement name> Air Quality`.
 This applies to both newly created and existing Virtual Layer sensors with a
@@ -560,6 +582,12 @@ generated ID instead of overwriting a user entity. Their states are category
 strings, **not numeric AQI**; no `aqi` device class or concentration unit is set.
 Recognized but unsupported units produce `unknown`, not a fabricated good grade.
 The applied recipe is visible in the companion's `air_quality_logic` attribute.
+Equivalent unit spellings (`mg/m3`, `mg/m^3`, `mg/m³`, `ug/m3`, `µg/m3`,
+`μg/m³`, and `Bq/m3`) and surrounding whitespace are normalized consistently
+in recipes, flow validation, concentration helpers, and live category templates.
+The source sensor's unit is not rewritten. SI prefix case remains significant:
+`Mg` is not `mg`. A bare `m³`, an area unit, or an unsupported concentration
+unit remains unknown instead of being guessed into a healthy category.
 Existing explicit Air Quality entities and their `_air_quality` IDs are retained.
 Both sensor and Air Quality forms expose **Configure air quality per source**.
 The original measurement sensor is never converted or overwritten. Choose the
@@ -567,7 +595,11 @@ combined virtual measurement, each selected source, or the deduplicated leaf
 sources of configured Virtual Layer composites. Combined measurements retain
 the sensor's configured reducer; independent sources use the worst valid grade.
 Leaf expansion is explicit and saved as a snapshot; reopen the scope step after
-changing the upstream topology. Cyclic or excessive graphs are rejected.
+changing the upstream topology. The selected composite roots are retained
+separately from the resolved leaves, so submitting that step expands the current
+dependencies again while retaining profiles for unchanged leaves. Older recipes
+that stored only leaves keep their snapshot; select the intended composites once
+to enable this refresh behavior. Cyclic or excessive graphs are rejected.
 
 Select a source by name and entity ID to edit its unit, optional attribute, five
 boundaries, six grade assignments, and calibration formula. Other source profiles

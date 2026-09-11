@@ -1816,10 +1816,10 @@ _SENSOR_CONVERSION_PROPERTIES = {
 _SENSOR_UNIT_CONVERSIONS = (
     (
         "μg/m³",
-        {"µg/m³": 1.0, "μg/m³": 1.0, "ug/m3": 1.0, "mg/m³": 1000.0, "mg/m3": 1000.0},
+        {"μg/m³": 1.0, "mg/m³": 1000.0},
     ),
     ("ppm", {"ppm": 1.0, "ppb": 0.001}),
-    ("Bq/m³", {"bq/m³": 1.0, "bq/m3": 1.0, "pci/l": 37.0}),
+    ("Bq/m³", {"Bq/m³": 1.0, "pCi/L": 37.0}),
 )
 
 
@@ -1827,11 +1827,10 @@ def _sensor_unit_conversion_profile(
     units: Collection[str | None],
 ) -> tuple[str, tuple[float, ...]] | None:
     """Return a canonical compatible unit and per-source scale factors."""
-    normalized = tuple(str(unit).strip() if unit else "" for unit in units)
-    casefolded = tuple(unit.casefold() for unit in normalized)
+    normalized = tuple(aq_options.normalize_unit(unit) if isinstance(unit, str) else "" for unit in units)
     for canonical, factors in _SENSOR_UNIT_CONVERSIONS:
-        if all(unit in factors for unit in casefolded):
-            return canonical, tuple(factors[unit] for unit in casefolded)
+        if all(unit in factors for unit in normalized):
+            return canonical, tuple(factors[unit] for unit in normalized)
     if len(set(normalized)) == 1:
         return normalized[0], tuple(1.0 for _unit in normalized)
     return None
@@ -6224,11 +6223,11 @@ def _native_source_template(
             # only compatible mass units; ppm needs gas-specific assumptions.
             if property_name != "air_quality_index":
                 factor = (
-                    "{'μg/m³': 1, 'µg/m³': 1, 'mg/m³': 1000}.get("
-                    f"state_attr({entity_id!r}, 'unit_of_measurement'))"
+                    "{'μg/m³': 1, 'mg/m³': 1000}.get("
+                    + aq_options.source_unit_expression(repr(entity_id)) + ")"
                 )
             else:
-                factor = f"(1 if state_attr({entity_id!r}, 'unit_of_measurement') in [none, '', 'AQI'] else none)"
+                factor = "(1 if " + aq_options.source_unit_expression(repr(entity_id)) + " in ['', 'AQI'] else none)"
             # Exact named attributes already use the native canonical unit;
             # their unit must not be inferred from an unrelated primary state.
             factor = f"(({factor}) if {matches} else 1)"
@@ -10065,6 +10064,19 @@ def _log_unhandled_flow_errors(cls):
 class _AirQualityLogicFlow:
     """Share recipe steps across initial setup, options-add and options-edit."""
 
+    def _aq_automatic_recipe(self, recipe):
+        """Use the same prefill for creation, reset and final regeneration."""
+        recipe = aq_options.automatic_recipe(recipe["sources"],
+            [self.hass.states.get(item) for item in recipe["sources"]], recipe)
+        if recipe.get("scope") == "combined" and not recipe["measurements"]:
+            originals = _stored_entity_ids(self._entity_defaults.get(CONF_SOURCE_ENTITIES_TEXT))
+            values, _ = aq_options.prefill_measurement(
+                {"mode": "measurement", "sources": recipe["sources"]},
+                [self.hass.states.get(item) for item in originals])
+            if "thresholds" in values:
+                recipe["measurements"] = [aq_options.normalize(values)]
+        return recipe
+
     async def async_step_air_quality_scope(self, user_input=None):
         """Choose explicit measurement-result or independent-source semantics."""
         pending = self._aq_pending
@@ -10076,7 +10088,11 @@ class _AirQualityLogicFlow:
                 scope = user_input["scope"]
                 if scope not in scopes:
                     raise vol.Invalid("Invalid scope")
-                sources = list(user_input.get("sources", pending.get("sources", [])))
+                sources = user_input.get("sources", pending.get("source_roots", pending.get("sources", [])))
+                if not isinstance(sources, list):
+                    raise vol.Invalid("Invalid sources")
+                sources = aq_options.normalize({"mode": "automatic", "sources": sources})["sources"]
+                roots = list(sources)
                 if scope == "combined":
                     defaults = self._entity_defaults
                     parent_id = defaults.get(ATTR_ENTITY_ID) or _default_virtual_entity_id_for_sources(
@@ -10092,28 +10108,22 @@ class _AirQualityLogicFlow:
                             if not isinstance(records, list):
                                 continue
                             for record in records:
-                                if isinstance(record, Mapping) and isinstance(record.get(ATTR_ENTITY_ID), str):
-                                    graph[record[ATTR_ENTITY_ID]] = _stored_entity_ids(record.get(CONF_SOURCE_ENTITIES))
+                                if isinstance(record, Mapping) and (record_id := _virtual_entity_id(record)):
+                                    graph[record_id] = _stored_entity_ids(record.get(CONF_SOURCE_ENTITIES))
                     sources = aq_options.expand_sources(sources, graph)
                 if not sources:
                     raise vol.Invalid("Select a source")
                 profiles = [item for item in pending.get("measurements", [])
                             if item.get("sources", [None])[0] in sources]
-                self._aq_pending = aq_options.automatic_recipe(sources,
-                    [self.hass.states.get(item) for item in sources],
-                    {**pending, "measurements": profiles, "scope": scope, "missing": user_input.get("missing", "skip")})
-                if scope == "combined" and not self._aq_pending["measurements"]:
-                    originals = _stored_entity_ids(self._entity_defaults.get(CONF_SOURCE_ENTITIES_TEXT))
-                    states = [self.hass.states.get(item) for item in originals]
-                    values, _ = aq_options.prefill_measurement({"mode": "measurement", "sources": sources}, states)
-                    if "thresholds" in values:
-                        self._aq_pending["measurements"] = [aq_options.normalize(values)]
+                self._aq_pending = self._aq_automatic_recipe({**pending, "sources": sources,
+                    "source_roots": roots, "measurements": profiles, "scope": scope,
+                    "missing": user_input.get("missing", "skip")})
                 return await self.async_step_air_quality_source_rules()
             except (KeyError, TypeError, ValueError, vol.Invalid):
                 errors["base"] = "invalid_air_quality_logic"
         return self.async_show_form(step_id="air_quality_scope", errors=errors, data_schema=vol.Schema({
             vol.Required("scope", default=pending.get("scope", "combined" if sensor else "sources")): aq_options.choice(scopes, "air_quality_scope"),
-            vol.Optional("sources", default=pending.get("sources", [])): selector.EntitySelector(selector.EntitySelectorConfig(multiple=True)),
+            vol.Optional("sources", default=pending.get("source_roots", pending.get("sources", []))): selector.EntitySelector(selector.EntitySelectorConfig(multiple=True)),
             vol.Required("missing", default=pending.get("missing", "skip")): aq_options.choice(("skip", "unknown"), "air_quality_missing"),
         }))
 
@@ -10132,7 +10142,7 @@ class _AirQualityLogicFlow:
                 profile = next((item for item in pending.get("measurements", []) if item["sources"] == [source]), None)
                 if action == "reset":
                     pending["measurements"] = [item for item in pending.get("measurements", []) if item["sources"] != [source]]
-                    self._aq_pending = aq_options.automatic_recipe(pending["sources"], [self.hass.states.get(item) for item in pending["sources"]], pending)
+                    self._aq_pending = self._aq_automatic_recipe(pending)
                 else:
                     self._aq_profile_parent = pending
                     self._aq_profile_source = source
@@ -10198,7 +10208,7 @@ class _AirQualityLogicFlow:
                 for state in source_states
             ):
                 unit = source_states[0].attributes.get("unit_of_measurement") or "unitless"
-                unit = str(unit).replace("µ", "μ")
+                unit = aq_options.normalize_unit(unit)
                 quantities = {state.attributes.get("device_class") for state in source_states}
                 recipe = {"mode": "measurement", "unit": unit if unit in aq_options.UNITS else "unitless",
                           "quantity": next(iter(quantities)) if len(quantities) == 1 and next(iter(quantities)) in aq_options.QUANTITIES[1:] else "any"}
@@ -10328,7 +10338,7 @@ class _AirQualityLogicFlow:
                         "pCi/L": {"Bq/m³", "pCi/L"},
                     }
                     if any(
-                        str(state.attributes.get("unit_of_measurement") or "").replace("µ", "μ")
+                        aq_options.normalize_unit(state.attributes.get("unit_of_measurement"))
                         not in unit_groups[sources["unit"]]
                         for entity_id in sources["sources"]
                         if (state := self.hass.states.get(entity_id)) is not None
@@ -10457,11 +10467,7 @@ class _AirQualityLogicFlow:
             recipe = {**recipe, "per_source": defaults.get(
                 "air_quality_per_source", recipe.get("per_source", False)
             )}
-            recipe = aq_options.automatic_recipe(
-                recipe["sources"],
-                [self.hass.states.get(entity_id) for entity_id in recipe["sources"]],
-                recipe,
-            )
+            recipe = self._aq_automatic_recipe(recipe)
             if defaults.get(CONF_PLATFORM) == "air_quality" and defaults.get("configure_air_quality_sources"):
                 defaults[CONF_SOURCE_ENTITIES_TEXT] = "\n".join(recipe["sources"])
         generated = aq_options.generate(recipe)

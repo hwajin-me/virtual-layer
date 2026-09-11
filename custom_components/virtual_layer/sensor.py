@@ -4,6 +4,7 @@ This component provides support for a virtual sensor.
 """
 
 import logging
+import math
 from collections.abc import Callable
 from datetime import date, datetime
 
@@ -131,6 +132,7 @@ UNITS_OF_MEASUREMENT = {
     SensorDeviceClass.PM1: CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,  # µg/m³ of PM1
     SensorDeviceClass.PM10: CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,  # µg/m³ of PM10
     SensorDeviceClass.PM25: CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,  # µg/m³ of PM2.5
+    "pm4": CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     SensorDeviceClass.SIGNAL_STRENGTH: SIGNAL_STRENGTH_DECIBELS,  # signal strength (dB/dBm)
     SensorDeviceClass.SULPHUR_DIOXIDE: CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,  # µg/m³ of sulphur dioxide
     SensorDeviceClass.TEMPERATURE: UnitOfTemperature.CELSIUS,
@@ -284,7 +286,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             ):
                 return None
             return value
-        if self._attr_device_class is SensorDeviceClass.TIMESTAMP:
+        if self._attr_device_class in (SensorDeviceClass.TIMESTAMP, "uptime"):
             if hasattr(value, "tzinfo"):
                 parsed = value
             else:
@@ -293,12 +295,21 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                 raise ValueError(f"Invalid timestamp sensor value: {value}")
             return dt_util.as_utc(parsed)
         if self._attr_device_class is SensorDeviceClass.DATE:
+            if isinstance(value, datetime):
+                return value.date()
             if isinstance(value, date):
                 return value
             try:
                 return date.fromisoformat(str(value))
             except ValueError as err:
                 raise ValueError(f"Invalid date sensor value: {value}") from err
+        if self._attr_device_class not in NON_NUMERIC_DEVICE_CLASSES and (
+                self._attr_state_class is not None
+                or self._attr_native_unit_of_measurement is not None
+                or (isinstance(self._attr_device_class, SensorDeviceClass)
+                    and self._attr_device_class not in NON_NUMERIC_DEVICE_CLASSES)):
+            if not math.isfinite(float(value)):
+                raise ValueError("Numeric sensor value must be finite")
         return value
 
     def _update_attributes(self):
@@ -325,7 +336,9 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         self._schedule_state_update()
 
     def set_state(self, value) -> None:
-        self.set(value)
+        # Invalid template readings must clear the previous measurement.
+        # Explicit service writes use set(), which rejects invalid values.
+        self.set(self._safe_native_value(value))
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         aliases = {
@@ -362,7 +375,10 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                 )
             else:
                 try:
-                    value = int(value)
+                    number = float(value)
+                    if not math.isfinite(number) or not number.is_integer():
+                        raise ValueError("Precision must be an integer")
+                    value = int(number)
                 except (TypeError, ValueError, OverflowError) as err:
                     raise ValueError(
                         "suggested_display_precision must be a non-negative integer"
@@ -386,6 +402,8 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:
+        if self._attr_device_class != SensorDeviceClass.ENUM:
+            self._attr_options = None
         if self._attr_device_class in NON_NUMERIC_DEVICE_CLASSES:
             self._attr_native_unit_of_measurement = None
             self._attr_suggested_unit_of_measurement = None

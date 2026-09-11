@@ -16,6 +16,32 @@ from custom_components.virtual_layer.const import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("quantity", ["pm4", "nitrous_oxide"])
+async def test_documented_pollutant_companion_loads_with_custom_thresholds(hass, tmp_path, monkeypatch, quantity):
+    from custom_components.virtual_layer.air_quality_options import LEVELS
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "documented.meta.json"))
+    parent = f"sensor.virtual_{quantity}"
+    record = {CONF_PLATFORM: "sensor", ATTR_ENTITY_ID: parent, CONF_NAME: quantity,
+              CONF_CLASS: quantity, CONF_UNIT_OF_MEASUREMENT: "μg/m³", CONF_INITIAL_VALUE: "3"}
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "air"}, options={ATTR_DEVICES: {"Room": [record]}})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(parent + "_aqi").state == "good"
+    options = deepcopy(dict(entry.options))
+    options[ATTR_DEVICES]["Room"][0]["air_quality_logic"] = {
+        "mode": "automatic", "scope": "combined", "sources": [parent], "measurements": [{
+            "mode": "measurement", "sources": [parent], "quantity": quantity, "unit": "μg/m³",
+            "thresholds": [0.1, 0.2, 0.3, 0.4, 0.5], "levels": list(LEVELS)}]}
+    hass.config_entries.async_update_entry(entry, options=options)
+    await hass.async_block_till_done()
+    assert hass.states.get(parent + "_aqi").state == "extremely_poor"
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(parent).state == "3"
+    assert hass.states.get(parent + "_aqi").state == "extremely_poor"
+
+
 async def test_source_profile_edit_after_removed_platform_and_reload(hass, tmp_path, monkeypatch):
     """Historical HA platform objects must not re-enter the active unload set."""
     from custom_components.virtual_layer import air_quality_options as aq
@@ -56,6 +82,9 @@ async def test_source_profile_edit_after_removed_platform_and_reload(hass, tmp_p
     ("radon", "Bq/m³", "54.07", "fair"),
     ("benzene", "μg/m³", "3", "moderate"),
     ("aqi", "", "150", "moderate"),
+    ("formaldehyde", "mg/m3", "0.003", "good"),
+    ("pm25", "ug/m^3", "5", "good"),
+    ("radon", "Bq/m3", "54.07", "fair"),
 ])
 async def test_existing_measurement_gets_live_companion_and_cleanup(hass, tmp_path, monkeypatch, quantity, unit, value, grade):
     monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "meta.json"))

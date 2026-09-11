@@ -13,6 +13,30 @@ from homeassistant.helpers import selector
 LEVELS = ("good", "fair", "moderate", "poor", "very_poor", "extremely_poor")
 MODES = ("automatic", "source", "measurement", "fixed", "custom")
 UNITS = ("unitless", "μg/m³", "mg/m³", "ppm", "ppb", "Bq/m³", "pCi/L")
+# Spelling aliases only: never infer a missing numerator or convert gas mass
+# concentrations into ppm. Preserve SI prefix case (mg is not Mg).
+UNIT_ALIASES = {unit: unit for unit in (*UNITS, "", "AQI")}
+for _prefix, _canonical in (("mg", "mg"), ("ug", "μg"), ("µg", "μg"), ("μg", "μg"), ("Bq", "Bq")):
+    for _volume in ("m3", "m^3", "m³"):
+        UNIT_ALIASES[f"{_prefix}/{_volume}"] = f"{_canonical}/m³"
+
+
+def normalize_unit(value):
+    """Normalize equivalent spellings without guessing physical dimensions."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return UNIT_ALIASES.get(value, value)
+
+
+def source_unit_expression(entity_id_expression="entity_id"):
+    """Jinja equivalent of normalize_unit for an already escaped entity ID."""
+    raw = f"state_attr({entity_id_expression}, 'unit_of_measurement')"
+    text = f"(({raw} if {raw} is not none else '') | string | trim)"
+    return repr(UNIT_ALIASES) + f".get({text}, {text})"
+
 REDUCERS = ("per_source", "mean", "median", "minimum", "maximum")
 QUANTITIES = (
     "any",
@@ -20,6 +44,7 @@ QUANTITIES = (
     "formaldehyde",
     "pm1",
     "pm25",
+    "pm4",
     "pm10",
     "aqi",
     "carbon_dioxide",
@@ -27,6 +52,7 @@ QUANTITIES = (
     "ozone",
     "nitrogen_dioxide",
     "nitrogen_monoxide",
+    "nitrous_oxide",
     "sulphur_dioxide",
     "volatile_organic_compounds",
     "volatile_organic_compounds_parts",
@@ -38,8 +64,8 @@ QUANTITIES = (
 # Integration-specific quantities, not invented Home Assistant device classes.
 CUSTOM_QUANTITIES = frozenset({"benzene", "ammonia", "hydrogen_sulfide"})
 
-# PM0.1 and N2O have no matching standard sensor device class. Their named
-# attributes remain usable; never alias PM1 to PM0.1 or NO2 to N2O.
+# Legacy PM0.1/nitrogen_oxide attributes have ambiguous measurement semantics.
+# Never alias PM1 to PM0.1 or NO2 to N2O.
 NATIVE_MEASUREMENT_CLASSES = {
     "particulate_matter_2_5": "pm25",
     "particulate_matter_10": "pm10",
@@ -57,7 +83,7 @@ def validate_quantity_unit(quantity, unit):
     allowed = UNITS
     if quantity == "radon":
         allowed = ("Bq/m³", "pCi/L")
-    elif quantity in ("pm1", "pm25", "pm10", "volatile_organic_compounds"):
+    elif quantity in ("pm1", "pm25", "pm4", "pm10", "nitrous_oxide", "volatile_organic_compounds"):
         allowed = ("μg/m³", "mg/m³")
     elif quantity == "aqi":
         allowed = ("unitless",)
@@ -77,6 +103,8 @@ STARTER_PROFILES = {
     "ammonia": ("ppm", (0.1, 0.2, 0.5, 1, 2), "Local ammonia display bands; not health limits"),
     "hydrogen_sulfide": ("ppm", (0.005, 0.01, 0.02, 0.05, 0.1), "Local hydrogen sulfide display bands; not health limits"),
     "pm1": ("μg/m³", (5, 10, 20, 35, 55), "Local PM1 display bands; not PM2.5 AQI or health limits"),
+    "pm4": ("μg/m³", (9, 35.4, 55.4, 125.4, 225.4), "PM2.5-shaped display proxy for PM4; not PM4 health limits or official AQI"),
+    "nitrous_oxide": ("μg/m³", (1000, 2000, 4000, 8000, 16000), "Local N2O display bands; not health limits or a NIOSH occupational exposure assessment"),
     "ozone": ("ppb", (20, 40, 60, 80, 100), "Local editable display bands; not health limits"),
     "sulphur_dioxide": ("ppb", (20, 40, 80, 160, 320), "Local editable display bands; not health limits"),
     "nitrogen_monoxide": ("ppb", (20, 40, 80, 160, 320), "Local editable display bands; not health limits"),
@@ -94,6 +122,7 @@ STARTER_PROFILES = {
 NAME_HINTS = {
     "pm25": r"(?:pm|particulate[ _-]*matter)[ _.-]*2[ _.-]*5|초미세먼지",
     "pm10": r"(?:pm|particulate[ _-]*matter)[ _.-]*10",
+    "pm4": r"(?:pm|particulate[ _-]*matter)[ _.-]*4(?:[_.]0)?(?![0-9]|[_.][0-9])",
     "pm1": r"(?:pm|particulate[ _-]*matter)[ _.-]*1(?:[_.]0)?(?![0-9]|[_.][0-9])",
     "radon": r"radon|라돈",
     "formaldehyde": r"formaldehyde|hcho|포름알데히드",
@@ -101,6 +130,7 @@ NAME_HINTS = {
     "carbon_monoxide": r"carbon[ _-]*monoxide|co(?![ _-]*[0-9₂])|일산화탄소",
     "nitrogen_dioxide": r"nitrogen[ _-]*dioxide|no2|no₂|이산화질소",
     "nitrogen_monoxide": r"nitrogen[ _-]*monoxide|nitric[ _-]*oxide|일산화질소",
+    "nitrous_oxide": r"nitrous[ _-]*oxide|n2o|n₂o|아산화질소",
     "sulphur_dioxide": r"sulphur[ _-]*dioxide|sulfur[ _-]*dioxide|so2|so₂|이산화황",
     "ozone": r"ozone|o3|o₃|오존",
     "volatile_organic_compounds": r"e[ _-]*tvoc|tvoc|voc|휘발성",
@@ -119,7 +149,7 @@ def infer_quantity(state):
     name = f"{state.entity_id.split('.', 1)[-1]} {state.attributes.get('friendly_name', '')}".lower()
     matches = {key for key, pattern in NAME_HINTS.items()
                if re.search(r"(?<![a-z0-9])(?:" + pattern + r")(?![a-z0-9])", name)}
-    if matches == {"volatile_organic_compounds"} and state.attributes.get("unit_of_measurement") in ("ppm", "ppb"):
+    if matches == {"volatile_organic_compounds"} and normalize_unit(state.attributes.get("unit_of_measurement")) in ("ppm", "ppb"):
         return "volatile_organic_compounds_parts"
     return next(iter(matches)) if len(matches) == 1 else None
 
@@ -138,9 +168,9 @@ def prefill_measurement(defaults, states):
     if quantity not in STARTER_PROFILES:
         return result, "No preset for this measurement; enter your own thresholds."
     unit, thresholds, label = STARTER_PROFILES[quantity]
-    source_unit = str(states[0].attributes.get("unit_of_measurement") or unit).replace("µ", "μ")
-    target_unit = result.get("unit")
-    if target_unit is None:
+    source_unit = normalize_unit(states[0].attributes.get("unit_of_measurement") or unit)
+    target_unit = normalize_unit(result["unit"]) if "unit" in result else None
+    if "unit" not in result:
         target_unit = source_unit if source_unit in UNITS else unit
         result["unit"] = target_unit
     factors = {("μg/m³", "mg/m³"): 0.001, ("mg/m³", "μg/m³"): 1000,
@@ -174,12 +204,14 @@ def automatic_recipe(sources, states, previous=None):
         # AQI already has bounded 0..500 handling in the category converter.
         if infer_quantity(state) == "aqi":
             continue
-        if str(state.attributes.get("unit_of_measurement") or "").replace("µ", "μ") not in UNITS:
+        if normalize_unit(state.attributes.get("unit_of_measurement")) not in UNITS:
             continue
         values, _ = prefill_measurement({"mode": "measurement", "sources": [entity_id]}, [state])
         if "thresholds" in values:
             measurements.append(normalize(values))
     return normalize({"mode": "automatic", "sources": sources, "measurements": measurements,
+                      **({"source_roots": previous["source_roots"]}
+                         if previous.get("scope") == "leaves" and "source_roots" in previous else {}),
                       "per_source": previous.get("per_source", False),
                       "scope": previous.get("scope", "sources"),
                       "missing": previous.get("missing", "skip")})
@@ -364,6 +396,11 @@ def normalize(recipe):
                 result[key] = recipe[key]
         if result.get("scope") == "combined" and len(sources) != 1:
             raise vol.Invalid("Combined measurement requires one source")
+        if result.get("scope") == "leaves" and "source_roots" in recipe:
+            roots = recipe["source_roots"]
+            if not isinstance(roots, list) or not 1 <= len(roots) <= 64:
+                raise vol.Invalid("Select 1 to 64 source roots")
+            result["source_roots"] = list(dict.fromkeys(cv.entity_id(value) for value in roots))
         if "per_source" in recipe:
             if not isinstance(recipe["per_source"], bool):
                 raise vol.Invalid("Invalid per-source setting")
@@ -403,7 +440,7 @@ def normalize(recipe):
             raise vol.Invalid("Invalid measurement quantity")
         result["quantity"] = quantity
         result.update(normalize_calculation(recipe))
-        unit = recipe.get("unit")
+        unit = normalize_unit(recipe.get("unit"))
         if unit not in UNITS:
             raise vol.Invalid("Invalid unit")
         validate_quantity_unit(quantity, unit)
@@ -480,10 +517,11 @@ def normalize_sources(mode, values):
         if quantity not in QUANTITIES:
             raise vol.Invalid("Invalid measurement quantity")
         result["quantity"] = quantity
-        if values.get("unit") not in UNITS:
+        unit = normalize_unit(values.get("unit"))
+        if unit not in UNITS:
             raise vol.Invalid("Invalid unit")
-        validate_quantity_unit(quantity, values["unit"])
-        result["unit"] = values["unit"]
+        validate_quantity_unit(quantity, unit)
+        result["unit"] = unit
     return result
 
 
@@ -570,7 +608,7 @@ def generate(recipe):
             "{% set rank = " + repr(list(LEVELS)) + ".index(category) %}"
             "{% else %}{% set index = state_attr(entity_id, 'air_quality_index') %}"
             "{% if index is none and state_attr(entity_id, 'device_class') == 'aqi' "
-            "and state_attr(entity_id, 'unit_of_measurement') in [none, '', 'AQI'] %}"
+            "and " + source_unit_expression() + " in ['', 'AQI'] %}"
             "{% set index = states(entity_id) %}{% endif %}"
             "{% if index is not boolean and is_number(index) and 0 <= (index | float) <= 500 %}"
             "{% set rank = ((index | float) / 100 + 0.5) | round(0, 'floor') | int %}"
@@ -632,7 +670,7 @@ def generate(recipe):
         unit = (
             repr("" if recipe["unit"] == "unitless" else recipe["unit"])
             if attribute
-            else "(state_attr(entity_id, 'unit_of_measurement') or '') | replace('µ', 'μ')"
+            else source_unit_expression()
         )
         body += (
             "{% set unit = " + unit + " %}"
