@@ -1063,7 +1063,7 @@ class BlendedCfg:
         )
 
         sensor_entities = self._entities.setdefault("sensor", [])
-        if platform == "sensor":
+        if platform in ("sensor", "binary_sensor"):
             # Build from configuration, not startup ordering or a restored state.
             # Existing UI entries receive the same companion on their next load.
             attributes = dict(entity.get(CONF_ATTRIBUTES, {}))
@@ -1083,13 +1083,20 @@ class BlendedCfg:
                     recipe = aq_options.rebind_combined(entity[CONF_AIR_QUALITY_LOGIC], entity_id)
             except (TypeError, ValueError, vol.Invalid):
                 pass
-            if recipe is not None or (metadata_valid and aq_options.infer_quantity(snapshot) is not None):
+            eligible = (aq_options.is_air_quality_binary(snapshot) if platform == "binary_sensor"
+                        else aq_options.infer_quantity(snapshot) is not None)
+            if recipe is not None or (metadata_valid and eligible):
                 recipe = recipe or aq_options.automatic_recipe([entity_id], [snapshot])
                 companion_unique_id = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}aqi"
                 companion_id = self._reserve_entity_id(
                     "sensor", f"sensor.{object_id}_aqi", companion_unique_id,
                 )
                 if companion_id is not None:
+                    source_fallback = (
+                        CONF_AIR_QUALITY_LOGIC not in entity
+                        or (recipe.get("mode") == "automatic" and not recipe.get("measurements"))
+                    )
+                    fallback_sources = source_entities if source_fallback else []
                     sensor_entities.append({
                         **{key: entity[key] for key in (
                             CONF_MANUFACTURER, CONF_MODEL, CONF_SW_VERSION,
@@ -1103,7 +1110,13 @@ class BlendedCfg:
                         CONF_INITIAL_VALUE: "unknown",
                         CONF_INITIAL_AVAILABILITY: True,
                         CONF_PERSISTENT: True,
-                        CONF_SOURCE_ENTITIES: recipe.get("sources", [entity_id]),
+                        CONF_SOURCE_ENTITIES: list(dict.fromkeys([
+                            *recipe.get("sources", [entity_id]), *fallback_sources,
+                            *(source_entities if platform == "binary_sensor" else []),
+                        ])),
+                        "_air_quality_fallback_sources": fallback_sources,
+                        "_air_quality_binary_sources": source_entities if platform == "binary_sensor" else [],
+                        "_air_quality_fallback_quantity": aq_options.infer_quantity(snapshot),
                         CONF_VALUE_TEMPLATE: aq_options.generate(recipe),
                         CONF_ICON: "mdi:air-filter",
                         CONF_ATTRIBUTES: {

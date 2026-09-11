@@ -842,6 +842,49 @@ async def test_config_flow_create_modify_runtime():
             assert hass.states.get(f"sensor.docker_{quantity}").state == "3"
             assert hass.states.get(f"sensor.docker_{quantity}_aqi").state == "good"
         assert hass.states.get("sensor.docker_carbon_dioxide_aqi").state == "good"
+        hass.states.async_set("sensor.docker_co_raw", "6", {
+            "device_class": "carbon_monoxide", "unit_of_measurement": "ppm",
+        })
+        options = copy.deepcopy(dict(entry.options))
+        next(iter(options["devices"].values())).append({
+            "platform": "sensor", "entity_id": "sensor.docker_carbon_monoxide",
+            "name": "Docker Carbon Monoxide", "class": "carbon_monoxide",
+            "initial_value": "6", "source_entities": ["sensor.docker_co_raw"],
+            "native_templates": {"unit_of_measurement": "{{ none }}"},
+        })
+        next(iter(options["devices"].values())).append({
+            "platform": "sensor", "entity_id": "sensor.docker_co_detector_2_co",
+            "name": "CO_DETECTOR 2 CO", "initial_value": 0,
+            "attributes": {"unit_of_measurement": "ppm"},
+        })
+        hass.states.async_set("binary_sensor.docker_co_alarm_input", "off")
+        next(iter(options["devices"].values())).append({
+            "platform": "binary_sensor", "entity_id": "binary_sensor.docker_co_alarm",
+            "name": "Docker CO Alarm", "class": "carbon_monoxide",
+            "source_entities": ["binary_sensor.docker_co_alarm_input"],
+            "value_template": "{{ states('binary_sensor.docker_co_alarm_input') }}",
+        })
+        hass.config_entries.async_update_entry(entry, options=options)
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.docker_carbon_monoxide_aqi").state == "fair"
+        assert hass.states.get("sensor.docker_carbon_monoxide_aqi").attributes["air_quality_evaluation_basis"] == "source_measurements"
+        assert "unit_of_measurement" not in hass.states.get("sensor.docker_carbon_monoxide").attributes
+        assert hass.states.get("sensor.docker_co_detector_2_co_aqi").state == "good"
+        assert hass.states.get("sensor.docker_co_detector_2_co").attributes["unit_of_measurement"] == "ppm"
+        assert hass.states.get("sensor.docker_co_detector_2_co").attributes.get("device_class") is None
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.docker_carbon_monoxide_aqi").state == "fair"
+        assert hass.states.get("sensor.docker_co_detector_2_co_aqi").state == "good"
+        assert float(hass.states.get("sensor.docker_co_detector_2_co").state) == 0
+        assert hass.states.get("sensor.docker_co_alarm_aqi").state == "good"
+        for value, expected in [("on", "poor"), ("unavailable", "poor"), ("off", "good")]:
+            hass.states.async_set("binary_sensor.docker_co_alarm_input", value)
+            await hass.async_block_till_done()
+            await asyncio.sleep(0.1)
+            await hass.async_block_till_done()
+            assert hass.states.get("sensor.docker_co_alarm_aqi").state == expected
+            assert hass.states.get("sensor.docker_co_alarm_aqi").attributes["air_quality_stale"] is (value == "unavailable")
     finally:
         await hass.async_stop()
 

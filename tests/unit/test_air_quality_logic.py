@@ -23,6 +23,25 @@ def measurement(**overrides):
     }
 
 
+@pytest.mark.parametrize("value,expected", [("on", "poor"), ("off", "good"),
+    ("unknown", "unknown"), ("unavailable", "unknown"), ("0", "unknown")])
+def test_automatic_binary_alarm_grades(hass, value, expected):
+    source = "binary_sensor.co"
+    hass.states.async_set(source, value, {"device_class": "carbon_monoxide"})
+    recipe = aq.automatic_recipe([source], [hass.states.get(source)])
+    assert recipe["measurements"] == []
+    assert Template(aq.generate(recipe), hass).async_render() == expected
+
+
+@pytest.mark.parametrize("missing,expected", [("skip", "poor"), ("unknown", "unknown")])
+def test_automatic_partial_binary_alarms(hass, missing, expected):
+    sources = ["binary_sensor.co", "binary_sensor.smoke", "binary_sensor.gas"]
+    for source, value in zip(sources, ["off", "on", "unavailable"]):
+        hass.states.async_set(source, value)
+    recipe = aq.automatic_recipe(sources, [hass.states.get(s) for s in sources], {"missing": missing})
+    assert Template(aq.generate(recipe), hass).async_render() == expected
+
+
 @pytest.mark.parametrize("quantity,name", [("pm4", "PM4.0"), ("nitrous_oxide", "N₂O")])
 def test_documented_pollutants_have_editable_display_defaults(hass, quantity, name):
     source = "sensor.documented_pollutant"

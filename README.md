@@ -584,6 +584,15 @@ other reasons include `sources_unavailable`, `availability_false`, and
 timestamp. Late metadata can repair owned automatic helpers on explicit
 air_quality entities and per-source companions too; customized formulas are
 not replaced. A bridge
+can also recover an unconfigured numeric companion when its composite parent
+lacks a usable unit: it evaluates same-pollutant original sensors separately,
+using each source's declared concentration unit, and takes the worst valid grade.
+`air_quality_evaluation_basis: source_measurements` identifies this path; it is
+not a classification of the unitless composite number. Once the parent's own
+measurement is usable, `configured` evaluation resumes. Explicit measurement
+overrides are never bypassed, and the original sensors/parent metadata are not
+rewritten. This includes CO concentration sensors (`carbon_monoxide`, ppm/ppb),
+not binary CO alarms. A bridge
 that ignores these diagnostic attributes may display an old grade without a
 freshness warning; do not treat a retained good grade as proof of safe air.
 The [Sensor entity contract](https://developers.home-assistant.io/docs/core/entity/sensor/)
@@ -605,6 +614,15 @@ generated ID instead of overwriting a user entity. Their states are category
 strings, **not numeric AQI**; no `aqi` device class or concentration unit is set.
 Recognized but unsupported units produce `unknown`, not a fabricated good grade.
 The applied recipe is visible in the companion's `air_quality_logic` attribute.
+Virtual binary CO, smoke, and gas alarms also receive a managed `_aqi` sensor:
+`off` means `good`, and `on` means `poor`. No concentration or numeric AQI is
+invented. Classless alarms can be recognized by an unambiguous pollutant or
+smoke/gas name; unrelated door/motion sensors are not automatically included.
+Binary sources explicitly selected in an automatic Air Quality recipe use the
+same two grades, with the worst valid grade winning for multiple sources.
+Missing responses retain the last valid grade through the existing stale-state
+fallback; they are never treated as `off`. These display grades do not replace
+the original safety alarm, which remains unchanged.
 Equivalent unit spellings (`mg/m3`, `mg/m^3`, `mg/m³`, `ug/m3`, `µg/m3`,
 `μg/m³`, and `Bq/m3`) and surrounding whitespace are normalized consistently
 in recipes, flow validation, concentration helpers, and live category templates.

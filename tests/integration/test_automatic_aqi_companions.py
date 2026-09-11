@@ -17,6 +17,135 @@ from custom_components.virtual_layer.const import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("device_class,name,eligible", [
+    ("carbon_monoxide", "CO alarm", True), ("smoke", "Smoke alarm", True),
+    ("gas", "Gas alarm", True), (None, "CO_DETECTOR 2 CO", True),
+    (None, "Smoke Detector", True), ("motion", "CO hallway motion", False),
+    ("door", "Door", False), (None, "Switch", False),
+])
+async def test_binary_air_alarm_companion(hass, tmp_path, monkeypatch, device_class, name, eligible):
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "binary-aq.json"))
+    source, parent = "binary_sensor.physical", "binary_sensor.virtual_alarm"
+    hass.states.async_set(source, "off")
+    record = {CONF_PLATFORM: "binary_sensor", ATTR_ENTITY_ID: parent, CONF_NAME: name,
+              CONF_SOURCE_ENTITIES: [source], CONF_VALUE_TEMPLATE: "{{ states('binary_sensor.physical') }}"}
+    if device_class:
+        record[CONF_CLASS] = device_class
+    original = deepcopy(record)
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Alarms"},
+                            options={ATTR_DEVICES: {"Alarms": [record]}})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    companion = "sensor.virtual_alarm_aqi"
+    if not eligible:
+        assert hass.states.get(companion) is None
+        return
+    assert hass.states.get(companion).state == "good"
+    registry = er.async_get(hass)
+    assert registry.async_get(companion).device_id == registry.async_get(parent).device_id
+    for value, expected in [("on", "poor"), ("unavailable", "poor"), ("off", "good")]:
+        hass.states.async_set(source, value)
+        await hass.async_block_till_done()
+        await asyncio.sleep(0.1)
+        await hass.async_block_till_done()
+        assert hass.states.get(companion).state == expected
+        assert hass.states.get(companion).attributes["air_quality_stale"] is (value == "unavailable")
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(companion).state == "good"
+    assert hass.states.get(parent).state == "off"
+    assert entry.options[ATTR_DEVICES]["Alarms"][0] == original
+
+
+async def test_binary_air_alarm_without_initial_response_is_not_good(hass, tmp_path, monkeypatch):
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "missing-binary.json"))
+    record = {CONF_PLATFORM: "binary_sensor", ATTR_ENTITY_ID: "binary_sensor.co_alarm",
+              CONF_NAME: "CO alarm", CONF_CLASS: "carbon_monoxide",
+              CONF_SOURCE_ENTITIES: ["binary_sensor.missing"],
+              CONF_VALUE_TEMPLATE: "{{ is_state('binary_sensor.missing', 'on') }}"}
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Alarm"},
+                            options={ATTR_DEVICES: {"Alarm": [record]}})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    companion = hass.states.get("sensor.co_alarm_aqi")
+    assert companion.state == "unknown"
+    assert companion.attributes["air_quality_stale"] is True
+
+
+async def test_classless_co_detector_zero_legacy_unit_survives_reload(hass, tmp_path, monkeypatch):
+    """A CO detector needs no device class to expose its zero-ppm AQ grade."""
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "classless-co.json"))
+    parent = "sensor.carbon_monoxide_detector_co_detector_2_co"
+    record = {CONF_PLATFORM: "sensor", ATTR_ENTITY_ID: parent,
+              CONF_NAME: "CO_DETECTOR 2 CO", CONF_INITIAL_VALUE: 0,
+              CONF_ATTRIBUTES: {"unit_of_measurement": "ppm"}}
+    original = deepcopy(record)
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Carbon Monoxide Detector"},
+                            options={ATTR_DEVICES: {"Carbon Monoxide Detector": [record]}})
+    entry.add_to_hass(hass)
+    for reload in (False, True):
+        if reload:
+            assert await hass.config_entries.async_reload(entry.entry_id)
+        else:
+            assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        source = hass.states.get(parent)
+        assert float(source.state) == 0
+        assert source.attributes["unit_of_measurement"] == "ppm"
+        assert source.attributes.get("device_class") is None
+        companion = hass.states.get(parent + "_aqi")
+        assert companion is not None
+        assert companion.state == "good"
+        assert companion.attributes["air_quality_stale"] is False
+        assert entry.options[ATTR_DEVICES]["Carbon Monoxide Detector"][0] == original
+
+
+@pytest.mark.parametrize("quantity,values,expected", [
+    ("carbon_dioxide", [1115, 976], "poor"),
+    ("carbon_monoxide", [2, 12], "moderate"),
+])
+@pytest.mark.parametrize("custom", [False, True])
+async def test_unitless_composite_uses_original_concentrations_without_guessing_units(hass, tmp_path, monkeypatch, quantity, values, expected, custom):
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "source-fallback.json"))
+    sources = ["sensor.physical_a", "sensor.physical_b"]
+    for source, value in zip(sources, values):
+        hass.states.async_set(source, str(value), {"device_class": quantity, "unit_of_measurement": "ppm"})
+    parent = f"sensor.composite_{quantity}"
+    record = {CONF_PLATFORM: "sensor", ATTR_ENTITY_ID: parent, CONF_NAME: quantity,
+              CONF_CLASS: quantity, CONF_SOURCE_ENTITIES: sources,
+              CONF_INITIAL_VALUE: str(sum(values) / 2),
+              CONF_NATIVE_TEMPLATES: {"unit_of_measurement": "{{ none }}"}}
+    if custom:
+        record["air_quality_logic"] = {"mode": "automatic", "scope": "combined", "sources": [parent], "measurements": [{
+            "mode": "measurement", "sources": [parent], "quantity": quantity, "unit": "ppm",
+            "thresholds": [2000, 3000, 4000, 5000, 6000]}]}
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "fallback"}, options={ATTR_DEVICES: {"Room": [record]}})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(parent + "_aqi").state == ("unknown" if custom else expected)
+    assert "unit_of_measurement" not in hass.states.get(parent).attributes
+    assert float(hass.states.get(parent).state) == sum(values) / 2
+    if not custom:
+        assert hass.states.get(parent + "_aqi").attributes["air_quality_evaluation_basis"] == "source_measurements"
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert hass.states.get(parent + "_aqi").state == expected
+        hass.states.async_set(sources[1], "unavailable")
+        await hass.async_block_till_done()
+        await asyncio.sleep(0.1)
+        await hass.async_block_till_done()
+        assert hass.states.get(parent + "_aqi").state == ("poor" if quantity == "carbon_dioxide" else "good")
+        options = deepcopy(dict(entry.options))
+        options[ATTR_DEVICES]["Room"][0][CONF_NATIVE_TEMPLATES]["unit_of_measurement"] = "{{ 'ppm' }}"
+        hass.config_entries.async_update_entry(entry, options=options)
+        await hass.async_block_till_done()
+        assert hass.states.get(parent + "_aqi").state == ("moderate" if quantity == "carbon_dioxide" else "fair")
+        assert hass.states.get(parent + "_aqi").attributes["air_quality_evaluation_basis"] == "configured"
+
+
 @pytest.mark.parametrize("saved_recipe", [False, True])
 async def test_companion_recovers_empty_recipe_when_native_metadata_arrives(hass, tmp_path, monkeypatch, saved_recipe):
     monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "late-meta.json"))

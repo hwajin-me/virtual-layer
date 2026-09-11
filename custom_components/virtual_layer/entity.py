@@ -1410,6 +1410,22 @@ class VirtualEntity(RestoreEntity):
             live_recipe = aq_options.automatic_recipe(
                 sources, [self.hass.states.get(source) for source in sources], previous=recipe,
             )
+            basis = "configured"
+            fallback_sources = self._config.get("_air_quality_fallback_sources", [])
+            if generated and fallback_sources:
+                helper = aq_options.generate(live_recipe)
+                if str(self._render_template(helper)).strip() not in AIR_QUALITY_LEVELS:
+                    quantity = self._config.get("_air_quality_fallback_quantity")
+                    candidates = [self.hass.states.get(source) for source in fallback_sources]
+                    candidates = [state for state in candidates if state is not None
+                                  and quantity is not None and aq_options.infer_quantity(state) == quantity]
+                    fallback = aq_options.automatic_recipe(
+                        [state.entity_id for state in candidates], candidates,
+                    ) if candidates else None
+                    if fallback and str(self._render_template(aq_options.generate(fallback))).strip() in AIR_QUALITY_LEVELS:
+                        live_recipe = fallback
+                        basis = "source_measurements"
+            self._virtual_attributes["air_quality_evaluation_basis"] = basis
             if live_recipe != getattr(self, "_aq_runtime_recipe", None):
                 helper = aq_options.generate(live_recipe)
                 if owns_value:
@@ -1418,7 +1434,7 @@ class VirtualEntity(RestoreEntity):
                     self._native_templates["air_quality"] = helper
                 self._virtual_attributes["air_quality_logic"] = live_recipe
                 self._aq_runtime_recipe = live_recipe
-        except (TypeError, ValueError, vol.Invalid):
+        except (TemplateError, TypeError, ValueError, vol.Invalid):
             # Keep malformed legacy records loadable; fallback handles no grade.
             return
 
@@ -1448,9 +1464,16 @@ class VirtualEntity(RestoreEntity):
         self._aq_template_error = False
         try:
             self._apply_current_templates()
+            binary_sources = self._config.get("_air_quality_binary_sources", [])
+            binary_missing = bool(binary_sources) and all(source in missing for source in binary_sources)
+            if binary_missing:
+                # A binary parent may retain on/off after its input disappears.
+                # Do not mistake that retained/default state for a fresh alarm.
+                self._attr_state = "unknown"
+                self._attr_native_value = "unknown"
             value = getattr(self, "_attr_state", None)
             valid = isinstance(value, str) and value in AIR_QUALITY_LEVELS
-            all_missing = bool(self._source_entities) and len(missing) == len(self._source_entities)
+            all_missing = binary_missing or (bool(self._source_entities) and len(missing) == len(self._source_entities))
             availability_failed = self._attr_available is False and not missing
             reason = (
                 "template_error" if self._aq_template_error else

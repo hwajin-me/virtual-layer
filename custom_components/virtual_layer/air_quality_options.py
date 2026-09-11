@@ -154,6 +154,19 @@ def infer_quantity(state):
     return next(iter(matches)) if len(matches) == 1 else None
 
 
+def is_air_quality_binary(state):
+    """Automatically manage air alarms, not unrelated motion/door sensors."""
+    if not state.entity_id.startswith("binary_sensor."):
+        return False
+    declared = state.attributes.get("device_class")
+    if declared:
+        return declared in ("carbon_monoxide", "smoke", "gas")
+    if infer_quantity(state) is not None:
+        return True
+    name = f"{state.entity_id.split('.', 1)[-1]} {state.attributes.get('friendly_name', '')}".lower()
+    return bool(re.search(r"(?<![a-z0-9])(?:smoke|gas|연기|가스)(?![a-z0-9])", name))
+
+
 def prefill_measurement(defaults, states):
     """Fill only absent fields; never rewrite stored or rejected user values."""
     result = dict(defaults)
@@ -200,6 +213,9 @@ def automatic_recipe(sources, states, previous=None):
     for entity_id, state in zip(sources, states, strict=True):
         if entity_id in saved:
             measurements.append(saved[entity_id])
+            continue
+        if entity_id.startswith("binary_sensor."):
+            # Binary alarms have no concentration or numeric thresholds.
             continue
         if state is None or infer_quantity(state) not in STARTER_PROFILES:
             continue
@@ -602,6 +618,9 @@ def generate(recipe):
             "{% set category = overrides[entity_id] %}"
             "{% if category in " + repr(list(LEVELS)) + " %}"
             "{% set rank = " + repr(list(LEVELS)) + ".index(category) %}{% endif %}"
+            "{% elif entity_id.startswith('binary_sensor.') %}"
+            "{% if states(entity_id) == 'on' %}{% set rank = 3 %}"
+            "{% elif states(entity_id) == 'off' %}{% set rank = 0 %}{% endif %}"
             "{% else %}"
             "{% set raw = state_attr(entity_id, 'air_quality') %}"
             "{% set raw = states(entity_id) if raw is none else raw %}"
