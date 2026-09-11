@@ -346,6 +346,21 @@ def test_english_service_translations_match_services_yaml():
 
 
 @pytest.mark.parametrize("translation_file", sorted(TRANSLATIONS.glob("*.json")))
+def test_translation_examples_do_not_contain_rich_text_tags(translation_file):
+    """Literal <entity_id> examples are parsed as unclosed ICU rich-text tags.
+
+    This catalog uses plain text/Markdown, not rich-text tag callbacks. Reject
+    tag-shaped examples even inside Markdown backticks (ICU parses first).
+    """
+    catalog = json.loads(translation_file.read_text(encoding="utf-8"))
+    for value in _leaf_values(catalog):
+        if isinstance(value, str):
+            assert not re.search(r"</?\w[^<>]*>", value), (
+                f"{translation_file.name} contains unsupported rich-text markup: {value!r}"
+            )
+
+
+@pytest.mark.parametrize("translation_file", sorted(TRANSLATIONS.glob("*.json")))
 def test_translation_placeholders_are_home_assistant_identifiers(translation_file):
     catalog = json.loads(translation_file.read_text(encoding="utf-8"))
 

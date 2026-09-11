@@ -103,11 +103,11 @@ async def test_classless_co_detector_zero_legacy_unit_survives_reload(hass, tmp_
 
 
 @pytest.mark.parametrize("quantity,values,expected", [
-    ("carbon_dioxide", [1115, 976], "poor"),
-    ("carbon_monoxide", [2, 12], "moderate"),
+    ("carbon_dioxide", [1111, 974], "moderate"),
+    ("carbon_monoxide", [2, 12], "fair"),
 ])
 @pytest.mark.parametrize("custom", [False, True])
-async def test_unitless_composite_uses_original_concentrations_without_guessing_units(hass, tmp_path, monkeypatch, quantity, values, expected, custom):
+async def test_unitless_composite_uses_its_value_with_consistent_source_units(hass, tmp_path, monkeypatch, quantity, values, expected, custom):
     monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "source-fallback.json"))
     sources = ["sensor.physical_a", "sensor.physical_b"]
     for source, value in zip(sources, values):
@@ -129,7 +129,7 @@ async def test_unitless_composite_uses_original_concentrations_without_guessing_
     assert "unit_of_measurement" not in hass.states.get(parent).attributes
     assert float(hass.states.get(parent).state) == sum(values) / 2
     if not custom:
-        assert hass.states.get(parent + "_aqi").attributes["air_quality_evaluation_basis"] == "source_measurements"
+        assert hass.states.get(parent + "_aqi").attributes["air_quality_evaluation_basis"] == "combined_inherited_unit"
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
         assert hass.states.get(parent + "_aqi").state == expected
@@ -137,13 +137,37 @@ async def test_unitless_composite_uses_original_concentrations_without_guessing_
         await hass.async_block_till_done()
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
-        assert hass.states.get(parent + "_aqi").state == ("poor" if quantity == "carbon_dioxide" else "good")
+        assert hass.states.get(parent + "_aqi").state == expected
+        assert hass.states.get(parent + "_aqi").attributes["air_quality_stale"] is True
         options = deepcopy(dict(entry.options))
         options[ATTR_DEVICES]["Room"][0][CONF_NATIVE_TEMPLATES]["unit_of_measurement"] = "{{ 'ppm' }}"
         hass.config_entries.async_update_entry(entry, options=options)
         await hass.async_block_till_done()
         assert hass.states.get(parent + "_aqi").state == ("moderate" if quantity == "carbon_dioxide" else "fair")
         assert hass.states.get(parent + "_aqi").attributes["air_quality_evaluation_basis"] == "configured"
+
+
+@pytest.mark.parametrize("second_unit,parent_unit,expected", [
+    ("ppb", None, "unknown"), (None, None, "unknown"),
+    ("ppm", "m³", "unknown"), ("ppb", "ppm", "moderate"),
+    (" ppm ", None, "moderate"),
+])
+async def test_composite_unit_inheritance_does_not_guess_or_override(hass, tmp_path, monkeypatch, second_unit, parent_unit, expected):
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "unit-guard.json"))
+    sources = ["sensor.co2_one", "sensor.co2_two"]
+    for source, unit, value in zip(sources, ["ppm", second_unit], [1111, 974]):
+        hass.states.async_set(source, str(value), {"device_class": "carbon_dioxide", "unit_of_measurement": unit})
+    record = {CONF_PLATFORM: "sensor", ATTR_ENTITY_ID: "sensor.composite_co2",
+              CONF_NAME: "Composite CO2", CONF_CLASS: "carbon_dioxide",
+              CONF_SOURCE_ENTITIES: sources, CONF_INITIAL_VALUE: "1042.5",
+              CONF_NATIVE_TEMPLATES: {"unit_of_measurement": "{{ " + (repr(parent_unit) if parent_unit else "none") + " }}"}}
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Air"},
+                            options={ATTR_DEVICES: {"Air": [record]}})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.composite_co2_aqi").state == expected
+    assert float(hass.states.get("sensor.composite_co2").state) == 1042.5
 
 
 @pytest.mark.parametrize("saved_recipe", [False, True])

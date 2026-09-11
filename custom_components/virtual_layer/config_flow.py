@@ -54,6 +54,7 @@ from homeassistant.util import slugify
 
 from .binary_options import detection_minutes
 from . import air_quality_options as aq_options
+from . import unit_history
 from .cfg import (
     _platform_command_names,
     _rename_meta_data,
@@ -12515,6 +12516,16 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                     entity,
                     device_config,
                 )
+                if (current_entity.get(CONF_PLATFORM) == "sensor"
+                        and entity.get(CONF_PLATFORM) == "sensor"
+                        and unit_history.unit_definition(current_entity) != unit_history.unit_definition(entity)):
+                    self._unit_edit = (device_name, entity, device_config)
+                    self._unit_options_snapshot = _plain_options(self.config_entry.options)
+                    self._unit_old_id = _virtual_entity_id(current_entity)
+                    self._unit_metadata = await unit_history.statistics_snapshot(self.hass, self._unit_old_id)
+                    self._unit_resolved, self._unit_target = unit_history.configured_unit(self.hass, entity)
+                    self._unit_previous = unit_history.configured_unit(self.hass, current_entity)[1]
+                    return await self.async_step_unit_change()
                 return self.async_create_entry(data=options)
             except InvalidJson as err:
                 errors[err.field_name] = "invalid_json"
@@ -12569,6 +12580,51 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
             data_schema=_entity_schema(defaults),
             errors=errors,
         )
+
+    async def async_step_unit_change(self, user_input=None):
+        """Require an explicit history policy before saving a sensor unit edit."""
+        if not hasattr(self, "_unit_edit"):
+            return await self.async_step_select_entity()
+        errors = {}
+        device_name, entity, device_config = self._unit_edit
+        choices = ["keep"]
+        metadata = self._unit_metadata
+        if (self._unit_resolved and metadata and metadata.get("source") == "recorder"
+                and self._unit_old_id == _virtual_entity_id(entity)
+                and metadata.get("unit_of_measurement") != self._unit_target):
+            choices.append("relabel")
+            from homeassistant.components.recorder.statistics import can_convert_units
+            if can_convert_units(metadata.get("unit_class"), metadata.get("unit_of_measurement"), self._unit_target):
+                choices.append("convert")
+        if user_input is not None:
+            policy = user_input.get("history_policy")
+            try:
+                self._resolve_edit_selection()
+                if _plain_options(self.config_entry.options) != self._unit_options_snapshot:
+                    raise InvalidEntitySelection
+                if policy not in choices or (policy != "keep" and user_input.get("confirm_history") is not True):
+                    raise ValueError("Explicit history confirmation required")
+                if policy != "keep" and unit_history.configured_unit(self.hass, entity) != (True, self._unit_target):
+                    raise ValueError("The template unit changed; reopen this step")
+                options = _replace_ui_entity(self.config_entry.options, self._edit_device_name,
+                    self._edit_index, device_name, entity, device_config)
+                # All entity validation is complete before touching statistics.
+                await unit_history.apply_statistics_policy(self.hass, self._unit_old_id,
+                    policy, self._unit_target, metadata)
+                return self.async_create_entry(data=options)
+            except InvalidEntitySelection:
+                return self.async_abort(reason="entity_not_found")
+            except (ValueError, TimeoutError, exceptions.HomeAssistantError):
+                errors["base"] = "unit_history_failed"
+        return self.async_show_form(step_id="unit_change", errors=errors,
+            description_placeholders={"entity_id": self._unit_old_id,
+                "old_unit": str(self._unit_previous), "new_unit": str(self._unit_target) if self._unit_resolved else "?",
+                "statistics_unit": str(metadata.get("unit_of_measurement")) if metadata else "—"},
+            data_schema=vol.Schema({
+                vol.Required("history_policy", default="keep"): selector.SelectSelector(
+                    selector.SelectSelectorConfig(options=choices, translation_key="unit_history_policy")),
+                vol.Optional("confirm_history", default=False): bool,
+            }))
 
     async def async_step_edit_motion_hold(self, user_input=None):
         """Update the hold time for an existing generated motion helper."""

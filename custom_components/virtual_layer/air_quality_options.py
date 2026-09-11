@@ -585,7 +585,7 @@ def recipe_from_form(mode, values):
     return normalize(recipe)
 
 
-def generate(recipe):
+def generate(recipe, *, source_units=None):
     """Render finite measurements in a declared unit into explicit categories."""
     recipe = normalize(recipe)
     mode = recipe["mode"]
@@ -603,7 +603,7 @@ def generate(recipe):
         # Macros isolate each measurement's namespace from the overall rank.
         profiles = recipe.get("measurements", [])
         macros = "".join(
-            "{% macro measurement_" + str(i) + "() %}" + generate(item) + "{% endmacro %}"
+            "{% macro measurement_" + str(i) + "() %}" + generate(item, source_units=source_units) + "{% endmacro %}"
             for i, item in enumerate(profiles)
         )
         overrides = "{% set overrides = {" + ", ".join(
@@ -694,6 +694,8 @@ def generate(recipe):
             if attribute
             else source_unit_expression()
         )
+        if not attribute and source_units:
+            unit = "(" + unit + " or " + repr(source_units) + ".get(entity_id, ''))"
         body += (
             "{% set unit = " + unit + " %}"
             "{% set factor = " + repr(factors) + ".get(unit) %}"

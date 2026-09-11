@@ -49,7 +49,7 @@
       },
       "air_quality": {
         "title": "Choose air-quality logic",
-        "description": "Configure how this entity determines its overall air-quality category before reviewing templates. This recipe generates editable Jinja; it does not configure your Matter bridge. Choose source categories, your own measurement boundaries, a fixed category, or custom Jinja. A categorical sensor.<name>_air_quality companion is generated on the same Device for MatterBridge 3.10.8 + matterbridge-hass 1.5.0. Set the plugin Air Quality Regex to match its actual entity ID exactly. This is a category string, not numeric AQI: do not add a numeric device class or unit. Plugin 1.5.0 skips unknown updates, so the previous Matter category may remain.",
+        "description": "Configure how this entity determines its overall air-quality category before reviewing templates. This recipe generates editable Jinja; it does not configure your Matter bridge. Choose source categories, your own measurement boundaries, a fixed category, or custom Jinja. A categorical sensor.name_air_quality companion is generated on the same Device for MatterBridge 3.10.8 + matterbridge-hass 1.5.0. Set the plugin Air Quality Regex to match its actual entity ID exactly. This is a category string, not numeric AQI: do not add a numeric device class or unit. Plugin 1.5.0 skips unknown updates, so the previous Matter category may remain.",
         "data": {
           "mode": "Determination method"
         },
@@ -71,7 +71,7 @@
       },
       "entity": {
         "title": "Add Virtual Entity",
-        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed <entity_id>_aqi categorical sensor named <name> Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
+        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed entity_id_aqi categorical sensor named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",
@@ -910,7 +910,11 @@
     }
   },
   "options": {
+    "abort": {
+      "entity_not_found": "The configuration changed while this form was open. Reopen the entity editor before changing its unit or history."
+    },
     "error": {
+      "unit_history_failed": "Confirm the statistics change. If it fails, reopen this step to refresh metadata, or keep existing history. No raw history is rewritten.",
       "invalid_icon": "Enter an icon in prefix:name format, or leave it empty.",
       "invalid_pull_interval": "Enter non-negative whole seconds within the supported date range. Use 0 to disable periodic updates.",
       "invalid_parent_device": "Select an existing parent device without a circular relationship, or clear the selection.",
@@ -1015,7 +1019,7 @@
       },
       "edit_air_quality": {
         "title": "Choose air-quality logic",
-        "description": "Configure how this entity determines its overall air-quality category before reviewing templates. This recipe generates editable Jinja; it does not configure your Matter bridge. Choose source categories, your own measurement boundaries, a fixed category, or custom Jinja. A categorical sensor.<name>_air_quality companion is generated on the same Device for MatterBridge 3.10.8 + matterbridge-hass 1.5.0. Set the plugin Air Quality Regex to match its actual entity ID exactly. This is a category string, not numeric AQI: do not add a numeric device class or unit. Plugin 1.5.0 skips unknown updates, so the previous Matter category may remain.",
+        "description": "Configure how this entity determines its overall air-quality category before reviewing templates. This recipe generates editable Jinja; it does not configure your Matter bridge. Choose source categories, your own measurement boundaries, a fixed category, or custom Jinja. A categorical sensor.name_air_quality companion is generated on the same Device for MatterBridge 3.10.8 + matterbridge-hass 1.5.0. Set the plugin Air Quality Regex to match its actual entity ID exactly. This is a category string, not numeric AQI: do not add a numeric device class or unit. Plugin 1.5.0 skips unknown updates, so the previous Matter category may remain.",
         "data": {
           "mode": "Determination method"
         },
@@ -1023,9 +1027,15 @@
           "mode": "Source: use textual categories. Measurement: classify finite measurements with your own five boundaries. Fixed: publish one chosen category. Custom: keep or write Jinja on the next screen."
         }
       },
+      "unit_change": {
+        "title": "Handle existing values after a unit change",
+        "description": "Entity: {entity_id}. Configured unit: {old_unit} → {new_unit}. Recorded statistics unit: {statistics_unit}. Keep history leaves all stored data unchanged. Correct label keeps statistic numbers and changes their unit only (for values already expressed in the new unit). Convert mathematically converts all short- and long-term statistics. These actions do not rewrite raw state history, current values, restored values, templates, or thresholds. The new configuration applies to future readings. Do not correct labels if the history contains mixed units; that requires a separate time-range repair. History actions are unavailable without statistics, with an unresolved template, or when the entity ID changes. A '?' unit could not be resolved.",
+        "data": {"history_policy": "Existing statistics", "confirm_history": "Confirm modification of all statistics for this entity"},
+        "data_description": {"history_policy": "Keep is the safe default. Correct label is not numerical conversion. Convert preserves physical quantities using Home Assistant's unit converter.", "confirm_history": "Required for correction or conversion. Applies to all recorded statistical periods, not a selected date range. Cancel the flow to leave the entity configuration unchanged."}
+      },
       "edit_entity": {
         "title": "Edit Virtual Entity",
-        "description": "Update this virtual entity and save the new configuration. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed <entity_id>_aqi categorical sensor named <name> Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
+        "description": "Update this virtual entity and save the new configuration. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed entity_id_aqi categorical sensor named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",
@@ -1687,7 +1697,7 @@
       },
       "air_quality": {
         "title": "Choose air-quality logic",
-        "description": "Configure how this entity determines its overall air-quality category before reviewing templates. This recipe generates editable Jinja; it does not configure your Matter bridge. Choose source categories, your own measurement boundaries, a fixed category, or custom Jinja. A categorical sensor.<name>_air_quality companion is generated on the same Device for MatterBridge 3.10.8 + matterbridge-hass 1.5.0. Set the plugin Air Quality Regex to match its actual entity ID exactly. This is a category string, not numeric AQI: do not add a numeric device class or unit. Plugin 1.5.0 skips unknown updates, so the previous Matter category may remain.",
+        "description": "Configure how this entity determines its overall air-quality category before reviewing templates. This recipe generates editable Jinja; it does not configure your Matter bridge. Choose source categories, your own measurement boundaries, a fixed category, or custom Jinja. A categorical sensor.name_air_quality companion is generated on the same Device for MatterBridge 3.10.8 + matterbridge-hass 1.5.0. Set the plugin Air Quality Regex to match its actual entity ID exactly. This is a category string, not numeric AQI: do not add a numeric device class or unit. Plugin 1.5.0 skips unknown updates, so the previous Matter category may remain.",
         "data": {
           "mode": "Determination method"
         },
@@ -1697,7 +1707,7 @@
       },
       "entity": {
         "title": "Add Virtual Entity",
-        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed <entity_id>_aqi categorical sensor named <name> Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
+        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed entity_id_aqi categorical sensor named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged; configure Matterbridge Air Quality Regex separately.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",
@@ -2698,6 +2708,9 @@
         "bearer": "Bearer token",
         "query": "api_key query parameter"
       }
+    },
+    "unit_history_policy": {
+      "options": {"keep": "Keep existing history", "relabel": "Correct statistics unit label (keep numbers)", "convert": "Convert statistics values to the new unit"}
     },
     "matter_light_type": {
       "options": {

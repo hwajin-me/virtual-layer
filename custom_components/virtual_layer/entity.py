@@ -28,7 +28,7 @@ from homeassistant.const import (
     STATE_CLOSED,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import Context, CoreState, callback
+from homeassistant.core import Context, CoreState, State, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import (
@@ -1407,33 +1407,40 @@ class VirtualEntity(RestoreEntity):
             if not (owns_value or owns_grade):
                 return
             sources = recipe.get("sources", [])
-            live_recipe = aq_options.automatic_recipe(
-                sources, [self.hass.states.get(source) for source in sources], previous=recipe,
-            )
-            basis = "configured"
+            states = [self.hass.states.get(source) for source in sources]
+            source_units = {}
             fallback_sources = self._config.get("_air_quality_fallback_sources", [])
-            if generated and fallback_sources:
-                helper = aq_options.generate(live_recipe)
-                if str(self._render_template(helper)).strip() not in AIR_QUALITY_LEVELS:
-                    quantity = self._config.get("_air_quality_fallback_quantity")
-                    candidates = [self.hass.states.get(source) for source in fallback_sources]
-                    candidates = [state for state in candidates if state is not None
-                                  and quantity is not None and aq_options.infer_quantity(state) == quantity]
-                    fallback = aq_options.automatic_recipe(
-                        [state.entity_id for state in candidates], candidates,
-                    ) if candidates else None
-                    if fallback and str(self._render_template(aq_options.generate(fallback))).strip() in AIR_QUALITY_LEVELS:
-                        live_recipe = fallback
-                        basis = "source_measurements"
+            # Borrow consistent metadata only, never replace the configured
+            # composite value/reducer with worst-of-originals evaluation.
+            if generated and fallback_sources and len(states) == 1 and states[0] is not None:
+                parent = states[0]
+                quantity = self._config.get("_air_quality_fallback_quantity")
+                candidates = [self.hass.states.get(source) for source in fallback_sources]
+                if (parent.entity_id.startswith("sensor.")
+                        and not parent.attributes.get("unit_of_measurement")
+                        and quantity is not None
+                        and all(state is not None and aq_options.infer_quantity(state) == quantity for state in candidates)):
+                    units = {aq_options.normalize_unit(state.attributes.get("unit_of_measurement")) for state in candidates}
+                    if len(units) == 1 and next(iter(units)) in aq_options.UNITS:
+                        unit = next(iter(units))
+                        source_units[parent.entity_id] = unit
+                        states = [State(parent.entity_id, parent.state,
+                                        {**parent.attributes, "unit_of_measurement": unit})]
+            live_recipe = aq_options.automatic_recipe(
+                sources, states, previous=recipe,
+            )
+            basis = "combined_inherited_unit" if source_units else "configured"
             self._virtual_attributes["air_quality_evaluation_basis"] = basis
-            if live_recipe != getattr(self, "_aq_runtime_recipe", None):
-                helper = aq_options.generate(live_recipe)
+            self._virtual_attributes["air_quality_inferred_units"] = source_units
+            runtime_signature = (live_recipe, source_units)
+            if runtime_signature != getattr(self, "_aq_runtime_recipe", None):
+                helper = aq_options.generate(live_recipe, source_units=source_units)
                 if owns_value:
                     self._value_template = helper
                 if owns_grade:
                     self._native_templates["air_quality"] = helper
                 self._virtual_attributes["air_quality_logic"] = live_recipe
-                self._aq_runtime_recipe = live_recipe
+                self._aq_runtime_recipe = runtime_signature
         except (TemplateError, TypeError, ValueError, vol.Invalid):
             # Keep malformed legacy records loadable; fallback handles no grade.
             return

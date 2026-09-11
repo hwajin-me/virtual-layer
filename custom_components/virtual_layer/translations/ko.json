@@ -49,7 +49,7 @@
       },
       "air_quality": {
         "title": "공기질 판정 방식 선택",
-        "description": "템플릿을 확인하기 전에 이 엔터티의 종합 공기질 판정 로직을 설정합니다. 설정은 편집 가능한 Jinja를 생성하며 Matter 브리지 자체를 설정하지는 않습니다. 소스 등급 사용, 측정값 경계값 판정, 고정 등급, 직접 Jinja 작성 중 선택하세요. MatterBridge 3.10.8 + matterbridge-hass 1.5.0용으로 같은 Device에 sensor.<이름>_air_quality 등급 센서를 자동 생성합니다. 플러그인의 Air Quality Regex에 이 센서의 실제 ID를 정확히 지정하세요. 숫자 AQI가 아닌 등급 문자열이며 device_class·단위를 추가하지 마세요. 플러그인 1.5.0은 unknown 갱신을 건너뛰어 이전 Matter 등급이 남을 수 있습니다.",
+        "description": "템플릿을 확인하기 전에 이 엔터티의 종합 공기질 판정 로직을 설정합니다. 설정은 편집 가능한 Jinja를 생성하며 Matter 브리지 자체를 설정하지는 않습니다. 소스 등급 사용, 측정값 경계값 판정, 고정 등급, 직접 Jinja 작성 중 선택하세요. MatterBridge 3.10.8 + matterbridge-hass 1.5.0용으로 같은 Device에 sensor.이름_air_quality 등급 센서를 자동 생성합니다. 플러그인의 Air Quality Regex에 이 센서의 실제 ID를 정확히 지정하세요. 숫자 AQI가 아닌 등급 문자열이며 device_class·단위를 추가하지 마세요. 플러그인 1.5.0은 unknown 갱신을 건너뛰어 이전 Matter 등급이 남을 수 있습니다.",
         "data": {
           "mode": "판정 방식"
         },
@@ -71,7 +71,7 @@
       },
       "entity": {
         "title": "가상 엔티티 추가",
-        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 <entity_id>_aqi 등급 센서가 자동 생성되며 이름은 <이름> Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
+        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 entity_id_aqi 등급 센서가 자동 생성되며 이름은 이름 Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
         "data": {
           "device_name": "장치 이름",
           "entity_name": "엔티티 이름",
@@ -910,7 +910,11 @@
     }
   },
   "options": {
+    "abort": {
+      "entity_not_found": "이 화면을 연 동안 설정이 변경되었습니다. 엔티티 편집 화면을 다시 열어 단위와 이력 처리를 설정하세요."
+    },
     "error": {
+      "unit_history_failed": "통계 변경 확인란을 선택하세요. 실패하면 이 단계를 다시 열어 메타데이터를 확인하거나 기존 이력 유지를 선택하세요. 원시 이력은 수정하지 않습니다.",
       "invalid_icon": "prefix:name 형식의 아이콘을 입력하거나 비워 두세요.",
       "invalid_pull_interval": "날짜 범위 내의 0 이상 정수(초)를 입력하세요. 주기적 갱신을 끄려면 0을 입력하세요.",
       "invalid_parent_device": "순환 연결이 없는 기존 상위 기기를 선택하거나 선택을 해제하세요.",
@@ -1015,7 +1019,7 @@
       },
       "edit_air_quality": {
         "title": "공기질 판정 방식 선택",
-        "description": "템플릿을 확인하기 전에 이 엔터티의 종합 공기질 판정 로직을 설정합니다. 설정은 편집 가능한 Jinja를 생성하며 Matter 브리지 자체를 설정하지는 않습니다. 소스 등급 사용, 측정값 경계값 판정, 고정 등급, 직접 Jinja 작성 중 선택하세요. MatterBridge 3.10.8 + matterbridge-hass 1.5.0용으로 같은 Device에 sensor.<이름>_air_quality 등급 센서를 자동 생성합니다. 플러그인의 Air Quality Regex에 이 센서의 실제 ID를 정확히 지정하세요. 숫자 AQI가 아닌 등급 문자열이며 device_class·단위를 추가하지 마세요. 플러그인 1.5.0은 unknown 갱신을 건너뛰어 이전 Matter 등급이 남을 수 있습니다.",
+        "description": "템플릿을 확인하기 전에 이 엔터티의 종합 공기질 판정 로직을 설정합니다. 설정은 편집 가능한 Jinja를 생성하며 Matter 브리지 자체를 설정하지는 않습니다. 소스 등급 사용, 측정값 경계값 판정, 고정 등급, 직접 Jinja 작성 중 선택하세요. MatterBridge 3.10.8 + matterbridge-hass 1.5.0용으로 같은 Device에 sensor.이름_air_quality 등급 센서를 자동 생성합니다. 플러그인의 Air Quality Regex에 이 센서의 실제 ID를 정확히 지정하세요. 숫자 AQI가 아닌 등급 문자열이며 device_class·단위를 추가하지 마세요. 플러그인 1.5.0은 unknown 갱신을 건너뛰어 이전 Matter 등급이 남을 수 있습니다.",
         "data": {
           "mode": "판정 방식"
         },
@@ -1023,9 +1027,15 @@
           "mode": "소스: 문자열 등급을 사용합니다. 측정값: 직접 지정한 경계값 5개로 판정합니다. 고정: 선택한 등급을 유지합니다. 직접 작성: 다음 화면에서 Jinja를 유지하거나 작성합니다."
         }
       },
+      "unit_change": {
+        "title": "단위 변경 후 기존 값 처리",
+        "description": "엔티티: {entity_id}. 설정 단위: {old_unit} → {new_unit}. 저장된 통계 단위: {statistics_unit}. 이력 유지는 저장된 데이터를 수정하지 않습니다. 표기 수정은 이미 새 단위로 측정된 기존 통계의 숫자를 유지하고 단위만 수정합니다. 환산은 모든 단기·장기 통계 수치를 새 단위로 환산합니다. 원시 상태 이력, 현재값, 복원값, 템플릿, 역치는 변경하지 않으며 새 설정은 이후 측정에 적용됩니다. 서로 다른 단위가 이력에 섞여 있으면 표기 수정을 하지 마세요. 기간별 별도 보정이 필요합니다. 통계가 없거나 템플릿 단위를 확인할 수 없거나 엔티티 ID가 바뀌면 통계 변경을 제공하지 않습니다. '?'는 단위 확인 실패입니다.",
+        "data": {"history_policy": "기존 통계 처리", "confirm_history": "이 엔티티의 전체 통계 변경 확인"},
+        "data_description": {"history_policy": "기본값은 안전한 이력 유지입니다. 표기 수정은 숫자 환산이 아닙니다. 환산은 Home Assistant의 단위 변환을 통해 물리량을 유지합니다.", "confirm_history": "표기 수정·환산 시 필수입니다. 특정 기간이 아닌 전체 통계에 적용됩니다. 설정을 변경하지 않으려면 flow를 취소하세요."}
+      },
       "edit_entity": {
         "title": "가상 엔티티 수정",
-        "description": "가상 엔티티를 수정하고 새 구성을 저장합니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 <entity_id>_aqi 등급 센서가 자동 생성되며 이름은 <이름> Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
+        "description": "가상 엔티티를 수정하고 새 구성을 저장합니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 entity_id_aqi 등급 센서가 자동 생성되며 이름은 이름 Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
         "data": {
           "device_name": "장치 이름",
           "entity_name": "엔티티 이름",
@@ -1687,7 +1697,7 @@
       },
       "air_quality": {
         "title": "공기질 판정 방식 선택",
-        "description": "템플릿을 확인하기 전에 이 엔터티의 종합 공기질 판정 로직을 설정합니다. 설정은 편집 가능한 Jinja를 생성하며 Matter 브리지 자체를 설정하지는 않습니다. 소스 등급 사용, 측정값 경계값 판정, 고정 등급, 직접 Jinja 작성 중 선택하세요. MatterBridge 3.10.8 + matterbridge-hass 1.5.0용으로 같은 Device에 sensor.<이름>_air_quality 등급 센서를 자동 생성합니다. 플러그인의 Air Quality Regex에 이 센서의 실제 ID를 정확히 지정하세요. 숫자 AQI가 아닌 등급 문자열이며 device_class·단위를 추가하지 마세요. 플러그인 1.5.0은 unknown 갱신을 건너뛰어 이전 Matter 등급이 남을 수 있습니다.",
+        "description": "템플릿을 확인하기 전에 이 엔터티의 종합 공기질 판정 로직을 설정합니다. 설정은 편집 가능한 Jinja를 생성하며 Matter 브리지 자체를 설정하지는 않습니다. 소스 등급 사용, 측정값 경계값 판정, 고정 등급, 직접 Jinja 작성 중 선택하세요. MatterBridge 3.10.8 + matterbridge-hass 1.5.0용으로 같은 Device에 sensor.이름_air_quality 등급 센서를 자동 생성합니다. 플러그인의 Air Quality Regex에 이 센서의 실제 ID를 정확히 지정하세요. 숫자 AQI가 아닌 등급 문자열이며 device_class·단위를 추가하지 마세요. 플러그인 1.5.0은 unknown 갱신을 건너뛰어 이전 Matter 등급이 남을 수 있습니다.",
         "data": {
           "mode": "판정 방식"
         },
@@ -1697,7 +1707,7 @@
       },
       "entity": {
         "title": "가상 엔티티 추가",
-        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 <entity_id>_aqi 등급 센서가 자동 생성되며 이름은 <이름> Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
+        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 entity_id_aqi 등급 센서가 자동 생성되며 이름은 이름 Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지되며 Matterbridge Air Quality Regex는 별도로 설정해야 합니다.",
         "data": {
           "device_name": "장치 이름",
           "entity_name": "엔티티 이름",
@@ -2698,6 +2708,9 @@
         "bearer": "Bearer 토큰",
         "query": "api_key 쿼리 매개변수"
       }
+    },
+    "unit_history_policy": {
+      "options": {"keep": "기존 이력 유지", "relabel": "통계 단위 표기 수정 (숫자 유지)", "convert": "통계 수치를 새 단위로 환산"}
     },
     "matter_light_type": {
       "options": {

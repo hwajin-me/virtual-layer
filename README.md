@@ -585,11 +585,15 @@ timestamp. Late metadata can repair owned automatic helpers on explicit
 air_quality entities and per-source companions too; customized formulas are
 not replaced. A bridge
 can also recover an unconfigured numeric companion when its composite parent
-lacks a usable unit: it evaluates same-pollutant original sensors separately,
-using each source's declared concentration unit, and takes the worst valid grade.
-`air_quality_evaluation_basis: source_measurements` identifies this path; it is
-not a classification of the unitless composite number. Once the parent's own
-measurement is usable, `configured` evaluation resumes. Explicit measurement
+lacks a unit: if all original sensors identify the same pollutant and declare
+the same normalized unit, that unit is used to classify the **composite value**.
+The parent's reducer is never replaced by worst-of-originals aggregation.
+`air_quality_evaluation_basis: combined_inherited_unit` and
+`air_quality_inferred_units` identify this metadata-only inheritance. Conflicting,
+missing, or incompatible units do not trigger a different aggregation policy;
+the last valid grade is retained as stale, or remains unknown without history.
+An explicit parent unit is authoritative. Once it is supplied, `configured`
+evaluation resumes. Explicit measurement
 overrides are never bypassed, and the original sensors/parent metadata are not
 rewritten. This includes CO concentration sensors (`carbon_monoxide`, ppm/ppb),
 not binary CO alarms. A bridge
@@ -603,7 +607,21 @@ or infinity. Display precision must be a nonnegative integer.
 
 UI-managed virtual measurement sensors also receive an automatic companion on
 load: `sensor.<measurement_object_id>_aqi`, named `<measurement name> Air Quality`.
-This applies to both newly created and existing Virtual Layer sensors with a
+
+When editing a sensor's configured unit (including a native unit template), a
+**Handle existing values after a unit change** step appears before saving.
+Keep history is the default. With existing Recorder statistics and a resolvable
+unit, you can explicitly confirm either correcting the statistics unit label
+without changing numbers, or mathematically converting the statistics. These
+operations affect all short- and long-term statistics for that entity only.
+They do not rewrite raw state history, current/restored readings, templates, or
+thresholds. If different units were mixed within the recorded period, do not
+relabel the whole series; it needs a separate time-range repair. Concurrent
+configuration/metadata changes are rejected. An entity ID change or an
+unresolved dynamic template only permits keeping history in this step.
+
+Automatic companions
+apply to both newly created and existing Virtual Layer sensors with a
 recognized air-quality device class or unambiguous ID/name. Original and unrelated
 Home Assistant sensors are not modified. Companions share the parent's Device,
 follow its identity/name changes and disappear when the parent is deleted or no

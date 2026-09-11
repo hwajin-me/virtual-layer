@@ -480,9 +480,34 @@ async def test_config_flow_create_modify_runtime():
     hass = HomeAssistant(str(config_dir))
     loader.async_setup(hass)
     try:
-        assert await bootstrap.async_from_config_dict({}, hass) is hass
+        assert await bootstrap.async_from_config_dict({"recorder": {
+            "db_url": f"sqlite:///{config_dir / 'unit-history.db'}",
+        }}, hass) is hass
+        assert "recorder" in hass.config.components
         assert await async_setup_component(hass, COMPONENT_DOMAIN, {})
         await hass.async_start()
+        from custom_components.virtual_layer import unit_history
+        from homeassistant.components.recorder import get_instance
+        from homeassistant.components.recorder.statistics import async_import_statistics, statistics_during_period
+        from homeassistant.components.recorder.tasks import SynchronizeTask
+        from functools import partial
+        from datetime import timedelta
+        from homeassistant.util import dt as dt_util
+        start = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+        for policy, expected in [("convert", 1), ("relabel", 1000)]:
+            statistic_id = f"sensor.docker_unit_{policy}"
+            async_import_statistics(hass, {"source": "recorder", "statistic_id": statistic_id,
+                "name": "Unit test", "unit_class": "power", "unit_of_measurement": "W",
+                "mean_type": 1, "has_sum": False},
+                [{"start": start, "mean": 1000, "min": 900, "max": 1100}])
+            committed = hass.loop.create_future()
+            get_instance(hass).queue_task(SynchronizeTask(committed))
+            await committed
+            metadata = await unit_history.statistics_snapshot(hass, statistic_id)
+            await unit_history.apply_statistics_policy(hass, statistic_id, policy, "kW", metadata)
+            result = await get_instance(hass).async_add_executor_job(partial(statistics_during_period,
+                hass, start, None, {statistic_id}, "hour", None, {"mean"}))
+            assert result[statistic_id][0]["mean"] == expected
         await test_tracker_timer_dispatch(hass)
         await test_source_startup_grace(hass)
         await test_image_camera_encoding(hass)
@@ -858,6 +883,14 @@ async def test_config_flow_create_modify_runtime():
             "attributes": {"unit_of_measurement": "ppm"},
         })
         hass.states.async_set("binary_sensor.docker_co_alarm_input", "off")
+        for source, value in [("sensor.docker_composite_co2_a", "1111"), ("sensor.docker_composite_co2_b", "974")]:
+            hass.states.async_set(source, value, {"device_class": "carbon_dioxide", "unit_of_measurement": "ppm"})
+        next(iter(options["devices"].values())).append({
+            "platform": "sensor", "entity_id": "sensor.docker_composite_co2",
+            "name": "Composite CO2", "class": "carbon_dioxide", "initial_value": "1042.5",
+            "source_entities": ["sensor.docker_composite_co2_a", "sensor.docker_composite_co2_b"],
+            "native_templates": {"unit_of_measurement": "{{ none }}"},
+        })
         next(iter(options["devices"].values())).append({
             "platform": "binary_sensor", "entity_id": "binary_sensor.docker_co_alarm",
             "name": "Docker CO Alarm", "class": "carbon_monoxide",
@@ -867,7 +900,8 @@ async def test_config_flow_create_modify_runtime():
         hass.config_entries.async_update_entry(entry, options=options)
         await hass.async_block_till_done()
         assert hass.states.get("sensor.docker_carbon_monoxide_aqi").state == "fair"
-        assert hass.states.get("sensor.docker_carbon_monoxide_aqi").attributes["air_quality_evaluation_basis"] == "source_measurements"
+        assert hass.states.get("sensor.docker_carbon_monoxide_aqi").attributes["air_quality_evaluation_basis"] == "combined_inherited_unit"
+        assert hass.states.get("sensor.docker_composite_co2_aqi").state == "moderate"
         assert "unit_of_measurement" not in hass.states.get("sensor.docker_carbon_monoxide").attributes
         assert hass.states.get("sensor.docker_co_detector_2_co_aqi").state == "good"
         assert hass.states.get("sensor.docker_co_detector_2_co").attributes["unit_of_measurement"] == "ppm"
@@ -877,6 +911,7 @@ async def test_config_flow_create_modify_runtime():
         assert hass.states.get("sensor.docker_carbon_monoxide_aqi").state == "fair"
         assert hass.states.get("sensor.docker_co_detector_2_co_aqi").state == "good"
         assert float(hass.states.get("sensor.docker_co_detector_2_co").state) == 0
+        assert hass.states.get("sensor.docker_composite_co2_aqi").state == "moderate"
         assert hass.states.get("sensor.docker_co_alarm_aqi").state == "good"
         for value, expected in [("on", "poor"), ("unavailable", "poor"), ("off", "good")]:
             hass.states.async_set("binary_sensor.docker_co_alarm_input", value)
