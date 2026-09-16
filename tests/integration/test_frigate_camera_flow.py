@@ -1,6 +1,8 @@
 """Create/edit Frigate camera stream defaults through real HA options flows."""
 
 import pytest
+
+from tests.flow_helpers import suggested_form_values
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.template import Template
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -42,7 +44,7 @@ async def test_frigate_camera_add_blank_and_edit_keep(hass, helper_enabled, subm
     assert result["step_id"] == "entity_helper"
     result = await manager.async_configure(result["flow_id"], {CONF_USE_TEMPLATE_HELPER: helper_enabled})
     assert result["step_id"] == "entity"
-    form = _flatten_entity_form_sections(result["data_schema"]({}))
+    form = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     expected = "rtsp://go2rtc.myong.us:8554/camera1?video=h264&audio=all"
     assert Template(form[CONF_NATIVE_VALUE_TEMPLATES]["stream_source"], hass).async_render() == expected
     form[CONF_NATIVE_VALUE_TEMPLATES]["stream_source"] = submitted
@@ -69,7 +71,7 @@ async def test_frigate_camera_add_blank_and_edit_keep(hass, helper_enabled, subm
     if result["step_id"] == "edit_entity_helper":
         result = await manager.async_configure(result["flow_id"], {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_KEEP})
     assert result["step_id"] == "edit_entity"
-    form = _flatten_entity_form_sections(result["data_schema"]({}))
+    form = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert Template(form[CONF_NATIVE_VALUE_TEMPLATES]["stream_source"], hass).async_render() == expected
     result = await manager.async_configure(result["flow_id"], form)
     assert result["type"] == "create_entry", result

@@ -4,6 +4,8 @@ from datetime import timedelta
 from functools import partial
 
 import pytest
+
+from tests.flow_helpers import suggested_form_values
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.util import dt as dt_util
 
@@ -39,7 +41,7 @@ async def make_unit_flow(hass, unit="kW"):
     defaults[flow_module.CONF_NATIVE_VALUE_TEMPLATES] = {"native_unit_of_measurement": flow_module._literal_template(unit)}
     result = await flow.async_step_edit_entity(defaults)
     if result.get("step_id") == "edit_entity" and not result.get("errors"):
-        defaults = flow_module._flatten_entity_form_sections(result["data_schema"]({}))
+        defaults = flow_module._flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
         result = await flow.async_step_edit_entity(defaults)
     assert result.get("errors", {}) == {}
     return flow, entry, result
@@ -90,7 +92,7 @@ async def test_statistics_policy_uses_real_recorder(recorder_mock, hass, policy,
     flow, entry, result = await make_unit_flow(hass, None if policy == "restore" else "kW")
     assert result["step_id"] == "unit_change"
     if policy == "restore":
-        assert result["data_schema"]({})["history_policy"] == "restore"
+        assert suggested_form_values(result["data_schema"])["history_policy"] == "restore"
     if policy not in ("keep", "restore"):
         result = await flow.async_step_unit_change({"history_policy": policy})
         assert result["errors"]["base"] == "unit_history_failed"

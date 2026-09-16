@@ -9,6 +9,8 @@ import homeassistant.helpers.area_registry as ar
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
 import pytest
+
+from tests.flow_helpers import suggested_form_values
 import yaml
 import voluptuous as vol
 from homeassistant.components.camera import Camera, CameraEntityFeature, CameraState
@@ -193,7 +195,7 @@ async def _accept_binary_detection_defaults(hass, result):
     """Traverse the mandatory binary settings step in existing flow scenarios."""
     if result.get("step_id") in {"motion_hold", "edit_motion_hold"}:
         result = await hass.config_entries.options.async_configure(
-            result["flow_id"], result["data_schema"]({})
+            result["flow_id"], suggested_form_values(result["data_schema"])
         )
         assert result["step_id"] in {"entity", "edit_entity"}
     return result
@@ -207,7 +209,7 @@ async def _choose_add_template_helper(
     target_entity_type=None,
 ):
     if result["step_id"] == "entity_type":
-        defaults = result["data_schema"]({})
+        defaults = suggested_form_values(result["data_schema"])
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
             {
@@ -231,7 +233,7 @@ async def _choose_add_template_helper(
     if result["step_id"] == "matter_fan_levels":
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            result["data_schema"]({}),
+            suggested_form_values(result["data_schema"]),
         )
     return result
 
@@ -254,7 +256,7 @@ async def test_edit_flow_rejects_bad_common_value_and_allows_correction(hass, fi
         result["flow_id"], {CONF_ENTITY_KEY: json.dumps(["key", "selected"], separators=(",", ":"))},
     )
     result = await manager.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: []})
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     result = await manager.async_configure(result["flow_id"], {**defaults, field: value})
     assert result["type"] == FlowResultType.FORM
     assert result["errors"][field] == error
@@ -281,7 +283,7 @@ async def test_edit_flow_rechecks_selected_entity_before_save(hass, change):
     )
     result = await manager.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: []})
     assert result["step_id"] == "edit_entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     defaults[CONF_ENTITY_NAME] = "Edited"
     devices = {
         "reorder": {"Room": [selected, first]},
@@ -335,7 +337,7 @@ async def test_climate_source_can_be_converted_to_temperature_sensor_in_add_flow
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_USE_TEMPLATE_HELPER: True}
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_VALUE_TEMPLATE] == (
         "{{ state_attr('climate.living_room', 'current_temperature') | float(none) }}"
     )
@@ -413,7 +415,7 @@ async def test_climate_and_temperature_sensor_show_conversion_step_in_add_flow(h
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_USE_TEMPLATE_HELPER: True}
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     assert "state_attr('climate.living_room', 'current_temperature')" in defaults[
         CONF_VALUE_TEMPLATE
@@ -478,7 +480,7 @@ async def test_humidifier_source_offers_sensor_and_binary_sensor_paths(hass):
         result["flow_id"], {CONF_USE_TEMPLATE_HELPER: True}
     )
     result = await _accept_binary_detection_defaults(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "binary_sensor"
     assert defaults[CONF_VALUE_TEMPLATE] == "{{ bedroom }}"
 
@@ -506,7 +508,7 @@ async def test_conversion_error_preserves_individual_measurements(hass):
         {CONF_REFERENCE_ENTITY_ID: ["climate.room", "sensor.humidity"]},
     )
     assert result["step_id"] == "sensor_conversion"
-    defaults = result["data_schema"]({})
+    defaults = suggested_form_values(result["data_schema"])
     assert defaults["sensor_source_conversion_0"] == "current_humidity"
     submitted = {
         "sensor_source_conversion_0": "temperature",
@@ -518,7 +520,7 @@ async def test_conversion_error_preserves_individual_measurements(hass):
     )
     assert result["step_id"] == "sensor_conversion"
     assert result["errors"] == {"base": "incompatible_sensor_sources"}
-    assert result["data_schema"]({}) == submitted
+    assert suggested_form_values(result["data_schema"]) == submitted
     submitted["sensor_source_conversion_0"] = "current_humidity"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], submitted
@@ -548,7 +550,7 @@ async def test_multiple_light_sources_create_live_average_brightness_sensor(hass
         result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "sensor"}
     )
     assert result["step_id"] == "sensor_conversion"
-    assert result["data_schema"]({})[CONF_SENSOR_AGGREGATION] == "average"
+    assert suggested_form_values(result["data_schema"])[CONF_SENSOR_AGGREGATION] == "average"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -559,7 +561,7 @@ async def test_multiple_light_sources_create_live_average_brightness_sensor(hass
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_USE_TEMPLATE_HELPER: True}
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], defaults
     )
@@ -632,7 +634,7 @@ async def test_multiple_pm25_sensors_normalize_units_in_add_flow(hass):
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_USE_TEMPLATE_HELPER: True}
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], defaults
     )
@@ -696,7 +698,7 @@ async def test_add_flow_combines_incompatible_sensor_measurements_unitlessly(has
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_USE_TEMPLATE_HELPER: True}
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         "state_class": "measurement"
     }
@@ -754,7 +756,7 @@ async def test_edit_flow_converts_climate_entity_to_live_temperature_sensor(hass
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_FORCE}
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     assert defaults[CONF_PLATFORM] == "sensor"
     assert defaults[ATTR_ENTITY_ID] == "sensor.room_virtual"
@@ -787,7 +789,7 @@ async def test_binary_detection_settings_step_saves_mixed_class_logic(hass):
         "motion_hold_minutes": 0, "motion_detection_logic": "any_active",
     })
     assert result["step_id"] == "entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert "(active | count) > 0" in defaults[CONF_VALUE_TEMPLATE]
     result = await manager.async_configure(result["flow_id"], defaults)
     stored = _first_stored_entity(result)
@@ -818,7 +820,7 @@ async def test_multiple_boolean_domains_create_live_binary_sensor(hass):
         result["flow_id"], {CONF_USE_TEMPLATE_HELPER: True}
     )
     result = await _accept_binary_detection_defaults(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "binary_sensor"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], defaults
@@ -867,7 +869,7 @@ async def test_options_flow_persists_native_templates_and_command_actions(hass):
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: []},
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     native_templates = {
         "fan_modes": "{{ state_attr('climate.real', 'fan_modes') }}",
         "fan_mode": "{{ state_attr('climate.real', 'fan_mode') }}",
@@ -908,7 +910,7 @@ async def test_options_flow_persists_native_templates_and_command_actions(hass):
             for marker, validator in result["data_schema"].schema.items()
         }
         assert CONF_NATIVE_TEMPLATES_JSON not in validators
-        defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+        defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
             {
@@ -960,7 +962,7 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "entity"
     assert result["errors"] == {}
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "sensor"
     assert defaults[CONF_INITIAL_VALUE] == "12.5"
     assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
@@ -1076,7 +1078,7 @@ async def test_options_flow_converts_single_switch_source_to_fan(hass):
         result,
         target_entity_type="fan",
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     assert defaults[CONF_PLATFORM] == "fan"
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["is_on"] == (
@@ -1198,7 +1200,7 @@ async def test_options_flow_edit_changes_single_switch_backed_entity_to_fan(hass
     )
 
     assert result["step_id"] == "edit_entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "fan"
     assert defaults[ATTR_ENTITY_ID] == "fan.desk_power_virtual"
     assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])["turn_on"] == [
@@ -1216,14 +1218,14 @@ async def test_options_flow_edit_changes_single_switch_backed_entity_to_fan(hass
     assert result["step_id"] == "edit_entity"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        _flatten_entity_form_sections(result["data_schema"]({})),
+        _flatten_entity_form_sections(suggested_form_values(result["data_schema"])),
     )
     assert result["step_id"] == "edit_entity_helper"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
     )
-    changed_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    changed_defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert changed_defaults[CONF_PLATFORM] == "light"
     assert changed_defaults[ATTR_ENTITY_ID] == "light.desk_power_virtual"
     assert set(changed_defaults[CONF_NATIVE_VALUE_TEMPLATES]) == set(
@@ -1267,7 +1269,7 @@ async def test_edit_type_step_preserves_legacy_custom_target_domain(hass):
     )
 
     assert result["step_id"] == "edit_entity_type"
-    assert result["data_schema"]({})[CONF_TARGET_ENTITY_TYPE] == "sensor"
+    assert suggested_form_values(result["data_schema"])[CONF_TARGET_ENTITY_TYPE] == "sensor"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {CONF_TARGET_ENTITY_TYPE: "sensor"},
@@ -1277,7 +1279,7 @@ async def test_edit_type_step_preserves_legacy_custom_target_domain(hass):
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_KEEP},
     )
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "sensor"
     assert defaults[ATTR_ENTITY_ID] == "sensor.legacy_state"
     assert defaults[CONF_VALUE_TEMPLATE] == ("{{ states('switch.legacy_source') }}")
@@ -1347,7 +1349,7 @@ async def test_edit_automatic_repairs_legacy_switch_backed_fan_actions(hass):
         {CONF_REFERENCE_ENTITY_ID: ["switch.legacy_fan_power"]},
     )
     assert result["step_id"] == "edit_entity_type"
-    assert result["data_schema"]({})[CONF_TARGET_ENTITY_TYPE] == "fan"
+    assert suggested_form_values(result["data_schema"])[CONF_TARGET_ENTITY_TYPE] == "fan"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {CONF_TARGET_ENTITY_TYPE: "fan"},
@@ -1357,7 +1359,7 @@ async def test_edit_automatic_repairs_legacy_switch_backed_fan_actions(hass):
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
     )
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     assert actions["turn_on"] == [
         {
@@ -1402,7 +1404,7 @@ async def test_options_flow_ignores_restored_source_metadata(hass):
         {CONF_REFERENCE_ENTITY_ID: ["sensor.radon_sensor"]},
     )
     result = await _choose_add_template_helper(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     assert ATTR_RESTORED not in _yaml_value(defaults[CONF_ATTRIBUTES_JSON])
     assert ATTR_RESTORED not in _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
@@ -1464,7 +1466,7 @@ async def test_options_flow_camera_alias_tracks_native_camera_states(hass):
         {CONF_REFERENCE_ENTITY_ID: [source_entity_id]},
     )
     result = await _choose_add_template_helper(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     assert defaults[CONF_PLATFORM] == "camera"
     assert defaults[CONF_INITIAL_VALUE] == CameraState.RECORDING
@@ -1567,7 +1569,7 @@ async def test_options_flow_adds_h264_camera_beside_non_streaming_camera(hass):
         },
     )
     result = await _choose_add_template_helper(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     defaults[CONF_ENTITY_NAME] = "Snapshot and H.264"
     defaults[ATTR_ENTITY_ID] = "camera.snapshot_and_h264"
     defaults[CONF_NATIVE_VALUE_TEMPLATES]["stream_source"] = (
@@ -1637,7 +1639,7 @@ async def test_boiler_helper_rejects_bad_formula_at_input_step(hass, step):
     assert result["errors"] == {
         CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE: "invalid_template",
     }
-    assert result["data_schema"]({})[
+    assert suggested_form_values(result["data_schema"])[
         CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
     ] == submitted[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE]
     assert flow._reference_defaults == original
@@ -1685,7 +1687,7 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "climate"
     assert defaults[CONF_ENTITY_NAME] == "Boiler"
     assert defaults[CONF_INITIAL_VALUE] == "heat"
@@ -2783,7 +2785,7 @@ async def test_options_flow_persists_every_combined_climate_helper_template(hass
         },
     )
     result = await _choose_add_template_helper(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     assert set(defaults[CONF_NATIVE_VALUE_TEMPLATES]) == set(
         CLIMATE_NATIVE_TEMPLATE_PROPERTIES
@@ -2873,7 +2875,7 @@ async def test_options_flow_rejects_invalid_jinja_before_saving(hass, caplog):
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: []},
     )
-    defaults = result["data_schema"]({})
+    defaults = suggested_form_values(result["data_schema"])
     defaults[CONF_ADVANCED_SETTINGS][CONF_ATTRIBUTE_TEMPLATES_JSON] = (
         '{"broken": "{{ broken + }}"}'
     )
@@ -2911,7 +2913,7 @@ async def test_options_flow_rejects_an_entity_id_owned_by_another_entity(hass):
         result["flow_id"],
         {CONF_REFERENCE_ENTITY_ID: []},
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     defaults.update(
         {
             CONF_DEVICE_NAME: "Meters",
@@ -2976,7 +2978,7 @@ async def test_vacuum_edit_hides_json_and_preserves_native_templates(hass):
         for marker, validator in result["data_schema"].schema.items()
     }
     assert CONF_NATIVE_TEMPLATES_JSON not in validators
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert (
         defaults[CONF_NATIVE_VALUE_TEMPLATES][managed_property]
         == (native_templates[managed_property])
@@ -3029,7 +3031,7 @@ async def test_climate_edit_repairs_legacy_enum_repr_native_template(hass):
         {},
     )
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_action"] == ("{{ 'heating' }}")
 
     result = await hass.config_entries.options.async_configure(
@@ -3102,7 +3104,7 @@ async def test_device_tracker_edit_repairs_legacy_enum_repr_attribute_template(h
         result["flow_id"],
         {},
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -3347,7 +3349,7 @@ async def test_initial_config_flow_device_name_is_blank(hass):
     )
 
     assert result["type"] == FlowResultType.FORM
-    assert result["data_schema"]({})[ATTR_GROUP_NAME] == ""
+    assert suggested_form_values(result["data_schema"])[ATTR_GROUP_NAME] == ""
 
 
 async def test_config_flow_normalizes_and_validates_device_group_names(hass):
@@ -3767,7 +3769,7 @@ async def test_options_flow_manages_shared_device_metadata_without_editing_entit
     )
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "edit_device"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_DEVICE_ID] == "laundry-old"
 
     result = await hass.config_entries.options.async_configure(
@@ -3826,7 +3828,7 @@ async def test_options_flow_allows_device_name_collision_with_different_id(hass)
         result["flow_id"],
         {CONF_MANAGED_DEVICE_NAME: "Laundry"},
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -4019,7 +4021,7 @@ async def test_options_flow_can_edit_existing_entity(hass):
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "edit_entity_source"
-    source_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    source_defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert source_defaults[CONF_REFERENCE_ENTITY_ID] == [
         "sensor.washer_power",
         "binary_sensor.washer_door",
@@ -4037,7 +4039,7 @@ async def test_options_flow_can_edit_existing_entity(hass):
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
     )
     assert result["step_id"] == "edit_entity"
-    edit_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    edit_defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert edit_defaults[CONF_ENTITY_NAME] == "Washer Phase"
     assert edit_defaults[ATTR_ENTITY_ID] == "sensor.washer_phase"
     assert edit_defaults[CONF_PLATFORM] == "sensor"
@@ -4083,7 +4085,7 @@ async def test_options_flow_can_edit_existing_entity(hass):
     )
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        _flatten_entity_form_sections(result["data_schema"]({})),
+        _flatten_entity_form_sections(suggested_form_values(result["data_schema"])),
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -4147,7 +4149,7 @@ async def test_options_flow_aligns_entity_id_when_domain_is_edited(hass):
         result["flow_id"],
         {},
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     defaults[CONF_PLATFORM] = "binary_sensor"
     defaults[CONF_INITIAL_VALUE] = "off"
 
@@ -4157,7 +4159,7 @@ async def test_options_flow_aligns_entity_id_when_domain_is_edited(hass):
     )
     if result["type"] == FlowResultType.FORM:
         assert result["step_id"] == "edit_entity"
-        defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+        defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
         assert "device_class" in defaults[CONF_NATIVE_VALUE_TEMPLATES]
         defaults[CONF_VALUE_TEMPLATE] = "{{ 'on' }}"
         defaults[CONF_NATIVE_VALUE_TEMPLATES]["device_class"] = "{{ 'door' }}"
@@ -4269,7 +4271,7 @@ async def test_options_flow_refreshes_generated_helper_when_sources_change(
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "edit_entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     expected_helper = _reference_entity_defaults(hass, new_sources)
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "\n".join(new_sources)
     assert _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON]) == (
@@ -4376,7 +4378,7 @@ async def test_options_flow_recovers_stale_helper_after_partial_source_update(
     )
     result = await _accept_binary_detection_defaults(hass, result)
     assert result["step_id"] == "edit_entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "\n".join(new_sources)
     assert _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON]) == _yaml_value(
         new_defaults[CONF_TEMPLATE_SOURCES_JSON]
@@ -4476,7 +4478,7 @@ async def test_options_flow_recovers_sorted_legacy_boolean_or_helper(hass):
     )
     result = await _accept_binary_detection_defaults(hass, result)
     assert result["step_id"] == "edit_entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert _yaml_value(defaults[CONF_TEMPLATE_SOURCES_JSON]) == _yaml_value(
         new_defaults[CONF_TEMPLATE_SOURCES_JSON]
     )
@@ -4563,7 +4565,7 @@ async def test_edit_same_sources_can_force_helpers_from_current_source_attribute
         result["flow_id"],
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_FORCE},
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     templates = _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
     assert "energy" in templates
 
@@ -4642,7 +4644,7 @@ async def test_options_flow_handles_custom_template_when_sources_change(
     )
     result = await _accept_binary_detection_defaults(hass, result)
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "\n".join(new_sources)
     expected_template = (
         custom_template
@@ -4724,7 +4726,7 @@ async def test_edit_form_source_change_requires_helper_policy(hass):
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
     )
     result = await _accept_binary_detection_defaults(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     defaults[CONF_SOURCE_ENTITIES_TEXT] = "\n".join(new_sources)
     defaults[CONF_ENTITY_NAME] = "Renamed Combined Doors"
     defaults[CONF_DEVICE_MODEL] = "Updated Model"
@@ -4741,7 +4743,7 @@ async def test_edit_form_source_change_requires_helper_policy(hass):
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_KEEP},
     )
     result = await _accept_binary_detection_defaults(hass, result)
-    edited = _flatten_entity_form_sections(result["data_schema"]({}))
+    edited = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert edited[CONF_SOURCE_ENTITIES_TEXT] == "\n".join(new_sources)
     assert edited[CONF_ENTITY_NAME] == "Renamed Combined Doors"
     assert edited[CONF_DEVICE_MODEL] == "Updated Model"
@@ -4820,7 +4822,7 @@ async def test_repeated_source_changes_regenerate_from_latest_helper_baseline(ha
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
     )
     result = await _accept_binary_detection_defaults(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert "door_7" in defaults[CONF_VALUE_TEMPLATE]
 
     defaults[CONF_SOURCE_ENTITIES_TEXT] = "\n".join(final_sources)
@@ -4835,7 +4837,7 @@ async def test_repeated_source_changes_regenerate_from_latest_helper_baseline(ha
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
     )
     result = await _accept_binary_detection_defaults(hass, result)
-    final_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    final_defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     expected = _reference_entity_defaults(hass, final_sources)
     assert final_defaults[CONF_VALUE_TEMPLATE] == expected[CONF_VALUE_TEMPLATE]
     assert _yaml_value(final_defaults[CONF_TEMPLATE_SOURCES_JSON]) == _yaml_value(
@@ -4876,7 +4878,7 @@ async def test_edit_form_rejects_multiple_nonmergeable_media_sources(hass):
         result["flow_id"],
         {},
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     defaults[CONF_SOURCE_ENTITIES_TEXT] = "camera.front\ncamera.back"
 
     result = await hass.config_entries.options.async_configure(
@@ -4960,7 +4962,7 @@ async def test_options_flow_refreshes_untouched_native_jinja_and_keeps_custom_fi
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_AUTO},
     )
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
     expected = _reference_entity_defaults(hass, ["climate.new_unit"])
     assert (
@@ -5037,7 +5039,7 @@ async def test_options_flow_refreshes_entity_id_when_source_domain_changes(hass)
     )
     result = await _accept_binary_detection_defaults(hass, result)
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "binary_sensor"
     assert defaults[ATTR_ENTITY_ID] == "binary_sensor.combined_state"
 
@@ -5092,7 +5094,7 @@ async def test_options_flow_rejects_indirect_virtual_entity_dependency_cycle(has
         {},
     )
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     defaults[CONF_SOURCE_ENTITIES_TEXT] = "sensor.first"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -5137,7 +5139,7 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "entity"
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_ENTITY_NAME] == "Kitchen Lamp"
     assert defaults[CONF_PLATFORM] == "light"
     assert defaults[CONF_INITIAL_VALUE] == "on"
@@ -5248,7 +5250,7 @@ async def test_creation_flows_apply_the_selected_template_helper_policy(hass):
         {CONF_USE_TEMPLATE_HELPER: True},
     )
     assert result["step_id"] == "entity"
-    config_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    config_defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert config_defaults[CONF_SOURCE_ENTITIES_TEXT] == "sensor.source_temperature"
     assert "source_temperature" in config_defaults[CONF_VALUE_TEMPLATE]
     hass.config_entries.flow.async_abort(result["flow_id"])
@@ -5281,7 +5283,7 @@ async def test_creation_flows_apply_the_selected_template_helper_policy(hass):
     result = await _choose_add_template_helper(hass, result, enabled=False)
 
     assert result["step_id"] == "entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_ENTITY_NAME] == "Room Temperature"
     assert defaults[CONF_PLATFORM] == "sensor"
     assert defaults[CONF_INITIAL_VALUE] == "21.5"
@@ -5344,7 +5346,7 @@ async def test_options_flow_copy_existing_entity_avoids_source_entity_id(
         {CONF_REFERENCE_ENTITY_ID: [source_id]},
     )
     result = await _choose_add_template_helper(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     assert defaults[ATTR_ENTITY_ID] == (
         "sensor.room_k_lamp_copy" if source_id == "sensor.room_k_lamp" else "sensor.room_k_lamp"
@@ -5362,8 +5364,9 @@ async def test_options_flow_copy_existing_entity_avoids_source_entity_id(
     assert _first_stored_entity(result)[CONF_NAME] == name
 
 
-@pytest.mark.parametrize("submitted_id", ["sensor.saved_id", ""])
-async def test_edit_name_preserves_id_unless_cleared(hass, submitted_id):
+@pytest.mark.parametrize("submitted_id", ["sensor.saved_id", "", "   ", None])
+@pytest.mark.parametrize("name", ["Original", "Powder Focused Light"])
+async def test_edit_name_preserves_id_unless_cleared(hass, submitted_id, name):
     selected = {CONF_PLATFORM: "sensor", CONF_NAME: "Original",
                 ATTR_ENTITY_ID: "sensor.saved_id", ATTR_ENTITY_KEY: "selected"}
     entry = MockConfigEntry(
@@ -5377,13 +5380,21 @@ async def test_edit_name_preserves_id_unless_cleared(hass, submitted_id):
         result["flow_id"], {CONF_ENTITY_KEY: json.dumps(["key", "selected"], separators=(",", ":"))},
     )
     result = await manager.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: []})
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
-    result = await manager.async_configure(result["flow_id"], {
-        **defaults, CONF_ENTITY_NAME: "Powder Focused Light",
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+    submitted = {
+        **defaults, CONF_ENTITY_NAME: name,
         CONF_DEVICE_NAME: "Renamed Device", ATTR_ENTITY_ID: submitted_id,
-    })
+    }
+    if submitted_id is None:
+        # Clearing optional text in HA's frontend removes the key entirely.
+        submitted.pop(ATTR_ENTITY_ID)
+    submitted = result["data_schema"](submitted)
+    result = await manager.async_configure(result["flow_id"], submitted)
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert _first_stored_entity(result)[ATTR_ENTITY_ID] == (submitted_id or "sensor.pd_fclight")
+    expected = "sensor.original" if name == "Original" else "sensor.pd_fclight"
+    assert _first_stored_entity(result)[ATTR_ENTITY_ID] == (
+        (submitted_id or "").strip() or expected
+    )
 
 
 async def test_create_without_sources_generates_id_from_submitted_name(hass):
@@ -5395,7 +5406,7 @@ async def test_create_without_sources_generates_id_from_submitted_name(hass):
     manager = hass.config_entries.options
     result = await manager.async_init(entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY})
     result = await manager.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: []})
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[ATTR_ENTITY_ID] == ""
     result = await manager.async_configure(result["flow_id"], {
         **defaults, CONF_DEVICE_NAME: "Unrelated Device",
@@ -5440,7 +5451,7 @@ async def test_options_flow_refreshes_untouched_helpers_when_add_sources_change(
     result = await _accept_binary_detection_defaults(hass, result)
     result = await _choose_add_template_helper(hass, result)
     result = await _accept_binary_detection_defaults(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert "door_two" in defaults[CONF_VALUE_TEMPLATE]
 
     defaults[CONF_DEVICE_NAME] = "Doors"
@@ -5526,7 +5537,7 @@ async def test_helper_update_failure_keeps_edit_form_available(
 
     assert result["step_id"] == "edit_entity"
     assert result["errors"] == {"base": "helper_update_failed"}
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == new_source
     assert defaults[CONF_VALUE_TEMPLATE] == "{{ door_old }}"
     assert "Unable to apply Virtual Layer helper update" in caplog.text
@@ -5579,7 +5590,7 @@ async def test_options_flow_prefills_climate_native_mode_options(hass):
     )
     result = await _choose_add_template_helper(hass, result)
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "climate"
     native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
     assert set(native_templates) == set(CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
@@ -5701,7 +5712,7 @@ async def test_options_flow_combines_fans_and_routes_matter_speed_to_stepped_sou
     )
     result = await _choose_add_template_helper(hass, result)
     assert result["step_id"] == "fan_source_roles"
-    role_input = result["data_schema"]({})
+    role_input = suggested_form_values(result["data_schema"])
     role_input[CONF_FAN_SPEED_SOURCE] = xiaomi_home
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], role_input
@@ -5723,7 +5734,7 @@ async def test_options_flow_combines_fans_and_routes_matter_speed_to_stepped_sou
             CONF_MATTER_FAN_HIGH_LEVEL: 100,
         },
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     speed_action = actions["set_percentage"][0]
     assert speed_action["target"] == {ATTR_ENTITY_ID: xiaomi_home}
@@ -5800,7 +5811,7 @@ async def test_options_flow_edits_stepped_fan_with_matter_levels_in_place(hass):
     )
     assert result["step_id"] == "edit_entity"
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], _flatten_entity_form_sections(result["data_schema"]({}))
+        result["flow_id"], _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -5873,7 +5884,7 @@ async def test_options_flow_edits_combined_fan_without_speed_reduction(hass):
         result["flow_id"], {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_FORCE}
     )
     assert result["step_id"] == "fan_source_roles"
-    role_input = result["data_schema"]({})
+    role_input = suggested_form_values(result["data_schema"])
     role_input[CONF_FAN_MAIN_SOURCE] = main
     role_input[CONF_FAN_SPEED_SOURCE] = FAN_ROLE_NONE
     role_input[CONF_FAN_PRESET_SOURCE] = preset
@@ -5881,7 +5892,7 @@ async def test_options_flow_edits_combined_fan_without_speed_reduction(hass):
         result["flow_id"], role_input
     )
     assert result["step_id"] == "edit_entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     assert "set_percentage" not in actions
     assert "oscillate" not in actions
@@ -5917,7 +5928,7 @@ async def test_options_flow_copies_fan_without_duplicate_attribute_templates(has
         {CONF_REFERENCE_ENTITY_ID: ["fan.air_ventilator"]},
     )
     result = await _choose_add_template_helper(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     assert defaults[CONF_PLATFORM] == "fan"
     assert "source_available" in defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]
@@ -5994,7 +6005,7 @@ async def test_options_flow_combines_xiaomi_fan_and_speed_number(hass):
         {CONF_REFERENCE_ENTITY_ID: [fan_entity_id, number_entity_id]},
     )
     result = await _choose_add_template_helper(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     assert defaults[CONF_PLATFORM] == "fan"
     assert "source_available" in defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]
@@ -6069,7 +6080,7 @@ async def test_options_flow_prefills_and_creates_native_dehumidifier(hass):
     )
     result = await _choose_add_template_helper(hass, result)
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "humidifier"
     native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
     assert (
@@ -6148,7 +6159,7 @@ async def test_options_flow_composes_humidifier_from_mixed_source_domains(hass):
         result,
         target_entity_type="humidifier",
     )
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "humidifier"
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["target_humidity"] == (
         "{{ states('number.dressing_room_dehumidifier_target_humidity') "
@@ -6222,7 +6233,7 @@ async def test_options_flow_can_edit_all_climate_modes(hass):
     )
 
     assert result["step_id"] == "edit_entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
     assert native_templates["fan_modes"] == "{{ ['auto', 'turbo'] }}"
     assert native_templates["preset_mode"] == "{{ 'none' }}"
@@ -6305,7 +6316,7 @@ async def test_edit_three_occupancy_sources_helper_policy(hass, policy):
     json.dumps(FlowManagerResourceView(manager)._prepare_result_json(result))
     result = await _accept_binary_detection_defaults(hass, result)
     assert result["step_id"] == "edit_entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     result = await manager.async_configure(result["flow_id"], defaults)
     assert result["type"] == FlowResultType.CREATE_ENTRY
     stored = _first_stored_entity(result)
@@ -6343,7 +6354,7 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
     result = await _choose_add_template_helper(hass, result)
     result = await _accept_binary_detection_defaults(hass, result)
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "binary_sensor"
     assert defaults[CONF_INITIAL_VALUE] == "on"
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == (
@@ -6432,7 +6443,7 @@ async def test_options_flow_adds_entity_to_selected_existing_device(hass):
         entry.entry_id,
         data={CONF_ACTION: ACTION_ADD_ENTITY},
     )
-    source_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    source_defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert source_defaults[CONF_TARGET_DEVICE_NAME] == "__new_device__"
 
     result = await hass.config_entries.options.async_configure(
@@ -6443,7 +6454,7 @@ async def test_options_flow_adds_entity_to_selected_existing_device(hass):
         },
     )
     result = await _choose_add_template_helper(hass, result)
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_DEVICE_NAME] == "Refrigerator Door"
     assert defaults[CONF_DEVICE_ID] == "refrigerator-door-1"
     assert defaults[CONF_DEVICE_MANUFACTURER] == "TCL"
@@ -6799,7 +6810,7 @@ async def test_options_flow_can_prefill_composite_sensor_with_average_template(h
     )
     result = await _choose_add_template_helper(hass, result)
 
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "sensor"
     assert defaults[CONF_INITIAL_VALUE] == "23.0"
     assert "float(none)" in defaults[CONF_VALUE_TEMPLATE]
@@ -7132,7 +7143,7 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
         result["flow_id"],
         {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_KEEP},
     )
-    reconfigured = _flatten_entity_form_sections(result["data_schema"]({}))
+    reconfigured = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     reconfigured[CONF_ENTITY_NAME] = "Reconfigured Washer"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -10286,15 +10297,15 @@ async def test_air_quality_default_skips_rules_and_preserves_source(hass, tmp_pa
     result = await hass.config_entries.options.async_init(entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY})
     result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: source_ids})
     if result["step_id"] == "sensor_conversion":
-        result = await hass.config_entries.options.async_configure(result["flow_id"], result["data_schema"]({}))
+        result = await hass.config_entries.options.async_configure(result["flow_id"], suggested_form_values(result["data_schema"]))
     result = await _choose_add_template_helper(hass, result, target_entity_type="air_quality")
     assert result["step_id"] == "entity"
-    values = _flatten_entity_form_sections(result["data_schema"]({}))
+    values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     if values[CONF_PLATFORM] != "air_quality":
         values[CONF_PLATFORM] = "air_quality"
         result = await hass.config_entries.options.async_configure(result["flow_id"], values)
         assert result["step_id"] == "entity"
-        values = _flatten_entity_form_sections(result["data_schema"]({}))
+        values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert values["configure_air_quality_rules"] is False
     values["air_quality_per_source"] = per_source
     values[ATTR_ENTITY_ID] = "air_quality.automatic_test"
@@ -10347,7 +10358,7 @@ async def test_new_measurement_flow_creates_aqi_without_air_quality_step(hass, t
     result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: ["sensor.physical_pm25"]})
     result = await _choose_add_template_helper(hass, result, target_entity_type="sensor")
     assert result["step_id"] == "entity"
-    values = _flatten_entity_form_sections(result["data_schema"]({}))
+    values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     values[ATTR_ENTITY_ID] = "sensor.ui_pm25"
     if scope:
         values["configure_air_quality_sources"] = True
@@ -10359,13 +10370,13 @@ async def test_new_measurement_flow_creates_aqi_without_air_quality_step(hass, t
         source = "sensor.ui_pm25" if scope == "combined" else "sensor.physical_pm25"
         result = await hass.config_entries.options.async_configure(result["flow_id"], {"source": source, "action": "edit"})
         assert result["step_id"] == "air_quality_setup"
-        values = result["data_schema"]({})
+        values = suggested_form_values(result["data_schema"])
         values.update({f"boundary_{i+1}": value for i, value in enumerate([1, 2, 3, 4, 10])})
         result = await hass.config_entries.options.async_configure(result["flow_id"], values)
         assert result["step_id"] == "air_quality_source_rules"
         result = await hass.config_entries.options.async_configure(result["flow_id"], {"source": source, "action": "continue"})
         assert result["step_id"] == "entity"
-        values = _flatten_entity_form_sections(result["data_schema"]({}))
+        values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -10401,19 +10412,19 @@ async def test_direct_air_quality_source_profile_persists_and_drives_companion(h
     result = await hass.config_entries.options.async_init(entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY})
     result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: [reference_id]})
     result = await _choose_add_template_helper(hass, result, target_entity_type="air_quality")
-    values = _flatten_entity_form_sections(result["data_schema"]({}))
+    values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     values.update({ATTR_ENTITY_ID: "air_quality.ui_profile", "configure_air_quality_sources": True, "air_quality_per_source": True})
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     assert result["step_id"] == "air_quality_scope"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {
         "scope": scope, "sources": [reference_id], "missing": "skip"})
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"source": "sensor.physical_pm25", "action": "edit"})
-    values = result["data_schema"]({})
+    values = suggested_form_values(result["data_schema"])
     values.update({f"boundary_{i+1}": value for i, value in enumerate([20, 30, 40, 50, 60])})
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"source": "sensor.physical_pm25", "action": "continue"})
     assert result["step_id"] == "entity"
-    values = _flatten_entity_form_sections(result["data_schema"]({}))
+    values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -10452,7 +10463,7 @@ async def test_air_quality_uses_a_dedicated_matter_configuration_step(hass):
     result = await _choose_add_template_helper(hass, result)
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "entity"
-    manual = _flatten_entity_form_sections(result["data_schema"]({}))
+    manual = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     manual["configure_air_quality_rules"] = True
     result = await hass.config_entries.options.async_configure(result["flow_id"], manual)
     assert result["step_id"] == "air_quality"
@@ -10467,7 +10478,7 @@ async def test_air_quality_uses_a_dedicated_matter_configuration_step(hass):
     assert result["description_placeholders"]["result"] == "good"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_action": "continue"})
     assert result["step_id"] == "entity"
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["air_quality"] == "{{ 'good' }}"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], defaults,
@@ -10492,12 +10503,12 @@ async def test_air_quality_uses_a_dedicated_matter_configuration_step(hass):
             result["flow_id"], {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_KEEP},
         )
     assert result["step_id"] == "edit_air_quality"
-    assert result["data_schema"]({})["mode"] == "fixed"
+    assert suggested_form_values(result["data_schema"])["mode"] == "fixed"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"mode": "custom"},
     )
     assert result["step_id"] == "edit_entity"
-    values = _flatten_entity_form_sections(result["data_schema"]({}))
+    values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     custom = "{{ 'fair' if is_state('air_quality.living_room', 'good') else 'poor' }}"
     values[CONF_NATIVE_VALUE_TEMPLATES]["air_quality"] = custom
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
@@ -10547,11 +10558,11 @@ async def test_add_formaldehyde_air_quality_preserves_same_named_sensor(hass, tm
     else:
         result = await _choose_add_template_helper(hass, result, target_entity_type="air_quality")
     assert result["step_id"] == "entity"
-    manual = _flatten_entity_form_sections(result["data_schema"]({}))
+    manual = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     manual["configure_air_quality_rules"] = True
     result = await hass.config_entries.options.async_configure(result["flow_id"], manual)
     assert result["step_id"] == "air_quality"
-    assert result["data_schema"]({})["mode"] == "automatic"
+    assert suggested_form_values(result["data_schema"])["mode"] == "automatic"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"mode": "measurement"})
     # Synthetic thresholds test the plumbing, not a health/exposure standard.
     result = await hass.config_entries.options.async_configure(result["flow_id"], {
@@ -10559,7 +10570,7 @@ async def test_add_formaldehyde_air_quality_preserves_same_named_sensor(hass, tm
         **{f"boundary_{i}": i * 0.1 for i in range(1, 6)}})
     assert result["description_placeholders"]["result"] == "good"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_action": "continue"})
-    values = _flatten_entity_form_sections(result["data_schema"]({}))
+    values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     values[ATTR_ENTITY_ID] = air_id
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -10618,7 +10629,7 @@ async def test_edit_air_quality_never_saves_before_final_form(hass, source_loade
     if source_loaded:
         # Default path must finish on the next submit, never revisit type or
         # confirmation screens, and must append rather than replace.
-        values = _flatten_entity_form_sections(result["data_schema"]({}))
+        values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
         assert values["device_configuration_url"] == ""
         result = await hass.config_entries.options.async_configure(result["flow_id"], values)
         assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -10647,7 +10658,7 @@ async def test_air_quality_measurement_recipe_precedes_templates_and_validates(h
         hass, result, target_entity_type="air_quality",
     )
     assert result["step_id"] == "entity"
-    manual = _flatten_entity_form_sections(result["data_schema"]({}))
+    manual = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     manual["configure_air_quality_rules"] = True
     result = await hass.config_entries.options.async_configure(result["flow_id"], manual)
     assert result["step_id"] == "air_quality"
@@ -10672,7 +10683,7 @@ async def test_air_quality_measurement_recipe_precedes_templates_and_validates(h
     assert not entry.options[ATTR_DEVICES]
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_action": "rules"})
     assert result["step_id"] == "air_quality_setup"
-    assert result["data_schema"]({})["boundary_5"] == 50
+    assert suggested_form_values(result["data_schema"])["boundary_5"] == 50
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     hass.states.async_set("sensor.pm25", "unknown")
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_action": "refresh"})
@@ -10681,7 +10692,7 @@ async def test_air_quality_measurement_recipe_precedes_templates_and_validates(h
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_action": "continue"})
     assert result["step_id"] == "entity"
     assert not entry.options[ATTR_DEVICES]
-    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     helper = defaults[CONF_NATIVE_VALUE_TEMPLATES]["air_quality"]
     assert Template(helper, hass).async_render() == "moderate"
     result = await hass.config_entries.options.async_configure(result["flow_id"], defaults)
@@ -10712,7 +10723,7 @@ async def test_air_quality_measurement_recipe_precedes_templates_and_validates(h
         result["flow_id"], {"mode": "measurement"},
     )
     assert result["step_id"] == "edit_air_quality_setup"
-    limits = result["data_schema"]({})
+    limits = suggested_form_values(result["data_schema"])
     calculation = limits["advanced"]
     assert calculation["multiplier"] == 1
     calculation.update(reducer="median", multiplier=2, offset=5, boundary_rule="lower_inclusive")
@@ -10724,7 +10735,7 @@ async def test_air_quality_measurement_recipe_precedes_templates_and_validates(h
     assert result["description_placeholders"]["result"] == "good"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_action": "continue"})
     assert result["step_id"] == "edit_entity"
-    updated = _flatten_entity_form_sections(result["data_schema"]({}))
+    updated = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert Template(updated[CONF_NATIVE_VALUE_TEMPLATES]["air_quality"], hass).async_render() == "good"
     result = await hass.config_entries.options.async_configure(result["flow_id"], updated)
     assert result["type"] == FlowResultType.CREATE_ENTRY

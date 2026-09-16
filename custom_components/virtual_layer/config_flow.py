@@ -3339,7 +3339,9 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None) -> vol.
             CONF_ICON_TEMPLATE,
             defaults.get(CONF_ICON_TEMPLATE, ""),
         ): TEMPLATE_SELECTOR,
-        vol.Optional(ATTR_ENTITY_ID, default=default_entity_id): str,
+        # The frontend omits cleared optional text fields. A non-empty schema
+        # default would silently restore the previous ID during validation.
+        vol.Optional(ATTR_ENTITY_ID, default=""): str,
         vol.Required(
             CONF_PLATFORM, default=defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
         ): vol.In(VIRTUAL_ENTITY_DOMAINS),
@@ -3584,7 +3586,12 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None) -> vol.
                 }
             },
         )
-    return _complete_form_schema(vol.Schema(schema, extra=vol.ALLOW_EXTRA))
+    completed_schema = _complete_form_schema(vol.Schema(schema, extra=vol.ALLOW_EXTRA))
+    for marker in completed_schema.schema:
+        if marker == ATTR_ENTITY_ID:
+            marker.description = {"suggested_value": default_entity_id}
+            break
+    return completed_schema
 
 
 def _needs_domain_specific_form(user_input) -> bool:
@@ -3636,6 +3643,9 @@ def _merge_entity_form_defaults(
     if not isinstance(defaults, Mapping):
         return user_input
     merged = _flatten_entity_form_sections(defaults)
+    # This top-level field is always visible; omission means it was cleared,
+    # unlike omitted values inside collapsed sections.
+    merged[ATTR_ENTITY_ID] = ""
     for field, value in user_input.items():
         if field == CONF_NATIVE_VALUE_TEMPLATES and isinstance(value, Mapping):
             previous = merged.get(field)

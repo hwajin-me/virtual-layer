@@ -4,6 +4,8 @@ from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
+
+from tests.flow_helpers import suggested_form_values
 from homeassistant.components import bluetooth
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
@@ -54,12 +56,12 @@ async def test_ab_gateway_wifi_ui_reload_and_absence(hass, freezer):
         result = await manager.async_configure(
             result["flow_id"], {flow.CONF_REFERENCE_ENTITY_ID: []}
         )
-        form = result["data_schema"]({})
+        form = suggested_form_values(result["data_schema"])
         form.update(
             {"platform": "device_tracker", "entity_id": "device_tracker.local_phone"}
         )
         result = await manager.async_configure(result["flow_id"], form)
-        form = result["data_schema"]({})
+        form = suggested_form_values(result["data_schema"])
         form["local_presence_settings"].update(
             {
                 "presence_enabled": True,
@@ -123,7 +125,7 @@ async def test_ab_gateway_wifi_ui_reload_and_absence(hass, freezer):
         result = await manager.async_configure(
             result["flow_id"], {flow.CONF_REFERENCE_ENTITY_ID: []}
         )
-        form = result["data_schema"]({})
+        form = suggested_form_values(result["data_schema"])
         assert form["local_presence_settings"]["presence_ble_addresses"] == MAC
         form["local_presence_settings"]["presence_enabled"] = False
         result = await manager.async_configure(result["flow_id"], form)

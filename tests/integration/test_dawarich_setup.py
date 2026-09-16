@@ -3,6 +3,8 @@
 import json
 
 import pytest
+
+from tests.flow_helpers import suggested_form_values
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -57,12 +59,12 @@ async def test_dawarich_ui_create_edit_reload_and_disable(
     result = await manager.async_configure(
         result["flow_id"], {flow.CONF_REFERENCE_ENTITY_ID: []}
     )
-    form = result["data_schema"]({})
+    form = suggested_form_values(result["data_schema"])
     form.update(
         {"platform": "device_tracker", "entity_id": "device_tracker.dawarich_trip"}
     )
     result = await manager.async_configure(result["flow_id"], form)
-    form = result["data_schema"]({})
+    form = suggested_form_values(result["data_schema"])
     form[flow.CONF_DAWARICH_SETTINGS].update(
         {
             "dawarich_enabled": True,
@@ -132,7 +134,7 @@ async def test_dawarich_ui_create_edit_reload_and_disable(
         result["flow_id"], {flow.CONF_REFERENCE_ENTITY_ID: []}
     )
     assert result["step_id"] == "edit_entity", result
-    form = result["data_schema"]({})
+    form = suggested_form_values(result["data_schema"])
     assert form[flow.CONF_DAWARICH_SETTINGS]["dawarich_api_key"] == "private-test-key"
     assert form[flow.CONF_DAWARICH_SETTINGS]["dawarich_test_connection"] is False
     form[flow.CONF_DAWARICH_SETTINGS]["dawarich_enabled"] = False

@@ -9,6 +9,8 @@ from types import MappingProxyType
 from unittest.mock import Mock
 
 import pytest
+
+from tests.flow_helpers import suggested_form_values
 import voluptuous as vol
 import yaml
 from homeassistant.components.camera import CameraEntityFeature
@@ -420,26 +422,40 @@ def test_entity_form_collapses_secondary_fields_and_flattens_submissions():
 
 
 def test_entity_form_defaults_to_the_selected_domain_prefix():
-    defaults = _entity_schema(
+    defaults = suggested_form_values(_entity_schema(
         {
             CONF_PLATFORM: "sensor",
             CONF_ENTITY_NAME: "Washer Phase",
         }
-    )({})
+    ))
 
     assert defaults[ATTR_ENTITY_ID] == "sensor.washer_phase"
 
 
+
 def test_entity_form_preserves_an_existing_entity_id():
-    defaults = _entity_schema(
+    defaults = suggested_form_values(_entity_schema(
         {
             CONF_PLATFORM: "sensor",
             CONF_ENTITY_NAME: "Washer Phase",
             ATTR_ENTITY_ID: "sensor.custom_washer_phase",
         }
-    )({})
+    ))
 
     assert defaults[ATTR_ENTITY_ID] == "sensor.custom_washer_phase"
+
+
+def test_cleared_entity_id_does_not_restore_schema_suggestion():
+    schema = _entity_schema({
+        CONF_PLATFORM: "sensor", CONF_ENTITY_NAME: "Washer Phase",
+        ATTR_ENTITY_ID: "sensor.custom_washer_phase",
+    })
+    marker = next(marker for marker in schema.schema if marker == ATTR_ENTITY_ID)
+    assert marker.description["suggested_value"] == "sensor.custom_washer_phase"
+    assert schema({})[ATTR_ENTITY_ID] == ""
+    assert schema({ATTR_ENTITY_ID: ""})[ATTR_ENTITY_ID] == ""
+    assert schema({ATTR_ENTITY_ID: "sensor.explicit"})[ATTR_ENTITY_ID] == "sensor.explicit"
+
 
 
 def test_entity_form_uses_icon_and_template_selectors():
@@ -4967,7 +4983,8 @@ def test_reference_entity_defaults_avoids_source_id_for_a_single_entity_copy(has
 
     defaults = _reference_entity_defaults(hass, ["sensor.kitchen_lamp"])
 
-    assert _entity_schema(defaults)({})[ATTR_ENTITY_ID] == "sensor.room_k_lamp"
+    assert suggested_form_values(_entity_schema(defaults))[ATTR_ENTITY_ID] == "sensor.room_k_lamp"
+
 
 
 def test_reference_entity_defaults_copy_id_keeps_suffix_after_slug_limit(hass):
@@ -4976,9 +4993,10 @@ def test_reference_entity_defaults_copy_id_keeps_suffix_after_slug_limit(hass):
 
     defaults = _reference_entity_defaults(hass, [source_id])
 
-    entity_id = _entity_schema(defaults)({})[ATTR_ENTITY_ID]
+    entity_id = suggested_form_values(_entity_schema(defaults))[ATTR_ENTITY_ID]
     assert len(entity_id.split(".", 1)[1]) <= 80
     assert entity_id != source_id
+
 
 
 @pytest.mark.parametrize(("name", "expected"), [
@@ -5059,10 +5077,11 @@ def test_generated_abbreviations_are_stable_when_reused(abbreviation):
 
 
 def test_entity_schema_keeps_explicit_unabbreviated_id():
-    assert _entity_schema({
+    assert suggested_form_values(_entity_schema({
         CONF_PLATFORM: "sensor", CONF_DEVICE_NAME: "Living Room",
         CONF_ENTITY_NAME: "Temperature", ATTR_ENTITY_ID: "sensor.living_room_temperature",
-    })({})[ATTR_ENTITY_ID] == "sensor.living_room_temperature"
+    }))[ATTR_ENTITY_ID] == "sensor.living_room_temperature"
+
 
 
 def test_entity_id_defaults_use_only_virtual_entity_name():

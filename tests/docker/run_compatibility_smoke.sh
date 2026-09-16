@@ -357,6 +357,15 @@ async def test_sensor_conversion_runtime():
 asyncio.run(test_sensor_conversion_runtime())
 
 
+def suggested_form_values(schema):
+    """Submit the ID displayed by the frontend unless the test clears it."""
+    values = schema({})
+    for marker in schema.schema:
+        if marker == "entity_id" and marker.description:
+            values["entity_id"] = marker.description["suggested_value"]
+    return values
+
+
 async def configure_flow(manager, result, user_input):
     """Submit one real Home Assistant config/options flow step."""
     result = await manager.async_configure(result["flow_id"], user_input)
@@ -572,7 +581,7 @@ async def test_tracker_creation_flows(hass):
                     source_input[vf.CONF_TARGET_DEVICE_NAME] = device_key
                 result = await configure_flow(manager, result, source_input)
                 assert result["step_id"] == "entity", result
-                values = _flatten_entity_form_sections(result["data_schema"]({}))
+                values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
                 assert values["platform"] == "device_tracker"
                 values.update({"entity_id": entity_id, CONF_ENTITY_NAME: f"Flow {kind} {int(initial)}"})
                 if initial:
@@ -617,7 +626,7 @@ async def test_tracker_creation_flows(hass):
                 result = await manager.async_init(entry.entry_id, data={CONF_ACTION: vf.ACTION_EDIT_ENTITY})
                 result = await configure_flow(manager, result, {CONF_ENTITY_KEY: selection})
                 result = await configure_flow(manager, result, {CONF_REFERENCE_ENTITY_ID: []})
-                values = _flatten_entity_form_sections(result["data_schema"]({}))
+                values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
                 field = "dawarich_poll_interval" if kind == "dawarich" else "presence_ble_timeout"
                 values[field] = 180
                 result = await configure_flow(manager, result, values)
@@ -905,7 +914,7 @@ async def test_config_flow_create_modify_runtime():
             {CONF_USE_TEMPLATE_HELPER: True},
         )
         assert result["step_id"] == "entity"
-        create_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+        create_defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
         create_defaults[CONF_ENTITY_NAME] = "Docker PM2.5"
         create_defaults["device_name"] = "Docker Air"
         create_defaults["entity_id"] = "sensor.docker_flow_pm25"
@@ -1017,7 +1026,7 @@ async def test_config_flow_create_modify_runtime():
             data={CONF_ACTION: ACTION_EDIT_ENTITY},
         )
         assert result["step_id"] == "select_entity"
-        entity_key = result["data_schema"]({})[CONF_ENTITY_KEY]
+        entity_key = suggested_form_values(result["data_schema"])[CONF_ENTITY_KEY]
         result = await configure_flow(
             options_flow,
             result,
@@ -1045,13 +1054,16 @@ async def test_config_flow_create_modify_runtime():
             {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_FORCE},
         )
         assert result["step_id"] == "edit_entity"
-        edit_defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+        edit_defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
         edit_defaults[CONF_ENTITY_NAME] = "Docker PM2.5 Maximum"
         edit_defaults["device_configuration_url"] = ""
         edit_defaults["device_via_device_id"] = ""
         edit_defaults["icon"] = "mdi:air-filter"
         edit_defaults["pull_interval"] = 0
-        edit_defaults["entity_id"] = "sensor.docker_flow_pm25_max"
+        # The frontend omits an optional text field when the user clears it.
+        edit_defaults.pop("entity_id", None)
+        edit_defaults = result["data_schema"](edit_defaults)
+        assert edit_defaults["entity_id"] == ""
 
         invalid_defaults = dict(edit_defaults)
         invalid_defaults[CONF_VALUE_TEMPLATE] = "{{ invalid template"
@@ -1069,7 +1081,7 @@ async def test_config_flow_create_modify_runtime():
         await hass.async_block_till_done()
 
         assert hass.states.get("sensor.docker_flow_pm25") is None
-        modified_id = "sensor.docker_flow_pm25_max"
+        modified_id = "sensor.docker_pm2_5_maximum"
         modified_state = hass.states.get(modified_id)
         assert modified_state is not None
         for usage in usage_entries:
@@ -1155,7 +1167,7 @@ async def test_config_flow_create_modify_runtime():
             CONF_SENSOR_CONVERSION: "state", CONF_SENSOR_AGGREGATION: "maximum"})
         result = await configure_flow(options_flow, result, {CONF_HELPER_UPDATE_MODE: "keep_current"})
         assert result["step_id"] == "edit_entity"
-        values = _flatten_entity_form_sections(result["data_schema"]({}))
+        values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
         values["configure_air_quality_sources"] = True
         result = await configure_flow(options_flow, result, values)
         assert result["step_id"] == "air_quality_scope"
@@ -1164,13 +1176,13 @@ async def test_config_flow_create_modify_runtime():
         assert result["step_id"] == "air_quality_source_rules"
         result = await configure_flow(options_flow, result, {"source": source_ids[0], "action": "edit"})
         assert result["step_id"] == "edit_air_quality_setup"
-        values = result["data_schema"]({})
+        values = suggested_form_values(result["data_schema"])
         values.update({f"boundary_{index+1}": value for index, value in enumerate([100, 200, 300, 400, 500])})
         result = await configure_flow(options_flow, result, values)
         assert result["step_id"] == "air_quality_source_rules"
         result = await configure_flow(options_flow, result, {"source": source_ids[0], "action": "continue"})
         assert result["step_id"] == "edit_entity"
-        values = _flatten_entity_form_sections(result["data_schema"]({}))
+        values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
         result = await configure_flow(options_flow, result, values)
         assert result["type"] == FlowResultType.CREATE_ENTRY
         await hass.async_block_till_done()
