@@ -104,7 +104,7 @@ async def test_adaptive_trip_stop_reload_and_delete_in_hass(hass, freezer, polyg
     registry = er.async_get(hass)
     device_id = registry.async_get("device_tracker.trip").device_id
     for suffix in ("info", "debug1", "debug2", "debug3"):
-        assert registry.async_get(f"sensor.trip_{suffix}").device_id == device_id
+        assert registry.async_get(f"sensor.{'src_' if suffix.startswith('debug') else ''}trip_{suffix}").device_id == device_id
     if polygon:
         assert state.state == "not_home"
         assert registry.async_get("sensor.trip_zone").device_id == device_id
@@ -367,7 +367,7 @@ async def test_polygon_tracker_triangulates_espresense_anchors_into_geojson_zone
         == anchors
     )
     for index, entity_id in enumerate(anchors, start=1):
-        debug = hass.states.get(f"sensor.room_position_debug{index}")
+        debug = hass.states.get(f"sensor.src_room_position_debug{index}")
         assert debug is not None
         assert debug.attributes["source_entity_id"] == entity_id
 

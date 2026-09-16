@@ -93,7 +93,7 @@ async def test_ab_gateway_wifi_ui_reload_and_absence(hass, freezer):
         assert state.attributes["location_presence_sources"] == ["ble:" + MAC]
         registry = er.async_get(hass)
         assert (
-            registry.async_get("sensor.local_phone_debug1").device_id
+            registry.async_get("sensor.src_local_phone_debug1").device_id
             == registry.async_get("device_tracker.local_phone").device_id
         )
         freezer.tick(timedelta(seconds=31))
@@ -137,7 +137,7 @@ async def test_ab_gateway_wifi_ui_reload_and_absence(hass, freezer):
         assert "local_presence" not in result["data"][ATTR_DEVICES][device_name][0]
         hass.config_entries.async_update_entry(entry, options=result["data"])
         await hass.async_block_till_done()
-        assert registry.async_get("sensor.local_phone_debug1") is None
+        assert registry.async_get("sensor.src_local_phone_debug1") is None
         assert await hass.config_entries.async_remove(entry.entry_id)
         await hass.async_block_till_done()
         freezer.tick(timedelta(seconds=40))

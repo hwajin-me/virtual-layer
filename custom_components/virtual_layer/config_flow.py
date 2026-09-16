@@ -3333,7 +3333,8 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
             CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")
         ): str,
         vol.Optional(CONF_ICON, default=defaults.get(CONF_ICON) or _air_quality_default_icon(
-            platform, defaults.get(CONF_ENTITY_NAME), defaults.get(ATTR_ENTITY_ID)
+            platform, defaults.get(CONF_ENTITY_NAME), defaults.get(ATTR_ENTITY_ID),
+            defaults.get(CONF_CLASS),
         )): ICON_SELECTOR,
         _editable_optional(
             CONF_ICON_TEMPLATE,
@@ -4542,18 +4543,7 @@ def _validate_virtual_entity_id_available(
 
 def _air_quality_default_icon(platform, *names) -> str:
     """Use one default icon for air-quality names across source integrations."""
-    if platform == "air_quality":
-        return "mdi:air-filter"
-    if platform not in ("sensor", "number", "binary_sensor"):
-        return ""
-    if aq_options.pollutant_name_matches(*names, include_icon_only=True):
-        return "mdi:air-filter"
-    if any(re.search(
-        r"(?<![a-z0-9])(?:air[ _-]*quality|공기[ _-]*질|미세먼지)(?![a-z0-9])",
-        aq_options.normalize_pollutant_name(name),
-    ) for name in names):
-        return "mdi:air-filter"
-    return ""
+    return aq_options.default_air_quality_icon(platform, *names)
 
 
 def _build_entity_config(
@@ -4594,7 +4584,7 @@ def _build_entity_config(
     if raw_icon is not None and not isinstance(raw_icon, str):
         raise InvalidFieldValue(CONF_ICON)
     icon = _text_default(raw_icon).strip() or _air_quality_default_icon(
-        platform, entity_name, user_input.get(ATTR_ENTITY_ID)
+        platform, entity_name, user_input.get(ATTR_ENTITY_ID), user_input.get(CONF_CLASS)
     )
     if icon:
         try:
@@ -9086,7 +9076,9 @@ def _reference_entity_defaults(
             + ") not in ['unknown', 'unavailable'] }}"
         )
     air_quality_icon = _air_quality_default_icon(
-        platform, defaults.get(CONF_ENTITY_NAME), *entity_ids
+        platform, defaults.get(CONF_ENTITY_NAME), *entity_ids,
+        *(state.attributes.get("device_class") for state in states),
+        *(state.attributes.get("friendly_name") for state in states),
     )
     if air_quality_icon:
         defaults[CONF_ICON] = air_quality_icon

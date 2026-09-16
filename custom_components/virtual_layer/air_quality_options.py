@@ -245,7 +245,7 @@ STARTER_PROFILES = {
 }
 NAME_HINTS = {
     "pm25": r"(?:pm|particulate[ _-]*matter)[ _.-]*2[ _.-]*5|초[ _-]*미세[ _-]*먼지",
-    "pm10": r"(?:pm|particulate[ _-]*matter)[ _.-]*10",
+    "pm10": r"(?:pm|particulate[ _-]*matter)[ _.-]*10(?:[_.]0)?(?![0-9]|[_.][0-9])",
     "pm4": r"(?:pm|particulate[ _-]*matter)[ _.-]*4(?:[_.]0)?(?![0-9]|[_.][0-9])",
     "pm1": r"(?:pm|particulate[ _-]*matter)[ _.-]*1(?:[_.]0)?(?![0-9]|[_.][0-9])",
     "radon": r"radon|라돈",
@@ -266,6 +266,8 @@ NAME_HINTS = {
 
 
 ICON_POLLUTANT_NAME_HINTS = {
+    # Historical entity-ID abbreviation, not a chemical formula/profile.
+    "formaldehyde": NAME_HINTS["formaldehyde"] + r"|h2ho",
     # Name/icon recognition only: these have no automatic grading profile.
     # Do not collapse individual solvents into TVOC or share mass/ppm factors.
     "toluene": r"toluene|methyl[ _-]*benzene|톨루엔",
@@ -297,6 +299,22 @@ def normalize_pollutant_name(value):
     value = unicodedata.normalize("NFKC", value).casefold()
     value = re.sub(r"[\s_\-‐‑‒–—−]+", "_", value)
     return value.strip("_")
+
+
+def default_air_quality_icon(platform, *names):
+    """Resolve a shared UI/runtime fallback without overriding explicit icons."""
+    if platform == "air_quality":
+        return "mdi:air-filter"
+    if platform not in ("sensor", "number", "binary_sensor"):
+        return ""
+    if pollutant_name_matches(*names, include_icon_only=True) or any(
+        re.search(
+            r"(?<![a-z0-9])(?:air[ _-]*quality|공기[ _-]*질|미세먼지)(?![a-z0-9])",
+            normalize_pollutant_name(name),
+        ) for name in names
+    ):
+        return "mdi:air-filter"
+    return ""
 
 
 def pollutant_name_matches(*names, include_icon_only=False):

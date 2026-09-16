@@ -58,7 +58,7 @@ from .const import *
 from .const import generic_entity_options
 from .entity import VirtualEntity, virtual_schema
 from .source_usage import SOURCE_USAGE, SourceUsageSensor
-from .air_quality_options import normalize_unit
+from .air_quality_options import default_air_quality_icon, normalize_unit
 from . import unit_history
 
 try:
@@ -209,6 +209,13 @@ async def async_setup_entry(
 
 class VirtualSensor(VirtualEntity, SensorEntity):
     """An implementation of a Virtual Sensor."""
+
+    @property
+    def icon(self):
+        """Give existing pollutant sensors the same fallback as new UI entries."""
+        return super().icon or default_air_quality_icon(
+            PLATFORM_DOMAIN, self.device_class, self.name, self.entity_id,
+        ) or None
 
     def __init__(self, config, old_style: bool):
         """Initialize an Virtual Sensor."""

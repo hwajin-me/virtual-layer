@@ -72,7 +72,7 @@ def test_supported_measurements_normalize_aliases(name, quantity):
 
 @pytest.mark.parametrize("name", [
     "Company", "Score", "ChlorinePump", "NO", "C8H10", "PM1_5", "PM1_01",
-    "PM100", "PM4_5", "chlorinated", "methanolic", "nozzle", "toluene2",
+    "PM100", "PM10.5", "PM10_01", "PM4_5", "chlorinated", "methanolic", "nozzle", "toluene2",
 ])
 def test_ambiguous_formulas_and_non_pollutant_tokens_are_not_guessed(name):
     assert not aq.pollutant_name_matches(name, include_icon_only=True)
@@ -91,10 +91,35 @@ def test_mixed_pollutants_and_metadata_keep_measurement_inference_conservative()
     assert aq.normalize_pollutant_name(None) == ""
 
 
-@pytest.mark.parametrize("name", ["에틸벤젠", "ＣＨ₄", "hydrogen–chloride"])
+@pytest.mark.parametrize("name", ["에틸벤젠", "ＣＨ₄", "hydrogen–chloride", "PM 10.0", "VOC", "h2ho"])
 def test_source_prefill_uses_normalized_pollutant_icon(hass, name):
     hass.states.async_set("sensor.sample", "1", {"friendly_name": name, "icon": "mdi:cloud"})
     defaults = _reference_entity_defaults(hass, ["sensor.sample"])
     assert defaults["icon"] == "mdi:air-filter"
     # The helper defers to the editable static icon instead of a vendor icon.
     assert Template(defaults["icon_template"], hass).async_render() == ""
+
+
+@pytest.mark.parametrize("device_class", ["pm10", "volatile_organic_compounds", "volatile_organic_compounds_parts"])
+def test_source_device_class_supplies_icon_without_descriptive_name(hass, device_class):
+    hass.states.async_set("sensor.sample", "1", {"device_class": device_class})
+    assert _reference_entity_defaults(hass, ["sensor.sample"])["icon"] == "mdi:air-filter"
+
+
+@pytest.mark.parametrize("config", [
+    {"name": "PM 10.0"}, {"name": "VOC"}, {"name": "h2ho"},
+    {"name": "Reading", "class": "pm10"},
+    {"name": "Reading", "class": "volatile_organic_compounds_parts"},
+    {"name": "Toluene"},
+])
+def test_existing_sensor_runtime_icon_and_explicit_override(config):
+    from custom_components.virtual_layer.sensor import VirtualSensor
+
+    sensor = VirtualSensor(config, False)
+    assert sensor.icon == "mdi:air-filter"
+    customized = VirtualSensor({**config, "icon": "mdi:flask"}, False)
+    assert customized.icon == "mdi:flask"
+    sensor._apply_native_template_value("icon", "mdi:cloud")
+    assert sensor.icon == "mdi:cloud"
+    sensor._apply_native_template_value("icon", "")
+    assert sensor.icon == "mdi:air-filter"

@@ -1055,7 +1055,7 @@ class BlendedCfg:
                 f"debug{index}",
                 source_entity_id,
                 (
-                    f"{entity[CONF_NAME]} - Source {index}: "
+                    f"[Source] - {entity[CONF_NAME]} - Source {index}: "
                     f"{_diagnostic_source_name(self._hass, source_entity_id)}"
                 ),
                 "mdi:bug-outline",
@@ -1376,7 +1376,7 @@ class BlendedCfg:
             diagnostic_unique_id = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}{suffix}"
             diagnostic_entity_id = self._reserve_entity_id(
                 "sensor",
-                f"sensor.{object_id}_{suffix}",
+                f"sensor.{'src_' if suffix != 'info' else ''}{object_id}_{suffix}",
                 diagnostic_unique_id,
             )
             diagnostic_entity = {

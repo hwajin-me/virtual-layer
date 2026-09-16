@@ -625,6 +625,15 @@ def _async_update_generated_entity_name(
 
 
 @callback
+def _generated_name_prefix(entity) -> str:
+    """Return the label preceding a generated entity's parent display name."""
+    attributes = entity.get(CONF_ATTRIBUTES)
+    if isinstance(attributes, Mapping) and attributes.get("diagnostic_type") == "source_state":
+        return "[Source] - "
+    return ""
+
+
+@callback
 def _async_remove_orphaned_diagnostic_registry_entries(hass, entry, entities) -> None:
     """Synchronize diagnostic registry defaults and remove obsolete diagnostics."""
     platform_entity_groups = entities.values() if isinstance(entities, Mapping) else []
@@ -682,18 +691,20 @@ def _async_remove_orphaned_diagnostic_registry_entries(hass, entry, entities) ->
             if isinstance(parent_entity, Mapping)
             else None
         )
+        name_prefix = _generated_name_prefix(generated_entity)
+        parent_name_start = f"{name_prefix}{configured_parent_name}"
         if (
             parent_registry_entry is not None
             and isinstance(configured_parent_name, str)
             and isinstance(generated_name, str)
-            and generated_name.startswith(configured_parent_name)
+            and generated_name.startswith(parent_name_start)
         ):
             if isinstance(generated_entity, dict):
                 generated_entity[_GENERATED_NAME_SUFFIX] = generated_name[
-                    len(configured_parent_name):
+                    len(parent_name_start):
                 ]
             parent_name = parent_registry_entry.name or configured_parent_name
-            generated_name = f"{parent_name}{generated_name[len(configured_parent_name):]}"
+            generated_name = f"{name_prefix}{parent_name}{generated_name[len(parent_name_start):]}"
         if isinstance(generated_name, str):
             _async_update_generated_entity_name(
                 hass,
@@ -832,17 +843,18 @@ def _async_setup_entity_id_guard(hass, entry, entities) -> None:
         configured_name = parent_data[1].get(CONF_NAME) if parent_data else None
         generated_name = entity.get(CONF_NAME)
         name_suffix = entity.get(_GENERATED_NAME_SUFFIX)
+        parent_name_start = f"{_generated_name_prefix(entity)}{configured_name}"
         if (
             not isinstance(configured_name, str)
             or not isinstance(generated_name, str)
             or (
                 not isinstance(name_suffix, str)
-                and not generated_name.startswith(configured_name)
+                and not generated_name.startswith(parent_name_start)
             )
         ):
             continue
         if not isinstance(name_suffix, str):
-            name_suffix = generated_name[len(configured_name):]
+            name_suffix = generated_name[len(parent_name_start):]
         generated_entities_by_parent.setdefault(parent_unique_id, []).append(
             (domain, entity, name_suffix)
         )
@@ -924,7 +936,7 @@ def _async_setup_entity_id_guard(hass, entry, entities) -> None:
             )
             if generated_entry is None or generated_entry.config_entry_id != entry.entry_id:
                 continue
-            cascaded_name = f"{primary_name}{name_suffix}"
+            cascaded_name = f"{_generated_name_prefix(generated_entity)}{primary_name}{name_suffix}"
             if generated_entry.original_name != cascaded_name:
                 _async_update_generated_entity_name(
                     hass,

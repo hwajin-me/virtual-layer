@@ -97,7 +97,7 @@ async def test_source_usage_shared_device_reload_and_removal(hass):
     parent_device_id = registry.async_get("sensor.alias_one").device_id
     assert parent_device_id != device.id
     assert registry.async_get("sensor.alias_one_info").device_id == parent_device_id
-    assert registry.async_get("sensor.alias_one_debug1").device_id == parent_device_id
+    assert registry.async_get("sensor.src_alias_one_debug1").device_id == parent_device_id
     assert entry.options["devices"]["Aliases"] == records
 
     registry.async_update_entity(usage.entity_id, name="My usage label")

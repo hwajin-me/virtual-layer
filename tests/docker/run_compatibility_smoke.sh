@@ -1020,6 +1020,8 @@ async def test_config_flow_create_modify_runtime():
         aqi_unique_id = registry.async_get("air_quality.docker_flow_pm25_aqi").unique_id
         for suffix in ("info", "debug1", "debug2", "aqi"):
             companion_id = f"sensor.docker_flow_pm25_{suffix}"
+            if suffix.startswith("debug"):
+                companion_id = companion_id.replace("sensor.", "sensor.src_", 1)
             if suffix == "aqi":
                 companion_id = companion_id.replace("sensor.", "air_quality.", 1)
             assert hass.states.get(companion_id) is not None
@@ -1104,8 +1106,11 @@ async def test_config_flow_create_modify_runtime():
         assert registry.async_get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").unique_id == aqi_unique_id
         for suffix in ("info", "debug1", "debug2", "aqi"):
             old_domain = "air_quality" if suffix == "aqi" else "sensor"
-            assert registry.async_get(f"{old_domain}.docker_flow_pm25_{suffix}") is None
+            prefix = "src_" if suffix.startswith("debug") else ""
+            assert registry.async_get(f"{old_domain}.{prefix}docker_flow_pm25_{suffix}") is None
             companion_id = f"{modified_id}_{suffix}"
+            if suffix.startswith("debug"):
+                companion_id = companion_id.replace("sensor.", "sensor.src_", 1)
             if suffix == "aqi":
                 companion_id = companion_id.replace("sensor.", "air_quality.", 1)
             companion_entry = registry.async_get(companion_id)
