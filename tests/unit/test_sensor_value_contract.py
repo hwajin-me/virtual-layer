@@ -62,3 +62,19 @@ def test_numeric_sensor_does_not_publish_enum_options():
     sensor._native_templates_applied()
     assert sensor.options is None
     assert sensor.native_value == 12
+
+
+@pytest.mark.parametrize("missing", [None, "", "  ", "None", "unknown", "unavailable"])
+def test_missing_unit_preserves_last_normalized_unit(missing):
+    sensor = make_sensor({"name": "PM", "class": "pm10", "initial_value": 12})
+    sensor._apply_native_template_value("native_unit_of_measurement", "µg/m3")
+    sensor._apply_native_template_value("native_unit_of_measurement", missing)
+    sensor._native_templates_applied()
+    assert sensor.native_unit_of_measurement == "μg/m³"
+    assert sensor.native_value == 12
+
+
+def test_unitless_sensor_remains_unitless():
+    sensor = make_sensor({"name": "Ratio", "initial_value": 0.5})
+    sensor._apply_native_template_value("native_unit_of_measurement", None)
+    assert sensor.native_unit_of_measurement is None

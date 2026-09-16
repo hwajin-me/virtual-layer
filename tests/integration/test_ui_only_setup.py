@@ -1,6 +1,7 @@
 """Integration tests for UI-only Virtual Layer setup behavior."""
 
 import json
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -4096,7 +4097,7 @@ async def test_options_flow_can_edit_existing_entity(hass):
         {
             CONF_PLATFORM: "sensor",
             CONF_NAME: "Washer Status",
-            ATTR_ENTITY_ID: "sensor.laundry_washer_status",
+            ATTR_ENTITY_ID: "sensor.washer_status",
             CONF_INITIAL_VALUE: "running",
             CONF_INITIAL_AVAILABILITY: True,
             CONF_PERSISTENT: False,
@@ -5312,9 +5313,18 @@ async def test_creation_flows_apply_the_selected_template_helper_policy(hass):
     assert CONF_AUTO_HELPER not in saved
 
 
-async def test_options_flow_copy_existing_entity_avoids_source_entity_id(hass):
+@pytest.mark.parametrize(("name", "submitted_id", "expected_id"), [
+    ("Kitchen Lamp", "", "sensor.room_k_lamp"),
+    ("Powder Indirect Bulb", None, "sensor.pd_ind_bb"),
+    ("Living Room Ceiling Light", None, "sensor.room_lv_clight"),
+    ("Focused Light", "sensor.my_custom_id", "sensor.my_custom_id"),
+])
+@pytest.mark.parametrize("source_id", ["sensor.kitchen_lamp", "sensor.room_k_lamp"])
+async def test_options_flow_copy_existing_entity_avoids_source_entity_id(
+    hass, name, submitted_id, expected_id, source_id,
+):
     hass.states.async_set(
-        "sensor.kitchen_lamp",
+        source_id,
         "on",
         {"friendly_name": "Kitchen Lamp"},
     )
@@ -5331,19 +5341,68 @@ async def test_options_flow_copy_existing_entity_avoids_source_entity_id(hass):
     )
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {CONF_REFERENCE_ENTITY_ID: ["sensor.kitchen_lamp"]},
+        {CONF_REFERENCE_ENTITY_ID: [source_id]},
     )
     result = await _choose_add_template_helper(hass, result)
     defaults = _flatten_entity_form_sections(result["data_schema"]({}))
 
-    assert defaults[ATTR_ENTITY_ID] == "sensor.virtual_device_kitchen_lamp"
+    assert defaults[ATTR_ENTITY_ID] == (
+        "sensor.room_k_lamp_copy" if source_id == "sensor.room_k_lamp" else "sensor.room_k_lamp"
+    )
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {**defaults, CONF_DEVICE_NAME: "Kitchen", ATTR_ENTITY_ID: ""},
+        {**defaults, CONF_DEVICE_NAME: "Kitchen", CONF_ENTITY_NAME: name,
+         ATTR_ENTITY_ID: defaults[ATTR_ENTITY_ID] if submitted_id is None else submitted_id},
     )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert _first_stored_entity(result)[ATTR_ENTITY_ID] == "sensor.kitchen_kitchen_lamp"
+    assert _first_stored_entity(result)[ATTR_ENTITY_ID] == (
+        expected_id + "_copy" if expected_id == source_id else expected_id
+    )
+    assert _first_stored_entity(result)[CONF_NAME] == name
+
+
+@pytest.mark.parametrize("submitted_id", ["sensor.saved_id", ""])
+async def test_edit_name_preserves_id_unless_cleared(hass, submitted_id):
+    selected = {CONF_PLATFORM: "sensor", CONF_NAME: "Original",
+                ATTR_ENTITY_ID: "sensor.saved_id", ATTR_ENTITY_KEY: "selected"}
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {"Room": [selected]}},
+    )
+    entry.add_to_hass(hass)
+    manager = hass.config_entries.options
+    result = await manager.async_init(entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY})
+    result = await manager.async_configure(
+        result["flow_id"], {CONF_ENTITY_KEY: json.dumps(["key", "selected"], separators=(",", ":"))},
+    )
+    result = await manager.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: []})
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    result = await manager.async_configure(result["flow_id"], {
+        **defaults, CONF_ENTITY_NAME: "Powder Focused Light",
+        CONF_DEVICE_NAME: "Renamed Device", ATTR_ENTITY_ID: submitted_id,
+    })
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert _first_stored_entity(result)[ATTR_ENTITY_ID] == (submitted_id or "sensor.pd_fclight")
+
+
+async def test_create_without_sources_generates_id_from_submitted_name(hass):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {}},
+    )
+    entry.add_to_hass(hass)
+    manager = hass.config_entries.options
+    result = await manager.async_init(entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY})
+    result = await manager.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: []})
+    defaults = _flatten_entity_form_sections(result["data_schema"]({}))
+    assert defaults[ATTR_ENTITY_ID] == ""
+    result = await manager.async_configure(result["flow_id"], {
+        **defaults, CONF_DEVICE_NAME: "Unrelated Device",
+        CONF_ENTITY_NAME: "Powder Indirect Bulb",
+    })
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert _first_stored_entity(result)[ATTR_ENTITY_ID] == "sensor.pd_ind_bb"
 
 
 async def test_options_flow_refreshes_untouched_helpers_when_add_sources_change(hass):
@@ -7083,20 +7142,19 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
     await hass.async_block_till_done()
 
     assert (
-        entity_registry.async_get("sensor.laundry_reconfigured_washer").original_name
+        entity_registry.async_get("sensor.virtual_washer").original_name
         == "Reconfigured Washer"
     )
     assert (
-        entity_registry.async_get("sensor.laundry_reconfigured_washer_info").original_name
+        entity_registry.async_get("sensor.virtual_washer_info").original_name
         == "Reconfigured Washer - Configuration"
     )
     assert (
-        entity_registry.async_get("sensor.laundry_reconfigured_washer_debug1").original_name
+        entity_registry.async_get("sensor.virtual_washer_debug1").original_name
         == "Reconfigured Washer - Source 1: Washer Power"
     )
-    assert entity_registry.async_get("sensor.virtual_washer") is None
-    assert entity_registry.async_get("sensor.virtual_washer_info") is None
-    customized_debug = entity_registry.async_get("sensor.laundry_reconfigured_washer_debug2")
+    assert entity_registry.async_get("sensor.laundry_reconfigured_washer") is None
+    customized_debug = entity_registry.async_get("sensor.virtual_washer_debug2")
     assert customized_debug.original_name == (
         "Reconfigured Washer - Source 2: Washer Door"
     )
@@ -9860,7 +9918,7 @@ async def test_generated_numeric_helper_ignores_unavailable_sources_at_runtime(h
     assert entity.state == "unknown"
 
 
-async def test_location_helper_updates_from_home_assistant_state_events(hass):
+async def test_location_helper_updates_from_home_assistant_state_events(hass, freezer):
     hass.states.async_set(
         "device_tracker.phone_one",
         "not_home",
@@ -9909,6 +9967,7 @@ async def test_location_helper_updates_from_home_assistant_state_events(hass):
         == "person.traveller"
     )
 
+    freezer.tick(timedelta(seconds=60))
     hass.states.async_set(
         "person.traveller",
         "not_home",

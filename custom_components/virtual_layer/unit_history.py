@@ -6,6 +6,7 @@ from homeassistant.const import CONF_UNIT_OF_MEASUREMENT
 from homeassistant.helpers.template import Template, TemplateError
 
 from .const import CONF_ATTRIBUTES, CONF_NATIVE_TEMPLATES
+from .air_quality_options import normalize_unit
 
 
 def unit_template(entity):
@@ -31,6 +32,9 @@ def configured_unit(hass, entity):
             return False, None
     else:
         value = entity.get(CONF_UNIT_OF_MEASUREMENT) or entity.get(CONF_ATTRIBUTES, {}).get(CONF_UNIT_OF_MEASUREMENT)
+    if value is not None and not isinstance(value, str):
+        return False, None
+    value = normalize_unit(value)
     if value is None or value == "":
         # A missing dynamic source attribute is not an explicit unit removal.
         return not bool(template), None

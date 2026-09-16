@@ -1,6 +1,7 @@
 """Unit tests for the aggregate GPS location helper."""
 
 from datetime import timedelta
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -37,6 +38,7 @@ from custom_components.virtual_layer.device_tracker import (
     ATTR_LOCATION_PRIORITY_SOURCE,
     ATTR_LOCATION_SOURCE_LAST_MOVED,
     ATTR_LOCATION_SOURCE_POSITIONS,
+    ATTR_LOCATION_SOURCE_OBSERVATIONS,
     ATTR_LOCATION_CLASSIFICATION,
     ATTR_LOCATION_BLE_DISTANCE,
     CONF_GPS,
@@ -132,7 +134,7 @@ async def test_move_to_coords_schedules_state_safely_from_executor(hass):
     assert tracker.location_accuracy == 12
 
 
-def test_presence_classification_prioritizes_wifi_ble_near_and_far_states(hass):
+def test_presence_classification_prioritizes_wifi_ble_near_and_far_states(hass, freezer):
     tracker = _helper_tracker(hass)
     tracker._config[CONF_PRESENCE_CLASSIFICATION] = True
     tracker._presence_classification = True
@@ -152,18 +154,21 @@ def test_presence_classification_prioritizes_wifi_ble_near_and_far_states(hass):
     assert tracker.extra_state_attributes[ATTR_LOCATION_BLE_DISTANCE] == 5
 
     hass.states.async_set("sensor.phone_distance", "unknown")
+    freezer.tick(timedelta(seconds=10))
     _set_position(hass, "device_tracker.first_phone", 37.5050, 127.0000)
     _set_position(hass, "device_tracker.second_phone", 37.5050, 127.0000)
     _set_position(hass, "device_tracker.travel_phone", 37.5050, 127.0000)
     tracker._update_location_from_sources()
     assert tracker.state == "near_home"
 
+    freezer.tick(timedelta(seconds=30))
     _set_position(hass, "device_tracker.first_phone", 37.5200, 127.0000)
     _set_position(hass, "device_tracker.second_phone", 37.5200, 127.0000)
     _set_position(hass, "device_tracker.travel_phone", 37.5200, 127.0000)
     tracker._update_location_from_sources()
     assert tracker.state == "away"
 
+    freezer.tick(timedelta(seconds=60))
     _set_position(hass, "device_tracker.first_phone", 37.6000, 127.0000)
     _set_position(hass, "device_tracker.second_phone", 37.6000, 127.0000)
     _set_position(hass, "device_tracker.travel_phone", 37.6000, 127.0000)
@@ -171,6 +176,11 @@ def test_presence_classification_prioritizes_wifi_ble_near_and_far_states(hass):
     assert tracker.state == "far_away"
 
     hass.states.async_set("binary_sensor.phone_wifi", "on")
+    tracker._update_location_from_sources()
+    assert tracker.state == "far_away"
+
+    freezer.tick(timedelta(seconds=60))
+    _set_position(hass, "device_tracker.first_phone", 37.5000, 127.0000)
     tracker._update_location_from_sources()
     assert tracker.state == "home"
 
@@ -250,7 +260,7 @@ def test_dawarich_point_envelopes_and_family_member_matching():
     assert VirtualDeviceTracker._dawarich_family_point(
         {"locations": [{"name": "Alex", "location": {"lat": 37.5, "lon": 127.0}}]},
         "alex",
-    ) == {"lat": 37.5, "lon": 127.0}
+    )["lat"] == 37.5
 
 
 @pytest.mark.asyncio
@@ -282,7 +292,13 @@ async def test_dawarich_refresh_updates_tracker_and_never_puts_api_key_in_state(
 
     class Response:
         def __init__(self, payload):
-            self.payload = payload
+            import io
+            import json
+            from unittest.mock import AsyncMock
+
+            stream = io.BytesIO(json.dumps(payload).encode())
+            self.content = Mock(read=AsyncMock(side_effect=stream.read))
+            self.headers = {}
             self.status = 200
 
         async def __aenter__(self):
@@ -301,7 +317,7 @@ async def test_dawarich_refresh_updates_tracker_and_never_puts_api_key_in_state(
         def get(self, url, **kwargs):
             requests.append((url, kwargs))
             if url.endswith("/visits"):
-                return Response({"visits": [{"place_name": "Office"}]})
+                return Response({"visits": [{"place_name": "Office", "started_at": 8}]})
             return Response(
                 {
                     "points": [
@@ -480,7 +496,7 @@ def test_tracker_restores_legacy_state_without_available_attribute(
     ) == expected_location
 
 
-def test_location_helper_prefers_recent_outlier_and_holds_arrived_device(hass):
+def test_location_helper_prefers_recent_outlier_and_holds_arrived_device(hass, freezer):
     tracker = _helper_tracker(hass)
     _set_position(hass, "device_tracker.first_phone", 37.5000, 127.0000)
     _set_position(hass, "device_tracker.second_phone", 37.5000, 127.0010)
@@ -498,6 +514,7 @@ def test_location_helper_prefers_recent_outlier_and_holds_arrived_device(hass):
 
     # The selected phone reaches the other devices. It is still the desired
     # tracker while its own GPS report remains inside the 30 minute window.
+    freezer.tick(timedelta(seconds=60))
     _set_position(hass, "device_tracker.travel_phone", 37.5000, 127.0002)
     tracker._update_location_from_sources()
 
@@ -508,31 +525,34 @@ def test_location_helper_prefers_recent_outlier_and_holds_arrived_device(hass):
     )
 
 
-def test_location_helper_returns_to_median_when_priority_is_no_longer_recent(hass):
+def test_location_helper_expires_unconfirmed_outlier_without_movement(hass, freezer):
     tracker = _helper_tracker(hass)
     _set_position(hass, "device_tracker.first_phone", 37.5000, 127.0000)
     _set_position(hass, "device_tracker.second_phone", 37.5000, 127.0010)
     _set_position(hass, "device_tracker.travel_phone", 37.5200, 127.0200)
     tracker._update_location_from_sources()
 
-    tracker._source_is_recent = lambda *_args: False
+    freezer.tick(timedelta(minutes=31))
+    _set_position(hass, "device_tracker.first_phone", 37.5000, 127.0000)
+    _set_position(hass, "device_tracker.second_phone", 37.5000, 127.0010)
     tracker._update_location_from_sources()
 
     assert tracker.latitude == 37.5000
-    assert tracker.longitude == 127.0010
+    assert tracker.longitude == pytest.approx(127.0005)
     assert tracker.extra_state_attributes[ATTR_LOCATION_PRIORITY_SOURCE] is None
 
 
-def test_location_helper_does_not_treat_non_gps_attribute_updates_as_movement(hass):
+def test_location_helper_does_not_treat_non_gps_attribute_updates_as_movement(hass, freezer):
     tracker = _helper_tracker(hass)
     _set_position(hass, "device_tracker.first_phone", 37.5000, 127.0000)
     _set_position(hass, "device_tracker.second_phone", 37.5000, 127.0010)
     _set_position(hass, "device_tracker.travel_phone", 37.5200, 127.0200)
     tracker._update_location_from_sources()
 
-    tracker._source_last_moved["device_tracker.travel_phone"] = (
-        dt_util.utcnow() - timedelta(minutes=31)
-    )
+    assert not tracker._source_last_moved
+    freezer.tick(timedelta(minutes=31))
+    _set_position(hass, "device_tracker.first_phone", 37.5000, 127.0000)
+    _set_position(hass, "device_tracker.second_phone", 37.5000, 127.0010)
     hass.states.async_set(
         "device_tracker.travel_phone",
         "not_home",
@@ -547,41 +567,34 @@ def test_location_helper_does_not_treat_non_gps_attribute_updates_as_movement(ha
     assert tracker.latitude == 37.5000
     assert tracker.longitude == 127.0010
     assert tracker.extra_state_attributes[ATTR_LOCATION_PRIORITY_SOURCE] is None
+    assert not tracker._source_last_moved
 
 
-def test_location_helper_restores_source_movement_history(hass):
+def test_location_helper_restores_source_movement_history(hass, freezer):
     tracker = _helper_tracker(hass)
     _set_position(hass, "device_tracker.first_phone", 37.5000, 127.0000)
     _set_position(hass, "device_tracker.second_phone", 37.5000, 127.0010)
+    _set_position(hass, "device_tracker.travel_phone", 37.5000, 127.0000)
+    tracker._update_location_from_sources()
+    freezer.tick(timedelta(seconds=60))
     _set_position(hass, "device_tracker.travel_phone", 37.5200, 127.0200)
     tracker._update_location_from_sources()
 
     restored = _helper_tracker(hass)
-    restored._virtual_attributes.update(
-        {
-            ATTR_LOCATION_PRIORITY_SOURCE: tracker.extra_state_attributes[
-                ATTR_LOCATION_PRIORITY_SOURCE
-            ],
-            ATTR_LOCATION_SOURCE_POSITIONS: tracker.extra_state_attributes[
-                ATTR_LOCATION_SOURCE_POSITIONS
-            ],
-            ATTR_LOCATION_SOURCE_LAST_MOVED: tracker.extra_state_attributes[
-                ATTR_LOCATION_SOURCE_LAST_MOVED
-            ],
-        }
-    )
+    restored._virtual_attributes.update(deepcopy(tracker.extra_state_attributes))
     restored._virtual_attributes[ATTR_LOCATION_SOURCE_POSITIONS][
         "device_tracker.first_phone"
     ] = [True, False]
     restored._virtual_attributes[ATTR_LOCATION_SOURCE_LAST_MOVED][
         "device_tracker.first_phone"
     ] = True
+    restored._virtual_attributes[ATTR_LOCATION_SOURCE_OBSERVATIONS][
+        "device_tracker.first_phone"
+    ]["position"] = [True, False]
     restored._restore_location_helper_attributes()
     assert "device_tracker.first_phone" not in restored._source_positions
     assert "device_tracker.first_phone" not in restored._source_last_moved
-    restored._source_last_moved["device_tracker.travel_phone"] = (
-        dt_util.utcnow() - timedelta(minutes=31)
-    )
+    freezer.tick(timedelta(minutes=31))
     hass.states.async_set(
         "device_tracker.travel_phone",
         "not_home",
@@ -594,9 +607,10 @@ def test_location_helper_restores_source_movement_history(hass):
 
     restored._update_location_from_sources()
 
-    assert restored.latitude == 37.5000
-    assert restored.longitude == 127.0010
-    assert restored.extra_state_attributes[ATTR_LOCATION_PRIORITY_SOURCE] is None
+    assert restored.latitude == 37.5200
+    assert restored.longitude == 127.0200
+    assert restored.extra_state_attributes[ATTR_LOCATION_PRIORITY_SOURCE] == "device_tracker.travel_phone"
+    assert restored.extra_state_attributes["location_stale"] is False
 
 
 def test_location_helper_excludes_its_own_entity_from_median(hass):

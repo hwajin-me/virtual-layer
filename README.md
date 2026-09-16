@@ -40,14 +40,24 @@ and manage them from `Settings > Devices & services > Virtual Layer`.
 - Create a virtual entity from one or more existing Home Assistant entities
 - Inspect each virtual entity's `source_entities` state attribute for its
   configured source entity IDs in order (an empty list when no sources are set).
-- Each referenced source also gets a diagnostic usage sensor, attached to the
-  source's existing device when available (otherwise a standalone sensor).
-  Its state counts the virtual entities using that source; `virtual_entities`
-  lists their IDs and `source_entity_id` identifies the source. References are
-  grouped per Virtual Layer config entry, including explicit attribute/template
-  sources. Sensors update or disappear as references are edited or removed;
+- Each referenced source gets a diagnostic sensor per virtual target, attached to
+  the source's existing device when available (otherwise a standalone sensor).
+  Its name shows the virtual target's display name and exact entity ID. Its
+  value follows that target's current state, including unknown/unavailable.
+  `virtual_entity_id` identifies the target, `virtual_entities` retains a
+  one-item list for compatibility, and `source_entity_id` identifies the source.
+  References are tracked per Virtual Layer config entry, including explicit
+  attribute/template sources. Sensors update or disappear as references are edited or removed;
   source outages do not erase configured usage. Original devices and entities
   keep their metadata and ownership.
+  Home Assistant startup and Virtual Layer reload automatically rebuild these
+  links for all saved virtual entities: missing usage sensors are recreated,
+  outdated reference lists and device links are refreshed, and repeated reloads
+  do not create duplicates. Existing entities need no edit or manual save.
+  Old count sensors migrate automatically on reload: the first target reuses
+  the existing sensor and its user customizations; other targets get separate
+  sensors. Renaming a target refreshes the default sensor name while keeping
+  a user-customized usage-sensor name.
 - Convert one supported single source to a different virtual entity type, such
   as a real switch exposed as a virtual fan
 - Auto-generate useful helper templates when multiple source entities are
@@ -78,6 +88,12 @@ and manage them from `Settings > Devices & services > Virtual Layer`.
   not full RGB colour reproduction. Matter cluster/unit conversion remains
   the responsibility of the installed bridge plugin.
 - Korean and English UI translations
+- Sensor unit templates retain the last valid unit when a source returns an
+  empty or unavailable unit. On reload, missing units recover from the entity's
+  recorded statistics. Sensor forms offer normalized Home Assistant units;
+  selecting one sets a fixed unit template without converting readings. The
+  unit-change step can restore the sensor's recorded unit while leaving all
+  historical statistics untouched.
 - Integration icons and brand assets
 
 ## Installation
@@ -165,14 +181,38 @@ Every entity supports:
 - command actions
 - pull interval
 
-Default entity IDs use `domain.device_name_entity_name`, with both names
-converted to snake case (for example,
-`sensor.temperature_sensor_living_room_temperature_sensor`). When the entity
-name is not yet available, the suggested ID uses an eight-character random
-alphanumeric suffix. Clear the ID field to regenerate it from the submitted
-names, or enter an explicit ID. Changing an existing entity's name or Device
-name automatically regenerates its ID, including previously customized IDs.
-Renaming a Device regenerates IDs for all its entities; unrelated edits keep IDs.
+Default entity IDs use `domain.entity_name`, derived only from the virtual entity
+name, converted to snake case, with common room/equipment/measurement phrases abbreviated
+(for example, `sensor.room_lv_temp_sensor`). Abbreviations apply to
+generated IDs only, before the length limit; saved IDs are not migrated.
+Spaces, underscores, and hyphens are supported, and only whole words/phrases
+are replaced. The Home Assistant domain prefix remains unchanged.
+
+| Name | ID abbreviation |
+| --- | --- |
+| living room / dressing room / bathroom / bedroom | room_lv / room_dr / room_bt / room_bed |
+| kitchen / laundry room / entrance / server room | room_k / room_ld / room_e / room_s |
+| doorstep / hallway | area_d / area_h |
+| camera / cctv / robot vacuum | cctv / cctv / rvcu |
+| carbon dioxide / carbon monoxide / formaldehyde | co2 / co / h2ho |
+| particulate matter / radon / smoke / volatile organic compound | pm / radon / smoke / voc |
+| illumination / humidity / temperature / vibration | ill / humi / temp / vib |
+| air conditioner / heating and air conditioning system | airc / hvac |
+| lighting controller (also lightling controller) / presence | light / pres |
+| indirect / bulb / ceiling light / powder / focused light | ind / bb / clight / pd / fclight |
+
+The dictionary also covers additional rooms, lighting fixtures, appliances,
+climate equipment, measurements, access devices, and networking. For example,
+`Master Bedroom Ceiling Lamp` becomes `room_mbed_clight`, and
+`Kitchen Refrigerator Power Consumption` becomes `room_k_frdg_pwr`.
+See the [full abbreviation dictionary](docs/entity-id-abbreviations.md).
+
+The Device name is not prepended. An unnamed form leaves the ID blank until a
+virtual entity name is submitted. During creation, changing the name updates an
+untouched suggested ID. An explicitly entered ID takes precedence. Existing IDs
+survive entity/Device renames; clear the ID field to regenerate it from the
+current virtual entity name. Source ID collisions receive a `_copy` suffix;
+other occupied IDs are rejected for correction in the form.
 
 The UI accepts JSON objects for static attributes, template sources, attribute
 sources, attribute templates, native property templates, and command actions.
@@ -300,9 +340,36 @@ on the source type:
 - String-like sources use concatenation
 - Date, time, and datetime sources use the latest known value
 - Select/input-select sources use the first available value
-- Multiple location sources create a GPS median helper. A source more than 300 m
-  from that median is followed for 30 minutes after its latest GPS update, so a
-  travelling device remains selected after it arrives near the other devices.
+- Multiple location sources follow a device with observed, plausible GPS
+  movement, including when only one of a person's devices leaves home. Movement
+  must exceed 10 m and the combined accuracy of the previous motion anchor and
+  current fix. GPS reports worse than the larger of 300 m and the configured
+  grouping distance, or jumps exceeding 350 m/s after accuracy allowance, are
+  rejected. These are heuristics, not proof that a person carries a device.
+- The selected moving device remains selected during stops. A device left on
+  home Wi-Fi/BLE does not override confirmed off-site movement. A different
+  device can take over after moving from near the selected device, or when the
+  selected device no longer has a usable report. Ordinary battery updates do
+  not count as movement. When a source supplies `last_seen` or `last_timestamp`,
+  its measurement clock is used for freshness, ordering, movement and polygon
+  `latest`/age rules. Epoch seconds (including numeric strings), ISO timestamps
+  and datetime values are accepted; naive datetimes use HA's time zone. Invalid,
+  future or backwards measurements cannot become fresh merely because HA
+  received an attribute update. Sources without a measurement clock retain the
+  HA timestamp fallback. `lat`/`lon` and `acc` aliases are supported as well.
+- With no movement evidence, the helper retains the median/outlier fallback:
+  a source more than 300 m from the median may be selected for 30 minutes as an
+  `unconfirmed_outlier`. The first observation is never confirmed movement.
+  `location_selection_reason`, `location_stale`, and
+  `location_rejected_sources` explain the decision. A confirmed device with no
+  usable report in the configured window (30 minutes by default) retains its
+  last known position with `location_stale: true`, rather than implying a return
+  home. HA's `last_reported` is used for report freshness, so identical reports
+  keep a stationary device fresh when it has no explicit measurement clock.
+  Without that clock, report freshness is not a GPS measurement age.
+  Selected GPS accuracy is preserved; a median includes source spread in its
+  uncertainty. Only the last accepted fix and movement anchor are saved for
+  restart recovery; the bounded working path is not exposed as travel history.
 
 Source attributes receive helpers too. A single source uses a dynamic
 `state_attr()` template. Attributes shared by multiple sources use `AND` for
@@ -351,15 +418,55 @@ URL and expose the native image bytes/content type. Camera and image entities
 cannot be combined into a multi-source helper because binary media cannot be
 meaningfully concatenated or averaged.
 
+Adaptive location helpers and adaptive polygon trackers additionally expose
+`location_last_seen`, `location_speed_m_s` and `location_bearing` (degrees
+clockwise from north). Speed and bearing use two accepted fixes from the same
+selected source, at least five seconds apart. Overlapping accuracy circles
+yield zero speed and no bearing. A new stationary measurement can clear speed;
+a repeated old measurement cannot refresh it. Motion estimates expire after
+five minutes (or the shorter source freshness window), clear on rejected or
+stale data, and are not reconstructed from a single restored fix. Median/radio
+positions have no inferred speed. These are GPS estimates, not calibrated speed
+measurements. The timestamp and alias handling were informed by
+[Composite Tracker](https://github.com/pnbruckner/ha-composite-tracker/), while
+Virtual Layer retains its UI-only configuration and carried-device selection.
+
+## Wi-Fi and AB Gateway Presence
+
+In Add/Edit Virtual Entity, select `device_tracker` and enable **Wi-Fi / BLE
+presence tracking**. For a standalone presence tracker, leave the initial source
+selection empty. For a composite tracker, also select your GPS source trackers.
+
+- **Wi-Fi entities:** select an existing router `device_tracker`, connection
+  `binary_sensor`, or SSID `sensor` for the specific device. For SSID sensors,
+  enter the exact, case-sensitive home SSIDs, one per line. This uses your
+  existing router/phone integration; no Wi-Fi password or network scan is needed.
+- **BLE addresses:** enter stable beacon/device MAC addresses, one per line.
+  Install and configure [AB Gateway](https://github.com/AprilBrother/component-ab-gateway)
+  separately. It publishes advertisements through Home Assistant's Bluetooth
+  scanner API, not device-tracker entities. Set scanner sources to `ab_gateway`
+  for the upstream default; these are HA scanner IDs, not MQTT topics or gateway
+  MAC addresses. Upstream advertisements from multiple physical gateways may
+  share this source ID. Rotating private device addresses require another
+  integration that resolves them to a stable identity.
+- **BLE RSSI and timeout:** choose the minimum signal strength (default −90 dBm)
+  and absence timeout (default 120 seconds). Every five seconds, Virtual Layer
+  checks the selected scanners' real advertisement timestamps. Reading cached
+  data or receiving weak packets does not extend the last strong observation.
+
+Any connected/nearby source establishes home presence; all disconnected/expired
+sources establish absence. Missing sources or offline scanners produce unknown
+when no positive evidence remains. Home coordinates use the configured home
+zone or HA home location, not a measured radio position. Confirmed movement of
+a carried GPS device still wins over devices left at home. Wi-Fi connections
+remain valid until their source changes state, including becoming unavailable.
+The settings reopen on edit and can be disabled without retaining hidden inputs.
+
 ## Polygon Zones
 
-AB BLE Gateway trackers can also be selected together with GPS trackers in the
-virtual device tracker source picker. Trackers reporting `source_type:
-bluetooth_le` (also `bluetooth` or `router`) and `home` take precedence over GPS.
-When they report `not_home`, `unknown`, or `unavailable`, GPS selection resumes.
-Configure beacon identity, RSSI thresholds, and idle timeout in AB BLE Gateway;
-Virtual Layer honors its resulting presence state. RSSI alone does not provide
-calibrated distance or room triangulation. For room/entrance polygon positioning,
+The same Wi-Fi/BLE inputs can supply home coordinates to polygon tracking.
+RSSI alone does not provide calibrated distance or room triangulation.
+For room/entrance polygon positioning,
 configure at least three non-collinear ESPresense distance anchors. Their stale
 positions are reevaluated at most every five seconds, or sooner for shorter
 configured anchor lifetimes (with a one-second minimum refresh interval).
@@ -372,7 +479,7 @@ Add/Edit Virtual Entity form:
 - **Polygon GeoJSON**: an inline Feature or FeatureCollection
 - **Polygon files or URLs**: one local path or HTTP(S) URL per line
 - **Person**: the optional `person` represented by the combined tracker
-- **Tracker selection strategy**: `majority`, `priority`, `latest`, or `median`
+- **Tracker selection strategy**: `adaptive`, `majority`, `priority`, `latest`, or `median`
 - **Tracker grouping distance**: distance used to form majority groups
 - **Tracker rules JSON**: optional per-source filtering and selection rules
 - **Outside-zone state**: defaults to `not_home`
@@ -404,6 +511,14 @@ imprecise reports; `enabled` disables a source; and `condition_template`
 provides a Home Assistant Jinja condition with `source`, `source_entity_id`,
 `person`, and `this` variables.
 
+Choose **Adaptive movement tracking** for multiple devices belonging to one
+person. It uses the same movement and stop-retention policy as the location
+helper before resolving polygon zones. Existing strategies keep their original
+meaning and the default remains `majority`; a majority of devices left at home
+will still win in that mode. Explicit `dominant` rules and triangulated
+ESPresense positions retain their precedence. Per-source exclusion rules also
+apply to adaptive tracking.
+
 ```json
 {
   "device_tracker.primary_phone": {
@@ -427,7 +542,56 @@ files and the last working polygon set remain active, and the error is reported
 in the tracker's `polygon_load_error` attribute. Editing or deleting the
 virtual tracker updates or cleans up both generated entities normally.
 
+## Dawarich Location Source
+
+Create or edit a `device_tracker` from the integration UI and open the
+**Dawarich** section. Enable it, enter the instance base URL (without `/api/v1`)
+and API key, and select Bearer or query authentication. You can configure the
+poll interval (15–3600 seconds), history limit (1–100 points), and optionally
+test authentication and a usable location before saving. Disable Dawarich and
+save to remove its saved configuration. The masked API key remains stored in
+the config entry; it is excluded from generated information entities and
+runtime error messages.
+
+With both family fields empty, the tracker reads the API key owner's points.
+For family sharing, enter the exact Dawarich member email or user ID. The
+optional legacy Person selector matches its display name to a returned family
+name or email; the explicit member field takes precedence. Missing or ambiguous
+matches produce an error instead of selecting another person's location.
+Family sharing must be enabled in Dawarich. The family API supplies current
+locations, not other members' complete history or visits.
+
+Dawarich can be the only location source, including for polygon zones, or feed
+the existing location helper alongside local trackers. Source freshness uses
+the measurement timestamp, so polling an old point does not simulate movement
+or make it fresh. Out-of-order points cannot roll the tracker back. Invalid
+points are skipped; a failed request retains the last location and marks the
+Dawarich feed stale. Concurrent polls are skipped and unloading cancels an
+active request. Native location templates do not overwrite the selected
+Dawarich/helper/polygon position.
+
+Attributes include `dawarich_point`, newest-first `dawarich_history`,
+`dawarich_point_time` (measurement time), `dawarich_last_updated` (successful
+poll time), `dawarich_stale`, and credential-safe `dawarich_error` codes. Own-account
+mode also retrieves the latest visit within 30 days of the latest point;
+`dawarich_visit_error` reports visit failures independently of location updates.
+The history attribute is bounded diagnostic data, not a full route archive.
+This integration only reads the [Dawarich API](https://dawarich.app/docs/api/dawarich-api/);
+it does not upload or modify locations.
+
 ## Cameras
+
+For a source camera registered by the Frigate custom integration, an empty
+**Native values → H.264 Stream Source** template is prefilled from Frigate's
+entity/device metadata and RTSP configuration, with `video=h264&audio=all`.
+The camera's original Frigate name survives Home Assistant entity renames.
+The loaded Frigate RTSP URL or configured RTSP template takes precedence;
+otherwise the Frigate server host and port 8554 are used, with the configured
+go2rtc/live stream name when available. A separate go2rtc hostname is used only
+when Frigate's RTSP settings specify it. Non-Frigate sources are not changed.
+Existing custom templates and legacy URLs remain authoritative; blank fields
+are filled on create/edit and save. The filter selects H.264 if available and
+does not create or transcode an H.264 track.
 
 For a robot vacuum map in Apple Home, select one `image.*` source, choose
 **Camera** as the target entity type, and save it on the desired Device.

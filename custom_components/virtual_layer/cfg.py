@@ -788,6 +788,9 @@ def _make_entity_id(platform, name):
 def _diagnostic_source_entities(entity):
     """Collect every explicit external source used by a virtual entity."""
     sources = []
+    presence = entity.get(CONF_LOCAL_PRESENCE)
+    if isinstance(presence, Mapping) and isinstance(presence.get("wifi_entities"), list):
+        sources.extend(source for source in presence["wifi_entities"] if isinstance(source, str))
     for source_entity_id in entity.get(CONF_SOURCE_ENTITIES, []):
         if isinstance(source_entity_id, str):
             sources.append(source_entity_id)
@@ -857,6 +860,14 @@ def _diagnostic_configuration(entity, platform):
             CONF_POLYGON_ESPRESENSE_ANCHORS: copy.deepcopy(
                 polygon.get(CONF_POLYGON_ESPRESENSE_ANCHORS, {}),
             ),
+        }
+    dawarich = entity.get(CONF_DAWARICH)
+    if isinstance(dawarich, Mapping):
+        configuration[CONF_DAWARICH] = {
+            "configured": True,
+            "mode": "family" if dawarich.get(CONF_DAWARICH_MEMBER) or dawarich.get(CONF_DAWARICH_PERSON_ENTITY) else "own",
+            CONF_DAWARICH_POLL_INTERVAL: dawarich.get(CONF_DAWARICH_POLL_INTERVAL, 60),
+            CONF_DAWARICH_HISTORY_LIMIT: dawarich.get(CONF_DAWARICH_HISTORY_LIMIT, 10),
         }
     return configuration
 

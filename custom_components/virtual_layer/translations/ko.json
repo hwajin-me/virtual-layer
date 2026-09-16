@@ -22,7 +22,16 @@
       "incompatible_air_quality_source_unit": "소스 단위가 호환되지 않습니다. m³는 부피이며 농도가 아닙니다. 소스 단위를 수정하거나 숫자 속성을 직접 선택하여 실제 농도 단위를 지정하세요.",
       "invalid_air_quality_logic": "유효한 소스와 단위를 선택하세요. 0 이상 1e12 이하의 유한한 경계값 5개를 오름차순으로 입력하고 구간별 등급 6개를 선택하세요.",
       "air_quality_requires_new_entity": "기존 측정 센서를 공기질 등급 엔터티로 교체할 수 없습니다. 취소하여 원본을 유지한 뒤, 엔터티 추가에서 같은 Device에 Air Quality를 별도로 구성하세요.",
-      "mixed_air_quality_measurements": "서로 다른 측정 항목을 같은 역치로 결합할 수 없습니다. 선택한 항목과 일치하는 소스만 사용하세요. 오염물질별로 판정한 뒤 등급 모드에서 결합하세요."
+      "mixed_air_quality_measurements": "서로 다른 측정 항목을 같은 역치로 결합할 수 없습니다. 선택한 항목과 일치하는 소스만 사용하세요. 오염물질별로 판정한 뒤 등급 모드에서 결합하세요.",
+      "invalid_dawarich_config": "Dawarich URL, API 키, 구성원 및 숫자 범위를 확인하세요.",
+      "dawarich_invalid_auth": "Dawarich가 API 키를 거부했습니다. 키와 인증 방식을 확인하세요.",
+      "dawarich_cannot_connect": "Dawarich에 연결할 수 없습니다. URL과 서버 상태를 확인하세요.",
+      "dawarich_http_error": "Dawarich가 예상하지 못한 HTTP 상태를 반환했습니다. URL, API 접근 및 가족 공유를 확인하세요.",
+      "dawarich_invalid_response": "Dawarich 응답 형식이 잘못되었거나 너무 큽니다.",
+      "dawarich_no_points": "측정 시각이 포함된 유효한 위치가 없습니다.",
+      "dawarich_member_not_found": "일치하는 가족 구성원이 없습니다. 정확한 이메일 또는 사용자 ID와 위치 공유를 확인하세요.",
+      "dawarich_ambiguous_member": "둘 이상의 가족 구성원이 일치합니다. 고유한 이메일 또는 사용자 ID를 입력하세요.",
+      "invalid_local_presence": "Wi-Fi 소스 또는 올바른 BLE 주소를 선택하세요. SSID 센서는 SSID 목록이 필요합니다. 스캐너 ID, 부재 시간, RSSI를 확인하세요."
     },
     "step": {
       "user": {
@@ -92,7 +101,7 @@
           "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
           "icon": "선택 사항인 Material Design 아이콘 이름입니다. 예: mdi:door",
           "icon_template": "아이콘 이름을 반환하는 선택적 Jinja 템플릿입니다. 템플릿 소스 변수와 this를 사용할 수 있습니다.",
-          "entity_id": "선택 사항입니다. 기본 ID는 도메인.device_name_entity_name의 snake_case 형식이며, 엔티티 이름이 없으면 임의의 영숫자를 사용합니다. 비우면 다시 생성하거나 원하는 ID를 직접 입력할 수 있습니다. 기기명이나 엔티티 이름을 바꾸면 직접 지정한 ID도 자동으로 재생성합니다.",
+          "entity_id": "선택 사항입니다. 사용자가 정한 가상 엔티티 이름에 약어를 적용하여 도메인.entity_name으로 생성하며 Device 이름은 붙이지 않습니다. 이름이 없으면 비워 둡니다. 현재 이름으로 다시 생성하려면 비우거나 원하는 ID를 직접 입력하세요. 저장된 ID는 이름을 변경해도 유지됩니다.",
           "platform": "Home Assistant 엔티티 도메인입니다. 변경 후 한 번 제출하면 해당 도메인의 전용 설정과 Jinja 필드가 표시됩니다.",
           "initial_value": "템플릿이 처음 렌더링되기 전이나 값 템플릿이 없을 때 사용하는 기본 상태입니다.",
           "initial_availability": "가용성 템플릿이 없을 때 사용하는 초기 가용 상태입니다.",
@@ -165,17 +174,12 @@
               "polygon_tracker_rules_json": "Tracker 규칙 Jinja 템플릿",
               "polygon_espresense_anchors_json": "ESPresense anchor",
               "polygon_away_state": "영역 밖 상태",
-              "dawarich_url": "Dawarich URL",
-              "dawarich_api_key": "Dawarich API 키",
-              "dawarich_auth_mode": "Dawarich 인증",
-              "dawarich_poll_interval": "Dawarich 업데이트 간격",
-              "dawarich_history_limit": "Dawarich 기록 지점 수",
-              "dawarich_person": "Dawarich 가족 Person",
               "presence_classification": "재실 상태 분류",
               "matter_light_type": "Matter 조명 장치 유형",
               "light_response_delay": "소스 응답 지연",
               "light_response_retries": "소스 새로고침 재시도",
               "light_ignore_unresponsive": "응답 없는 전구 무시",
+              "sensor_unit": "센서 단위",
               "climate_temperature_step": "온도 조절 간격",
               "media_player_source_priority": "미디어 소스 우선순위",
               "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
@@ -186,22 +190,17 @@
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
               "polygon_files_text": "줄마다 로컬 경로 또는 HTTP(S) GeoJSON URL 하나를 입력합니다. 상대 경로는 Home Assistant 설정 디렉터리를 기준으로 합니다.",
               "polygon_person": "이 가상 tracker가 나타내는 선택 Person입니다. 설정한 소스 tracker들이 지도 위치를 결정합니다.",
-              "polygon_strategy": "다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다.",
-              "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
+              "polygon_strategy": "적응형은 GPS 정확도와 이동속도를 검증하여 이동한 기기를 추적하고 정지 중에도 유지하며, 오래된 위치를 표시합니다. 다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다. dominant 규칙은 적응형보다 우선합니다.",
+              "polygon_distance_meters": "다수결 그룹 거리 또는 적응형의 기기 교체와 미확인 이탈 기기 선택에 사용하는 거리(미터)입니다.",
               "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
               "polygon_espresense_anchors_json": "ESPresense 거리 sensor ID를 키로 하는 anchor 객체입니다. 각 anchor에는 latitude와 longitude가 필요하며, 유효한 거리 3개 이상을 삼각측량해 GeoJSON zone으로 판정합니다.",
               "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다.",
-              "dawarich_url": "/api/v1을 제외한 Dawarich 인스턴스 기본 URL입니다(예: https://dawarich.example.com).",
-              "dawarich_api_key": "이 가상 tracker에만 사용하는 API 키입니다. 통합 구성에 저장되며 템플릿이나 속성에 넣지 마세요.",
-              "dawarich_auth_mode": "최신 Dawarich는 Bearer를 사용하고, api_key 인증으로 구성된 인스턴스는 query parameter를 사용하세요.",
-              "dawarich_poll_interval": "GET /api/v1/points 요청 사이의 초 단위 간격입니다. 최소값은 15초입니다.",
-              "dawarich_history_limit": "dawarich_history 속성에 유지할 최근 지점 요약의 수입니다(1–100).",
-              "dawarich_person": "선택 사항인 Home Assistant Person을 Dawarich Family 구성원과 연결합니다. /api/v1/families/locations를 사용하며 Person 표시 이름과 가족 구성원 이름이 일치해야 합니다.",
               "presence_classification": "복합 tracker에서 활성화하면 Wi‑Fi/ESPresense 재실은 home, BLE 거리는 front_door, zone.home과의 GPS 거리는 near_home·away·far_away로 분류합니다.",
               "matter_light_type": "가상 조명의 최대 기능을 선택합니다: 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상입니다. 전구를 묶으면 생성된 헬퍼가 가장 적은 지원 프로필을 사용합니다. RGB와 색온도 전구는 색온도 조명이 되고, 켜기/끄기 전용 전구가 하나라도 있으면 가상 조명은 켜기/끄기만 지원합니다. 효과와 깜빡임은 노출하지 않습니다.",
               "light_response_delay": "명령 후 소스 상태를 다시 읽기 전 요청한 조명 값을 유지할 시간(초, 0–30)입니다.",
               "light_response_retries": "조명 그룹은 소스 기기를 새로고침하고 목표에 도달하지 않은 전구에만 최신 명령을 재전송합니다(0–10회). 새 명령은 이전 재시도를 취소합니다. 단일 소스 조명은 상태만 다시 읽습니다.",
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
+              "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
               "configure_air_quality_rules": "PM1.0·PM2.5·PM4·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·N₂O·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 순간값 표시용이며 공식 건강 기준이나 노출시간 평가가 아닙니다. good은 안전을 보증하지 않습니다. PM4는 PM2.5 구간을 차용한 표시용 참고값, N₂O는 직업 노출 기준과 무관한 자체 표시 구간을 사용합니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
@@ -499,7 +498,7 @@
               "source_entity": "원본 엔티티 ID(예: image.vacuum_map)를 반환하는 Jinja입니다. 카메라는 camera 또는 래스터 image 원본 하나를, 이미지는 image 원본 하나를 연결합니다. 이미지 카메라는 HomeKit Bridge에서 H.264로 변환합니다.",
               "source_list": "소스 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "state_class": "상태 클래스에 사용할 값을 반환하는 Jinja 템플릿입니다.",
-              "stream_source": "H.264 스트림 소스에 사용할 RTSP 또는 Home Assistant 호환 스트림 URL을 반환하는 Jinja 템플릿입니다. 고정 URL은 rtsp://example.test/live를 Jinja 표현식으로 감싸 입력하세요. Apple Home에서는 이 카메라만 선택한 별도의 HomeKit Bridge 액세서리 모드 항목을 만들어야 하며, 일반 브리지에는 카메라가 포함되지 않습니다.",
+              "stream_source": "H.264 스트림 소스에 사용할 RTSP 또는 Home Assistant 호환 스트림 URL을 반환하는 Jinja 템플릿입니다. 고정 URL은 rtsp://example.test/live를 Jinja 표현식으로 감싸 입력하세요. Apple Home에서는 이 카메라만 선택한 별도의 HomeKit Bridge 액세서리 모드 항목을 만들어야 하며, 일반 브리지에는 카메라가 포함되지 않습니다. Frigate 카메라 원본에 한해 빈 입력을 엔티티·디바이스 정보와 Frigate RTSP 설정으로 자동 채우고 video=h264&audio=all을 붙입니다. 기존 템플릿은 유지됩니다. H.264 필터는 기존 트랙을 선택하며 코덱을 변환하지 않습니다.",
               "support_backup": "백업 지원에 사용할 boolean을 반환하는 Jinja 템플릿입니다.",
               "support_duration": "재생 시간 지원에 사용할 boolean을 반환하는 Jinja 템플릿입니다.",
               "support_open": "열기 지원에 사용할 boolean을 반환하는 Jinja 템플릿입니다.",
@@ -604,6 +603,54 @@
               "wind_bearing": "풍향 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "xy_color": "XY 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다."
             }
+          },
+          "dawarich_settings": {
+            "name": "Dawarich",
+            "description": "Dawarich에서 위치와 이동 이력을 조회합니다.",
+            "data": {
+              "dawarich_enabled": "Dawarich 사용",
+              "dawarich_url": "Dawarich URL",
+              "dawarich_api_key": "Dawarich API 키",
+              "dawarich_auth_mode": "인증 방식",
+              "dawarich_poll_interval": "업데이트 간격",
+              "dawarich_history_limit": "이력 위치 수",
+              "dawarich_member": "가족 구성원 이메일 또는 사용자 ID",
+              "dawarich_person": "기존 가족 Person",
+              "dawarich_test_connection": "저장 전 연결 테스트"
+            },
+            "data_description": {
+              "dawarich_enabled": "이 트래커의 Dawarich 조회를 켭니다. 끄고 저장하면 저장된 Dawarich 설정을 제거합니다.",
+              "dawarich_url": "/api/v1을 제외한 기본 URL입니다. 예: https://dawarich.example.com",
+              "dawarich_api_key": "통합 구성에 저장됩니다. 암호 입력란은 화면에서 값을 숨기며 엔티티 속성에는 공개하지 않습니다.",
+              "dawarich_auth_mode": "Bearer 토큰 또는 api_key 쿼리 매개변수 인증을 선택합니다.",
+              "dawarich_poll_interval": "API 조회 간격(15–3600초)입니다. 위치의 최신 여부는 조회 시간이 아닌 측정 시각으로 판단합니다.",
+              "dawarich_history_limit": "dawarich_history에 보관할 최근 위치 요약 수(1–100)입니다. 가족 모드는 현재 위치만 제공합니다.",
+              "dawarich_member": "선택 사항인 정확한 Dawarich 가족 이메일 또는 사용자 ID입니다. Person보다 우선합니다. 둘 다 비우면 API 키 소유자의 위치를 조회합니다. 가족 위치 공유가 켜져 있어야 합니다.",
+              "dawarich_person": "구형 서버에서 Person 표시 이름을 가족 이름 또는 이메일과 일치시키는 단일 Person입니다. 본인 계정 조회 시 비우세요. 현재 서버에서는 구성원 직접 입력을 권장합니다.",
+              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요."
+            }
+          },
+          "local_presence_settings": {
+            "name": "Wi-Fi / BLE 재실 추적",
+            "description": "연결 상태와 AB Gateway Bluetooth 관측으로 특정 기기를 추적합니다.",
+            "data": {
+              "presence_enabled": "로컬 재실 추적 사용",
+              "presence_wifi_entities": "Wi-Fi 연결 소스",
+              "presence_wifi_ssids": "집 Wi-Fi SSID",
+              "presence_ble_addresses": "BLE 기기 주소",
+              "presence_ble_sources": "Bluetooth 스캐너 소스",
+              "presence_ble_timeout": "BLE 부재 판정 시간",
+              "presence_ble_min_rssi": "최소 BLE RSSI"
+            },
+            "data_description": {
+              "presence_enabled": "선택한 Wi-Fi 연결과 원격 BLE 관측을 GPS와 함께 집계합니다. 끄고 저장하면 이 로컬 재실 설정을 제거합니다.",
+              "presence_wifi_entities": "추적할 특정 기기의 공유기 device_tracker 또는 연결 binary_sensor를 선택하세요. Wi-Fi SSID sensor를 선택했다면 아래에 집 SSID를 정확히 입력하세요. 사용할 수 없는 소스는 연결 해제로 취급하지 않습니다.",
+              "presence_wifi_ssids": "대소문자를 구분하는 정확한 SSID를 한 줄에 하나씩 입력하세요. 선택한 sensor 엔티티에만 적용하며 하나라도 일치하면 집으로 판단합니다. Wi-Fi 비밀번호는 입력하지 마세요.",
+              "presence_ble_addresses": "고정 BLE MAC 주소를 한 줄에 하나씩 입력하세요. 지정한 기기만 추적합니다. 주소가 주기적으로 바뀌는 기기는 다른 통합에서 안정적인 식별자를 제공해야 합니다.",
+              "presence_ble_sources": "Home Assistant 원격 스캐너 소스 ID를 한 줄에 하나씩 입력하세요. AprilBrother component-ab-gateway의 기본값은 ab_gateway입니다. MQTT 토픽이나 개별 게이트웨이 MAC이 아닙니다. 게이트웨이 통합은 별도로 설정하세요.",
+              "presence_ble_timeout": "RSSI 기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 5초마다 확인하며 캐시를 다시 읽는 것으로 재실 시간이 연장되지 않습니다.",
+              "presence_ble_min_rssi": "이 값 이상의 dBm 광고를 가까운 기기로 인정합니다(-127–0). 약한 광고는 부재 타이머를 연장하지 않습니다. RSSI를 거리로 환산하지 않습니다."
+            }
           }
         }
       },
@@ -615,7 +662,7 @@
           "target_device_name": "가상 장치"
         },
         "data_description": {
-          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 모션/재실은 과반 감지와 지연 해제, 누수/연기/가스/물 같은 안전 센서는 OR, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다. 난방 전용 climate는 heat/off로 단순화됩니다. climate 하나와 switch 하나를 함께 선택하면 보일러 helper가 생성됩니다. 온수 switch는 heat/off 모두 항상 켜고, heat는 climate의 heat 모드, 가상 off는 climate의 fan_only 모드를 사용합니다. Camera와 Image 소스는 하나씩 별칭으로만 연결할 수 있고 병합하지 않습니다.",
+          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 모션/재실은 과반 감지와 지연 해제, 누수/연기/가스/물 같은 안전 센서는 OR, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 타당한 GPS 이동을 추적하고 정지 중에도 이동한 기기를 유지합니다. 이동 증거가 없으면 GPS 중앙값과 미확인 이탈 기기 우선 정책(300m, 30분)을 사용합니다. 난방 전용 climate는 heat/off로 단순화됩니다. climate 하나와 switch 하나를 함께 선택하면 보일러 helper가 생성됩니다. 온수 switch는 heat/off 모두 항상 켜고, heat는 climate의 heat 모드, 가상 off는 climate의 fan_only 모드를 사용합니다. Camera와 Image 소스는 하나씩 별칭으로만 연결할 수 있고 병합하지 않습니다.",
           "target_device_name": "기존 가상 장치를 선택하면 해당 장치의 엔티티로 함께 묶입니다. 새 장치를 만들 수도 있습니다."
         }
       },
@@ -936,7 +983,16 @@
       "incompatible_air_quality_source_unit": "소스 단위가 호환되지 않습니다. m³는 부피이며 농도가 아닙니다. 소스 단위를 수정하거나 숫자 속성을 직접 선택하여 실제 농도 단위를 지정하세요.",
       "invalid_air_quality_logic": "유효한 소스와 단위를 선택하세요. 0 이상 1e12 이하의 유한한 경계값 5개를 오름차순으로 입력하고 구간별 등급 6개를 선택하세요.",
       "air_quality_requires_new_entity": "기존 측정 센서를 공기질 등급 엔터티로 교체할 수 없습니다. 취소하여 원본을 유지한 뒤, 엔터티 추가에서 같은 Device에 Air Quality를 별도로 구성하세요.",
-      "mixed_air_quality_measurements": "서로 다른 측정 항목을 같은 역치로 결합할 수 없습니다. 선택한 항목과 일치하는 소스만 사용하세요. 오염물질별로 판정한 뒤 등급 모드에서 결합하세요."
+      "mixed_air_quality_measurements": "서로 다른 측정 항목을 같은 역치로 결합할 수 없습니다. 선택한 항목과 일치하는 소스만 사용하세요. 오염물질별로 판정한 뒤 등급 모드에서 결합하세요.",
+      "invalid_dawarich_config": "Dawarich URL, API 키, 구성원 및 숫자 범위를 확인하세요.",
+      "dawarich_invalid_auth": "Dawarich가 API 키를 거부했습니다. 키와 인증 방식을 확인하세요.",
+      "dawarich_cannot_connect": "Dawarich에 연결할 수 없습니다. URL과 서버 상태를 확인하세요.",
+      "dawarich_http_error": "Dawarich가 예상하지 못한 HTTP 상태를 반환했습니다. URL, API 접근 및 가족 공유를 확인하세요.",
+      "dawarich_invalid_response": "Dawarich 응답 형식이 잘못되었거나 너무 큽니다.",
+      "dawarich_no_points": "측정 시각이 포함된 유효한 위치가 없습니다.",
+      "dawarich_member_not_found": "일치하는 가족 구성원이 없습니다. 정확한 이메일 또는 사용자 ID와 위치 공유를 확인하세요.",
+      "dawarich_ambiguous_member": "둘 이상의 가족 구성원이 일치합니다. 고유한 이메일 또는 사용자 ID를 입력하세요.",
+      "invalid_local_presence": "Wi-Fi 소스 또는 올바른 BLE 주소를 선택하세요. SSID 센서는 SSID 목록이 필요합니다. 스캐너 ID, 부재 시간, RSSI를 확인하세요."
     },
     "step": {
       "init": {
@@ -1030,8 +1086,14 @@
       "unit_change": {
         "title": "단위 변경 후 기존 값 처리",
         "description": "엔티티: {entity_id}. 설정 단위: {old_unit} → {new_unit}. 저장된 통계 단위: {statistics_unit}. 이력 유지는 저장된 데이터를 수정하지 않습니다. 표기 수정은 이미 새 단위로 측정된 기존 통계의 숫자를 유지하고 단위만 수정합니다. 환산은 모든 단기·장기 통계 수치를 새 단위로 환산합니다. 원시 상태 이력, 현재값, 복원값, 템플릿, 역치는 변경하지 않으며 새 설정은 이후 측정에 적용됩니다. 서로 다른 단위가 이력에 섞여 있으면 표기 수정을 하지 마세요. 기간별 별도 보정이 필요합니다. 통계가 없거나 템플릿 단위를 확인할 수 없거나 엔티티 ID가 바뀌면 통계 변경을 제공하지 않습니다. '?'는 단위 확인 실패입니다.",
-        "data": {"history_policy": "기존 통계 처리", "confirm_history": "이 엔티티의 전체 통계 변경 확인"},
-        "data_description": {"history_policy": "기본값은 안전한 이력 유지입니다. 표기 수정은 숫자 환산이 아닙니다. 환산은 Home Assistant의 단위 변환을 통해 물리량을 유지합니다.", "confirm_history": "표기 수정·환산 시 필수입니다. 특정 기간이 아닌 전체 통계에 적용됩니다. 설정을 변경하지 않으려면 flow를 취소하세요."}
+        "data": {
+          "history_policy": "기존 통계 처리",
+          "confirm_history": "이 엔티티의 전체 통계 변경 확인"
+        },
+        "data_description": {
+          "history_policy": "센서 단위 복구는 정규화된 기존 통계 단위를 센서에 적용하며 통계를 보존합니다. 새 단위가 없으면 기본 선택됩니다. 이력 유지는 센서를 고치지 않습니다. 표기 수정은 숫자 환산이 아니며 환산은 Home Assistant 단위 변환을 사용합니다.",
+          "confirm_history": "표기 수정·환산 시 필수입니다. 특정 기간이 아닌 전체 통계에 적용됩니다. 설정을 변경하지 않으려면 flow를 취소하세요."
+        }
       },
       "edit_entity": {
         "title": "가상 엔티티 수정",
@@ -1056,7 +1118,7 @@
           "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
           "icon": "선택 사항인 Material Design 아이콘 이름입니다. 예: mdi:door",
           "icon_template": "아이콘 이름을 반환하는 선택적 Jinja 템플릿입니다. 템플릿 소스 변수와 this를 사용할 수 있습니다.",
-          "entity_id": "선택 사항입니다. 기본 ID는 도메인.device_name_entity_name의 snake_case 형식이며, 엔티티 이름이 없으면 임의의 영숫자를 사용합니다. 비우면 다시 생성하거나 원하는 ID를 직접 입력할 수 있습니다. 기기명이나 엔티티 이름을 바꾸면 직접 지정한 ID도 자동으로 재생성합니다.",
+          "entity_id": "선택 사항입니다. 사용자가 정한 가상 엔티티 이름에 약어를 적용하여 도메인.entity_name으로 생성하며 Device 이름은 붙이지 않습니다. 이름이 없으면 비워 둡니다. 현재 이름으로 다시 생성하려면 비우거나 원하는 ID를 직접 입력하세요. 저장된 ID는 이름을 변경해도 유지됩니다.",
           "platform": "Home Assistant 엔티티 도메인입니다. 변경 후 한 번 제출하면 해당 도메인의 전용 설정과 Jinja 필드가 표시됩니다.",
           "initial_value": "템플릿이 처음 렌더링되기 전이나 값 템플릿이 없을 때 사용하는 기본 상태입니다.",
           "initial_availability": "가용성 템플릿이 없을 때 사용하는 초기 가용 상태입니다.",
@@ -1129,17 +1191,12 @@
               "polygon_tracker_rules_json": "Tracker 규칙 Jinja 템플릿",
               "polygon_espresense_anchors_json": "ESPresense anchor",
               "polygon_away_state": "영역 밖 상태",
-              "dawarich_url": "Dawarich URL",
-              "dawarich_api_key": "Dawarich API 키",
-              "dawarich_auth_mode": "Dawarich 인증",
-              "dawarich_poll_interval": "Dawarich 업데이트 간격",
-              "dawarich_history_limit": "Dawarich 기록 지점 수",
-              "dawarich_person": "Dawarich 가족 Person",
               "presence_classification": "재실 상태 분류",
               "matter_light_type": "Matter 조명 장치 유형",
               "light_response_delay": "소스 응답 지연",
               "light_response_retries": "소스 새로고침 재시도",
               "light_ignore_unresponsive": "응답 없는 전구 무시",
+              "sensor_unit": "센서 단위",
               "climate_temperature_step": "온도 조절 간격",
               "media_player_source_priority": "미디어 소스 우선순위",
               "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
@@ -1150,22 +1207,17 @@
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
               "polygon_files_text": "줄마다 로컬 경로 또는 HTTP(S) GeoJSON URL 하나를 입력합니다. 상대 경로는 Home Assistant 설정 디렉터리를 기준으로 합니다.",
               "polygon_person": "이 가상 tracker가 나타내는 선택 Person입니다. 설정한 소스 tracker들이 지도 위치를 결정합니다.",
-              "polygon_strategy": "다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다.",
-              "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
+              "polygon_strategy": "적응형은 GPS 정확도와 이동속도를 검증하여 이동한 기기를 추적하고 정지 중에도 유지하며, 오래된 위치를 표시합니다. 다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다. dominant 규칙은 적응형보다 우선합니다.",
+              "polygon_distance_meters": "다수결 그룹 거리 또는 적응형의 기기 교체와 미확인 이탈 기기 선택에 사용하는 거리(미터)입니다.",
               "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
               "polygon_espresense_anchors_json": "latitude와 longitude를 가진 anchor sensor입니다. 거리 3개 이상을 삼각측량해 GeoJSON zone으로 판정합니다.",
               "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다.",
-              "dawarich_url": "/api/v1을 제외한 Dawarich 인스턴스 기본 URL입니다.",
-              "dawarich_api_key": "이 통합 구성에만 저장되는 API 키입니다.",
-              "dawarich_auth_mode": "Bearer 토큰 또는 api_key 쿼리 매개변수 인증입니다.",
-              "dawarich_poll_interval": "지점 요청 사이의 초 단위 간격입니다(15–3600).",
-              "dawarich_history_limit": "엔티티 속성으로 유지할 최근 지점 요약의 수입니다(1–100).",
-              "dawarich_person": "표시 이름으로 Dawarich Family 구성원과 연결할 선택 Person입니다.",
               "presence_classification": "Wi‑Fi/ESPresense는 home, BLE 거리는 front_door, zone.home과의 GPS 거리는 near_home·away·far_away로 분류합니다.",
               "matter_light_type": "가상 조명의 최대 기능을 선택합니다: 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상입니다. 전구를 묶으면 생성된 헬퍼가 가장 적은 지원 프로필을 사용합니다. RGB와 색온도 전구는 색온도 조명이 되고, 켜기/끄기 전용 전구가 하나라도 있으면 가상 조명은 켜기/끄기만 지원합니다. 효과와 깜빡임은 노출하지 않습니다.",
               "light_response_delay": "명령 후 소스 상태를 다시 읽기 전 요청한 조명 값을 유지할 시간(초, 0–30)입니다.",
               "light_response_retries": "조명 그룹은 소스 기기를 새로고침하고 목표에 도달하지 않은 전구에만 최신 명령을 재전송합니다(0–10회). 새 명령은 이전 재시도를 취소합니다. 단일 소스 조명은 상태만 다시 읽습니다.",
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
+              "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
               "configure_air_quality_rules": "PM1.0·PM2.5·PM4·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·N₂O·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 순간값 표시용이며 공식 건강 기준이나 노출시간 평가가 아닙니다. good은 안전을 보증하지 않습니다. PM4는 PM2.5 구간을 차용한 표시용 참고값, N₂O는 직업 노출 기준과 무관한 자체 표시 구간을 사용합니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
@@ -1463,7 +1515,7 @@
               "source_entity": "원본 엔티티 ID(예: image.vacuum_map)를 반환하는 Jinja입니다. 카메라는 camera 또는 래스터 image 원본 하나를, 이미지는 image 원본 하나를 연결합니다. 이미지 카메라는 HomeKit Bridge에서 H.264로 변환합니다.",
               "source_list": "소스 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "state_class": "상태 클래스에 사용할 값을 반환하는 Jinja 템플릿입니다.",
-              "stream_source": "H.264 스트림 소스에 사용할 RTSP 또는 Home Assistant 호환 스트림 URL을 반환하는 Jinja 템플릿입니다. 고정 URL은 rtsp://example.test/live를 Jinja 표현식으로 감싸 입력하세요. Apple Home에서는 이 카메라만 선택한 별도의 HomeKit Bridge 액세서리 모드 항목을 만들어야 하며, 일반 브리지에는 카메라가 포함되지 않습니다.",
+              "stream_source": "H.264 스트림 소스에 사용할 RTSP 또는 Home Assistant 호환 스트림 URL을 반환하는 Jinja 템플릿입니다. 고정 URL은 rtsp://example.test/live를 Jinja 표현식으로 감싸 입력하세요. Apple Home에서는 이 카메라만 선택한 별도의 HomeKit Bridge 액세서리 모드 항목을 만들어야 하며, 일반 브리지에는 카메라가 포함되지 않습니다. Frigate 카메라 원본에 한해 빈 입력을 엔티티·디바이스 정보와 Frigate RTSP 설정으로 자동 채우고 video=h264&audio=all을 붙입니다. 기존 템플릿은 유지됩니다. H.264 필터는 기존 트랙을 선택하며 코덱을 변환하지 않습니다.",
               "support_backup": "백업 지원에 사용할 boolean을 반환하는 Jinja 템플릿입니다.",
               "support_duration": "재생 시간 지원에 사용할 boolean을 반환하는 Jinja 템플릿입니다.",
               "support_open": "열기 지원에 사용할 boolean을 반환하는 Jinja 템플릿입니다.",
@@ -1568,6 +1620,54 @@
               "wind_bearing": "풍향 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "xy_color": "XY 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다."
             }
+          },
+          "dawarich_settings": {
+            "name": "Dawarich",
+            "description": "Dawarich에서 위치와 이동 이력을 조회합니다.",
+            "data": {
+              "dawarich_enabled": "Dawarich 사용",
+              "dawarich_url": "Dawarich URL",
+              "dawarich_api_key": "Dawarich API 키",
+              "dawarich_auth_mode": "인증 방식",
+              "dawarich_poll_interval": "업데이트 간격",
+              "dawarich_history_limit": "이력 위치 수",
+              "dawarich_member": "가족 구성원 이메일 또는 사용자 ID",
+              "dawarich_person": "기존 가족 Person",
+              "dawarich_test_connection": "저장 전 연결 테스트"
+            },
+            "data_description": {
+              "dawarich_enabled": "이 트래커의 Dawarich 조회를 켭니다. 끄고 저장하면 저장된 Dawarich 설정을 제거합니다.",
+              "dawarich_url": "/api/v1을 제외한 기본 URL입니다. 예: https://dawarich.example.com",
+              "dawarich_api_key": "통합 구성에 저장됩니다. 암호 입력란은 화면에서 값을 숨기며 엔티티 속성에는 공개하지 않습니다.",
+              "dawarich_auth_mode": "Bearer 토큰 또는 api_key 쿼리 매개변수 인증을 선택합니다.",
+              "dawarich_poll_interval": "API 조회 간격(15–3600초)입니다. 위치의 최신 여부는 조회 시간이 아닌 측정 시각으로 판단합니다.",
+              "dawarich_history_limit": "dawarich_history에 보관할 최근 위치 요약 수(1–100)입니다. 가족 모드는 현재 위치만 제공합니다.",
+              "dawarich_member": "선택 사항인 정확한 Dawarich 가족 이메일 또는 사용자 ID입니다. Person보다 우선합니다. 둘 다 비우면 API 키 소유자의 위치를 조회합니다. 가족 위치 공유가 켜져 있어야 합니다.",
+              "dawarich_person": "구형 서버에서 Person 표시 이름을 가족 이름 또는 이메일과 일치시키는 단일 Person입니다. 본인 계정 조회 시 비우세요. 현재 서버에서는 구성원 직접 입력을 권장합니다.",
+              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요."
+            }
+          },
+          "local_presence_settings": {
+            "name": "Wi-Fi / BLE 재실 추적",
+            "description": "연결 상태와 AB Gateway Bluetooth 관측으로 특정 기기를 추적합니다.",
+            "data": {
+              "presence_enabled": "로컬 재실 추적 사용",
+              "presence_wifi_entities": "Wi-Fi 연결 소스",
+              "presence_wifi_ssids": "집 Wi-Fi SSID",
+              "presence_ble_addresses": "BLE 기기 주소",
+              "presence_ble_sources": "Bluetooth 스캐너 소스",
+              "presence_ble_timeout": "BLE 부재 판정 시간",
+              "presence_ble_min_rssi": "최소 BLE RSSI"
+            },
+            "data_description": {
+              "presence_enabled": "선택한 Wi-Fi 연결과 원격 BLE 관측을 GPS와 함께 집계합니다. 끄고 저장하면 이 로컬 재실 설정을 제거합니다.",
+              "presence_wifi_entities": "추적할 특정 기기의 공유기 device_tracker 또는 연결 binary_sensor를 선택하세요. Wi-Fi SSID sensor를 선택했다면 아래에 집 SSID를 정확히 입력하세요. 사용할 수 없는 소스는 연결 해제로 취급하지 않습니다.",
+              "presence_wifi_ssids": "대소문자를 구분하는 정확한 SSID를 한 줄에 하나씩 입력하세요. 선택한 sensor 엔티티에만 적용하며 하나라도 일치하면 집으로 판단합니다. Wi-Fi 비밀번호는 입력하지 마세요.",
+              "presence_ble_addresses": "고정 BLE MAC 주소를 한 줄에 하나씩 입력하세요. 지정한 기기만 추적합니다. 주소가 주기적으로 바뀌는 기기는 다른 통합에서 안정적인 식별자를 제공해야 합니다.",
+              "presence_ble_sources": "Home Assistant 원격 스캐너 소스 ID를 한 줄에 하나씩 입력하세요. AprilBrother component-ab-gateway의 기본값은 ab_gateway입니다. MQTT 토픽이나 개별 게이트웨이 MAC이 아닙니다. 게이트웨이 통합은 별도로 설정하세요.",
+              "presence_ble_timeout": "RSSI 기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 5초마다 확인하며 캐시를 다시 읽는 것으로 재실 시간이 연장되지 않습니다.",
+              "presence_ble_min_rssi": "이 값 이상의 dBm 광고를 가까운 기기로 인정합니다(-127–0). 약한 광고는 부재 타이머를 연장하지 않습니다. RSSI를 거리로 환산하지 않습니다."
+            }
           }
         }
       },
@@ -1579,7 +1679,7 @@
           "target_device_name": "가상 장치"
         },
         "data_description": {
-          "reference_entity_id": "현재 가상 엔티티 값을 유지하려면 비워 두세요. Boolean은 AND, 모션/재실은 과반 감지와 지연 해제, 누수/연기/가스/물 같은 안전 센서는 OR, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다. 난방 전용 climate는 heat/off로 단순화됩니다. climate 하나와 switch 하나를 함께 선택하면 보일러 helper가 생성됩니다. 온수 switch는 heat/off 모두 항상 켜고, heat는 climate의 heat 모드, 가상 off는 climate의 fan_only 모드를 사용합니다. Camera와 Image 소스는 하나씩 별칭으로만 연결할 수 있고 병합하지 않습니다.",
+          "reference_entity_id": "현재 가상 엔티티 값을 유지하려면 비워 두세요. Boolean은 AND, 모션/재실은 과반 감지와 지연 해제, 누수/연기/가스/물 같은 안전 센서는 OR, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 타당한 GPS 이동을 추적하고 정지 중에도 이동한 기기를 유지합니다. 이동 증거가 없으면 GPS 중앙값과 미확인 이탈 기기 우선 정책(300m, 30분)을 사용합니다. 난방 전용 climate는 heat/off로 단순화됩니다. climate 하나와 switch 하나를 함께 선택하면 보일러 helper가 생성됩니다. 온수 switch는 heat/off 모두 항상 켜고, heat는 climate의 heat 모드, 가상 off는 climate의 fan_only 모드를 사용합니다. Camera와 Image 소스는 하나씩 별칭으로만 연결할 수 있고 병합하지 않습니다.",
           "target_device_name": "이 엔티티를 포함할 가상 장치를 선택하세요."
         }
       },
@@ -1728,7 +1828,7 @@
           "entity_name": "엔티티 이름과 기본 엔티티 ID를 만드는 데 사용합니다.",
           "icon": "선택 사항인 Material Design 아이콘 이름입니다. 예: mdi:door",
           "icon_template": "아이콘 이름을 반환하는 선택적 Jinja 템플릿입니다. 템플릿 소스 변수와 this를 사용할 수 있습니다.",
-          "entity_id": "선택 사항입니다. 기본 ID는 도메인.device_name_entity_name의 snake_case 형식이며, 엔티티 이름이 없으면 임의의 영숫자를 사용합니다. 비우면 다시 생성하거나 원하는 ID를 직접 입력할 수 있습니다. 기기명이나 엔티티 이름을 바꾸면 직접 지정한 ID도 자동으로 재생성합니다.",
+          "entity_id": "선택 사항입니다. 사용자가 정한 가상 엔티티 이름에 약어를 적용하여 도메인.entity_name으로 생성하며 Device 이름은 붙이지 않습니다. 이름이 없으면 비워 둡니다. 현재 이름으로 다시 생성하려면 비우거나 원하는 ID를 직접 입력하세요. 저장된 ID는 이름을 변경해도 유지됩니다.",
           "platform": "Home Assistant 엔티티 도메인입니다. 변경 후 한 번 제출하면 해당 도메인의 전용 설정과 Jinja 필드가 표시됩니다.",
           "initial_value": "템플릿이 처음 렌더링되기 전이나 값 템플릿이 없을 때 사용하는 기본 상태입니다.",
           "initial_availability": "가용성 템플릿이 없을 때 사용하는 초기 가용 상태입니다.",
@@ -1801,17 +1901,12 @@
               "polygon_tracker_rules_json": "Tracker 규칙 Jinja 템플릿",
               "polygon_espresense_anchors_json": "ESPresense anchor",
               "polygon_away_state": "영역 밖 상태",
-              "dawarich_url": "Dawarich URL",
-              "dawarich_api_key": "Dawarich API 키",
-              "dawarich_auth_mode": "Dawarich 인증",
-              "dawarich_poll_interval": "Dawarich 업데이트 간격",
-              "dawarich_history_limit": "Dawarich 기록 지점 수",
-              "dawarich_person": "Dawarich 가족 Person",
               "presence_classification": "재실 상태 분류",
               "matter_light_type": "Matter 조명 장치 유형",
               "light_response_delay": "소스 응답 지연",
               "light_response_retries": "소스 새로고침 재시도",
               "light_ignore_unresponsive": "응답 없는 전구 무시",
+              "sensor_unit": "센서 단위",
               "climate_temperature_step": "온도 조절 간격",
               "media_player_source_priority": "미디어 소스 우선순위",
               "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
@@ -1822,22 +1917,17 @@
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
               "polygon_files_text": "줄마다 로컬 경로 또는 HTTP(S) GeoJSON URL 하나를 입력합니다. 상대 경로는 Home Assistant 설정 디렉터리를 기준으로 합니다.",
               "polygon_person": "이 가상 tracker가 나타내는 선택 Person입니다. 설정한 소스 tracker들이 지도 위치를 결정합니다.",
-              "polygon_strategy": "다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다.",
-              "polygon_distance_meters": "다수결에서 tracker들이 같은 그룹에 포함되는 최대 거리(미터)입니다.",
+              "polygon_strategy": "적응형은 GPS 정확도와 이동속도를 검증하여 이동한 기기를 추적하고 정지 중에도 유지하며, 오래된 위치를 표시합니다. 다수결은 가까운 tracker를 묶고, 우선순위는 가장 낮은 규칙 우선순위를, 최신은 최근 업데이트를, 중앙값은 모든 유효 위치를 사용합니다. dominant 규칙은 적응형보다 우선합니다.",
+              "polygon_distance_meters": "다수결 그룹 거리 또는 적응형의 기기 교체와 미확인 이탈 기기 선택에 사용하는 거리(미터)입니다.",
               "polygon_tracker_rules_json": "Tracker 엔티티 ID별 선택 규칙 객체입니다. dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, condition_template을 지원합니다.",
               "polygon_espresense_anchors_json": "latitude와 longitude를 가진 anchor sensor입니다. 거리 3개 이상을 삼각측량해 GeoJSON zone으로 판정합니다.",
               "polygon_away_state": "선택한 GPS 위치가 모든 polygon 밖에 있을 때 사용할 상태입니다.",
-              "dawarich_url": "/api/v1을 제외한 Dawarich 인스턴스 기본 URL입니다.",
-              "dawarich_api_key": "이 통합 구성에만 저장되는 API 키입니다.",
-              "dawarich_auth_mode": "Bearer 토큰 또는 api_key 쿼리 매개변수 인증입니다.",
-              "dawarich_poll_interval": "지점 요청 사이의 초 단위 간격입니다(15–3600).",
-              "dawarich_history_limit": "엔티티 속성으로 유지할 최근 지점 요약의 수입니다(1–100).",
-              "dawarich_person": "표시 이름으로 Dawarich Family 구성원과 연결할 선택 Person입니다.",
               "presence_classification": "Wi‑Fi/ESPresense는 home, BLE 거리는 front_door, zone.home과의 GPS 거리는 near_home·away·far_away로 분류합니다.",
               "matter_light_type": "가상 조명의 최대 기능을 선택합니다: 켜기/끄기, 밝기, 색온도 또는 확장 HS/XY 색상입니다. 전구를 묶으면 생성된 헬퍼가 가장 적은 지원 프로필을 사용합니다. RGB와 색온도 전구는 색온도 조명이 되고, 켜기/끄기 전용 전구가 하나라도 있으면 가상 조명은 켜기/끄기만 지원합니다. 효과와 깜빡임은 노출하지 않습니다.",
               "light_response_delay": "명령 후 소스 상태를 다시 읽기 전 요청한 조명 값을 유지할 시간(초, 0–30)입니다.",
               "light_response_retries": "조명 그룹은 소스 기기를 새로고침하고 목표에 도달하지 않은 전구에만 최신 명령을 재전송합니다(0–10회). 새 명령은 이전 재시도를 취소합니다. 단일 소스 조명은 상태만 다시 읽습니다.",
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
+              "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
               "configure_air_quality_rules": "PM1.0·PM2.5·PM4·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·N₂O·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 순간값 표시용이며 공식 건강 기준이나 노출시간 평가가 아닙니다. good은 안전을 보증하지 않습니다. PM4는 PM2.5 구간을 차용한 표시용 참고값, N₂O는 직업 노출 기준과 무관한 자체 표시 구간을 사용합니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
@@ -2135,7 +2225,7 @@
               "source_entity": "원본 엔티티 ID(예: image.vacuum_map)를 반환하는 Jinja입니다. 카메라는 camera 또는 래스터 image 원본 하나를, 이미지는 image 원본 하나를 연결합니다. 이미지 카메라는 HomeKit Bridge에서 H.264로 변환합니다.",
               "source_list": "소스 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "state_class": "상태 클래스에 사용할 값을 반환하는 Jinja 템플릿입니다.",
-              "stream_source": "H.264 스트림 소스에 사용할 RTSP 또는 Home Assistant 호환 스트림 URL을 반환하는 Jinja 템플릿입니다. 고정 URL은 rtsp://example.test/live를 Jinja 표현식으로 감싸 입력하세요. Apple Home에서는 이 카메라만 선택한 별도의 HomeKit Bridge 액세서리 모드 항목을 만들어야 하며, 일반 브리지에는 카메라가 포함되지 않습니다.",
+              "stream_source": "H.264 스트림 소스에 사용할 RTSP 또는 Home Assistant 호환 스트림 URL을 반환하는 Jinja 템플릿입니다. 고정 URL은 rtsp://example.test/live를 Jinja 표현식으로 감싸 입력하세요. Apple Home에서는 이 카메라만 선택한 별도의 HomeKit Bridge 액세서리 모드 항목을 만들어야 하며, 일반 브리지에는 카메라가 포함되지 않습니다. Frigate 카메라 원본에 한해 빈 입력을 엔티티·디바이스 정보와 Frigate RTSP 설정으로 자동 채우고 video=h264&audio=all을 붙입니다. 기존 템플릿은 유지됩니다. H.264 필터는 기존 트랙을 선택하며 코덱을 변환하지 않습니다.",
               "support_backup": "백업 지원에 사용할 boolean을 반환하는 Jinja 템플릿입니다.",
               "support_duration": "재생 시간 지원에 사용할 boolean을 반환하는 Jinja 템플릿입니다.",
               "support_open": "열기 지원에 사용할 boolean을 반환하는 Jinja 템플릿입니다.",
@@ -2240,6 +2330,54 @@
               "wind_bearing": "풍향 네이티브 속성을 반환하는 Jinja 템플릿입니다.",
               "xy_color": "XY 색상 네이티브 속성을 반환하는 Jinja 템플릿입니다."
             }
+          },
+          "dawarich_settings": {
+            "name": "Dawarich",
+            "description": "Dawarich에서 위치와 이동 이력을 조회합니다.",
+            "data": {
+              "dawarich_enabled": "Dawarich 사용",
+              "dawarich_url": "Dawarich URL",
+              "dawarich_api_key": "Dawarich API 키",
+              "dawarich_auth_mode": "인증 방식",
+              "dawarich_poll_interval": "업데이트 간격",
+              "dawarich_history_limit": "이력 위치 수",
+              "dawarich_member": "가족 구성원 이메일 또는 사용자 ID",
+              "dawarich_person": "기존 가족 Person",
+              "dawarich_test_connection": "저장 전 연결 테스트"
+            },
+            "data_description": {
+              "dawarich_enabled": "이 트래커의 Dawarich 조회를 켭니다. 끄고 저장하면 저장된 Dawarich 설정을 제거합니다.",
+              "dawarich_url": "/api/v1을 제외한 기본 URL입니다. 예: https://dawarich.example.com",
+              "dawarich_api_key": "통합 구성에 저장됩니다. 암호 입력란은 화면에서 값을 숨기며 엔티티 속성에는 공개하지 않습니다.",
+              "dawarich_auth_mode": "Bearer 토큰 또는 api_key 쿼리 매개변수 인증을 선택합니다.",
+              "dawarich_poll_interval": "API 조회 간격(15–3600초)입니다. 위치의 최신 여부는 조회 시간이 아닌 측정 시각으로 판단합니다.",
+              "dawarich_history_limit": "dawarich_history에 보관할 최근 위치 요약 수(1–100)입니다. 가족 모드는 현재 위치만 제공합니다.",
+              "dawarich_member": "선택 사항인 정확한 Dawarich 가족 이메일 또는 사용자 ID입니다. Person보다 우선합니다. 둘 다 비우면 API 키 소유자의 위치를 조회합니다. 가족 위치 공유가 켜져 있어야 합니다.",
+              "dawarich_person": "구형 서버에서 Person 표시 이름을 가족 이름 또는 이메일과 일치시키는 단일 Person입니다. 본인 계정 조회 시 비우세요. 현재 서버에서는 구성원 직접 입력을 권장합니다.",
+              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요."
+            }
+          },
+          "local_presence_settings": {
+            "name": "Wi-Fi / BLE 재실 추적",
+            "description": "연결 상태와 AB Gateway Bluetooth 관측으로 특정 기기를 추적합니다.",
+            "data": {
+              "presence_enabled": "로컬 재실 추적 사용",
+              "presence_wifi_entities": "Wi-Fi 연결 소스",
+              "presence_wifi_ssids": "집 Wi-Fi SSID",
+              "presence_ble_addresses": "BLE 기기 주소",
+              "presence_ble_sources": "Bluetooth 스캐너 소스",
+              "presence_ble_timeout": "BLE 부재 판정 시간",
+              "presence_ble_min_rssi": "최소 BLE RSSI"
+            },
+            "data_description": {
+              "presence_enabled": "선택한 Wi-Fi 연결과 원격 BLE 관측을 GPS와 함께 집계합니다. 끄고 저장하면 이 로컬 재실 설정을 제거합니다.",
+              "presence_wifi_entities": "추적할 특정 기기의 공유기 device_tracker 또는 연결 binary_sensor를 선택하세요. Wi-Fi SSID sensor를 선택했다면 아래에 집 SSID를 정확히 입력하세요. 사용할 수 없는 소스는 연결 해제로 취급하지 않습니다.",
+              "presence_wifi_ssids": "대소문자를 구분하는 정확한 SSID를 한 줄에 하나씩 입력하세요. 선택한 sensor 엔티티에만 적용하며 하나라도 일치하면 집으로 판단합니다. Wi-Fi 비밀번호는 입력하지 마세요.",
+              "presence_ble_addresses": "고정 BLE MAC 주소를 한 줄에 하나씩 입력하세요. 지정한 기기만 추적합니다. 주소가 주기적으로 바뀌는 기기는 다른 통합에서 안정적인 식별자를 제공해야 합니다.",
+              "presence_ble_sources": "Home Assistant 원격 스캐너 소스 ID를 한 줄에 하나씩 입력하세요. AprilBrother component-ab-gateway의 기본값은 ab_gateway입니다. MQTT 토픽이나 개별 게이트웨이 MAC이 아닙니다. 게이트웨이 통합은 별도로 설정하세요.",
+              "presence_ble_timeout": "RSSI 기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 5초마다 확인하며 캐시를 다시 읽는 것으로 재실 시간이 연장되지 않습니다.",
+              "presence_ble_min_rssi": "이 값 이상의 dBm 광고를 가까운 기기로 인정합니다(-127–0). 약한 광고는 부재 타이머를 연장하지 않습니다. RSSI를 거리로 환산하지 않습니다."
+            }
           }
         }
       },
@@ -2251,7 +2389,7 @@
           "target_device_name": "가상 장치"
         },
         "data_description": {
-          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 모션/재실은 과반 감지와 지연 해제, 누수/연기/가스/물 같은 안전 센서는 OR, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 GPS 중앙값을 기본으로 하며, 300m 이상 이탈한 최근 30분 이내 위치 갱신 기기를 우선 추적합니다. 난방 전용 climate는 heat/off로 단순화됩니다. climate 하나와 switch 하나를 함께 선택하면 보일러 helper가 생성됩니다. 온수 switch는 heat/off 모두 항상 켜고, heat는 climate의 heat 모드, 가상 off는 climate의 fan_only 모드를 사용합니다. Camera와 Image 소스는 하나씩 별칭으로만 연결할 수 있고 병합하지 않습니다.",
+          "reference_entity_id": "처음부터 만들려면 비워 두세요. Boolean은 AND, 모션/재실은 과반 감지와 지연 해제, 누수/연기/가스/물 같은 안전 센서는 OR, 숫자는 평균, 문자열은 연결, 날짜/시간은 최신값, 선택 항목은 사용 가능한 첫 값입니다. 여러 위치 소스는 타당한 GPS 이동을 추적하고 정지 중에도 이동한 기기를 유지합니다. 이동 증거가 없으면 GPS 중앙값과 미확인 이탈 기기 우선 정책(300m, 30분)을 사용합니다. 난방 전용 climate는 heat/off로 단순화됩니다. climate 하나와 switch 하나를 함께 선택하면 보일러 helper가 생성됩니다. 온수 switch는 heat/off 모두 항상 켜고, heat는 climate의 heat 모드, 가상 off는 climate의 fan_only 모드를 사용합니다. Camera와 Image 소스는 하나씩 별칭으로만 연결할 수 있고 병합하지 않습니다.",
           "target_device_name": "기존 가상 장치를 선택하면 해당 장치의 엔티티로 함께 묶입니다. 새 장치를 만들 수도 있습니다."
         }
       },
@@ -2697,6 +2835,7 @@
     },
     "polygon_strategy": {
       "options": {
+        "adaptive": "적응형 이동 추적",
         "majority": "다수결",
         "priority": "우선순위",
         "latest": "최근 업데이트",
@@ -2710,7 +2849,17 @@
       }
     },
     "unit_history_policy": {
-      "options": {"keep": "기존 이력 유지", "relabel": "통계 단위 표기 수정 (숫자 유지)", "convert": "통계 수치를 새 단위로 환산"}
+      "options": {
+        "restore": "통계의 원래 단위로 센서 복구 (이력 보존)",
+        "keep": "기존 이력 유지",
+        "relabel": "통계 단위 표기 수정 (숫자 유지)",
+        "convert": "통계 수치를 새 단위로 환산"
+      }
+    },
+    "sensor_unit": {
+      "options": {
+        "template": "단위 템플릿 유지"
+      }
     },
     "matter_light_type": {
       "options": {
@@ -2980,11 +3129,6 @@
     }
   },
   "entity": {
-    "sensor": {
-      "source_usage": {
-        "name": "{source} Virtual Layer 사용"
-      }
-    },
     "climate": {
       "virtual": {
         "state_attributes": {

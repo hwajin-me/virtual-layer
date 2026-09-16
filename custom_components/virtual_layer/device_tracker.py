@@ -4,10 +4,12 @@ This component provides support for a virtual device tracker.
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from math import asin, cos, isfinite, radians, sin, sqrt
+from math import asin, atan2, cos, degrees, isfinite, radians, sin, sqrt
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -30,7 +32,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.event import (
     async_track_state_change_event,
@@ -49,6 +51,12 @@ from . import (
 )
 from .const import *
 from .entity import VirtualEntity, repair_legacy_template_data, virtual_schema
+from .dawarich import (
+    DawarichClient, DawarichError, family_point, normalize_config as normalize_dawarich_config,
+    point_time as dawarich_point_time, records as dawarich_records,
+    summary as dawarich_summary, valid_point as valid_dawarich_point,
+)
+from .local_presence import BLE_PREFIX, LocalPresence, normalize as normalize_local_presence
 from .polygon import (
     find_polygon_zone,
     load_polygon_zones,
@@ -74,12 +82,25 @@ FRONT_DOOR_DISTANCE_METERS = 20
 NEAR_HOME_DISTANCE_METERS = 1_000
 FAR_AWAY_DISTANCE_METERS = 5_000
 POLYGON_FILE_RELOAD_INTERVAL = timedelta(minutes=5)
-LOCATION_CHANGE_DISTANCE_METERS = 1
+LOCATION_CHANGE_DISTANCE_METERS = 10
+# Allow ordinary air travel, but reject impossible GPS teleports. Accuracy
+# circles are subtracted before applying this deliberately generous ceiling.
+MAX_LOCATION_SPEED_METERS_PER_SECOND = 350
+LOCATION_HISTORY_LIMIT = 8
+SPEED_MIN_INTERVAL_SECONDS = 5
+SPEED_MAX_AGE_SECONDS = 300
+ATTR_LOCATION_LAST_SEEN = "location_last_seen"
+ATTR_LOCATION_SPEED = "location_speed_m_s"
+ATTR_LOCATION_BEARING = "location_bearing"
 ATTR_LOCATION_MEDIAN_LATITUDE = "location_median_latitude"
 ATTR_LOCATION_MEDIAN_LONGITUDE = "location_median_longitude"
 ATTR_LOCATION_PRIORITY_SOURCE = "location_priority_source"
 ATTR_LOCATION_SOURCE_LAST_MOVED = "location_source_last_moved"
 ATTR_LOCATION_SOURCE_POSITIONS = "location_source_positions"
+ATTR_LOCATION_SOURCE_OBSERVATIONS = "location_source_observations"
+ATTR_LOCATION_SELECTION_REASON = "location_selection_reason"
+ATTR_LOCATION_STALE = "location_stale"
+ATTR_LOCATION_REJECTED_SOURCES = "location_rejected_sources"
 ATTR_POLYGON_ZONE = "polygon_zone"
 ATTR_POLYGON_ZONES = "polygon_zones"
 ATTR_POLYGON_PERSON = "polygon_person"
@@ -96,13 +117,18 @@ ATTR_DAWARICH_POINT = "dawarich_point"
 ATTR_DAWARICH_HISTORY = "dawarich_history"
 ATTR_DAWARICH_VISIT = "dawarich_visit"
 ATTR_DAWARICH_ERROR = "dawarich_error"
+ATTR_DAWARICH_POINT_TIME = "dawarich_point_time"
+ATTR_DAWARICH_STALE = "dawarich_stale"
+ATTR_DAWARICH_VISIT_ERROR = "dawarich_visit_error"
+ATTR_DAWARICH_SOURCE_ID = "dawarich_source_id"
+DAWARICH_SOURCE = "dawarich"
 ATTR_LOCATION_PRESENCE_SOURCES = "location_presence_sources"
 ATTR_LOCATION_CLASSIFICATION = "location_classification"
 ATTR_LOCATION_HOME_DISTANCE = "location_home_distance"
 ATTR_LOCATION_BLE_DISTANCE = "location_ble_distance"
 DEFAULT_DAWARICH_POLL_INTERVAL = 60
 DEFAULT_DAWARICH_HISTORY_LIMIT = 10
-POLYGON_STRATEGIES = {"majority", "priority", "latest", "median"}
+POLYGON_STRATEGIES = {"adaptive", "majority", "priority", "latest", "median"}
 POLYGON_RULE_KEYS = {
     "condition_template",
     "dominant",
@@ -149,6 +175,7 @@ DEVICE_TRACKER_SCHEMA = vol.Schema(
             vol.Optional(CONF_PRESENCE_CLASSIFICATION): bool,
             vol.Optional(CONF_POLYGONAL_ZONE): object,
             vol.Optional(CONF_DAWARICH): object,
+            vol.Optional(CONF_LOCAL_PRESENCE): object,
         },
     )
 )
@@ -156,6 +183,8 @@ DEVICE_TRACKER_SCHEMA = vol.Schema(
 
 def validate_domain_options(config) -> None:
     """Validate UI-supplied location helper settings."""
+    if config.get(CONF_LOCAL_PRESENCE) is not None:
+        normalize_local_presence(config[CONF_LOCAL_PRESENCE])
     value = config.get(CONF_LOCATION_HELPER)
     if value is not None:
         if not isinstance(value, dict):
@@ -200,56 +229,7 @@ def validate_domain_options(config) -> None:
 
     dawarich = config.get(CONF_DAWARICH)
     if dawarich is not None:
-        if not isinstance(dawarich, dict):
-            raise vol.Invalid("dawarich must be an object")
-        allowed = {
-            CONF_DAWARICH_URL,
-            CONF_DAWARICH_API_KEY,
-            CONF_DAWARICH_AUTH_MODE,
-            CONF_DAWARICH_POLL_INTERVAL,
-            CONF_DAWARICH_HISTORY_LIMIT,
-            CONF_DAWARICH_PERSON_ENTITY,
-        }
-        if set(dawarich) - allowed or not isinstance(
-            dawarich.get(CONF_DAWARICH_URL), str
-        ):
-            raise vol.Invalid("invalid Dawarich configuration")
-        if (
-            not dawarich[CONF_DAWARICH_URL]
-            .rstrip("/")
-            .startswith(("http://", "https://"))
-        ):
-            raise vol.Invalid("invalid Dawarich URL")
-        if (
-            not isinstance(dawarich.get(CONF_DAWARICH_API_KEY), str)
-            or not dawarich[CONF_DAWARICH_API_KEY].strip()
-        ):
-            raise vol.Invalid("Dawarich API key is required")
-        if dawarich.get(CONF_DAWARICH_AUTH_MODE, "bearer") not in {"bearer", "query"}:
-            raise vol.Invalid("invalid Dawarich authentication mode")
-        try:
-            poll = int(
-                dawarich.get(
-                    CONF_DAWARICH_POLL_INTERVAL, DEFAULT_DAWARICH_POLL_INTERVAL
-                )
-            )
-            limit = int(
-                dawarich.get(
-                    CONF_DAWARICH_HISTORY_LIMIT, DEFAULT_DAWARICH_HISTORY_LIMIT
-                )
-            )
-        except (TypeError, ValueError, OverflowError) as err:
-            raise vol.Invalid("invalid Dawarich interval") from err
-        if not 15 <= poll <= 3600 or not 1 <= limit <= 100:
-            raise vol.Invalid("invalid Dawarich interval")
-        person = dawarich.get(CONF_DAWARICH_PERSON_ENTITY, "")
-        if person:
-            try:
-                cv.entity_id(person)
-            except vol.Invalid as err:
-                raise vol.Invalid("invalid Dawarich person") from err
-            if not person.startswith("person."):
-                raise vol.Invalid("invalid Dawarich person")
+        normalize_dawarich_config(dawarich)
 
     polygon = config.get(CONF_POLYGONAL_ZONE)
     if polygon is None:
@@ -372,6 +352,7 @@ def validate_domain_options(config) -> None:
             not isinstance(entity_id, str)
             or (
                 not entity_id.startswith("device_tracker.") and entity_id not in anchors
+                and entity_id not in (config.get(CONF_LOCAL_PRESENCE) or {}).get("wifi_entities", [])
             )
             for entity_id in source_entities
         ):
@@ -531,6 +512,14 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         self._location_helper = self._normalize_location_helper(
             config.get(CONF_LOCATION_HELPER),
         )
+        try:
+            self._local_presence_config = normalize_local_presence(config[CONF_LOCAL_PRESENCE]) if config.get(CONF_LOCAL_PRESENCE) else None
+        except vol.Invalid:
+            self._local_presence_config = None
+        self._presence_adapter = None
+        self._ble_states = {}
+        if self._local_presence_config and not self._location_helper:
+            self._location_helper = self._normalize_location_helper({})
         self._presence_classification = bool(
             config.get(CONF_PRESENCE_CLASSIFICATION, False)
         )
@@ -542,9 +531,16 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         self._dawarich_config = self._normalize_dawarich_config(
             config.get(CONF_DAWARICH)
         )
+        self._dawarich_state = None
+        self._dawarich_task = None
+        self._dawarich_removed = False
         self._priority_source = None
         self._source_positions = {}
         self._source_last_moved = {}
+        self._source_history = {}
+        self._source_motion_anchors = {}
+        self._source_rejected_positions = {}
+        self._source_reported = {}
 
         _LOGGER.debug(f"{self._attr_name}, available={self._attr_available}")
         _LOGGER.debug(f"{self._attr_name}, entity={self.entity_id}")
@@ -574,30 +570,45 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             self._location = self._restored_state_value(state, config)
             self._coords = {}
             self._gps_accuracy = 0
+        saved_source = self._virtual_attributes.get(ATTR_DAWARICH_SOURCE_ID)
+        if self._virtual_attributes.get(ATTR_DAWARICH_POINT) and (
+            not self._dawarich_config or saved_source != self._dawarich_source_id()
+        ):
+            # Editing the account/member must not restore another person's
+            # location or reject their older point as an out-of-order update.
+            selected = self._virtual_attributes.get(ATTR_LOCATION_PRIORITY_SOURCE)
+            polygon_selected = self._virtual_attributes.get(ATTR_POLYGON_SELECTED_SOURCE)
+            for key in list(self._virtual_attributes):
+                if key.startswith("dawarich_"):
+                    self._virtual_attributes.pop(key)
+            for key in (ATTR_LOCATION_SOURCE_OBSERVATIONS, ATTR_LOCATION_SOURCE_POSITIONS, ATTR_LOCATION_SOURCE_LAST_MOVED):
+                saved = self._virtual_attributes.get(key)
+                if isinstance(saved, dict):
+                    self._virtual_attributes[key] = {k: v for k, v in saved.items() if k != DAWARICH_SOURCE}
+            if selected == DAWARICH_SOURCE:
+                self._virtual_attributes[ATTR_LOCATION_PRIORITY_SOURCE] = None
+            if (not self._location_helper and not self._polygon_config) or selected == DAWARICH_SOURCE or polygon_selected == DAWARICH_SOURCE:
+                self._coords = {}
+                self._location = config.get(CONF_INITIAL_VALUE, "not_home")
+                self._gps_accuracy = 0
         self._restore_location_helper_attributes()
+        if self._dawarich_config:
+            raw = self._virtual_attributes.get(ATTR_DAWARICH_POINT)
+            if isinstance(raw, dict) and (point := valid_dawarich_point(raw)) is not None:
+                self._set_dawarich_sample(point)
+            # A saved coordinate is not evidence of a successful current poll.
+            self._virtual_attributes[ATTR_DAWARICH_STALE] = True
 
     @staticmethod
     def _normalize_dawarich_config(value):
-        """Return a safe Dawarich configuration from stored UI options."""
+        """Invalid legacy settings must not prevent loading/editing the tracker."""
         if not isinstance(value, dict):
             return None
         try:
-            validate_domain_options({CONF_DAWARICH: value})
-        except vol.Invalid as err:
-            _LOGGER.warning("Ignoring invalid Dawarich configuration: %s", err)
+            return normalize_dawarich_config(value)
+        except vol.Invalid:
+            _LOGGER.warning("Ignoring invalid Dawarich configuration")
             return None
-        return {
-            CONF_DAWARICH_URL: value[CONF_DAWARICH_URL].rstrip("/"),
-            CONF_DAWARICH_API_KEY: value[CONF_DAWARICH_API_KEY].strip(),
-            CONF_DAWARICH_AUTH_MODE: value.get(CONF_DAWARICH_AUTH_MODE, "bearer"),
-            CONF_DAWARICH_POLL_INTERVAL: int(
-                value.get(CONF_DAWARICH_POLL_INTERVAL, DEFAULT_DAWARICH_POLL_INTERVAL)
-            ),
-            CONF_DAWARICH_HISTORY_LIMIT: int(
-                value.get(CONF_DAWARICH_HISTORY_LIMIT, DEFAULT_DAWARICH_HISTORY_LIMIT)
-            ),
-            CONF_DAWARICH_PERSON_ENTITY: value.get(CONF_DAWARICH_PERSON_ENTITY, ""),
-        }
 
     @staticmethod
     def _normalize_location_helper(value):
@@ -666,9 +677,14 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
 
     def _restore_location_helper_attributes(self):
         """Restore the selected source so its priority survives restarts."""
-        if not self._location_helper:
+        if not self._location_helper and not (
+            self._polygon_config and self._polygon_config[CONF_POLYGON_STRATEGY] == "adaptive"
+        ):
             return
-        source_entities = self._location_source_entities()
+        source_entities = (
+            self._polygon_source_entities() if self._polygon_config
+            else self._location_source_entities()
+        )
         priority_source = self._virtual_attributes.get(ATTR_LOCATION_PRIORITY_SOURCE)
         if priority_source in source_entities:
             self._priority_source = priority_source
@@ -686,20 +702,61 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                     continue
                 self._source_positions[entity_id] = (latitude, longitude)
 
+        observations = self._virtual_attributes.get(ATTR_LOCATION_SOURCE_OBSERVATIONS)
+        if isinstance(observations, dict):
+            for entity_id, observation in observations.items():
+                if entity_id not in source_entities or not isinstance(observation, dict):
+                    continue
+                try:
+                    raw_position = observation["position"]
+                    raw_anchor = observation["anchor"]
+                    if not isinstance(raw_position, list) or not isinstance(raw_anchor, list):
+                        continue
+                    position = self._validated_coordinates(*raw_position)
+                    anchor = self._validated_coordinates(*raw_anchor)
+                    raw_timestamp = observation["timestamp"]
+                    if isinstance(raw_timestamp, bool):
+                        continue
+                    timestamp = datetime.fromtimestamp(float(raw_timestamp), tz=timezone.utc)
+                    raw_reported = observation.get("reported", raw_timestamp)
+                    if isinstance(raw_reported, bool):
+                        continue
+                    reported = datetime.fromtimestamp(float(raw_reported), tz=timezone.utc)
+                    accuracy = _safe_gps_accuracy(observation["accuracy"])
+                    anchor_accuracy = _safe_gps_accuracy(observation["anchor_accuracy"])
+                    if not timestamp <= reported <= dt_util.utcnow() or accuracy is None or anchor_accuracy is None:
+                        continue
+                except (KeyError, TypeError, ValueError, OSError, OverflowError):
+                    continue
+                self._source_history[entity_id] = [(position, timestamp, accuracy)]
+                self._source_reported[entity_id] = reported
+                self._source_motion_anchors[entity_id] = (anchor, anchor_accuracy)
+                self._source_positions[entity_id] = position
+                rejected_position = observation.get("rejected_position")
+                if isinstance(rejected_position, list):
+                    try:
+                        self._source_rejected_positions[entity_id] = self._validated_coordinates(*rejected_position)
+                    except (TypeError, ValueError, OverflowError):
+                        pass
+
         source_last_moved = self._virtual_attributes.get(
             ATTR_LOCATION_SOURCE_LAST_MOVED
         )
         if isinstance(source_last_moved, dict):
             for entity_id, timestamp in source_last_moved.items():
-                if entity_id not in source_entities:
+                # Old versions marked first observations as movement. Only new,
+                # validated observation records can restore confirmed motion.
+                if entity_id not in self._source_history:
                     continue
                 try:
                     if isinstance(timestamp, bool):
                         raise TypeError
-                    self._source_last_moved[entity_id] = datetime.fromtimestamp(
+                    moved = datetime.fromtimestamp(
                         float(timestamp),
                         tz=timezone.utc,
                     )
+                    if moved <= self._source_history[entity_id][-1][1]:
+                        self._source_last_moved[entity_id] = moved
                 except (TypeError, ValueError, OSError, OverflowError):
                     continue
 
@@ -724,6 +781,8 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             return
 
         source_entities = set(self._location_source_entities())
+        source_entities.discard(DAWARICH_SOURCE)
+        source_entities = {entity_id for entity_id in source_entities if not entity_id.startswith(BLE_PREFIX)}
         if source_entities:
             self._refresh_remove_listeners.append(
                 async_track_state_change_event(
@@ -738,232 +797,110 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             async_track_time_interval(
                 self.hass,
                 self._async_location_source_changed,
-                timedelta(minutes=1),
+                timedelta(seconds=5 if self._local_presence_config else 60),
             )
         )
         self._update_location_from_sources()
 
+    _dawarich_points = staticmethod(dawarich_records)
+    _dawarich_family_point = staticmethod(family_point)
+    _dawarich_point_summary = staticmethod(dawarich_summary)
+
     @staticmethod
-    def _dawarich_points(payload):
-        """Return point records from documented and older Dawarich envelopes."""
-        if isinstance(payload, list):
-            return [item for item in payload if isinstance(item, dict)]
-        if not isinstance(payload, dict):
-            return []
-        for key in ("points", "data", "locations", "results", "visits"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return [item for item in value if isinstance(item, dict)]
-        return (
-            [payload]
-            if any(key in payload for key in ("latitude", "lat", "longitude", "lon"))
-            else []
-        )
+    def _dawarich_point_timestamp(point):
+        return dawarich_point_time(point) or datetime.min.replace(tzinfo=timezone.utc)
 
     def _dawarich_person_name(self):
-        """Return Home Assistant's selected Person label for family matching."""
         person_id = self._dawarich_config.get(CONF_DAWARICH_PERSON_ENTITY, "")
         person = self.hass.states.get(person_id) if person_id else None
-        return str(person.name if person else "").strip().casefold()
+        return str(person.name if person else "").strip()
 
-    @staticmethod
-    def _dawarich_family_point(payload, person_name):
-        """Find a selected family member in version-tolerant API envelopes."""
-        members = VirtualDeviceTracker._dawarich_points(payload)
-        for member in members:
-            user = member.get("user")
-            if not isinstance(user, dict):
-                user = (
-                    member.get("member")
-                    if isinstance(member.get("member"), dict)
-                    else {}
-                )
-            candidate = (
-                str(
-                    member.get(
-                        "name",
-                        member.get(
-                            "user_name",
-                            member.get(
-                                "email", user.get("name", user.get("email", ""))
-                            ),
-                        ),
-                    )
-                )
-                .strip()
-                .casefold()
+    def _dawarich_source_id(self):
+        """Opaque restore identity; never publish URL, API key or member."""
+        identity = {
+            key: self._dawarich_config.get(key, "") for key in (
+                CONF_DAWARICH_URL, CONF_DAWARICH_API_KEY,
+                CONF_DAWARICH_MEMBER, CONF_DAWARICH_PERSON_ENTITY,
             )
-            if candidate == person_name:
-                location = member.get("location")
-                return location if isinstance(location, dict) else member
-        return None
-
-    @staticmethod
-    def _dawarich_coordinate(point, *names):
-        for name in names:
-            value = point.get(name)
-            if value is not None:
-                return value
-        return None
-
-    @classmethod
-    def _dawarich_point_timestamp(cls, point):
-        """Return a sortable timestamp for ISO and Unix point payloads."""
-        raw = cls._dawarich_coordinate(
-            point, "timestamp", "recorded_at", "datetime", "created_at", "updated_at"
-        )
-        if isinstance(raw, bool) or raw is None:
-            return datetime.min.replace(tzinfo=timezone.utc)
-        if isinstance(raw, (int, float)):
-            try:
-                return datetime.fromtimestamp(raw, tz=timezone.utc)
-            except (OSError, OverflowError, ValueError):
-                return datetime.min.replace(tzinfo=timezone.utc)
-        if isinstance(raw, str):
-            parsed = dt_util.parse_datetime(raw)
-            if parsed is not None:
-                return dt_util.as_utc(parsed)
-        return datetime.min.replace(tzinfo=timezone.utc)
-
-    @classmethod
-    def _dawarich_point_summary(cls, point):
-        """Keep useful location/history metadata without exposing arbitrary API data."""
-        keys = (
-            "id",
-            "timestamp",
-            "recorded_at",
-            "datetime",
-            "created_at",
-            "updated_at",
-            "altitude",
-            "speed",
-            "velocity",
-            "bearing",
-            "course",
-            "accuracy",
-            "horizontal_accuracy",
-            "activity",
-            "address",
-            "city",
-            "country",
-            "place_name",
-            "place",
-            "arrival_at",
-            "departure_at",
-        )
-        return {
-            key: point[key]
-            for key in keys
-            if key in point
-            and isinstance(point[key], (str, int, float, bool, type(None)))
         }
+        return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
-    async def _async_dawarich_latest_visit(self, session, headers, params):
-        """Fetch a visit opportunistically; locations remain usable without it."""
-        try:
-            async with asyncio.timeout(15):
-                async with session.get(
-                    self._dawarich_config[CONF_DAWARICH_URL] + "/api/v1/visits",
-                    headers=headers,
-                    params={**params, "per_page": 1},
-                ) as response:
-                    if response.status != 200:
-                        return None
-                    payload = await response.json(content_type=None)
-            visits = self._dawarich_points(payload)
-            return self._dawarich_point_summary(visits[0]) if visits else None
-        except (asyncio.TimeoutError, ClientError, ValueError, TypeError):
-            return None
+    def _set_dawarich_sample(self, point):
+        """Use measurement time, never poll time, as the source's GPS clock."""
+        measured = dawarich_point_time(point)
+        self._dawarich_state = State(
+            "device_tracker.virtual_layer_dawarich", "not_home",
+            {ATTR_LATITUDE: point["latitude"], ATTR_LONGITUDE: point["longitude"],
+             CONF_GPS_ACCURACY: point["accuracy"], "source_type": "gps", "last_seen": measured.isoformat()},
+            last_changed=measured, last_updated=measured, last_reported=measured,
+        )
 
     async def _async_refresh_dawarich(self, _now=None) -> None:
-        """Fetch latest Dawarich points without blocking Home Assistant's loop."""
-        config = self._dawarich_config
-        if not config:
+        """Serialize refreshes and publish a complete validated snapshot."""
+        if not self._dawarich_config or self._dawarich_removed or self._dawarich_task:
             return
-        headers = {"Accept": "application/json"}
-        params = {"per_page": config[CONF_DAWARICH_HISTORY_LIMIT]}
-        if config[CONF_DAWARICH_AUTH_MODE] == "query":
-            params["api_key"] = config[CONF_DAWARICH_API_KEY]
-        else:
-            headers["Authorization"] = "Bearer " + config[CONF_DAWARICH_API_KEY]
+        self._dawarich_task = asyncio.current_task()
         try:
-            session = async_get_clientsession(self.hass)
-            async with asyncio.timeout(15):
-                endpoint = (
-                    "/api/v1/families/locations"
-                    if config.get(CONF_DAWARICH_PERSON_ENTITY)
-                    else "/api/v1/points"
-                )
-                async with session.get(
-                    config[CONF_DAWARICH_URL] + endpoint, headers=headers, params=params
-                ) as response:
-                    response.raise_for_status()
-                    payload = await response.json(content_type=None)
-            family_point = (
-                self._dawarich_family_point(payload, self._dawarich_person_name())
-                if config.get(CONF_DAWARICH_PERSON_ENTITY)
-                else None
-            )
-            points = [family_point] if family_point else self._dawarich_points(payload)
-            if not points:
-                raise ValueError("Dawarich returned no location points")
-            # Point API ordering is not guaranteed across Dawarich versions.
-            point = max(points, key=self._dawarich_point_timestamp)
-            latitude = self._dawarich_coordinate(point, "latitude", "lat")
-            longitude = self._dawarich_coordinate(point, "longitude", "lon", "lng")
-            latitude, longitude = self._validated_coordinates(latitude, longitude)
-            accuracy = (
-                _safe_gps_accuracy(
-                    self._dawarich_coordinate(
-                        point, "accuracy", "horizontal_accuracy", "gps_accuracy"
-                    )
-                )
-                or 0
-            )
-            visit = (
-                None
-                if config.get(CONF_DAWARICH_PERSON_ENTITY)
-                else await self._async_dawarich_latest_visit(session, headers, params)
-            )
-            self._location = None
-            self._coords = {
-                ATTR_LATITUDE: latitude,
-                ATTR_LONGITUDE: longitude,
-                ATTR_RADIUS: 0,
-            }
-            self._gps_accuracy = accuracy
-            self._virtual_attributes.update(
-                {
-                    ATTR_DAWARICH_LAST_UPDATED: dt_util.utcnow().isoformat(),
-                    ATTR_DAWARICH_POINT: self._dawarich_point_summary(point),
-                    ATTR_DAWARICH_HISTORY: [
-                        self._dawarich_point_summary(item) for item in points
-                    ],
-                    ATTR_DAWARICH_VISIT: visit,
-                    ATTR_DAWARICH_ERROR: None,
-                }
-            )
+            client = DawarichClient(async_get_clientsession(self.hass), self._dawarich_config)
+            snapshot = await client.async_fetch(self._dawarich_person_name())
+            if self._dawarich_removed:
+                return
+            measured = dawarich_point_time(snapshot.point)
+            previous = self._dawarich_state.last_updated if self._dawarich_state else None
+            if previous is not None and measured < previous:
+                raise DawarichError("older_point")
+            self._set_dawarich_sample(snapshot.point)
+            now = dt_util.utcnow()
+            self._virtual_attributes.update({
+                ATTR_DAWARICH_LAST_UPDATED: now.isoformat(),
+                ATTR_DAWARICH_POINT_TIME: measured.isoformat(),
+                ATTR_DAWARICH_SOURCE_ID: self._dawarich_source_id(),
+                ATTR_DAWARICH_POINT: snapshot.point,
+                ATTR_DAWARICH_HISTORY: snapshot.history,
+                ATTR_DAWARICH_VISIT: snapshot.visit,
+                ATTR_DAWARICH_ERROR: None,
+                ATTR_DAWARICH_VISIT_ERROR: snapshot.visit_error,
+                ATTR_DAWARICH_STALE: now - measured > timedelta(
+                    seconds=self._location_policy()[CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS]
+                ),
+            })
+            # Polygon resolution and local-source aggregation consume Dawarich
+            # as a source; independent timers must not overwrite each other.
+            if self._polygon_config:
+                self._update_polygon_from_sources()
+            elif self._location_helper:
+                self._update_location_from_sources()
+            else:
+                self._update_attributes()
+                self.move_to_coords({ATTR_LATITUDE: snapshot.point["latitude"],
+                                     ATTR_LONGITUDE: snapshot.point["longitude"], ATTR_RADIUS: 0},
+                                    snapshot.point["accuracy"])
+        except DawarichError as err:
+            if self._dawarich_removed:
+                return
+            # HTTP exception strings may contain an api_key query parameter.
+            _LOGGER.warning("Unable to refresh Dawarich for %s (%s)", self.entity_id, err.code)
+            self._virtual_attributes.update({ATTR_DAWARICH_ERROR: err.code, ATTR_DAWARICH_STALE: True})
             self._update_attributes()
             self._schedule_state_update()
-        except (
-            asyncio.TimeoutError,
-            ClientError,
-            ValueError,
-            TypeError,
-            KeyError,
-        ) as err:
-            _LOGGER.warning(
-                "Unable to refresh Dawarich for %s: %s", self.entity_id, err
-            )
-            self._virtual_attributes[ATTR_DAWARICH_ERROR] = str(err)
-            self._update_attributes()
-            self._schedule_state_update()
+        finally:
+            self._dawarich_task = None
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._dawarich_removed = True
+        task = self._dawarich_task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await super().async_will_remove_from_hass()
 
     async def _async_setup_polygon_tracking(self) -> None:
         """Load polygon definitions and start source aggregation."""
         await self._async_reload_polygon_zones(keep_existing=False)
 
         source_entities = set(self._polygon_source_entities())
+        source_entities.discard(DAWARICH_SOURCE)
+        source_entities = {entity_id for entity_id in source_entities if not entity_id.startswith(BLE_PREFIX)}
         if source_entities:
             self._refresh_remove_listeners.append(
                 async_track_state_change_event(
@@ -978,7 +915,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 float(anchor.get("max_age_seconds", DEFAULT_ESPRESENSE_MAX_AGE_SECONDS))
                 for anchor in anchors.values()
             ]
-        ) if anchors else 60.0
+        ) if anchors else (5.0 if self._local_presence_config else 60.0)
         self._refresh_remove_listeners.append(
             async_track_time_interval(
                 self.hass,
@@ -1037,11 +974,15 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
 
     def _polygon_source_entities(self) -> list[str]:
         """Return explicit trackers, falling back to the configured person."""
-        source_entities = self._location_source_entities()
+        source_entities = [
+            entity_id for entity_id in self._location_source_entities()
+            if entity_id != DAWARICH_SOURCE
+        ]
+        dawarich = [DAWARICH_SOURCE] if self._dawarich_config else []
         if source_entities:
             return list(
                 dict.fromkeys(
-                    source_entities
+                    source_entities + dawarich
                     + list(
                         self._polygon_config.get(CONF_POLYGON_ESPRESENSE_ANCHORS, {})
                     )
@@ -1049,7 +990,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             )
         person = self._polygon_config.get(CONF_POLYGON_PERSON_ENTITY)
         sources = [person] if person and person != self.entity_id else []
-        return sources + list(
+        return sources + dawarich + list(
             self._polygon_config.get(CONF_POLYGON_ESPRESENSE_ANCHORS, {})
         )
 
@@ -1144,12 +1085,13 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         if rule.get("enabled", True) is False:
             return False
         now = dt_util.utcnow()
+        observed = self._source_observation_time(state)
         max_age = rule.get("max_age_seconds")
-        if max_age is not None and now - state.last_updated > timedelta(
+        if max_age is not None and (observed is None or not timedelta(0) <= now - observed <= timedelta(
             seconds=float(max_age)
-        ):
+        )):
             return False
-        accuracy = _safe_gps_accuracy(state.attributes.get(CONF_GPS_ACCURACY, 0))
+        accuracy = self._source_accuracy(state)
         if accuracy is None:
             return False
         max_accuracy = rule.get("max_gps_accuracy")
@@ -1186,23 +1128,25 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         """Aggregate source positions and resolve the selected polygon zone."""
         if not self._polygon_config:
             return
+        self._refresh_local_presence()
+        self._update_motion_attributes(None)
         rules = self._polygon_config[CONF_POLYGON_TRACKER_RULES]
         samples = []
         for entity_id in self._polygon_source_entities():
-            state = self.hass.states.get(entity_id)
+            state = self._location_source_state(entity_id)
             if (
                 state is None
                 or state.state in {STATE_UNAVAILABLE, STATE_UNKNOWN}
                 or (position := self._position_from_state(self.hass, state)) is None
+                or (observed := self._source_observation_time(state)) is None
+                or observed > dt_util.utcnow()
             ):
                 continue
             rule = rules.get(entity_id, {})
             if not self._polygon_rule_matches(entity_id, state, rule):
                 continue
             try:
-                accuracy = _safe_gps_accuracy(
-                    state.attributes.get(CONF_GPS_ACCURACY, 0)
-                )
+                accuracy = self._source_accuracy(state)
                 if accuracy is None:
                     continue
                 samples.append(
@@ -1211,7 +1155,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                         "latitude": position[0],
                         "longitude": position[1],
                         "gps_accuracy": accuracy,
-                        "last_updated": state.last_updated,
+                        "last_updated": observed,
                         "dominant": bool(rule.get("dominant", False)),
                         "priority": float(rule.get("priority", 100)),
                         "weight": float(rule.get("weight", 1)),
@@ -1247,11 +1191,21 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 }
             )
 
-        selected = select_tracker_position(
-            samples,
-            self._polygon_config[CONF_POLYGON_STRATEGY],
-            float(self._polygon_config[CONF_POLYGON_DISTANCE_METERS]),
-        )
+        if self._polygon_config[CONF_POLYGON_STRATEGY] == "adaptive" and not any(
+            sample.get("dominant") for sample in samples
+        ):
+            selected = self._adaptive_polygon_position(samples)
+        else:
+            selected = select_tracker_position(
+                samples,
+                self._polygon_config[CONF_POLYGON_STRATEGY],
+                float(self._polygon_config[CONF_POLYGON_DISTANCE_METERS]),
+            )
+            if self._polygon_config[CONF_POLYGON_STRATEGY] == "adaptive":
+                self._virtual_attributes.update({
+                    ATTR_LOCATION_SELECTION_REASON: "dominant",
+                    ATTR_LOCATION_STALE: False,
+                })
         self._virtual_attributes.update(
             {
                 ATTR_POLYGON_PERSON: self._polygon_config.get(
@@ -1269,7 +1223,14 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         if selected is None:
             self._virtual_attributes[ATTR_POLYGON_ZONE] = None
             self._update_attributes()
-            self.move_to_location(self._polygon_config[CONF_POLYGON_AWAY_STATE])
+            missing_presence = self._local_presence_config and any(
+                (state := self._location_source_state(source)) is None
+                or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}
+                for source in self._polygon_source_entities()
+            )
+            self.move_to_location(
+                STATE_UNKNOWN if missing_presence else self._polygon_config[CONF_POLYGON_AWAY_STATE]
+            )
             return
 
         zone = find_polygon_zone(
@@ -1299,8 +1260,8 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
     @staticmethod
     def _coordinates_from_state(state):
         """Read usable GPS coordinates from a Home Assistant state."""
-        raw_latitude = state.attributes.get(ATTR_LATITUDE)
-        raw_longitude = state.attributes.get(ATTR_LONGITUDE)
+        raw_latitude = state.attributes.get(ATTR_LATITUDE, state.attributes.get("lat"))
+        raw_longitude = state.attributes.get(ATTR_LONGITUDE, state.attributes.get("lon"))
         if isinstance(raw_latitude, bool) or isinstance(raw_longitude, bool):
             return None
         try:
@@ -1317,6 +1278,49 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         ):
             return None
         return latitude, longitude
+
+    @staticmethod
+    def _has_observation_time(state):
+        return any(state.attributes.get(key) is not None for key in ("last_seen", "last_timestamp"))
+
+    @staticmethod
+    def _source_observation_time(state):
+        """Honor source measurement clocks; malformed explicit clocks fail closed.
+
+        Composite Tracker-compatible timestamps may be epoch seconds, ISO text
+        or datetime objects. HA interprets naive datetimes in its local zone.
+        """
+        raw = next((state.attributes[key] for key in ("last_seen", "last_timestamp")
+                    if state.attributes.get(key) is not None), None)
+        if raw is None:
+            return state.last_updated
+        if isinstance(raw, bool):
+            return None
+        try:
+            if isinstance(raw, datetime):
+                return dt_util.as_utc(raw)
+            if not isinstance(raw, (str, int, float)):
+                return None
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                parsed = dt_util.parse_datetime(raw)
+                return dt_util.as_utc(parsed) if parsed is not None else None
+            if not isfinite(value):
+                return None
+            return dt_util.utc_from_timestamp(value)
+        except (TypeError, ValueError, OverflowError, OSError):
+            return None
+
+    @classmethod
+    def _source_report_time(cls, state):
+        if cls._has_observation_time(state):
+            return cls._source_observation_time(state)
+        return getattr(state, "last_reported", state.last_updated)
+
+    @staticmethod
+    def _source_accuracy(state):
+        return _safe_gps_accuracy(state.attributes.get(CONF_GPS_ACCURACY, state.attributes.get("acc", 0)))
 
     @staticmethod
     def _zone_matches(zone_state, location_name) -> bool:
@@ -1353,17 +1357,87 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
     @classmethod
     def _position_from_state(cls, hass, state):
         """Read source coordinates directly or from its named zone state."""
-        return cls._coordinates_from_state(
+        position = cls._coordinates_from_state(
             state
         ) or cls._coordinates_from_location_state(hass, state.state)
+        if position is None and state.state == "home" and state.attributes.get("source_type") in {"router", "bluetooth", "bluetooth_le"}:
+            try:
+                return cls._validated_coordinates(hass.config.latitude, hass.config.longitude)
+            except (TypeError, ValueError, OverflowError):
+                return None
+        return position
+
+    def _adaptive_polygon_position(self, samples):
+        """Apply the same carried-device policy before resolving polygon zones."""
+        rules = self._polygon_config[CONF_POLYGON_TRACKER_RULES]
+        states = {}
+        for entity_id in self._polygon_source_entities():
+            state = self._location_source_state(entity_id)
+            rule = rules.get(entity_id, {})
+            if state is None:
+                # A missing HA state is a lost report, not removal from the
+                # configuration. Explicit filters still exclude that source.
+                if rule.get("enabled", True) and not any(
+                    key in rule for key in ("condition_template", "max_age_seconds", "max_gps_accuracy")
+                ):
+                    states[entity_id] = None
+            elif self._polygon_rule_matches(entity_id, state, rule):
+                states[entity_id] = state
+        positions = self._record_source_movements({
+            sample["entity_id"]: (sample["latitude"], sample["longitude"])
+            for sample in samples if sample["entity_id"] in states
+        }, states)
+        selected, reason, stale = self._select_location_source(positions, states, dt_util.utcnow())
+        self._priority_source = selected
+        self._store_location_observations()
+        self._update_motion_attributes(selected, stale)
+        self._virtual_attributes.update({
+            ATTR_LOCATION_PRIORITY_SOURCE: selected,
+            ATTR_LOCATION_SELECTION_REASON: reason,
+            ATTR_LOCATION_STALE: stale,
+        })
+        if selected:
+            position = self._source_positions[selected]
+            history = self._source_history.get(selected)
+            return {
+                "latitude": position[0], "longitude": position[1],
+                "gps_accuracy": history[-1][2] if history else 0,
+                "selected_source": selected, "members": [selected], "reason": reason,
+            }
+        valid = [sample for sample in samples if sample["entity_id"] in positions]
+        result = select_tracker_position(valid, "median")
+        if result:
+            center = (result["latitude"], result["longitude"])
+            result["gps_accuracy"] = max(
+                self._distance_meters(center, positions[sample["entity_id"]])
+                + sample["gps_accuracy"] for sample in valid
+            )
+        return result
 
     def _location_source_entities(self) -> list[str]:
         """Return configured sources without the virtual tracker itself."""
-        return [
+        local = self._local_presence_config or {}
+        return list(dict.fromkeys([
             entity_id
-            for entity_id in self._source_entities
+            for entity_id in [*self._source_entities, *local.get("wifi_entities", [])]
             if entity_id != self.entity_id
-        ]
+        ] + ([DAWARICH_SOURCE] if self._dawarich_config else [])
+        + [BLE_PREFIX + address for address in local.get("ble_addresses", [])]))
+
+    def _refresh_local_presence(self):
+        if not self._local_presence_config:
+            return
+        if self._presence_adapter is None:
+            self._presence_adapter = LocalPresence(self.hass, self._local_presence_config)
+        self._ble_states = self._presence_adapter.ble_states()
+        self._virtual_attributes["local_presence_error"] = self._presence_adapter.error
+
+    def _location_source_state(self, entity_id):
+        if entity_id.startswith(BLE_PREFIX):
+            return self._ble_states.get(entity_id)
+        if self._presence_adapter and entity_id in self._local_presence_config["wifi_entities"]:
+            return self._presence_adapter.wifi_state(entity_id)
+        return self._dawarich_state if entity_id == DAWARICH_SOURCE else self.hass.states.get(entity_id)
 
     @staticmethod
     def _median(values: list[float]) -> float:
@@ -1386,55 +1460,272 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         )
         return 6_371_000 * 2 * asin(sqrt(max(0.0, min(1.0, value))))
 
-    def _record_source_movements(self, positions, source_states) -> None:
-        """Record movement only when a source coordinate actually changes."""
+    def _location_policy(self):
+        """Share movement inference with the opt-in polygon strategy."""
+        policy = self._location_helper or {
+            CONF_LOCATION_HELPER_DISTANCE_METERS: DEFAULT_LOCATION_HELPER_DISTANCE_METERS,
+            CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS: DEFAULT_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS,
+        }
+        if self._polygon_config and self._polygon_config[CONF_POLYGON_STRATEGY] == "adaptive":
+            return {
+                **policy,
+                CONF_LOCATION_HELPER_DISTANCE_METERS: self._polygon_config[CONF_POLYGON_DISTANCE_METERS],
+            }
+        return policy
+
+    def _record_source_movements(self, positions, source_states) -> dict:
+        """Accept plausible observations; a first observation is not movement.
+
+        Keep a bounded path in memory. Persist only its last point and motion
+        anchor, so reloads preserve evidence without publishing travel history.
+        Attribute-only updates never advance the GPS observation clock.
+        """
+        now = dt_util.utcnow()
+        policy = self._location_policy()
+        window = timedelta(seconds=policy[CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS])
+        max_accuracy = max(300, policy[CONF_LOCATION_HELPER_DISTANCE_METERS])
+        accepted = {}
+        rejected = {
+            entity_id: "unavailable" for entity_id, state in source_states.items()
+            if state is None or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}
+        }
+        for entity_id, state in source_states.items():
+            if state is not None:
+                reported = self._source_report_time(state)
+                if reported is None:
+                    rejected[entity_id] = "invalid_timestamp"
+                elif not timedelta(0) <= now - reported <= window:
+                    rejected[entity_id] = "future_timestamp" if reported > now else "stale"
+        for mapping in (
+            self._source_positions, self._source_last_moved, self._source_history,
+            self._source_motion_anchors, self._source_rejected_positions, self._source_reported,
+        ):
+            for entity_id in set(mapping) - set(source_states):
+                mapping.pop(entity_id, None)
         for entity_id, position in positions.items():
-            previous_position = self._source_positions.get(entity_id)
-            self._source_positions[entity_id] = position
-            if (
-                previous_position is not None
-                and self._distance_meters(previous_position, position)
-                <= LOCATION_CHANGE_DISTANCE_METERS
-            ):
+            state = source_states[entity_id]
+            timestamp = self._source_observation_time(state)
+            reported = self._source_report_time(state)
+            accuracy = self._source_accuracy(state)
+            reason = None
+            if state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
+                reason = "unavailable"
+            elif timestamp is None or reported is None:
+                reason = "invalid_timestamp"
+            elif timestamp > now or reported > now:
+                reason = "future_timestamp"
+            elif not timedelta(0) <= now - reported <= window:
+                reason = "stale"
+            elif accuracy is None or accuracy > max_accuracy:
+                reason = "accuracy"
+            if reason:
+                rejected[entity_id] = reason
                 continue
 
-            last_updated = getattr(source_states[entity_id], "last_updated", None)
-            if last_updated is not None:
-                self._source_last_moved[entity_id] = last_updated
+            # Zone centers and network/radio presence are useful fallback
+            # locations, but cannot demonstrate a physical GPS trajectory.
+            gps = (
+                self._coordinates_from_state(state) is not None
+                and state.attributes.get("source_type", "gps") == "gps"
+            )
+            history = self._source_history.setdefault(entity_id, [])
+            if not gps:
+                history.clear()
+                self._source_last_moved.pop(entity_id, None)
+                self._source_motion_anchors.pop(entity_id, None)
+            if history and gps:
+                previous, previous_time, previous_accuracy = history[-1]
+                distance = self._distance_meters(previous, position)
+                elapsed = (timestamp - self._source_reported.get(entity_id, previous_time)).total_seconds()
+                if timestamp < previous_time or (position != previous and elapsed <= 0):
+                    rejected[entity_id] = "out_of_order"
+                    continue
+                if position == self._source_rejected_positions.get(entity_id):
+                    rejected[entity_id] = "implausible_speed"
+                    continue
+                if (
+                    position != previous
+                    and max(0, distance - accuracy - previous_accuracy)
+                    > MAX_LOCATION_SPEED_METERS_PER_SECOND * max(1, elapsed)
+                ):
+                    self._source_rejected_positions[entity_id] = position
+                    rejected[entity_id] = "implausible_speed"
+                    continue
+                anchor, anchor_accuracy = self._source_motion_anchors.get(
+                    entity_id, (previous, previous_accuracy)
+                )
+                if position != previous and self._distance_meters(anchor, position) > max(
+                    LOCATION_CHANGE_DISTANCE_METERS, accuracy + anchor_accuracy
+                ):
+                    self._source_last_moved[entity_id] = timestamp
+                    self._source_motion_anchors[entity_id] = (position, accuracy)
+            if gps and (not history or history[-1][0] != position or (
+                self._has_observation_time(state) and timestamp > self._source_reported.get(entity_id, history[-1][1])
+            )):
+                history.append((position, timestamp, accuracy))
+                del history[:-LOCATION_HISTORY_LIMIT]
+                self._source_motion_anchors.setdefault(entity_id, (position, accuracy))
+            elif gps and history:
+                history[-1] = (position, history[-1][1], accuracy)
+            self._source_rejected_positions.pop(entity_id, None)
+            self._source_reported[entity_id] = reported
+            self._source_positions[entity_id] = position
+            accepted[entity_id] = position
+        self._virtual_attributes[ATTR_LOCATION_REJECTED_SOURCES] = rejected
+        return accepted
+
+    def _update_motion_attributes(self, selected, stale=False):
+        """Estimate motion within one source, never between different devices."""
+        history = self._source_history.get(selected, [])
+        seen = self._source_reported.get(selected)
+        speed = bearing = None
+        if not stale and len(history) >= 2:
+            previous, previous_time, previous_accuracy = history[-2]
+            current, current_time, accuracy = history[-1]
+            elapsed = (current_time - previous_time).total_seconds()
+            age = (dt_util.utcnow() - current_time).total_seconds()
+            if elapsed >= SPEED_MIN_INTERVAL_SECONDS and 0 <= age <= min(
+                SPEED_MAX_AGE_SECONDS, self._location_policy()[CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS]
+            ):
+                distance = self._distance_meters(previous, current)
+                if distance <= previous_accuracy + accuracy:
+                    speed = 0.0
+                else:
+                    speed = distance / elapsed
+                    lat1, lat2 = radians(previous[0]), radians(current[0])
+                    delta_lon = radians(current[1] - previous[1])
+                    bearing = (degrees(atan2(
+                        sin(delta_lon) * cos(lat2),
+                        cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(delta_lon),
+                    )) + 360) % 360
+        self._virtual_attributes.update({
+            ATTR_LOCATION_LAST_SEEN: seen.isoformat() if seen else None,
+            ATTR_LOCATION_SPEED: speed,
+            ATTR_LOCATION_BEARING: bearing,
+        })
 
     def _source_is_recent(self, entity_id, now) -> bool:
         """Return whether the source has actually moved inside the policy window."""
         last_moved = self._source_last_moved.get(entity_id)
         if last_moved is None:
             return False
-        return now - last_moved <= timedelta(
-            seconds=self._location_helper[CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS],
+        return timedelta(0) <= now - last_moved <= timedelta(
+            seconds=self._location_policy()[CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS],
         )
+
+    def _select_location_source(self, positions, source_states, now):
+        """Follow observed travel through stops and permit nearby handoffs."""
+        threshold = self._location_policy()[CONF_LOCATION_HELPER_DISTANCE_METERS]
+        moving = [
+            entity_id for entity_id in positions
+            if self._source_is_recent(entity_id, now)
+        ]
+        # Stable source ordering breaks exact timestamp ties, not attribute
+        # refreshes such as battery updates on a device left behind.
+        moving.sort(key=lambda entity_id: self._source_last_moved[entity_id], reverse=True)
+        current = self._priority_source
+        if current in self._source_last_moved and current in self._source_positions:
+            for candidate in moving:
+                history = self._source_history.get(candidate, [])
+                if candidate == current or len(history) < 2:
+                    continue
+                if self._source_last_moved[candidate] <= self._source_last_moved[current]:
+                    continue
+                # A different device may be picked up where the person stopped.
+                # Remote motion at home must not steal a fresh tracker at work.
+                if current not in positions or self._distance_meters(
+                    history[-2][0], self._source_positions[current]
+                ) <= threshold:
+                    return candidate, "handoff", False
+            return current, "following" if current in positions else "last_known", current not in positions
+        if moving:
+            return moving[0], "movement", False
+        if not positions:
+            return None, "no_position", True
+        median = (
+            self._median([position[0] for position in positions.values()]),
+            median_longitude(position[1] for position in positions.values()),
+        )
+        window = timedelta(seconds=self._location_policy()[CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS])
+        # Retain the legacy bootstrap heuristic when there is no motion history,
+        # but label it as an unconfirmed outlier and use its GPS observation time.
+        outliers = []
+        for entity_id, position in positions.items():
+            history = self._source_history.get(entity_id, [])
+            observed = history[-1][1] if history else self._source_observation_time(source_states[entity_id])
+            if (
+                timedelta(0) <= now - observed <= window
+                and (entity_id == current or self._distance_meters(position, median) > threshold)
+            ):
+                outliers.append(entity_id)
+        if outliers:
+            selected = current if current in outliers else max(
+                outliers,
+                key=lambda entity_id: self._source_history[entity_id][-1][1]
+                if self._source_history.get(entity_id) else self._source_observation_time(source_states[entity_id]),
+            )
+            return selected, "unconfirmed_outlier", False
+        return None, "median", False
+
+    def _store_location_observations(self):
+        """Expose bounded restart data, not the path kept in working memory."""
+        self._virtual_attributes.update({
+            ATTR_LOCATION_SOURCE_POSITIONS: {
+                entity_id: list(position) for entity_id, position in self._source_positions.items()
+            },
+            ATTR_LOCATION_SOURCE_LAST_MOVED: {
+                entity_id: value.timestamp() for entity_id, value in self._source_last_moved.items()
+            },
+            ATTR_LOCATION_SOURCE_OBSERVATIONS: {
+                entity_id: {
+                    "position": list(history[-1][0]),
+                    "timestamp": history[-1][1].timestamp(),
+                    "reported": self._source_reported[entity_id].timestamp(),
+                    "accuracy": history[-1][2],
+                    "anchor": list(self._source_motion_anchors[entity_id][0]),
+                    "anchor_accuracy": self._source_motion_anchors[entity_id][1],
+                    "rejected_position": (
+                        list(self._source_rejected_positions[entity_id])
+                        if entity_id in self._source_rejected_positions else None
+                    ),
+                }
+                for entity_id, history in self._source_history.items() if history
+            },
+        })
 
     @classmethod
     def _is_local_presence_source(cls, entity_id, state) -> bool:
         """Recognize affirmative Wi-Fi/ESPresense-style presence states."""
         if state is None or state.state in {STATE_UNAVAILABLE, STATE_UNKNOWN}:
             return False
+        if entity_id.startswith(BLE_PREFIX):
+            return state.state == "home"
+        if state.attributes.get("local_connection") is True:
+            return state.state == "home"
         domain = entity_id.split(".", 1)[0]
         if domain in {"binary_sensor", "switch", "input_boolean"}:
             return str(state.state).lower() in {"on", "home", "true", "present"}
         if domain == "device_tracker":
-            # AB BLE Gateway applies its RSSI threshold and idle timeout before
-            # publishing home. Honor that radio decision without interpreting
-            # RSSI as an uncalibrated distance or treating GPS home as radio.
+            # Existing radio trackers already expose their presence decision.
+            # Do not interpret RSSI as distance or GPS home as radio presence.
             return state.attributes.get("source_type") in {
                 "bluetooth", "bluetooth_le", "router"
             } and state.state == "home"
         return False
 
-    @staticmethod
-    def _ble_distance_meters(source_entities, source_states) -> float | None:
+    def _ble_distance_meters(self, source_entities, source_states) -> float | None:
         """Return the nearest finite ESPresense/BLE distance from configured sources."""
         distances = []
+        now = dt_util.utcnow()
+        window = timedelta(seconds=self._location_policy()[CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS])
         for entity_id in source_entities:
             state = source_states.get(entity_id)
-            if state is None or entity_id.split(".", 1)[0] != "sensor":
+            if (
+                state is None or entity_id.split(".", 1)[0] != "sensor"
+                or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}
+                or (reported := self._source_report_time(state)) is None
+                or not timedelta(0) <= now - reported <= window
+            ):
                 continue
             value = state.attributes.get(
                 "distance", state.attributes.get("distance_meters")
@@ -1474,19 +1765,26 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
 
     @callback
     def _update_location_from_sources(self) -> None:
-        """Track a recent outlier, otherwise use the sources' median position."""
+        """Follow credible movement, preserving a carried device during stops."""
         if not self._location_helper:
             return
+        self._refresh_local_presence()
+        self._update_motion_attributes(None)
 
         now = dt_util.utcnow()
         source_entities = self._location_source_entities()
         source_states = {
-            entity_id: self.hass.states.get(entity_id) for entity_id in source_entities
+            entity_id: self._location_source_state(entity_id) for entity_id in source_entities
         }
         local_presence = [
             entity_id
             for entity_id, state in source_states.items()
             if self._is_local_presence_source(entity_id, state)
+            and (state.attributes.get("source_type") == "router" or (
+                (reported := self._source_report_time(state)) is not None
+                and timedelta(0) <= now - reported
+                <= timedelta(seconds=self._location_policy()[CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS])
+            ))
         ]
         ble_distance = self._ble_distance_meters(source_entities, source_states)
         positions = {
@@ -1495,33 +1793,39 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             if state is not None
             if (coordinates := self._position_from_state(self.hass, state)) is not None
         }
-        self._record_source_movements(positions, source_states)
+        positions = self._record_source_movements(positions, source_states)
+        selected, reason, stale = self._select_location_source(positions, source_states, now)
+        self._store_location_observations()
         self._virtual_attributes.update(
             {
-                ATTR_LOCATION_SOURCE_POSITIONS: {
-                    entity_id: list(position)
-                    for entity_id, position in self._source_positions.items()
-                    if entity_id in source_entities
-                },
-                ATTR_LOCATION_SOURCE_LAST_MOVED: {
-                    entity_id: last_moved.timestamp()
-                    for entity_id, last_moved in self._source_last_moved.items()
-                    if entity_id in source_entities
-                },
                 ATTR_LOCATION_PRESENCE_SOURCES: local_presence,
                 ATTR_LOCATION_BLE_DISTANCE: ble_distance,
+                ATTR_LOCATION_SELECTION_REASON: reason,
+                ATTR_LOCATION_STALE: stale,
             }
         )
-        # Local radio/network presence is a direct proof of occupancy. It
-        # outranks GPS: a phone may report an older off-site coordinate while
-        # it is already associated with home Wi-Fi or detected by ESPresense.
-        if local_presence:
-            self._priority_source = local_presence[0]
+        # Radio presence proves that device is home, not that the person is.
+        # Only use it ahead of GPS when there is no confirmed travelling device
+        # or that device's accepted GPS position has also returned home.
+        home = self._coordinates_from_location_state(self.hass, "home")
+        if home is None and local_presence:
+            home = self._position_from_state(self.hass, source_states[local_presence[0]])
+        selected_home = bool(
+            selected and home and not stale
+            and self._distance_meters(self._source_positions[selected], home) <= 100
+        )
+        if local_presence and (selected not in self._source_last_moved or selected_home):
+            # Preserve a confirmed source across home stops for the next trip.
+            if selected not in self._source_last_moved:
+                selected = local_presence[0]
+            self._priority_source = selected
             self._virtual_attributes.update(
                 {
                     ATTR_LOCATION_MEDIAN_LATITUDE: None,
                     ATTR_LOCATION_MEDIAN_LONGITUDE: None,
-                    ATTR_LOCATION_PRIORITY_SOURCE: local_presence[0],
+                    ATTR_LOCATION_PRIORITY_SOURCE: selected,
+                    ATTR_LOCATION_SELECTION_REASON: "local_presence",
+                    ATTR_LOCATION_STALE: False,
                 }
             )
             if self._presence_classification:
@@ -1531,12 +1835,21 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                         ATTR_LOCATION_HOME_DISTANCE: 0,
                     }
                 )
+            self._location = "home"
+            self._coords = {}
+            self._gps_accuracy = 0
+            if home:
+                self._coords = {ATTR_LATITUDE: home[0], ATTR_LONGITUDE: home[1], ATTR_RADIUS: 0}
+                zone = self.hass.states.get("zone.home")
+                self._gps_accuracy = (_safe_gps_accuracy(zone.attributes.get(ATTR_RADIUS, 100)) or 100) if zone else 100
             self._update_attributes()
-            self.move_to_location("home")
+            self._schedule_state_update()
             return
-        if not positions:
+        if not positions and selected is None:
             known_states = [
-                state.state for state in source_states.values() if state is not None
+                state.state for entity_id, state in source_states.items()
+                if state is not None
+                and entity_id not in self._virtual_attributes[ATTR_LOCATION_REJECTED_SOURCES]
             ]
             self._priority_source = None
             self._virtual_attributes.update(
@@ -1555,15 +1868,17 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 )
             self._update_attributes()
             self.move_to_location(
-                "home"
+                STATE_UNKNOWN if self._local_presence_config and len(known_states) < len(source_states) else "home"
                 if known_states and all(value == "home" for value in known_states)
                 else "not_home",
             )
             return
 
         median = (
-            self._median([position[0] for position in positions.values()]),
-            median_longitude(position[1] for position in positions.values()),
+            (
+                self._median([position[0] for position in positions.values()]),
+                median_longitude(position[1] for position in positions.values()),
+            ) if positions else self._source_positions[selected]
         )
         self._virtual_attributes.update(
             {
@@ -1572,36 +1887,27 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             }
         )
 
-        # Keep following the already selected device after it reaches the
-        # majority location, until its own GPS updates are no longer recent.
-        selected = None
-        priority_state = source_states.get(self._priority_source)
-        if (
-            self._priority_source in positions
-            and priority_state is not None
-            and self._source_is_recent(self._priority_source, now)
-        ):
-            selected = self._priority_source
-        else:
-            threshold = self._location_helper[CONF_LOCATION_HELPER_DISTANCE_METERS]
-            recent_outliers = [
-                entity_id
-                for entity_id, position in positions.items()
-                if self._distance_meters(position, median) > threshold
-                and self._source_is_recent(entity_id, now)
-            ]
-            if recent_outliers:
-                selected = max(
-                    recent_outliers,
-                    key=lambda entity_id: source_states[entity_id].last_updated,
-                )
-
         self._priority_source = selected
         self._virtual_attributes[ATTR_LOCATION_PRIORITY_SOURCE] = selected
-        latitude, longitude = positions[selected] if selected else median
+        latitude, longitude = self._source_positions[selected] if selected else median
+        if selected:
+            history = self._source_history.get(selected)
+            accuracy = history[-1][2] if history else (
+                self._source_accuracy(source_states[selected]) or 0
+            )
+        else:
+            accuracy = max(
+                self._distance_meters(position, median)
+                + (self._source_accuracy(source_states[entity_id]) or 0)
+                for entity_id, position in positions.items()
+            )
+        self._update_motion_attributes(selected, stale)
         if self._presence_classification:
             classification = self._classify_presence_location(
-                (latitude, longitude), ble_distance
+                (latitude, longitude),
+                # A BLE sensor at home must not classify an off-site GPS source
+                # as standing at the front door.
+                ble_distance if home and self._distance_meters((latitude, longitude), home) <= 100 else None,
             )
             self._location = classification
             self._coords = {
@@ -1609,7 +1915,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 ATTR_LONGITUDE: longitude,
                 ATTR_RADIUS: 0,
             }
-            self._gps_accuracy = 0
+            self._gps_accuracy = accuracy
             self._update_attributes()
             self._schedule_state_update()
             return
@@ -1620,7 +1926,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 ATTR_LONGITUDE: longitude,
                 ATTR_RADIUS: 0,
             },
-            0,
+            accuracy,
         )
 
     @property
@@ -1689,7 +1995,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         self._schedule_state_update()
 
     def set_state(self, value) -> None:
-        if self._location_helper or self._polygon_config:
+        if self._location_helper or self._polygon_config or self._dawarich_config:
             return
         self.move_to_location(value)
 

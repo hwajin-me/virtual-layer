@@ -1,4 +1,7 @@
 aiofiles
+aiousbwatcher==1.1.1
+pyserial==3.5
+dbus-fast==3.1.2
 PyTurboJPEG
 HAP-python==5.0.0
 fnv-hash-fast==1.6.0

@@ -855,6 +855,18 @@ class VirtualLight(VirtualEntity, LightEntity):
             "color_temp": "color_temp_kelvin",
         }
         name = aliases.get(name, name)
+        # Lights omit level/color attributes while off, unavailable, or using
+        # another color mode. Missing readings must not reject otherwise valid
+        # source templates or erase the last usable target.
+        if name in {
+            "brightness", "color_mode", "color_temp_kelvin", "hs_color",
+            "xy_color", "rgb_color", "rgbw_color", "rgbww_color",
+        } and (
+            value is None
+            or isinstance(value, str)
+            and value.strip().lower() in {"", "none", "unknown", "unavailable"}
+        ):
+            return False
         if name in {"effect", "effects", "effect_list"}:
             raise ValueError("Matter-compatible lights do not support effects")
         if name == "supported_color_modes":

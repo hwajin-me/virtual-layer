@@ -2884,6 +2884,47 @@ def test_light_number_and_vacuum_templates_use_native_types(hass):
     assert vacuum.extra_state_attributes["battery_level"] == 87
 
 
+@pytest.mark.parametrize("missing", [None, "None", "", "unknown", "unavailable"])
+def test_light_optional_source_templates_keep_last_value_and_recover(hass, caplog, missing):
+    values = {
+        "brightness": 128, "color_mode": "hs", "color_temp_kelvin": 4000,
+        "hs_color": [120, 50], "xy_color": [0.25, 0.5],
+        "rgb_color": [10, 20, 30], "rgbw_color": [10, 20, 30, 40],
+        "rgbww_color": [10, 20, 30, 40, 50],
+    }
+    source = "light.optional_source"
+    hass.states.async_set(source, "on", values)
+    light = VirtualLight(LIGHT_SCHEMA(_base(
+        "light.optional_values", "on", matter_light_type="extended_color",
+        **{CONF_NATIVE_TEMPLATES: {
+            key: "{{ state_attr('" + source + "', '" + key + "') }}"
+            for key in values
+        }},
+    )), False)
+    _render_native_templates(light, hass)
+    previous = {key: getattr(light, key) for key in values}
+    for state in ("off", "unknown", "unavailable"):
+        hass.states.async_set(source, state, {key: missing for key in values})
+        light._apply_templates()
+        assert {key: getattr(light, key) for key in values} == previous
+    hass.states.async_set(source, "on", {**values, "brightness": 200, "hs_color": [240, 75]})
+    light._apply_templates()
+    assert light.brightness == 200
+    assert light.hs_color == (240, 75)
+    assert "Unable to render native template" not in caplog.text
+
+
+@pytest.mark.parametrize(("name", "value"), [
+    ("brightness", 256), ("brightness", -1), ("color_mode", "invalid"),
+    ("color_temp_kelvin", 0), ("hs_color", [361, 50]),
+    ("xy_color", [0.5, 2]), ("rgb_color", [256, 0, 0]),
+])
+def test_light_optional_templates_still_reject_invalid_values(name, value):
+    light = VirtualLight(LIGHT_SCHEMA(_base("light.invalid_value", "on")), False)
+    with pytest.raises(ValueError):
+        light._apply_native_template_value(name, value)
+
+
 def test_light_native_color_modes_can_reduce_matter_contract_to_onoff(hass):
     """Do not reintroduce RGB clusters when a helper renders an on/off light."""
     light = VirtualLight(

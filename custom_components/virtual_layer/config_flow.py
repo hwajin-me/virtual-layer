@@ -31,6 +31,7 @@ from homeassistant.components.lock import LockEntityFeature
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.components.siren import SirenEntityFeature
 from homeassistant.components.sensor.const import (
+    DEVICE_CLASS_UNITS,
     UNIT_CONVERTERS as SENSOR_UNIT_CONVERTERS,
 )
 from homeassistant.components.update import UpdateEntityFeature
@@ -48,6 +49,7 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import selector
 from homeassistant.helpers.json import json_bytes
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.template import Template, TemplateError
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
@@ -55,6 +57,8 @@ from homeassistant.util import slugify
 from .binary_options import detection_minutes
 from . import air_quality_options as aq_options
 from . import unit_history
+from .dawarich import DawarichClient, DawarichError, normalize_config as normalize_dawarich_config
+from .local_presence import DEFAULTS as LOCAL_PRESENCE_DEFAULTS, normalize as normalize_local_presence
 from .cfg import (
     _platform_command_names,
     _rename_meta_data,
@@ -70,6 +74,7 @@ from .climate_options import (
 )
 from .const import *
 from .device_metadata import configuration_url_or_none, valid_parent_device
+from .frigate_source import frigate_camera_stream_url
 from .entity import (
     pull_interval_seconds,
     VirtualEntity,
@@ -200,6 +205,12 @@ CONF_DAWARICH_AUTH_MODE_INPUT = "dawarich_auth_mode"
 CONF_DAWARICH_POLL_INTERVAL_INPUT = "dawarich_poll_interval"
 CONF_DAWARICH_HISTORY_LIMIT_INPUT = "dawarich_history_limit"
 CONF_DAWARICH_PERSON_INPUT = "dawarich_person"
+CONF_DAWARICH_SETTINGS = "dawarich_settings"
+CONF_DAWARICH_ENABLED_INPUT = "dawarich_enabled"
+CONF_DAWARICH_MEMBER_INPUT = "dawarich_member"
+CONF_DAWARICH_TEST_INPUT = "dawarich_test_connection"
+CONF_LOCAL_PRESENCE_SETTINGS = "local_presence_settings"
+CONF_PRESENCE_ENABLED_INPUT = "presence_enabled"
 CAMERA_SOURCE_ENTITY_OPTION = "source_entity"
 NEW_DEVICE_TARGET = "__new_device__"
 HELPER_UPDATE_AUTO = "automatic"
@@ -1208,6 +1219,7 @@ _DOMAIN_OPTION_RESERVED_KEYS = {
     CONF_EVENT_HOOKS,
     CONF_POLYGONAL_ZONE,
     CONF_DAWARICH,
+    CONF_LOCAL_PRESENCE,
     CONF_PRESENCE_CLASSIFICATION,
     ATTR_DEVICE_ID,
     CONF_MANUFACTURER,
@@ -3015,6 +3027,8 @@ def _flatten_entity_form_sections(user_input: Mapping | None) -> dict[str, Any]:
     for section_name in (
         CONF_DEVICE_DETAILS,
         CONF_DOMAIN_SETTINGS,
+        CONF_DAWARICH_SETTINGS,
+        CONF_LOCAL_PRESENCE_SETTINGS,
         CONF_ADVANCED_SETTINGS,
     ):
         values = flattened.pop(section_name, None)
@@ -3141,8 +3155,34 @@ def _native_template_defaults(
     return result
 
 
-def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+def _prefill_frigate_camera_stream(hass, defaults: dict[str, Any]) -> dict[str, Any]:
+    """Fill only an absent/blank camera stream editor from verified Frigate metadata."""
+    if hass is None or defaults.get(CONF_PLATFORM) != "camera":
+        return defaults
+    native = defaults.get(CONF_NATIVE_VALUE_TEMPLATES, {})
+    if not isinstance(native, Mapping):
+        return defaults
+    value = native.get("stream_source")
+    if value is not None and (not isinstance(value, str) or value.strip()):
+        return defaults
+    try:
+        legacy = _parse_native_templates(defaults.get(CONF_NATIVE_TEMPLATES_JSON))
+        options = _parse_domain_options(defaults.get(CONF_DOMAIN_OPTIONS_JSON))
+    except InvalidJson:
+        return defaults
+    if legacy.get("stream_source") or options.get("stream_source") or defaults.get("stream_source"):
+        return defaults
+    sources = _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT))
+    if not sources and isinstance(options.get("source_entity"), str):
+        sources = [options["source_entity"]]
+    if len(sources) != 1 or not (url := frigate_camera_stream_url(hass, sources[0])):
+        return defaults
+    return {**defaults, CONF_NATIVE_VALUE_TEMPLATES: {**native, "stream_source": _literal_template(url)}}
+
+
+def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None) -> vol.Schema:
     defaults = _flatten_entity_form_sections(defaults)
+    defaults = _prefill_frigate_camera_stream(hass, defaults)
     platform = defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
     managed_native_properties = set(DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()))
     if managed_native_properties and CONF_NATIVE_VALUE_TEMPLATES not in defaults:
@@ -3310,37 +3350,9 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         domain_schema.update(
             {
                 vol.Optional(
-                    CONF_DAWARICH_URL_INPUT,
-                    default=defaults.get(CONF_DAWARICH_URL_INPUT, ""),
-                ): str,
-                vol.Optional(
-                    CONF_DAWARICH_API_KEY_INPUT,
-                    default=defaults.get(CONF_DAWARICH_API_KEY_INPUT, ""),
-                ): str,
-                vol.Optional(
-                    CONF_DAWARICH_AUTH_MODE_INPUT,
-                    default=defaults.get(CONF_DAWARICH_AUTH_MODE_INPUT, "bearer"),
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=["bearer", "query"],
-                        translation_key="dawarich_auth_mode",
-                    )
-                ),
-                vol.Optional(
-                    CONF_DAWARICH_POLL_INTERVAL_INPUT,
-                    default=defaults.get(CONF_DAWARICH_POLL_INTERVAL_INPUT, 60),
-                ): PULL_INTERVAL_SELECTOR,
-                vol.Optional(
-                    CONF_DAWARICH_HISTORY_LIMIT_INPUT,
-                    default=defaults.get(CONF_DAWARICH_HISTORY_LIMIT_INPUT, 10),
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
-                vol.Optional(
                     CONF_PRESENCE_CLASSIFICATION,
                     default=defaults.get(CONF_PRESENCE_CLASSIFICATION, False),
                 ): cv.boolean,
-                vol.Optional(CONF_DAWARICH_PERSON_INPUT): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="person")
-                ),
                 _editable_optional(
                     CONF_POLYGON_GEOJSON_JSON,
                     _yaml_text_editor_default(defaults.get(CONF_POLYGON_GEOJSON_JSON)),
@@ -3354,7 +3366,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     default=defaults.get(CONF_POLYGON_STRATEGY_INPUT, "majority"),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=["majority", "priority", "latest", "median"],
+                        options=["adaptive", "majority", "priority", "latest", "median"],
                         translation_key="polygon_strategy",
                     )
                 ),
@@ -3451,6 +3463,59 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 multiple=True,
                 reorder=True,
             )
+        )
+    if platform == "sensor":
+        units = sorted({aq_options.normalize_unit(str(unit))
+                        for values in DEVICE_CLASS_UNITS.values() for unit in values
+                        if unit})
+        domain_schema[vol.Optional("sensor_unit", default=defaults.get("sensor_unit", "template"))] = selector.SelectSelector(
+            selector.SelectSelectorConfig(options=["template", *units],
+                translation_key="sensor_unit", mode=selector.SelectSelectorMode.DROPDOWN)
+        )
+    if platform == "device_tracker":
+        person = defaults.get(CONF_DAWARICH_PERSON_INPUT, "")
+        selected_person = person if isinstance(person, list) else ([person] if person else [])
+        dawarich_schema = {
+            vol.Optional(CONF_DAWARICH_ENABLED_INPUT, default=defaults.get(
+                CONF_DAWARICH_ENABLED_INPUT, bool(defaults.get(CONF_DAWARICH_URL_INPUT))
+            )): selector.BooleanSelector(),
+            vol.Optional(CONF_DAWARICH_URL_INPUT, default=defaults.get(CONF_DAWARICH_URL_INPUT, "")): selector.TextSelector(),
+            vol.Optional(CONF_DAWARICH_API_KEY_INPUT, default=defaults.get(CONF_DAWARICH_API_KEY_INPUT, "")): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            ),
+            vol.Optional(CONF_DAWARICH_AUTH_MODE_INPUT, default=defaults.get(CONF_DAWARICH_AUTH_MODE_INPUT, "bearer")): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=["bearer", "query"], translation_key="dawarich_auth_mode")
+            ),
+            vol.Optional(CONF_DAWARICH_POLL_INTERVAL_INPUT, default=defaults.get(CONF_DAWARICH_POLL_INTERVAL_INPUT, 60)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=15, max=3600, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Optional(CONF_DAWARICH_HISTORY_LIMIT_INPUT, default=defaults.get(CONF_DAWARICH_HISTORY_LIMIT_INPUT, 10)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=100, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Optional(CONF_DAWARICH_MEMBER_INPUT, default=defaults.get(CONF_DAWARICH_MEMBER_INPUT, "")): selector.TextSelector(),
+            vol.Optional(CONF_DAWARICH_PERSON_INPUT, default=selected_person): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="person", multiple=True)
+            ),
+            vol.Optional(CONF_DAWARICH_TEST_INPUT, default=defaults.get(CONF_DAWARICH_TEST_INPUT, False)): selector.BooleanSelector(),
+        }
+        schema[vol.Optional(CONF_DAWARICH_SETTINGS, default=dict)] = section(
+            vol.Schema(dawarich_schema), {"collapsed": not defaults.get(CONF_DAWARICH_ENABLED_INPUT, False)},
+        )
+    if platform == "device_tracker":
+        presence_schema = {
+            vol.Optional(CONF_PRESENCE_ENABLED_INPUT, default=defaults.get(CONF_PRESENCE_ENABLED_INPUT, False)): selector.BooleanSelector(),
+            vol.Optional("presence_wifi_entities", default=defaults.get("presence_wifi_entities", [])): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["device_tracker", "binary_sensor", "sensor"], multiple=True)
+            ),
+        }
+        for key in ("wifi_ssids", "ble_addresses", "ble_sources"):
+            presence_schema[vol.Optional("presence_" + key, default=defaults.get("presence_" + key, "ab_gateway" if key == "ble_sources" else ""))] = MULTILINE_TEXT_SELECTOR
+        for key, minimum, maximum in (("ble_timeout", 10, 3600), ("ble_min_rssi", -127, 0)):
+            presence_schema[vol.Optional("presence_" + key, default=defaults.get("presence_" + key, LOCAL_PRESENCE_DEFAULTS[key]))] = selector.NumberSelector(
+                selector.NumberSelectorConfig(min=minimum, max=maximum, step=1, mode=selector.NumberSelectorMode.BOX)
+            )
+        schema[vol.Optional(CONF_LOCAL_PRESENCE_SETTINGS, default=dict)] = section(
+            vol.Schema(presence_schema), {"collapsed": not defaults.get(CONF_PRESENCE_ENABLED_INPUT, False)}
         )
     if domain_schema:
         schema[vol.Optional(CONF_DOMAIN_SETTINGS, default=dict)] = section(
@@ -3628,19 +3693,190 @@ def _device_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     )
 
 
+_ENTITY_ID_ABBREVIATIONS = {
+    "living_room": "room_lv",
+    "dressing_room": "room_dr",
+    "bathroom": "room_bt",
+    "bedroom": "room_bed",
+    "kitchen": "room_k",
+    "laundry_room": "room_ld",
+    "entrance": "room_e",
+    "doorstep": "area_d",
+    "server_room": "room_s",
+    "hallway": "area_h",
+    "camera": "cctv",
+    "cctv": "cctv",
+    "robot_vacuum": "rvcu",
+    "carbon_dioxide": "co2",
+    "carbon_monoxide": "co",
+    "formaldehyde": "h2ho",
+    "particulate_matter": "pm",
+    "radon": "radon",
+    "smoke": "smoke",
+    "volatile_organic_compound": "voc",
+    "illumination": "ill",
+    "humidity": "humi",
+    "temperature": "temp",
+    "vibration": "vib",
+    "air_conditioner": "airc",
+    "heating_and_air_conditioning_system": "hvac",
+    "lightling_controller": "light",
+    "lighting_controller": "light",
+    "presence": "pres",
+    "indirect": "ind",
+    "bulb": "bb",
+    "ceiling_light": "clight",
+    "powder": "pd",
+    "focused_light": "fclight",
+    # Rooms and areas: keep the room_/area_ convention of the original names.
+    "dining_room": "room_dn",
+    "master_bedroom": "room_mbed",
+    "primary_bedroom": "room_mbed",
+    "guest_bedroom": "room_gbed",
+    "guest_room": "room_gst",
+    "kids_room": "room_kid",
+    "children_room": "room_kid",
+    "study_room": "room_st",
+    "home_office": "room_off",
+    "utility_room": "room_ut",
+    "storage_room": "room_str",
+    "powder_room": "room_pd",
+    "walk_in_closet": "room_wc",
+    "balcony": "area_bal",
+    "terrace": "area_ter",
+    "garage": "area_grg",
+    "garden": "area_gdn",
+    "backyard": "area_by",
+    "front_yard": "area_fy",
+    "driveway": "area_dw",
+    "staircase": "area_stair",
+    "basement": "area_bsmt",
+    "attic": "area_att",
+    # Lighting: match full fixture names before their component words.
+    "ceiling_lamp": "clight",
+    "light_bulb": "bb",
+    "wall_light": "wlight",
+    "wall_lamp": "wlight",
+    "floor_lamp": "flamp",
+    "table_lamp": "tlamp",
+    "desk_lamp": "dlamp",
+    "pendant_light": "plight",
+    "spotlight": "spot",
+    "downlight": "dlight",
+    "track_light": "tlight",
+    "strip_light": "strip",
+    "led_strip": "strip",
+    "night_light": "nlight",
+    "under_cabinet_light": "uclight",
+    "color_temperature": "ctemp",
+    "colour_temperature": "ctemp",
+    "brightness": "bri",
+    # Appliances, climate, and water equipment.
+    "robot_vacuum_cleaner": "rvcu",
+    "vacuum_cleaner": "vcu",
+    "washing_machine": "wm",
+    "tumble_dryer": "tdry",
+    "dishwasher": "dwash",
+    "refrigerator": "frdg",
+    "fridge": "frdg",
+    "freezer": "frzr",
+    "microwave_oven": "mw",
+    "microwave": "mw",
+    "range_hood": "rhood",
+    "coffee_machine": "coffee",
+    "air_purifier": "apur",
+    "humidifier": "hmdf",
+    "dehumidifier": "dhmdf",
+    "ceiling_fan": "cfan",
+    "exhaust_fan": "efan",
+    "ventilation": "vent",
+    "heat_pump": "hpump",
+    "water_heater": "whtr",
+    "floor_heating": "fheat",
+    "thermostat": "tstat",
+    "water_purifier": "wpur",
+    "water_pump": "wpump",
+    "circulation_pump": "cpump",
+    "irrigation": "irrig",
+    # Measurements and equipment status; leave generic sensor/switch names alone.
+    "relative_humidity": "rhumi",
+    "absolute_humidity": "ahumi",
+    "dew_point": "dew",
+    "air_pressure": "apres",
+    "atmospheric_pressure": "apres",
+    "water_pressure": "wpres",
+    "air_quality": "aq",
+    "air_quality_index": "aqi",
+    "total_volatile_organic_compounds": "tvoc",
+    "total_volatile_organic_compound": "tvoc",
+    "volatile_organic_compounds": "voc",
+    "illuminance": "ill",
+    "occupancy": "occ",
+    "water_leak": "wleak",
+    "battery_level": "batt_lvl",
+    "battery_low": "batt_low",
+    "battery": "batt",
+    "signal_strength": "sig",
+    "link_quality": "lqi",
+    "power_consumption": "pwr",
+    "energy_consumption": "energy",
+    "electric_current": "amps",
+    "voltage": "volt",
+    "frequency": "freq",
+    "power_factor": "pf",
+    "water_flow": "wflow",
+    "water_consumption": "wuse",
+    "gas_consumption": "guse",
+    "wind_speed": "wspd",
+    "wind_direction": "wdir",
+    "rainfall": "rain",
+    "soil_moisture": "soil_moist",
+    "ultraviolet_index": "uvi",
+    "remaining_time": "remain",
+    "elapsed_time": "elapsed",
+    "filter_life": "flt_life",
+    "filter_remaining": "flt_remain",
+    # Access, media, and networking.
+    "front_door": "fdoor",
+    "back_door": "bdoor",
+    "garage_door": "gdoor",
+    "door_lock": "dlock",
+    "doorbell": "dbell",
+    "roller_shutter": "rshutter",
+    "roller_blind": "rblind",
+    "curtain": "curt",
+    "smart_plug": "plug",
+    "power_strip": "pstrip",
+    "television": "tv",
+    "media_player": "media",
+    "remote_control": "remote",
+    "access_point": "ap",
+    "network_attached_storage": "nas",
+    "uninterruptible_power_supply": "ups",
+    "download_speed": "dl_spd",
+    "upload_speed": "ul_spd",
+}
+_ENTITY_ID_ABBREVIATION_PATTERN = re.compile(
+    r"(?<![a-z0-9])(?:"
+    + "|".join(sorted(_ENTITY_ID_ABBREVIATIONS, key=len, reverse=True))
+    + r")(?![a-z0-9])"
+)
+
+
+def _abbreviated_entity_slug(name: str) -> str:
+    """Shorten whole phrases once, preserving unrelated words and abbreviations."""
+    return _ENTITY_ID_ABBREVIATION_PATTERN.sub(
+        lambda match: _ENTITY_ID_ABBREVIATIONS[match.group()], slugify(name)
+    )
+
+
 def _default_virtual_entity_id(
     platform: str, entity_name: str, device_name: str | None = None
 ) -> str:
-    """Return an entity id with the selected Home Assistant domain prefix."""
+    """Generate an ID from the virtual entity name, independent of its Device."""
     if platform not in VIRTUAL_ENTITY_DOMAINS:
         return ""
-    object_id = slugify(str(entity_name).removeprefix("+"))
-    if device_name is not None:
-        suffix = object_id or uuid.uuid4().hex[:8]
-        device_slug = slugify(device_name) or "virtual_device"
-        # Reserve space for both components, including a random unnamed suffix.
-        device_slug = device_slug[: MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH // 2].rstrip("_")
-        object_id = f"{device_slug}_{suffix}"
+    object_id = _abbreviated_entity_slug(str(entity_name).removeprefix("+"))
     if not object_id:
         return ""
     object_id = object_id[:MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH].rstrip("_")
@@ -3663,6 +3899,23 @@ def _default_virtual_entity_id_for_sources(
     object_id = object_id[: MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH - len(suffix)]
     object_id = object_id.rstrip("_") + suffix
     return f"{platform}.{object_id}"
+
+
+def _refresh_generated_entity_id(user_input: dict, defaults: Mapping | None) -> dict:
+    """Follow a changed creation name only while the suggested ID is untouched."""
+    defaults = _flatten_entity_form_sections(defaults)
+    platform = user_input.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
+    old_name = defaults.get(CONF_ENTITY_NAME, "")
+    old_suggestion = _default_virtual_entity_id_for_sources(
+        platform, old_name,
+        _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT)),
+    )
+    submitted_id = _text_default(user_input.get(ATTR_ENTITY_ID)).strip()
+    if (defaults.get(ATTR_ENTITY_ID) in (None, "", old_suggestion)
+            and user_input.get(CONF_ENTITY_NAME, "") != old_name
+            and submitted_id == old_suggestion):
+        return {**user_input, ATTR_ENTITY_ID: ""}
+    return user_input
 
 
 def _reject_json_constant(value: str):
@@ -4079,6 +4332,8 @@ def _validate_entity_references(entity: dict[str, Any]) -> None:
         return
     if entity_id in entity.get(CONF_SOURCE_ENTITIES, []):
         raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
+    if entity_id in (entity.get(CONF_LOCAL_PRESENCE) or {}).get("wifi_entities", []):
+        raise InvalidEntityReference("presence_wifi_entities")
     for field_name, sources in (
         (CONF_ATTRIBUTE_SOURCES_JSON, entity.get(CONF_ATTRIBUTE_SOURCES, {})),
         (CONF_TEMPLATE_SOURCES_JSON, entity.get(CONF_TEMPLATE_SOURCES, {})),
@@ -4118,6 +4373,11 @@ def _virtual_entity_id(entity: Mapping) -> str | None:
 def _entity_dependency_sources(entity: Mapping) -> dict[str, str]:
     """Return explicit source entities and the field that configured each one."""
     sources = {}
+    presence = entity.get(CONF_LOCAL_PRESENCE)
+    if isinstance(presence, Mapping) and isinstance(presence.get("wifi_entities"), list):
+        for source in presence["wifi_entities"]:
+            if isinstance(source, str):
+                sources[source] = "presence_wifi_entities"
     source_entities = entity.get(CONF_SOURCE_ENTITIES, [])
     if isinstance(source_entities, (list, tuple, set)):
         for entity_id in source_entities:
@@ -4412,6 +4672,13 @@ def _build_entity_config(
         template_value = repair_legacy_enum_template(template_value).strip()
         if template_value:
             native_templates[property_name] = template_value
+    if platform == "sensor" and user_input.get("sensor_unit", "template") != "template":
+        unit = aq_options.normalize_unit(user_input["sensor_unit"])
+        allowed_units = {aq_options.normalize_unit(str(unit))
+                         for values in DEVICE_CLASS_UNITS.values() for unit in values if unit}
+        if unit not in allowed_units:
+            raise InvalidDomainOptions
+        native_templates["native_unit_of_measurement"] = _literal_template(unit)
     if platform == "climate":
         temperature_step = user_input.get(CONF_CLIMATE_TEMPERATURE_STEP_INPUT)
         if temperature_step is not None:
@@ -4646,6 +4913,25 @@ def _build_entity_config(
                 for key in ("device_class", "state_class", "unit_of_measurement"):
                     values.pop(key, None)
 
+    enabled = user_input.get(CONF_PRESENCE_ENABLED_INPUT, False)
+    if not isinstance(enabled, bool):
+        raise InvalidFieldValue(CONF_PRESENCE_ENABLED_INPUT, "invalid_local_presence")
+    if enabled:
+        if platform != "device_tracker":
+            raise InvalidDomainOptions
+        raw_presence = {
+            "wifi_entities": user_input.get("presence_wifi_entities", []),
+            "ble_timeout": user_input.get("presence_ble_timeout", 120),
+            "ble_min_rssi": user_input.get("presence_ble_min_rssi", -90),
+        }
+        for key in ("wifi_ssids", "ble_addresses", "ble_sources"):
+            raw_presence[key] = _multiline_list_default(user_input.get("presence_" + key, "ab_gateway" if key == "ble_sources" else "")).splitlines()
+            raw_presence[key] = [item for item in raw_presence[key] if item.strip()]
+        try:
+            entity[CONF_LOCAL_PRESENCE] = normalize_local_presence(raw_presence)
+        except vol.Invalid as err:
+            raise InvalidFieldValue(CONF_PRESENCE_ENABLED_INPUT, "invalid_local_presence") from err
+
     polygon_geojson_value = user_input.get(CONF_POLYGON_GEOJSON_JSON)
     polygon_files = [
         item.strip()
@@ -4719,11 +5005,16 @@ def _build_entity_config(
                 polygon_anchors_value, CONF_POLYGON_ESPRESENSE_ANCHORS_JSON
             )
         anchors = polygon.get(CONF_POLYGON_ESPRESENSE_ANCHORS, {})
-        if not source_entities and not polygon_person and not anchors:
+        dawarich_source = bool(
+            user_input.get(CONF_DAWARICH_URL_INPUT)
+            and user_input.get(CONF_DAWARICH_ENABLED_INPUT, True)
+        )
+        if not source_entities and not polygon_person and not anchors and not dawarich_source and not entity.get(CONF_LOCAL_PRESENCE):
             raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
         if any(
             not source_entity_id.startswith("device_tracker.")
             and source_entity_id not in anchors
+            and source_entity_id not in entity.get(CONF_LOCAL_PRESENCE, {}).get("wifi_entities", [])
             for source_entity_id in source_entities
         ):
             raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
@@ -4735,30 +5026,32 @@ def _build_entity_config(
     dawarich_api_key = _text_default(
         user_input.get(CONF_DAWARICH_API_KEY_INPUT)
     ).strip()
-    if dawarich_url or dawarich_api_key:
+    enabled = user_input.get(CONF_DAWARICH_ENABLED_INPUT, bool(dawarich_url or dawarich_api_key))
+    if not isinstance(enabled, bool):
+        raise InvalidFieldValue(CONF_DAWARICH_ENABLED_INPUT, "invalid_dawarich_config")
+    if enabled:
         if platform != "device_tracker":
             raise InvalidDomainOptions
-        try:
-            dawarich_poll_interval = nonnegative_int(
-                user_input.get(CONF_DAWARICH_POLL_INTERVAL_INPUT, 60)
-            )
-            dawarich_history_limit = int(
-                user_input.get(CONF_DAWARICH_HISTORY_LIMIT_INPUT, 10)
-            )
-        except (vol.Invalid, TypeError, ValueError, OverflowError) as err:
-            raise InvalidDomainOptions from err
-        entity[CONF_DAWARICH] = {
+        person = user_input.get(CONF_DAWARICH_PERSON_INPUT, "")
+        if isinstance(person, list):
+            if len(person) > 1:
+                raise InvalidFieldValue(CONF_DAWARICH_PERSON_INPUT, "invalid_dawarich_config")
+            person = person[0] if person else ""
+        dawarich_config = {
             CONF_DAWARICH_URL: dawarich_url,
             CONF_DAWARICH_API_KEY: dawarich_api_key,
             CONF_DAWARICH_AUTH_MODE: user_input.get(
                 CONF_DAWARICH_AUTH_MODE_INPUT, "bearer"
             ),
-            CONF_DAWARICH_POLL_INTERVAL: dawarich_poll_interval,
-            CONF_DAWARICH_HISTORY_LIMIT: dawarich_history_limit,
-            CONF_DAWARICH_PERSON_ENTITY: _text_default(
-                user_input.get(CONF_DAWARICH_PERSON_INPUT)
-            ).strip(),
+            CONF_DAWARICH_POLL_INTERVAL: user_input.get(CONF_DAWARICH_POLL_INTERVAL_INPUT, 60),
+            CONF_DAWARICH_HISTORY_LIMIT: user_input.get(CONF_DAWARICH_HISTORY_LIMIT_INPUT, 10),
+            CONF_DAWARICH_PERSON_ENTITY: person,
+            CONF_DAWARICH_MEMBER: user_input.get(CONF_DAWARICH_MEMBER_INPUT, ""),
         }
+        try:
+            entity[CONF_DAWARICH] = normalize_dawarich_config(dawarich_config)
+        except vol.Invalid as err:
+            raise InvalidFieldValue(CONF_DAWARICH_ENABLED_INPUT, "invalid_dawarich_config") from err
     if platform == "device_tracker" and user_input.get(CONF_PRESENCE_CLASSIFICATION):
         entity[CONF_PRESENCE_CLASSIFICATION] = True
     _validate_entity_references(entity)
@@ -4808,6 +5101,8 @@ async def _async_build_entity_config(
     replacing_entity_id: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Build UI entity configuration without importing platform code on the loop."""
+    user_input = _flatten_entity_form_sections(user_input)
+    user_input.update(_prefill_frigate_camera_stream(hass, user_input))
     platform = user_input[CONF_PLATFORM]
     try:
         schema, validate_domain_options = await hass.async_add_executor_job(
@@ -4829,6 +5124,20 @@ async def _async_build_entity_config(
     _validate_platform_entity(entity, schema, validate_domain_options)
     _validate_virtual_dependency_cycle(hass, entity, replacing_entity_id)
     _validate_virtual_entity_id_available(hass, entity, replacing_entity_id)
+    if user_input.get(CONF_DAWARICH_TEST_INPUT) and entity.get(CONF_DAWARICH):
+        config = entity[CONF_DAWARICH]
+        person = hass.states.get(config[CONF_DAWARICH_PERSON_ENTITY]) if config[CONF_DAWARICH_PERSON_ENTITY] else None
+        try:
+            await DawarichClient(async_get_clientsession(hass), config).async_fetch(
+                person.name if person else "", include_visit=False,
+            )
+        except DawarichError as err:
+            field = (
+                CONF_DAWARICH_API_KEY_INPUT if err.code == "invalid_auth"
+                else CONF_DAWARICH_MEMBER_INPUT if err.code in {"member_not_found", "ambiguous_member"}
+                else CONF_DAWARICH_TEST_INPUT
+            )
+            raise InvalidFieldValue(field, "dawarich_" + err.code) from None
     return device_name, entity
 
 
@@ -5412,44 +5721,6 @@ def _replace_ui_device(
             if existing.get(ATTR_DEVICE_ID, existing_name) == new_device_id:
                 target_device_name = existing_name
                 break
-
-    target_exists = target_device_name in devices and target_device_name != old_device_name
-    effective_name = (
-        _device_display_name(target_device_name, _get_device_attributes(next_options, target_device_name))
-        if target_exists else new_device_name
-    )
-    old_display_name = _device_display_name(
-        old_device_name, _get_device_attributes(next_options, old_device_name)
-    )
-    if effective_name != old_display_name:
-        occupied = {
-            _virtual_entity_id(item) for item in _iter_option_entities(next_options)
-        }
-        for item in old_entities:
-            if not isinstance(item, dict) or item.get(CONF_PLATFORM) not in VIRTUAL_ENTITY_DOMAINS:
-                continue
-            old_id = _virtual_entity_id(item)
-            candidate = _default_virtual_entity_id_for_sources(
-                item[CONF_PLATFORM], _text_default(item.get(CONF_NAME)),
-                _stored_entity_ids(item.get(CONF_SOURCE_ENTITIES)), effective_name,
-            )
-            base = candidate
-            serial = 2
-            while True:
-                trial = {**item, ATTR_ENTITY_ID: candidate}
-                try:
-                    if candidate in occupied and candidate != old_id:
-                        raise EntityIdAlreadyUsed
-                    if hass is not None:
-                        _validate_virtual_entity_id_available(hass, trial, old_id)
-                    break
-                except EntityIdAlreadyUsed:
-                    suffix = f"_{serial}"
-                    domain, object_id = base.split(".", 1)
-                    candidate = f"{domain}.{object_id[:MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH - len(suffix)].rstrip('_')}{suffix}"
-                    serial += 1
-            item[ATTR_ENTITY_ID] = candidate
-            occupied.add(candidate)
 
     device_attributes = _options_device_attributes(next_options)
     if target_device_name == old_device_name:
@@ -9200,6 +9471,9 @@ def _reference_entity_defaults(
             if all_location and platform == "device_tracker"
             else _native_reference_templates(platform, entity_ids, states)
         )
+    if platform == "camera" and len(entity_ids) == 1:
+        if url := frigate_camera_stream_url(hass, entity_ids[0]):
+            native_templates["stream_source"] = _literal_template(url)
     if platform in DOMAIN_NATIVE_TEMPLATE_PROPERTIES and not (
         all_location and platform == "device_tracker"
     ):
@@ -9942,6 +10216,7 @@ def _entity_form_defaults(
                 polygon.get(CONF_POLYGON_STRATEGY)
                 if polygon.get(CONF_POLYGON_STRATEGY)
                 in {
+                    "adaptive",
                     "majority",
                     "priority",
                     "latest",
@@ -9965,27 +10240,47 @@ def _entity_form_defaults(
             ),
         }
     )
+    local = entity.get(CONF_LOCAL_PRESENCE)
+    defaults[CONF_PRESENCE_ENABLED_INPUT] = bool(local)
+    local = local if isinstance(local, Mapping) else {}
+    defaults["presence_wifi_entities"] = _stored_entity_ids(local.get("wifi_entities", []))
+    for key in ("wifi_ssids", "ble_addresses", "ble_sources"):
+        defaults["presence_" + key] = _multiline_list_default(local.get(key, LOCAL_PRESENCE_DEFAULTS[key]))
+    for key, minimum, maximum in (("ble_timeout", 10, 3600), ("ble_min_rssi", -127, 0)):
+        try:
+            value = int(local.get(key, LOCAL_PRESENCE_DEFAULTS[key]))
+        except (TypeError, ValueError, OverflowError):
+            value = LOCAL_PRESENCE_DEFAULTS[key]
+        defaults["presence_" + key] = min(maximum, max(minimum, value))
     dawarich = entity.get(CONF_DAWARICH)
     if not isinstance(dawarich, Mapping):
         dawarich = {}
+    dawarich_person = _text_default(dawarich.get(CONF_DAWARICH_PERSON_ENTITY))
+    try:
+        if dawarich_person and not cv.entity_id(dawarich_person).startswith("person."):
+            dawarich_person = ""
+    except vol.Invalid:
+        dawarich_person = ""
     defaults.update(
         {
+            CONF_DAWARICH_ENABLED_INPUT: bool(dawarich),
+            CONF_DAWARICH_MEMBER_INPUT: _text_default(dawarich.get(CONF_DAWARICH_MEMBER)),
+            CONF_DAWARICH_TEST_INPUT: False,
             CONF_DAWARICH_URL_INPUT: _text_default(dawarich.get(CONF_DAWARICH_URL)),
             CONF_DAWARICH_API_KEY_INPUT: _text_default(
                 dawarich.get(CONF_DAWARICH_API_KEY)
             ),
-            CONF_DAWARICH_AUTH_MODE_INPUT: dawarich.get(
-                CONF_DAWARICH_AUTH_MODE, "bearer"
+            CONF_DAWARICH_AUTH_MODE_INPUT: (
+                dawarich.get(CONF_DAWARICH_AUTH_MODE)
+                if dawarich.get(CONF_DAWARICH_AUTH_MODE) in ("bearer", "query") else "bearer"
             ),
-            CONF_DAWARICH_POLL_INTERVAL_INPUT: _nonnegative_int_default(
+            CONF_DAWARICH_POLL_INTERVAL_INPUT: min(3600, max(15, _nonnegative_int_default(
                 dawarich.get(CONF_DAWARICH_POLL_INTERVAL) or 60
-            ),
-            CONF_DAWARICH_HISTORY_LIMIT_INPUT: _nonnegative_int_default(
+            ))),
+            CONF_DAWARICH_HISTORY_LIMIT_INPUT: min(100, max(1, _nonnegative_int_default(
                 dawarich.get(CONF_DAWARICH_HISTORY_LIMIT) or 10
-            ),
-            CONF_DAWARICH_PERSON_INPUT: _text_default(
-                dawarich.get(CONF_DAWARICH_PERSON_ENTITY)
-            ),
+            ))),
+            CONF_DAWARICH_PERSON_INPUT: dawarich_person,
             CONF_PRESENCE_CLASSIFICATION: _boolean_default(
                 entity.get(CONF_PRESENCE_CLASSIFICATION), False
             ),
@@ -11084,6 +11379,7 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
                 user_input,
                 self._entity_defaults,
             )
+            user_input = _refresh_generated_entity_id(user_input, self._entity_defaults)
             try:
                 user_input, self._reference_defaults = _refresh_add_reference_defaults(
                     self.hass,
@@ -11105,7 +11401,7 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
             self._entity_defaults = user_input
             return self.async_show_form(
                 step_id="entity",
-                data_schema=_entity_schema(user_input),
+                data_schema=_entity_schema(user_input, hass=self.hass),
             )
         if user_input is not None and not errors:
             user_input = _with_hidden_native_template_defaults(
@@ -11160,7 +11456,7 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
             self._entity_defaults = user_input
         return self.async_show_form(
             step_id="entity",
-            data_schema=_entity_schema(user_input or self._entity_defaults),
+            data_schema=_entity_schema(user_input or self._entity_defaults, hass=self.hass),
             errors=errors,
         )
 
@@ -11706,6 +12002,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 user_input,
                 self._entity_defaults,
             )
+            user_input = _refresh_generated_entity_id(user_input, self._entity_defaults)
             try:
                 user_input, self._reference_defaults = _refresh_add_reference_defaults(
                     self.hass,
@@ -11727,7 +12024,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
             self._entity_defaults = user_input
             return self.async_show_form(
                 step_id="entity",
-                data_schema=_entity_schema(user_input),
+                data_schema=_entity_schema(user_input, hass=self.hass),
             )
         if user_input is not None and not errors:
             user_input = _with_hidden_native_template_defaults(
@@ -11778,7 +12075,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
             self._entity_defaults = user_input
         return self.async_show_form(
             step_id="entity",
-            data_schema=_entity_schema(user_input or self._entity_defaults),
+            data_schema=_entity_schema(user_input or self._entity_defaults, hass=self.hass),
             errors=errors,
         )
 
@@ -12294,7 +12591,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 )
                 return self.async_show_form(
                     step_id="edit_entity",
-                    data_schema=_entity_schema(self._entity_defaults),
+                    data_schema=_entity_schema(self._entity_defaults, hass=self.hass),
                     errors=errors,
                 )
 
@@ -12455,7 +12752,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
             self._entity_defaults = user_input
             return self.async_show_form(
                 step_id="edit_entity",
-                data_schema=_entity_schema(user_input),
+                data_schema=_entity_schema(user_input, hass=self.hass),
             )
         if user_input is not None:
             user_input = _with_hidden_native_template_defaults(
@@ -12469,18 +12766,6 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                     self._edit_device_name,
                     self._edit_index,
                 )
-                old_device = _get_device_attributes(
-                    self.config_entry.options, self._edit_device_name
-                )
-                if (
-                    _text_default(user_input.get(CONF_ENTITY_NAME)).strip()
-                    != _text_default(current_entity.get(CONF_NAME)).strip()
-                    or _text_default(user_input.get(CONF_DEVICE_NAME)).strip()
-                    != _device_display_name(self._edit_device_name, old_device)
-                ):
-                    # A name change explicitly requests a fresh default ID,
-                    # even when the old ID was customized.
-                    user_input[ATTR_ENTITY_ID] = ""
                 submitted_sources = _parse_source_entities(
                     user_input.get(CONF_SOURCE_ENTITIES_TEXT, ""),
                 )
@@ -12592,11 +12877,15 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 )
                 if (current_entity.get(CONF_PLATFORM) == "sensor"
                         and entity.get(CONF_PLATFORM) == "sensor"
-                        and unit_history.unit_definition(current_entity) != unit_history.unit_definition(entity)):
+                        and (unit_history.unit_definition(current_entity) != unit_history.unit_definition(entity)
+                             or not unit_history.configured_unit(self.hass, entity)[1])):
                     self._unit_edit = (device_name, entity, device_config)
                     self._unit_options_snapshot = _plain_options(self.config_entry.options)
                     self._unit_old_id = _virtual_entity_id(current_entity)
                     self._unit_metadata = await unit_history.statistics_snapshot(self.hass, self._unit_old_id)
+                    if (unit_history.unit_definition(current_entity) == unit_history.unit_definition(entity)
+                            and not (self._unit_metadata or {}).get("unit_of_measurement")):
+                        return self.async_create_entry(data=options)
                     self._unit_resolved, self._unit_target = unit_history.configured_unit(self.hass, entity)
                     self._unit_previous = unit_history.configured_unit(self.hass, current_entity)[1]
                     return await self.async_step_unit_change()
@@ -12651,7 +12940,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
 
         return self.async_show_form(
             step_id="edit_entity",
-            data_schema=_entity_schema(defaults),
+            data_schema=_entity_schema(defaults, hass=self.hass),
             errors=errors,
         )
 
@@ -12663,6 +12952,11 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
         device_name, entity, device_config = self._unit_edit
         choices = ["keep"]
         metadata = self._unit_metadata
+        recorded_unit = aq_options.normalize_unit(metadata.get("unit_of_measurement")) if metadata else None
+        can_restore = bool(recorded_unit and metadata.get("source") == "recorder"
+                           and self._unit_old_id == _virtual_entity_id(entity))
+        if can_restore:
+            choices.insert(0, "restore")
         if (self._unit_resolved and metadata and metadata.get("source") == "recorder"
                 and unit_history.entity_unit_available(self.hass, self._unit_old_id)
                 and self._unit_old_id == _virtual_entity_id(entity)
@@ -12677,15 +12971,24 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 self._resolve_edit_selection()
                 if _plain_options(self.config_entry.options) != self._unit_options_snapshot:
                     raise InvalidEntitySelection
-                if policy not in choices or (policy != "keep" and user_input.get("confirm_history") is not True):
+                if policy not in choices or (policy not in ("keep", "restore") and user_input.get("confirm_history") is not True):
                     raise ValueError("Explicit history confirmation required")
-                if policy != "keep" and unit_history.configured_unit(self.hass, entity) != (True, self._unit_target):
+                if policy == "restore":
+                    if await unit_history.statistics_snapshot(self.hass, self._unit_old_id) != metadata:
+                        raise ValueError("Statistics changed; reopen this step")
+                    entity = copy.deepcopy(entity)
+                    entity[CONF_UNIT_OF_MEASUREMENT] = recorded_unit
+                    templates = entity.setdefault(CONF_NATIVE_TEMPLATES, {})
+                    for key in ("unit", "unit_of_measurement", "native_unit_of_measurement"):
+                        templates.pop(key, None)
+                    templates["native_unit_of_measurement"] = _literal_template(recorded_unit)
+                elif policy != "keep" and unit_history.configured_unit(self.hass, entity) != (True, self._unit_target):
                     raise ValueError("The template unit changed; reopen this step")
                 options = _replace_ui_entity(self.config_entry.options, self._edit_device_name,
                     self._edit_index, device_name, entity, device_config)
                 # All entity validation is complete before touching statistics.
                 await unit_history.apply_statistics_policy(self.hass, self._unit_old_id,
-                    policy, self._unit_target, metadata)
+                    "keep" if policy == "restore" else policy, self._unit_target, metadata)
                 return self.async_create_entry(data=options)
             except InvalidEntitySelection:
                 return self.async_abort(reason="entity_not_found")
@@ -12696,7 +12999,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 "old_unit": str(self._unit_previous), "new_unit": str(self._unit_target) if self._unit_resolved else "?",
                 "statistics_unit": str(metadata.get("unit_of_measurement")) if metadata else "—"},
             data_schema=vol.Schema({
-                vol.Required("history_policy", default="keep"): selector.SelectSelector(
+                vol.Required("history_policy", default="restore" if can_restore and not self._unit_target else "keep"): selector.SelectSelector(
                     selector.SelectSelectorConfig(options=choices, translation_key="unit_history_policy")),
                 vol.Optional("confirm_history", default=False): bool,
             }))
@@ -12743,9 +13046,9 @@ class MissingEntityName(exceptions.HomeAssistantError):
 class InvalidFieldValue(exceptions.HomeAssistantError):
     """A form field contains a value that cannot be used at runtime."""
 
-    def __init__(self, field_name):
+    def __init__(self, field_name, error_code=None):
         self.field_name = field_name
-        self.error_code = {
+        self.error_code = error_code or {
             CONF_ICON: "invalid_icon",
             CONF_PULL_INTERVAL: "invalid_pull_interval",
             CONF_DEVICE_VIA_DEVICE_ID: "invalid_parent_device",

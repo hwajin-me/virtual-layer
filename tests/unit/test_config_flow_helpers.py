@@ -101,6 +101,7 @@ from custom_components.virtual_layer.config_flow import (
     _build_device_config,
     _build_entity_config,
     _default_virtual_entity_id,
+    _ENTITY_ID_ABBREVIATIONS,
     _delete_entities_schema,
     _delete_ui_device,
     _delete_ui_entities,
@@ -426,7 +427,7 @@ def test_entity_form_defaults_to_the_selected_domain_prefix():
         }
     )({})
 
-    assert defaults[ATTR_ENTITY_ID] == "sensor.virtual_device_washer_phase"
+    assert defaults[ATTR_ENTITY_ID] == "sensor.washer_phase"
 
 
 def test_entity_form_preserves_an_existing_entity_id():
@@ -4966,7 +4967,7 @@ def test_reference_entity_defaults_avoids_source_id_for_a_single_entity_copy(has
 
     defaults = _reference_entity_defaults(hass, ["sensor.kitchen_lamp"])
 
-    assert _entity_schema(defaults)({})[ATTR_ENTITY_ID] == "sensor.virtual_device_kitchen_lamp"
+    assert _entity_schema(defaults)({})[ATTR_ENTITY_ID] == "sensor.room_k_lamp"
 
 
 def test_reference_entity_defaults_copy_id_keeps_suffix_after_slug_limit(hass):
@@ -4980,24 +4981,104 @@ def test_reference_entity_defaults_copy_id_keeps_suffix_after_slug_limit(hass):
     assert entity_id != source_id
 
 
-def test_device_scoped_entity_id_defaults():
+@pytest.mark.parametrize(("name", "expected"), [
+    ("Living Room", "room_lv"), ("Dressing Room", "room_dr"),
+    ("Bathroom", "room_bt"), ("Bedroom", "room_bed"),
+    ("Kitchen", "room_k"), ("Laundry Room", "room_ld"),
+    ("Entrance", "room_e"), ("Doorstep", "area_d"),
+    ("Server Room", "room_s"), ("Hallway", "area_h"),
+    ("Camera", "cctv"), ("CCTV", "cctv"), ("Robot Vacuum", "rvcu"),
+    ("Carbon Dioxide", "co2"), ("Carbon Monoxide", "co"),
+    ("Formaldehyde", "h2ho"), ("Particulate Matter", "pm"),
+    ("Radon", "radon"), ("Smoke", "smoke"),
+    ("Volatile Organic Compound", "voc"), ("Illumination", "ill"),
+    ("Humidity", "humi"), ("Temperature", "temp"), ("Vibration", "vib"),
+    ("Air Conditioner", "airc"),
+    ("Heating and Air Conditioning System", "hvac"),
+    ("Lightling Controller", "light"), ("Lighting Controller", "light"),
+    ("Presence", "pres"),
+    ("Indirect", "ind"), ("Bulb", "bb"), ("Ceiling Light", "clight"),
+    ("Powder", "pd"), ("Focused Light", "fclight"),
+])
+@pytest.mark.parametrize("separator", [" ", "_", "-"])
+def test_generated_entity_id_abbreviates_phrases(name, expected, separator):
+    assert _default_virtual_entity_id(
+        "sensor", name.replace(" ", separator)
+    ) == f"sensor.{expected}"
+
+
+def test_generated_entity_id_preserves_boundaries_and_domain():
+    assert _default_virtual_entity_id(
+        "camera", "Kitchenette Camera 2 TemperatureOffset", "Living Room"
+    ) == "camera.kitchenette_cctv_2_temperatureoffset"
+    assert _default_virtual_entity_id("sensor", "room_lv_temp") == "sensor.room_lv_temp"
+
+
+@pytest.mark.parametrize(("name", "expected"), [
+    ("Master Bedroom Ceiling Lamp", "room_mbed_clight"),
+    ("Primary Bedroom Light Bulb", "room_mbed_bb"),
+    ("Guest Bedroom Table Lamp", "room_gbed_tlamp"),
+    ("Dining Room Pendant Light", "room_dn_plight"),
+    ("Home Office Desk Lamp", "room_off_dlamp"),
+    ("Walk In Closet LED Strip", "room_wc_strip"),
+    ("Powder Room Relative Humidity", "room_pd_rhumi"),
+    ("Utility Room Washing Machine Remaining Time", "room_ut_wm_remain"),
+    ("Storage Room Robot Vacuum Cleaner Battery Level", "room_str_rvcu_batt_lvl"),
+    ("Kitchen Refrigerator Power Consumption", "room_k_frdg_pwr"),
+    ("Kitchen Dishwasher Water Consumption", "room_k_dwash_wuse"),
+    ("Bathroom Exhaust Fan", "room_bt_efan"),
+    ("Living Room Air Purifier Filter Remaining", "room_lv_apur_flt_remain"),
+    ("Bedroom Colour Temperature", "room_bed_ctemp"),
+    ("Bedroom Color Temperature", "room_bed_ctemp"),
+    ("Living Room Air Quality Index", "room_lv_aqi"),
+    ("Total Volatile Organic Compounds", "tvoc"),
+    ("Volatile Organic Compounds", "voc"),
+    ("Garden Soil Moisture", "area_gdn_soil_moist"),
+    ("Terrace Wind Speed", "area_ter_wspd"),
+    ("Garage Door Battery Low", "gdoor_batt_low"),
+    ("Server Room Uninterruptible Power Supply", "room_s_ups"),
+    ("Server Room Network Attached Storage", "room_s_nas"),
+    ("Access Point Signal Strength", "ap_sig"),
+    ("Living Room Television Smart Plug", "room_lv_tv_plug"),
+    ("Front Door Door Lock", "fdoor_dlock"),
+    ("Water Heater Water Pressure", "whtr_wpres"),
+    ("Balcony Roller Shutter", "area_bal_rshutter"),
+    ("Ceiling Light 2 Brightness", "clight_2_bri"),
+    ("BatteryBackup VoltageOffset", "batterybackup_voltageoffset"),
+])
+@pytest.mark.parametrize("separator", [" ", "_", "-"])
+def test_extended_abbreviations_compose_and_prefer_complete_phrases(name, expected, separator):
+    assert _default_virtual_entity_id(
+        "sensor", name.upper().replace(" ", separator)
+    ) == f"sensor.{expected}"
+
+
+@pytest.mark.parametrize("abbreviation", sorted(set(_ENTITY_ID_ABBREVIATIONS.values())))
+def test_generated_abbreviations_are_stable_when_reused(abbreviation):
+    assert _default_virtual_entity_id("sensor", abbreviation) == f"sensor.{abbreviation}"
+
+
+def test_entity_schema_keeps_explicit_unabbreviated_id():
+    assert _entity_schema({
+        CONF_PLATFORM: "sensor", CONF_DEVICE_NAME: "Living Room",
+        CONF_ENTITY_NAME: "Temperature", ATTR_ENTITY_ID: "sensor.living_room_temperature",
+    })({})[ATTR_ENTITY_ID] == "sensor.living_room_temperature"
+
+
+def test_entity_id_defaults_use_only_virtual_entity_name():
     assert _default_virtual_entity_id(
         "sensor", "Living Room Temperature Sensor", "Temperature Sensor"
-    ) == "sensor.temperature_sensor_living_room_temperature_sensor"
-    ids = {_default_virtual_entity_id("sensor", "", "Temperature Sensor") for _ in range(10)}
-    assert len(ids) == 10
-    for entity_id in ids:
-        suffix = entity_id.removeprefix("sensor.temperature_sensor_")
-        assert len(suffix) == 8 and suffix.isalnum()
+    ) == "sensor.room_lv_temp_sensor"
+    assert _default_virtual_entity_id("sensor", "", "Temperature Sensor") == ""
 
 
-def test_unnamed_entity_form_suggests_device_scoped_random_id():
+def test_unnamed_entity_form_leaves_id_blank():
     defaults = _entity_schema({
         CONF_PLATFORM: "sensor", CONF_DEVICE_NAME: "Temperature Sensor",
         CONF_ENTITY_NAME: "",
     })({})
-    suffix = defaults[ATTR_ENTITY_ID].removeprefix("sensor.temperature_sensor_")
-    assert len(suffix) == 8 and suffix.isalnum()
+    assert defaults[ATTR_ENTITY_ID] == ""
+
 
 
 def test_presence_motion_helper_uses_majority_and_delayed_all_off_clear(
@@ -7005,9 +7086,7 @@ def test_replace_ui_device_renames_group_and_updates_shared_metadata():
 
     assert "Laundry" not in next_options[ATTR_DEVICES]
     assert len(next_options[ATTR_DEVICES]["laundry-new"]) == 2
-    assert [item[ATTR_ENTITY_ID] for item in next_options[ATTR_DEVICES]["laundry-new"]] == [
-        "sensor.laundry_room_washer_phase", "binary_sensor.laundry_room_washer_door",
-    ]
+    assert next_options[ATTR_DEVICES]["laundry-new"] == original[ATTR_DEVICES]["Laundry"]
     assert next_options[ATTR_DEVICE_ATTRIBUTES]["laundry-new"] == {
         ATTR_DEVICE_ID: "laundry-new",
         CONF_NAME: "Laundry Room",
@@ -7016,7 +7095,7 @@ def test_replace_ui_device_renames_group_and_updates_shared_metadata():
     assert original[ATTR_DEVICE_ATTRIBUTES]["Laundry"][ATTR_DEVICE_ID] == "laundry-old"
 
 
-def test_device_rename_regenerates_custom_ids_and_keeps_invalid_records():
+def test_device_rename_preserves_custom_ids_and_invalid_records():
     original = {
         ATTR_DEVICES: {"device-1": [
             {CONF_PLATFORM: "sensor", CONF_NAME: "Temperature", ATTR_ENTITY_ID: "sensor.custom", ATTR_ENTITY_KEY: "one"},
@@ -7029,8 +7108,8 @@ def test_device_rename_regenerates_custom_ids_and_keeps_invalid_records():
         ATTR_DEVICE_ID: "device-1", CONF_NAME: "New Room",
     })
     entities = result[ATTR_DEVICES]["device-1"]
-    assert entities[0][ATTR_ENTITY_ID] == "sensor.new_room_temperature"
-    assert entities[1][ATTR_ENTITY_ID] == "sensor.new_room_temperature_2"
+    assert entities[0][ATTR_ENTITY_ID] == "sensor.custom"
+    assert entities[1][ATTR_ENTITY_ID] == "sensor.other"
     assert [item[ATTR_ENTITY_KEY] for item in entities[:2]] == ["one", "two"]
     assert entities[2] == "broken"
     assert original[ATTR_DEVICES]["device-1"][0][ATTR_ENTITY_ID] == "sensor.custom"

@@ -1,6 +1,7 @@
 """Integration tests for polygon virtual device trackers."""
 
 import copy
+import json
 from datetime import timedelta
 from threading import get_ident
 
@@ -26,6 +27,11 @@ from custom_components.virtual_layer.config_flow import (
     CONF_POLYGON_GEOJSON_JSON,
     CONF_POLYGON_STRATEGY_INPUT,
     CONF_REFERENCE_ENTITY_ID,
+    CONF_DEVICE_NAME,
+    CONF_ENTITY_NAME,
+    CONF_SOURCE_ENTITIES_TEXT,
+    _build_entity_config,
+    _entity_schema,
 )
 from custom_components.virtual_layer.const import (
     ATTR_DEVICE_ATTRIBUTES,
@@ -51,9 +57,89 @@ from custom_components.virtual_layer.device_tracker import (
     ATTR_POLYGON_SELECTED_SOURCE,
     ATTR_POLYGON_SELECTED_MEMBERS,
     ATTR_POLYGON_ZONE,
+    DEVICE_TRACKER_SCHEMA,
+    validate_domain_options,
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize("polygon", [False, True])
+async def test_adaptive_trip_stop_reload_and_delete_in_hass(hass, freezer, polygon):
+    """UI-built configuration follows one carried device with real HA events."""
+    sources = ["device_tracker.trip_phone", "device_tracker.home_tablet", "device_tracker.home_watch"]
+    for source in sources:
+        hass.states.async_set(source, "not_home", {
+            ATTR_LATITUDE: 37.5, ATTR_LONGITUDE: 127, "gps_accuracy": 12,
+        })
+    form = _entity_schema({CONF_PLATFORM: "device_tracker", CONF_ENTITY_NAME: "Trip"})({})
+    form.update({
+        CONF_DEVICE_NAME: "Trip", ATTR_ENTITY_ID: "device_tracker.trip",
+        CONF_SOURCE_ENTITIES_TEXT: "\n".join(sources),
+    })
+    if polygon:
+        form.update({
+            CONF_POLYGON_GEOJSON_JSON: json.dumps(GEOJSON),
+            CONF_POLYGON_STRATEGY_INPUT: "adaptive",
+        })
+    _, config = _build_entity_config(form, DEVICE_TRACKER_SCHEMA, validate_domain_options)
+    config[CONF_PERSISTENT] = True
+    if not polygon:
+        config[CONF_LOCATION_HELPER] = {"distance_threshold_meters": 300}
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Trip"},
+        options={ATTR_DEVICES: {"Trip": [config]}},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    freezer.tick(timedelta(seconds=120))
+    hass.states.async_set(sources[0], "not_home", {
+        ATTR_LATITUDE: 37.7, ATTR_LONGITUDE: 127, "gps_accuracy": 12,
+    })
+    await hass.async_block_till_done()
+    state = hass.states.get("device_tracker.trip")
+    assert state.attributes[ATTR_LATITUDE] == 37.7
+    assert state.attributes["location_priority_source"] == sources[0]
+    registry = er.async_get(hass)
+    device_id = registry.async_get("device_tracker.trip").device_id
+    for suffix in ("info", "debug1", "debug2", "debug3"):
+        assert registry.async_get(f"sensor.trip_{suffix}").device_id == device_id
+    if polygon:
+        assert state.state == "not_home"
+        assert registry.async_get("sensor.trip_zone").device_id == device_id
+        assert registry.async_get("image.trip_map").device_id == device_id
+
+    freezer.tick(timedelta(minutes=31))
+    for source in sources:
+        old = hass.states.get(source)
+        hass.states.async_set(source, old.state, dict(old.attributes))
+    async_fire_time_changed(hass, dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert hass.states.get("device_tracker.trip").attributes[ATTR_LATITUDE] == 37.7
+    assert hass.states.get("device_tracker.trip").attributes["location_stale"] is False
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    state = hass.states.get("device_tracker.trip")
+    assert state.attributes[ATTR_LATITUDE] == 37.7
+    assert state.attributes["location_priority_source"] == sources[0]
+    assert state.attributes["location_selection_reason"] == "following"
+
+    freezer.tick(timedelta(minutes=31))
+    for source in sources[1:]:
+        old = hass.states.get(source)
+        hass.states.async_set(source, old.state, dict(old.attributes))
+    async_fire_time_changed(hass, dt_util.utcnow())
+    await hass.async_block_till_done()
+    state = hass.states.get("device_tracker.trip")
+    assert state.attributes[ATTR_LATITUDE] == 37.7
+    assert state.attributes["location_stale"] is True
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert registry.async_get("device_tracker.trip") is None
+    if polygon:
+        assert registry.async_get("sensor.trip_zone") is None
+        assert registry.async_get("image.trip_map") is None
 
 
 @pytest.mark.parametrize("polygon", [False, True])
@@ -152,16 +238,19 @@ async def test_selecting_device_tracker_reopens_form_with_polygon_fields(hass):
 
     assert result["type"] == FlowResultType.FORM
     polygon_defaults = result["data_schema"]({})
+    dawarich_defaults = polygon_defaults["dawarich_settings"]
     polygon_defaults = polygon_defaults[CONF_DOMAIN_SETTINGS]
     assert CONF_POLYGON_GEOJSON_JSON in polygon_defaults
     assert polygon_defaults[CONF_POLYGON_STRATEGY_INPUT] == "majority"
-    assert polygon_defaults[CONF_DAWARICH_URL_INPUT] == ""
-    assert polygon_defaults[CONF_DAWARICH_AUTH_MODE_INPUT] == "bearer"
+    assert dawarich_defaults[CONF_DAWARICH_URL_INPUT] == ""
+    assert dawarich_defaults[CONF_DAWARICH_AUTH_MODE_INPUT] == "bearer"
     assert polygon_defaults[CONF_PRESENCE_CLASSIFICATION] is False
 
 
 async def test_combined_wifi_ble_and_gps_tracker_classifies_presence_in_hass(hass):
     """The integration publishes the classified state and GPS on a real setup."""
+    hass.config.latitude = 37.5
+    hass.config.longitude = 127.0
     hass.states.async_set(
         "device_tracker.phone", "not_home", {ATTR_LATITUDE: 37.5, ATTR_LONGITUDE: 127.0}
     )

@@ -22,7 +22,16 @@
       "incompatible_air_quality_source_unit": "The source unit is incompatible. m³ is volume, not concentration. Correct the source unit, or select a numeric attribute and declare its actual concentration unit.",
       "invalid_air_quality_logic": "Select valid sources and units. Enter five finite, non-negative, strictly increasing boundaries (up to 1e12) and six valid interval categories.",
       "air_quality_requires_new_entity": "A measurement sensor cannot be replaced by an air-quality category. Cancel to keep the original, then use Add entity to configure Air Quality separately on the same Device.",
-      "mixed_air_quality_measurements": "Use sources matching the selected quantity. Do not combine different pollutants under the same thresholds; classify them separately, then combine categories."
+      "mixed_air_quality_measurements": "Use sources matching the selected quantity. Do not combine different pollutants under the same thresholds; classify them separately, then combine categories.",
+      "invalid_dawarich_config": "Check the Dawarich URL, API key, member, and numeric ranges.",
+      "dawarich_invalid_auth": "Dawarich rejected the API key. Check the key and authentication mode.",
+      "dawarich_cannot_connect": "Cannot connect to Dawarich. Check the URL and server availability.",
+      "dawarich_http_error": "Dawarich returned an unexpected HTTP status. Check the URL, API access, and family sharing.",
+      "dawarich_invalid_response": "Dawarich returned an invalid or oversized response.",
+      "dawarich_no_points": "No valid location with a measurement timestamp was returned.",
+      "dawarich_member_not_found": "No matching family member was returned. Check their exact email or user ID and location sharing.",
+      "dawarich_ambiguous_member": "More than one family member matched. Use a unique email or user ID.",
+      "invalid_local_presence": "Select Wi-Fi sources or valid BLE addresses. SSID sensors require an SSID list; check scanner IDs, timeout and RSSI."
     },
     "step": {
       "user": {
@@ -92,7 +101,7 @@
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "icon_template": "Optional Jinja template that returns an icon name. It can use template source variables and this.",
-          "entity_id": "Optional. Defaults to domain.device_name_entity_name in snake case; an unnamed entity uses a random alphanumeric suffix. Clear to regenerate, or enter your own ID. Changing the Device or entity name automatically regenerates existing IDs, including custom IDs.",
+          "entity_id": "Optional. Defaults to domain.entity_name using the virtual entity name with abbreviations; the Device name is not included. An unnamed form leaves this blank. Clear to regenerate from the current name, or enter your own ID. Saved IDs are preserved when names change.",
           "platform": "Home Assistant entity domain. Submit once after changing it to load the domain-specific controls and Jinja fields.",
           "initial_value": "Fallback state used before a template renders or when no value template is configured.",
           "initial_availability": "Initial availability used when no availability template is configured.",
@@ -165,17 +174,12 @@
               "polygon_tracker_rules_json": "Tracker rules Jinja templates",
               "polygon_espresense_anchors_json": "ESPresense anchors",
               "polygon_away_state": "Outside-zone state",
-              "dawarich_url": "Dawarich URL",
-              "dawarich_api_key": "Dawarich API key",
-              "dawarich_auth_mode": "Dawarich authentication",
-              "dawarich_poll_interval": "Dawarich update interval",
-              "dawarich_history_limit": "Dawarich history points",
-              "dawarich_person": "Dawarich family person",
               "presence_classification": "Classify home presence",
               "matter_light_type": "Matter light device type",
               "light_response_delay": "Source response delay",
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
+              "sensor_unit": "Sensor unit",
               "climate_temperature_step": "Temperature adjustment step",
               "media_player_source_priority": "Media source priority",
               "configure_air_quality_rules": "Customize air-quality rules",
@@ -186,22 +190,17 @@
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
               "polygon_files_text": "One local path or HTTP(S) GeoJSON URL per line. Relative paths are resolved below the Home Assistant configuration directory.",
               "polygon_person": "Optional person represented by this virtual tracker. The configured source trackers determine the map position.",
-              "polygon_strategy": "Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions.",
-              "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
+              "polygon_strategy": "Adaptive follows observed movement, checks GPS accuracy and speed, and keeps the carried device during stops; stale positions are marked. Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions. Dominant rules override adaptive selection.",
+              "polygon_distance_meters": "Distance in meters for majority grouping, or for adaptive handoffs and unconfirmed outlier selection.",
               "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
               "polygon_espresense_anchors_json": "Anchor map keyed by ESPresense distance sensor. Each anchor needs latitude and longitude; three or more valid distances are triangulated and resolved through the GeoJSON zones.",
               "polygon_away_state": "State used when the selected GPS position is outside every polygon.",
-              "dawarich_url": "Base URL of your Dawarich instance, without /api/v1 (for example https://dawarich.example.com).",
-              "dawarich_api_key": "API key used only for this virtual tracker. It is stored in the integration configuration; do not include it in templates or attributes.",
-              "dawarich_auth_mode": "Use Bearer for modern Dawarich instances, or query parameter for instances configured for api_key authentication.",
-              "dawarich_poll_interval": "Seconds between GET /api/v1/points requests. The minimum is 15 seconds.",
-              "dawarich_history_limit": "Number of recent point summaries to retain in the dawarich_history attribute (1–100).",
-              "dawarich_person": "Optional Home Assistant Person matched to a Dawarich Family member. This uses /api/v1/families/locations; the Person display name must match the family member name.",
               "presence_classification": "When enabled for a combined tracker, Wi-Fi/ESPresense presence is home; BLE distance is front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
               "matter_light_type": "Choose the maximum virtual-light capability: on/off, dimming, color temperature, or extended HS/XY color. When combining bulbs, the generated helper uses the least capable profile: RGB plus color-temperature becomes color temperature, and any on/off-only bulb makes the virtual light on/off only. Effects and flash are never exposed.",
               "light_response_delay": "Seconds to retain a requested light value before reading source states again (0–30).",
               "light_response_retries": "For light groups, refresh source devices and resend the latest command only to bulbs that have not reached the target (0–10 retries). A new command cancels old retries. Single-source lights only re-read state.",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
+              "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
@@ -499,7 +498,7 @@
               "source_entity": "Source entity ID as Jinja (for example, image.vacuum_map). Cameras accept one camera or raster image source; images accept one image source. Image-to-camera maps use HomeKit Bridge H.264 transcoding.",
               "source_list": "Jinja template for source list. Return a list compatible with Home Assistant.",
               "state_class": "Jinja template for state class. Return a value compatible with Home Assistant.",
-              "stream_source": "Jinja template for an H.264 stream source. Return an RTSP or other Home Assistant-compatible stream URL. For a fixed URL, wrap rtsp://example.test/live in a Jinja expression. Apple Home requires this camera to be added as its own HomeKit Bridge accessory-mode entry; cameras are not included in a normal bridge.",
+              "stream_source": "Jinja template for an H.264 stream source. Return an RTSP or other Home Assistant-compatible stream URL. For a fixed URL, wrap rtsp://example.test/live in a Jinja expression. Apple Home requires this camera to be added as its own HomeKit Bridge accessory-mode entry; cameras are not included in a normal bridge. For Frigate camera sources only, an empty field is filled from the source entity/device and Frigate RTSP settings with video=h264&audio=all. Existing templates are preserved. The H.264 filter selects an existing track; it does not transcode.",
               "support_backup": "Jinja template for support backup. Return a boolean compatible with Home Assistant.",
               "support_duration": "Jinja template for support duration. Return a boolean compatible with Home Assistant.",
               "support_open": "Jinja template for support open. Return a boolean compatible with Home Assistant.",
@@ -604,6 +603,54 @@
               "wind_bearing": "Jinja template for the wind bearing native property.",
               "xy_color": "Jinja template for the xy color native property."
             }
+          },
+          "dawarich_settings": {
+            "name": "Dawarich",
+            "description": "Read location and history from Dawarich.",
+            "data": {
+              "dawarich_enabled": "Enable Dawarich",
+              "dawarich_url": "Dawarich URL",
+              "dawarich_api_key": "Dawarich API key",
+              "dawarich_auth_mode": "Authentication",
+              "dawarich_poll_interval": "Update interval",
+              "dawarich_history_limit": "History points",
+              "dawarich_member": "Family member email or user ID",
+              "dawarich_person": "Legacy family Person",
+              "dawarich_test_connection": "Test connection before saving"
+            },
+            "data_description": {
+              "dawarich_enabled": "Enable polling for this tracker. Turn off to remove its saved Dawarich configuration.",
+              "dawarich_url": "Base URL without /api/v1, for example https://dawarich.example.com.",
+              "dawarich_api_key": "Stored in this integration configuration. The password field hides it on screen; it is not published in entity attributes.",
+              "dawarich_auth_mode": "Use Bearer token or api_key query-parameter authentication.",
+              "dawarich_poll_interval": "Seconds between API polls (15–3600). Point freshness uses its measurement timestamp, not poll time.",
+              "dawarich_history_limit": "Maximum recent location summaries retained in dawarich_history (1–100). Family mode returns only the current location.",
+              "dawarich_member": "Optional exact Dawarich family email or user ID. Takes precedence over Person. Leave both empty to read the API key owner’s points. Family sharing must be enabled.",
+              "dawarich_person": "Optional single Person for older servers matching its display name to a family name or email. Clear it for your own account; current servers should use the explicit member field.",
+              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline."
+            }
+          },
+          "local_presence_settings": {
+            "name": "Wi-Fi / BLE presence",
+            "description": "Track selected devices through connection state and AB Gateway Bluetooth observations.",
+            "data": {
+              "presence_enabled": "Enable local presence",
+              "presence_wifi_entities": "Wi-Fi connection sources",
+              "presence_wifi_ssids": "Home Wi-Fi SSIDs",
+              "presence_ble_addresses": "BLE device addresses",
+              "presence_ble_sources": "Bluetooth scanner sources",
+              "presence_ble_timeout": "BLE absence timeout",
+              "presence_ble_min_rssi": "Minimum BLE RSSI"
+            },
+            "data_description": {
+              "presence_enabled": "Combine selected Wi-Fi connections and remote BLE observations with GPS. Disable and save to remove these local-presence settings.",
+              "presence_wifi_entities": "Select router device trackers or connection binary sensors for the specific devices you want to track. For a Wi-Fi SSID sensor, also enter the exact home SSIDs below. Unavailable sources do not count as disconnected.",
+              "presence_wifi_ssids": "One exact, case-sensitive SSID per line. Used only for selected sensor entities; any matching SSID means home. Do not enter Wi-Fi passwords.",
+              "presence_ble_addresses": "One stable BLE MAC address per line. Only these devices are tracked; rotating private addresses require a stable identity supplied by another integration.",
+              "presence_ble_sources": "One Home Assistant remote scanner source ID per line. AprilBrother component-ab-gateway uses ab_gateway by default. These are scanner source IDs, not MQTT topics or individual gateway MACs. Configure the gateway integration separately.",
+              "presence_ble_timeout": "Seconds after the last advertisement at or above the RSSI threshold before marking away (10–3600). Checked every 5 seconds; rereading cached advertisements does not extend presence.",
+              "presence_ble_min_rssi": "Advertisements at or above this dBm value count as nearby (-127–0). Weaker advertisements do not renew the timeout. RSSI is not converted into distance."
+            }
           }
         }
       },
@@ -615,7 +662,7 @@
           "target_device_name": "Virtual Device"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: the hot-water switch remains on in both modes, heat uses the climate heat mode, and virtual off uses the climate fan-only mode. Camera and image sources can be aliased one at a time, not merged.",
+          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources follow plausible GPS movement and keep the travelling device during stops. Without movement evidence they use median GPS with unconfirmed outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: the hot-water switch remains on in both modes, heat uses the climate heat mode, and virtual off uses the climate fan-only mode. Camera and image sources can be aliased one at a time, not merged.",
           "target_device_name": "Choose an existing Virtual Device to keep its entities together, or create a new Device."
         }
       },
@@ -936,7 +983,16 @@
       "incompatible_air_quality_source_unit": "The source unit is incompatible. m³ is volume, not concentration. Correct the source unit, or select a numeric attribute and declare its actual concentration unit.",
       "invalid_air_quality_logic": "Select valid sources and units. Enter five finite, non-negative, strictly increasing boundaries (up to 1e12) and six valid interval categories.",
       "air_quality_requires_new_entity": "A measurement sensor cannot be replaced by an air-quality category. Cancel to keep the original, then use Add entity to configure Air Quality separately on the same Device.",
-      "mixed_air_quality_measurements": "Use sources matching the selected quantity. Do not combine different pollutants under the same thresholds; classify them separately, then combine categories."
+      "mixed_air_quality_measurements": "Use sources matching the selected quantity. Do not combine different pollutants under the same thresholds; classify them separately, then combine categories.",
+      "invalid_dawarich_config": "Check the Dawarich URL, API key, member, and numeric ranges.",
+      "dawarich_invalid_auth": "Dawarich rejected the API key. Check the key and authentication mode.",
+      "dawarich_cannot_connect": "Cannot connect to Dawarich. Check the URL and server availability.",
+      "dawarich_http_error": "Dawarich returned an unexpected HTTP status. Check the URL, API access, and family sharing.",
+      "dawarich_invalid_response": "Dawarich returned an invalid or oversized response.",
+      "dawarich_no_points": "No valid location with a measurement timestamp was returned.",
+      "dawarich_member_not_found": "No matching family member was returned. Check their exact email or user ID and location sharing.",
+      "dawarich_ambiguous_member": "More than one family member matched. Use a unique email or user ID.",
+      "invalid_local_presence": "Select Wi-Fi sources or valid BLE addresses. SSID sensors require an SSID list; check scanner IDs, timeout and RSSI."
     },
     "step": {
       "init": {
@@ -1030,8 +1086,14 @@
       "unit_change": {
         "title": "Handle existing values after a unit change",
         "description": "Entity: {entity_id}. Configured unit: {old_unit} → {new_unit}. Recorded statistics unit: {statistics_unit}. Keep history leaves all stored data unchanged. Correct label keeps statistic numbers and changes their unit only (for values already expressed in the new unit). Convert mathematically converts all short- and long-term statistics. These actions do not rewrite raw state history, current values, restored values, templates, or thresholds. The new configuration applies to future readings. Do not correct labels if the history contains mixed units; that requires a separate time-range repair. History actions are unavailable without statistics, with an unresolved template, or when the entity ID changes. A '?' unit could not be resolved.",
-        "data": {"history_policy": "Existing statistics", "confirm_history": "Confirm modification of all statistics for this entity"},
-        "data_description": {"history_policy": "Keep is the safe default. Correct label is not numerical conversion. Convert preserves physical quantities using Home Assistant's unit converter.", "confirm_history": "Required for correction or conversion. Applies to all recorded statistical periods, not a selected date range. Cancel the flow to leave the entity configuration unchanged."}
+        "data": {
+          "history_policy": "Existing statistics",
+          "confirm_history": "Confirm modification of all statistics for this entity"
+        },
+        "data_description": {
+          "history_policy": "Restore sensor unit uses the normalized recorded unit and preserves all statistics; it is the default when the new unit is missing. Keep preserves history without fixing the sensor. Relabel does not convert numbers; Convert uses Home Assistant unit conversion.",
+          "confirm_history": "Required for correction or conversion. Applies to all recorded statistical periods, not a selected date range. Cancel the flow to leave the entity configuration unchanged."
+        }
       },
       "edit_entity": {
         "title": "Edit Virtual Entity",
@@ -1056,7 +1118,7 @@
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "icon_template": "Optional Jinja template that returns an icon name. It can use template source variables and this.",
-          "entity_id": "Optional. Defaults to domain.device_name_entity_name in snake case; an unnamed entity uses a random alphanumeric suffix. Clear to regenerate, or enter your own ID. Changing the Device or entity name automatically regenerates existing IDs, including custom IDs.",
+          "entity_id": "Optional. Defaults to domain.entity_name using the virtual entity name with abbreviations; the Device name is not included. An unnamed form leaves this blank. Clear to regenerate from the current name, or enter your own ID. Saved IDs are preserved when names change.",
           "platform": "Home Assistant entity domain. Submit once after changing it to load the domain-specific controls and Jinja fields.",
           "initial_value": "Fallback state used before a template renders or when no value template is configured.",
           "initial_availability": "Initial availability used when no availability template is configured.",
@@ -1129,17 +1191,12 @@
               "polygon_tracker_rules_json": "Tracker rules Jinja templates",
               "polygon_espresense_anchors_json": "ESPresense anchors",
               "polygon_away_state": "Outside-zone state",
-              "dawarich_url": "Dawarich URL",
-              "dawarich_api_key": "Dawarich API key",
-              "dawarich_auth_mode": "Dawarich authentication",
-              "dawarich_poll_interval": "Dawarich update interval",
-              "dawarich_history_limit": "Dawarich history points",
-              "dawarich_person": "Dawarich family person",
               "presence_classification": "Classify home presence",
               "matter_light_type": "Matter light device type",
               "light_response_delay": "Source response delay",
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
+              "sensor_unit": "Sensor unit",
               "climate_temperature_step": "Temperature adjustment step",
               "media_player_source_priority": "Media source priority",
               "configure_air_quality_rules": "Customize air-quality rules",
@@ -1150,22 +1207,17 @@
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
               "polygon_files_text": "One local path or HTTP(S) GeoJSON URL per line. Relative paths are resolved below the Home Assistant configuration directory.",
               "polygon_person": "Optional person represented by this virtual tracker. The configured source trackers determine the map position.",
-              "polygon_strategy": "Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions.",
-              "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
+              "polygon_strategy": "Adaptive follows observed movement, checks GPS accuracy and speed, and keeps the carried device during stops; stale positions are marked. Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions. Dominant rules override adaptive selection.",
+              "polygon_distance_meters": "Distance in meters for majority grouping, or for adaptive handoffs and unconfirmed outlier selection.",
               "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
               "polygon_espresense_anchors_json": "Anchor sensors with latitude and longitude; three or more distances are triangulated into the GeoJSON zones.",
               "polygon_away_state": "State used when the selected GPS position is outside every polygon.",
-              "dawarich_url": "Base URL of your Dawarich instance, without /api/v1.",
-              "dawarich_api_key": "API key stored only in this integration configuration.",
-              "dawarich_auth_mode": "Bearer token or api_key query-parameter authentication.",
-              "dawarich_poll_interval": "Seconds between point requests (15–3600).",
-              "dawarich_history_limit": "Recent point summaries retained as an entity attribute (1–100).",
-              "dawarich_person": "Optional Person matched to a Dawarich Family member by display name.",
               "presence_classification": "Wi-Fi/ESPresense means home; BLE distance means front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
               "matter_light_type": "Choose the maximum virtual-light capability: on/off, dimming, color temperature, or extended HS/XY color. When combining bulbs, the generated helper uses the least capable profile: RGB plus color-temperature becomes color temperature, and any on/off-only bulb makes the virtual light on/off only. Effects and flash are never exposed.",
               "light_response_delay": "Seconds to retain a requested light value before reading source states again (0–30).",
               "light_response_retries": "For light groups, refresh source devices and resend the latest command only to bulbs that have not reached the target (0–10 retries). A new command cancels old retries. Single-source lights only re-read state.",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
+              "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
@@ -1463,7 +1515,7 @@
               "source_entity": "Source entity ID as Jinja (for example, image.vacuum_map). Cameras accept one camera or raster image source; images accept one image source. Image-to-camera maps use HomeKit Bridge H.264 transcoding.",
               "source_list": "Jinja template for source list. Return a list compatible with Home Assistant.",
               "state_class": "Jinja template for state class. Return a value compatible with Home Assistant.",
-              "stream_source": "Jinja template for an H.264 stream source. Return an RTSP or other Home Assistant-compatible stream URL. For a fixed URL, wrap rtsp://example.test/live in a Jinja expression. Apple Home requires this camera to be added as its own HomeKit Bridge accessory-mode entry; cameras are not included in a normal bridge.",
+              "stream_source": "Jinja template for an H.264 stream source. Return an RTSP or other Home Assistant-compatible stream URL. For a fixed URL, wrap rtsp://example.test/live in a Jinja expression. Apple Home requires this camera to be added as its own HomeKit Bridge accessory-mode entry; cameras are not included in a normal bridge. For Frigate camera sources only, an empty field is filled from the source entity/device and Frigate RTSP settings with video=h264&audio=all. Existing templates are preserved. The H.264 filter selects an existing track; it does not transcode.",
               "support_backup": "Jinja template for support backup. Return a boolean compatible with Home Assistant.",
               "support_duration": "Jinja template for support duration. Return a boolean compatible with Home Assistant.",
               "support_open": "Jinja template for support open. Return a boolean compatible with Home Assistant.",
@@ -1568,6 +1620,54 @@
               "wind_bearing": "Jinja template for the wind bearing native property.",
               "xy_color": "Jinja template for the xy color native property."
             }
+          },
+          "dawarich_settings": {
+            "name": "Dawarich",
+            "description": "Read location and history from Dawarich.",
+            "data": {
+              "dawarich_enabled": "Enable Dawarich",
+              "dawarich_url": "Dawarich URL",
+              "dawarich_api_key": "Dawarich API key",
+              "dawarich_auth_mode": "Authentication",
+              "dawarich_poll_interval": "Update interval",
+              "dawarich_history_limit": "History points",
+              "dawarich_member": "Family member email or user ID",
+              "dawarich_person": "Legacy family Person",
+              "dawarich_test_connection": "Test connection before saving"
+            },
+            "data_description": {
+              "dawarich_enabled": "Enable polling for this tracker. Turn off to remove its saved Dawarich configuration.",
+              "dawarich_url": "Base URL without /api/v1, for example https://dawarich.example.com.",
+              "dawarich_api_key": "Stored in this integration configuration. The password field hides it on screen; it is not published in entity attributes.",
+              "dawarich_auth_mode": "Use Bearer token or api_key query-parameter authentication.",
+              "dawarich_poll_interval": "Seconds between API polls (15–3600). Point freshness uses its measurement timestamp, not poll time.",
+              "dawarich_history_limit": "Maximum recent location summaries retained in dawarich_history (1–100). Family mode returns only the current location.",
+              "dawarich_member": "Optional exact Dawarich family email or user ID. Takes precedence over Person. Leave both empty to read the API key owner’s points. Family sharing must be enabled.",
+              "dawarich_person": "Optional single Person for older servers matching its display name to a family name or email. Clear it for your own account; current servers should use the explicit member field.",
+              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline."
+            }
+          },
+          "local_presence_settings": {
+            "name": "Wi-Fi / BLE presence",
+            "description": "Track selected devices through connection state and AB Gateway Bluetooth observations.",
+            "data": {
+              "presence_enabled": "Enable local presence",
+              "presence_wifi_entities": "Wi-Fi connection sources",
+              "presence_wifi_ssids": "Home Wi-Fi SSIDs",
+              "presence_ble_addresses": "BLE device addresses",
+              "presence_ble_sources": "Bluetooth scanner sources",
+              "presence_ble_timeout": "BLE absence timeout",
+              "presence_ble_min_rssi": "Minimum BLE RSSI"
+            },
+            "data_description": {
+              "presence_enabled": "Combine selected Wi-Fi connections and remote BLE observations with GPS. Disable and save to remove these local-presence settings.",
+              "presence_wifi_entities": "Select router device trackers or connection binary sensors for the specific devices you want to track. For a Wi-Fi SSID sensor, also enter the exact home SSIDs below. Unavailable sources do not count as disconnected.",
+              "presence_wifi_ssids": "One exact, case-sensitive SSID per line. Used only for selected sensor entities; any matching SSID means home. Do not enter Wi-Fi passwords.",
+              "presence_ble_addresses": "One stable BLE MAC address per line. Only these devices are tracked; rotating private addresses require a stable identity supplied by another integration.",
+              "presence_ble_sources": "One Home Assistant remote scanner source ID per line. AprilBrother component-ab-gateway uses ab_gateway by default. These are scanner source IDs, not MQTT topics or individual gateway MACs. Configure the gateway integration separately.",
+              "presence_ble_timeout": "Seconds after the last advertisement at or above the RSSI threshold before marking away (10–3600). Checked every 5 seconds; rereading cached advertisements does not extend presence.",
+              "presence_ble_min_rssi": "Advertisements at or above this dBm value count as nearby (-127–0). Weaker advertisements do not renew the timeout. RSSI is not converted into distance."
+            }
           }
         }
       },
@@ -1579,7 +1679,7 @@
           "target_device_name": "Virtual Device"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to keep the current virtual entity values. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: the hot-water switch remains on in both modes, heat uses the climate heat mode, and virtual off uses the climate fan-only mode. Camera and image sources can be aliased one at a time, not merged.",
+          "reference_entity_id": "Leave empty to keep the current virtual entity values. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources follow plausible GPS movement and keep the travelling device during stops. Without movement evidence they use median GPS with unconfirmed outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: the hot-water switch remains on in both modes, heat uses the climate heat mode, and virtual off uses the climate fan-only mode. Camera and image sources can be aliased one at a time, not merged.",
           "target_device_name": "Choose the Device that should contain this entity."
         }
       },
@@ -1728,7 +1828,7 @@
           "entity_name": "This is used for the entity name and default entity ID.",
           "icon": "Optional Material Design Icons name, for example mdi:door.",
           "icon_template": "Optional Jinja template that returns an icon name. It can use template source variables and this.",
-          "entity_id": "Optional. Defaults to domain.device_name_entity_name in snake case; an unnamed entity uses a random alphanumeric suffix. Clear to regenerate, or enter your own ID. Changing the Device or entity name automatically regenerates existing IDs, including custom IDs.",
+          "entity_id": "Optional. Defaults to domain.entity_name using the virtual entity name with abbreviations; the Device name is not included. An unnamed form leaves this blank. Clear to regenerate from the current name, or enter your own ID. Saved IDs are preserved when names change.",
           "platform": "Home Assistant entity domain. Submit once after changing it to load the domain-specific controls and Jinja fields.",
           "initial_value": "Fallback state used before a template renders or when no value template is configured.",
           "initial_availability": "Initial availability used when no availability template is configured.",
@@ -1801,17 +1901,12 @@
               "polygon_tracker_rules_json": "Tracker rules Jinja templates",
               "polygon_espresense_anchors_json": "ESPresense anchors",
               "polygon_away_state": "Outside-zone state",
-              "dawarich_url": "Dawarich URL",
-              "dawarich_api_key": "Dawarich API key",
-              "dawarich_auth_mode": "Dawarich authentication",
-              "dawarich_poll_interval": "Dawarich update interval",
-              "dawarich_history_limit": "Dawarich history points",
-              "dawarich_person": "Dawarich family person",
               "presence_classification": "Classify home presence",
               "matter_light_type": "Matter light device type",
               "light_response_delay": "Source response delay",
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
+              "sensor_unit": "Sensor unit",
               "climate_temperature_step": "Temperature adjustment step",
               "media_player_source_priority": "Media source priority",
               "configure_air_quality_rules": "Customize air-quality rules",
@@ -1822,22 +1917,17 @@
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
               "polygon_files_text": "One local path or HTTP(S) GeoJSON URL per line. Relative paths are resolved below the Home Assistant configuration directory.",
               "polygon_person": "Optional person represented by this virtual tracker. The configured source trackers determine the map position.",
-              "polygon_strategy": "Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions.",
-              "polygon_distance_meters": "Maximum distance in meters for trackers to belong to the same majority group.",
+              "polygon_strategy": "Adaptive follows observed movement, checks GPS accuracy and speed, and keeps the carried device during stops; stale positions are marked. Majority groups nearby trackers, priority selects the lowest rule priority, latest uses the newest update, and median combines all valid positions. Dominant rules override adaptive selection.",
+              "polygon_distance_meters": "Distance in meters for majority grouping, or for adaptive handoffs and unconfirmed outlier selection.",
               "polygon_tracker_rules_json": "Optional object keyed by tracker entity ID. Rules support dominant, weight, priority, max_age_seconds, max_gps_accuracy, enabled, and condition_template.",
               "polygon_espresense_anchors_json": "Anchor sensors with latitude and longitude; three or more distances are triangulated into the GeoJSON zones.",
               "polygon_away_state": "State used when the selected GPS position is outside every polygon.",
-              "dawarich_url": "Base URL of your Dawarich instance, without /api/v1.",
-              "dawarich_api_key": "API key stored only in this integration configuration.",
-              "dawarich_auth_mode": "Bearer token or api_key query-parameter authentication.",
-              "dawarich_poll_interval": "Seconds between point requests (15–3600).",
-              "dawarich_history_limit": "Recent point summaries retained as an entity attribute (1–100).",
-              "dawarich_person": "Optional Person matched to a Dawarich Family member by display name.",
               "presence_classification": "Wi-Fi/ESPresense means home; BLE distance means front_door; GPS distance from zone.home becomes near_home, away, or far_away.",
               "matter_light_type": "Choose the maximum virtual-light capability: on/off, dimming, color temperature, or extended HS/XY color. When combining bulbs, the generated helper uses the least capable profile: RGB plus color-temperature becomes color temperature, and any on/off-only bulb makes the virtual light on/off only. Effects and flash are never exposed.",
               "light_response_delay": "Seconds to retain a requested light value before reading source states again (0–30).",
               "light_response_retries": "For light groups, refresh source devices and resend the latest command only to bulbs that have not reached the target (0–10 retries). A new command cancels old retries. Single-source lights only re-read state.",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
+              "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
@@ -2135,7 +2225,7 @@
               "source_entity": "Source entity ID as Jinja (for example, image.vacuum_map). Cameras accept one camera or raster image source; images accept one image source. Image-to-camera maps use HomeKit Bridge H.264 transcoding.",
               "source_list": "Jinja template for source list. Return a list compatible with Home Assistant.",
               "state_class": "Jinja template for state class. Return a value compatible with Home Assistant.",
-              "stream_source": "Jinja template for an H.264 stream source. Return an RTSP or other Home Assistant-compatible stream URL. For a fixed URL, wrap rtsp://example.test/live in a Jinja expression. Apple Home requires this camera to be added as its own HomeKit Bridge accessory-mode entry; cameras are not included in a normal bridge.",
+              "stream_source": "Jinja template for an H.264 stream source. Return an RTSP or other Home Assistant-compatible stream URL. For a fixed URL, wrap rtsp://example.test/live in a Jinja expression. Apple Home requires this camera to be added as its own HomeKit Bridge accessory-mode entry; cameras are not included in a normal bridge. For Frigate camera sources only, an empty field is filled from the source entity/device and Frigate RTSP settings with video=h264&audio=all. Existing templates are preserved. The H.264 filter selects an existing track; it does not transcode.",
               "support_backup": "Jinja template for support backup. Return a boolean compatible with Home Assistant.",
               "support_duration": "Jinja template for support duration. Return a boolean compatible with Home Assistant.",
               "support_open": "Jinja template for support open. Return a boolean compatible with Home Assistant.",
@@ -2240,6 +2330,54 @@
               "wind_bearing": "Jinja template for the wind bearing native property.",
               "xy_color": "Jinja template for the xy color native property."
             }
+          },
+          "dawarich_settings": {
+            "name": "Dawarich",
+            "description": "Read location and history from Dawarich.",
+            "data": {
+              "dawarich_enabled": "Enable Dawarich",
+              "dawarich_url": "Dawarich URL",
+              "dawarich_api_key": "Dawarich API key",
+              "dawarich_auth_mode": "Authentication",
+              "dawarich_poll_interval": "Update interval",
+              "dawarich_history_limit": "History points",
+              "dawarich_member": "Family member email or user ID",
+              "dawarich_person": "Legacy family Person",
+              "dawarich_test_connection": "Test connection before saving"
+            },
+            "data_description": {
+              "dawarich_enabled": "Enable polling for this tracker. Turn off to remove its saved Dawarich configuration.",
+              "dawarich_url": "Base URL without /api/v1, for example https://dawarich.example.com.",
+              "dawarich_api_key": "Stored in this integration configuration. The password field hides it on screen; it is not published in entity attributes.",
+              "dawarich_auth_mode": "Use Bearer token or api_key query-parameter authentication.",
+              "dawarich_poll_interval": "Seconds between API polls (15–3600). Point freshness uses its measurement timestamp, not poll time.",
+              "dawarich_history_limit": "Maximum recent location summaries retained in dawarich_history (1–100). Family mode returns only the current location.",
+              "dawarich_member": "Optional exact Dawarich family email or user ID. Takes precedence over Person. Leave both empty to read the API key owner’s points. Family sharing must be enabled.",
+              "dawarich_person": "Optional single Person for older servers matching its display name to a family name or email. Clear it for your own account; current servers should use the explicit member field.",
+              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline."
+            }
+          },
+          "local_presence_settings": {
+            "name": "Wi-Fi / BLE presence",
+            "description": "Track selected devices through connection state and AB Gateway Bluetooth observations.",
+            "data": {
+              "presence_enabled": "Enable local presence",
+              "presence_wifi_entities": "Wi-Fi connection sources",
+              "presence_wifi_ssids": "Home Wi-Fi SSIDs",
+              "presence_ble_addresses": "BLE device addresses",
+              "presence_ble_sources": "Bluetooth scanner sources",
+              "presence_ble_timeout": "BLE absence timeout",
+              "presence_ble_min_rssi": "Minimum BLE RSSI"
+            },
+            "data_description": {
+              "presence_enabled": "Combine selected Wi-Fi connections and remote BLE observations with GPS. Disable and save to remove these local-presence settings.",
+              "presence_wifi_entities": "Select router device trackers or connection binary sensors for the specific devices you want to track. For a Wi-Fi SSID sensor, also enter the exact home SSIDs below. Unavailable sources do not count as disconnected.",
+              "presence_wifi_ssids": "One exact, case-sensitive SSID per line. Used only for selected sensor entities; any matching SSID means home. Do not enter Wi-Fi passwords.",
+              "presence_ble_addresses": "One stable BLE MAC address per line. Only these devices are tracked; rotating private addresses require a stable identity supplied by another integration.",
+              "presence_ble_sources": "One Home Assistant remote scanner source ID per line. AprilBrother component-ab-gateway uses ab_gateway by default. These are scanner source IDs, not MQTT topics or individual gateway MACs. Configure the gateway integration separately.",
+              "presence_ble_timeout": "Seconds after the last advertisement at or above the RSSI threshold before marking away (10–3600). Checked every 5 seconds; rereading cached advertisements does not extend presence.",
+              "presence_ble_min_rssi": "Advertisements at or above this dBm value count as nearby (-127–0). Weaker advertisements do not renew the timeout. RSSI is not converted into distance."
+            }
           }
         }
       },
@@ -2251,7 +2389,7 @@
           "target_device_name": "Virtual Device"
         },
         "data_description": {
-          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources use median GPS with recent outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: the hot-water switch remains on in both modes, heat uses the climate heat mode, and virtual off uses the climate fan-only mode. Camera and image sources can be aliased one at a time, not merged.",
+          "reference_entity_id": "Leave empty to create a virtual entity from scratch. Boolean sources use AND, motion/presence sources use majority with delayed clear, safety sources such as leak, smoke, gas, and water use OR, numeric sources use average, text sources use concat, date/time sources use latest, select sources use first available, and multiple location sources follow plausible GPS movement and keep the travelling device during stops. Without movement evidence they use median GPS with unconfirmed outlier priority (300 m for 30 minutes). A heating-only climate source is simplified to heat/off. Selecting exactly one climate and one switch creates a boiler helper: the hot-water switch remains on in both modes, heat uses the climate heat mode, and virtual off uses the climate fan-only mode. Camera and image sources can be aliased one at a time, not merged.",
           "target_device_name": "Choose an existing Virtual Device to keep its entities together, or create a new Device."
         }
       },
@@ -2697,6 +2835,7 @@
     },
     "polygon_strategy": {
       "options": {
+        "adaptive": "Adaptive movement tracking",
         "majority": "Majority",
         "priority": "Priority",
         "latest": "Latest update",
@@ -2710,7 +2849,17 @@
       }
     },
     "unit_history_policy": {
-      "options": {"keep": "Keep existing history", "relabel": "Correct statistics unit label (keep numbers)", "convert": "Convert statistics values to the new unit"}
+      "options": {
+        "restore": "Restore sensor unit from statistics (preserve history)",
+        "keep": "Keep existing history",
+        "relabel": "Correct statistics unit label (keep numbers)",
+        "convert": "Convert statistics values to the new unit"
+      }
+    },
+    "sensor_unit": {
+      "options": {
+        "template": "Keep unit template"
+      }
     },
     "matter_light_type": {
       "options": {
@@ -2980,11 +3129,6 @@
     }
   },
   "entity": {
-    "sensor": {
-      "source_usage": {
-        "name": "{source} Virtual Layer usage"
-      }
-    },
     "climate": {
       "virtual": {
         "state_attributes": {

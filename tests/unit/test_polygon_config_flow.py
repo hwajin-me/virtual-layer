@@ -70,7 +70,8 @@ GEOJSON = {
 }
 
 
-def test_config_flow_builds_and_restores_polygon_fields():
+@pytest.mark.parametrize("strategy", ["majority", "adaptive"])
+def test_config_flow_builds_and_restores_polygon_fields(strategy):
     form = _entity_schema({
         CONF_PLATFORM: "device_tracker",
         CONF_ENTITY_NAME: "Family Location",
@@ -84,7 +85,7 @@ def test_config_flow_builds_and_restores_polygon_fields():
         CONF_POLYGON_GEOJSON_JSON: json.dumps(GEOJSON),
         CONF_POLYGON_FILES_TEXT: "zones/work.geojson\nhttps://example.test/trip.geojson",
         CONF_POLYGON_PERSON: "person.family",
-        CONF_POLYGON_STRATEGY_INPUT: "majority",
+        CONF_POLYGON_STRATEGY_INPUT: strategy,
         CONF_POLYGON_DISTANCE_INPUT: 250,
         CONF_POLYGON_TRACKER_RULES_JSON: json.dumps({
             "device_tracker.phone_a": {"dominant": True, "priority": 1},
@@ -110,7 +111,7 @@ def test_config_flow_builds_and_restores_polygon_fields():
             "https://example.test/trip.geojson",
         ],
         CONF_POLYGON_PERSON_ENTITY: "person.family",
-        CONF_POLYGON_STRATEGY: "majority",
+        CONF_POLYGON_STRATEGY: strategy,
         CONF_POLYGON_DISTANCE_METERS: 250,
         CONF_POLYGON_TRACKER_RULES: {
             "device_tracker.phone_a": {"dominant": True, "priority": 1},
@@ -133,6 +134,7 @@ def test_config_flow_builds_and_restores_polygon_fields():
         "https://example.test/trip.geojson",
     ]
     assert defaults[CONF_POLYGON_PERSON] == "person.family"
+    assert defaults[CONF_POLYGON_STRATEGY_INPUT] == strategy
     assert defaults[CONF_POLYGON_DISTANCE_INPUT] == 250
     assert _yaml_value(defaults[CONF_POLYGON_TRACKER_RULES_JSON]) == {
         "device_tracker.phone_a": {"dominant": True, "priority": 1},

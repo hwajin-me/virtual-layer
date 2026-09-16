@@ -58,6 +58,8 @@ from .const import *
 from .const import generic_entity_options
 from .entity import VirtualEntity, virtual_schema
 from .source_usage import SOURCE_USAGE, SourceUsageSensor
+from .air_quality_options import normalize_unit
+from . import unit_history
 
 try:
     from homeassistant.const import UnitOfDensity, UnitOfRatio
@@ -237,6 +239,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         )
         if not isinstance(self._attr_native_unit_of_measurement, (str, type(None))):
             self._attr_native_unit_of_measurement = None
+        self._last_valid_unit = normalize_unit(self._attr_native_unit_of_measurement) or None
         if (
             not self._attr_native_unit_of_measurement
             and self._attr_device_class in UNITS_OF_MEASUREMENT
@@ -248,6 +251,20 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         self._attr_unit_of_measurement = self._attr_native_unit_of_measurement
 
         _LOGGER.debug(f"VirtualSensor: {self.name} created")
+
+    async def async_added_to_hass(self):
+        """Recover a missing unit before publishing the first sensor state."""
+        if self._attr_device_class not in NON_NUMERIC_DEVICE_CLASSES:
+            _, unit = unit_history.configured_unit(self.hass, self._config)
+            if not unit:
+                metadata = await unit_history.statistics_snapshot(self.hass, self.entity_id)
+                if metadata and metadata.get("source") == "recorder":
+                    recorded = normalize_unit(metadata.get("unit_of_measurement"))
+                    if recorded:
+                        self._attr_native_unit_of_measurement = recorded
+                        self._attr_unit_of_measurement = recorded
+                        self._last_valid_unit = recorded
+        await super().async_added_to_hass()
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -371,7 +388,12 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                 if len(set(value)) != len(value):
                     raise ValueError("options contains duplicate values")
         elif name == "native_unit_of_measurement":
-            value = None if value is None or value == "" else str(value)
+            value = normalize_unit(value)
+            if not value or value.lower() in {"none", "unknown", "unavailable"}:
+                # Missing source metadata must not invalidate recorded statistics.
+                value = self._last_valid_unit
+            else:
+                self._last_valid_unit = value
         elif name == "suggested_display_precision":
             if value is None or value == "":
                 value = None
@@ -413,6 +435,9 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         if self._attr_device_class in NON_NUMERIC_DEVICE_CLASSES:
             self._attr_native_unit_of_measurement = None
             self._attr_suggested_unit_of_measurement = None
+            self._last_valid_unit = None
+        elif self._attr_native_unit_of_measurement:
+            self._last_valid_unit = self._attr_native_unit_of_measurement
         valid_state_classes = DEVICE_CLASS_STATE_CLASSES.get(self._attr_device_class)
         if (
             valid_state_classes is not None

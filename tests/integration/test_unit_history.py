@@ -21,7 +21,7 @@ def recorder_db_url(tmp_path):
     return f"sqlite:///{tmp_path / 'recorder.db'}"
 
 
-async def make_unit_flow(hass):
+async def make_unit_flow(hass, unit="kW"):
     record = {"platform": "sensor", "entity_id": "sensor.unit_example", "name": "Example",
               "initial_value": "1000", "unit_of_measurement": "W"}
     entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Units"},
@@ -36,7 +36,7 @@ async def make_unit_flow(hass):
     flow._edit_source_entities = []
     defaults = flow_module._entity_form_defaults("Units", record, entry.options)
     flow._entity_defaults = deepcopy(defaults)
-    defaults[flow_module.CONF_NATIVE_VALUE_TEMPLATES] = {"native_unit_of_measurement": "{{ 'kW' }}"}
+    defaults[flow_module.CONF_NATIVE_VALUE_TEMPLATES] = {"native_unit_of_measurement": flow_module._literal_template(unit)}
     result = await flow.async_step_edit_entity(defaults)
     if result.get("step_id") == "edit_entity" and not result.get("errors"):
         defaults = flow_module._flatten_entity_form_sections(result["data_schema"]({}))
@@ -65,7 +65,7 @@ async def test_unit_edit_rejects_unconfirmed_history_and_stale_options(hass):
     assert result["type"] == "abort"
 
 
-@pytest.mark.parametrize("policy,expected", [("relabel", 1000), ("convert", 1), ("keep", 1000)])
+@pytest.mark.parametrize("policy,expected", [("relabel", 1000), ("convert", 1), ("keep", 1000), ("restore", 1000)])
 async def test_statistics_policy_uses_real_recorder(recorder_mock, hass, policy, expected):
     hass.states.async_set("sensor.unit_example", "1000", {"unit_of_measurement": "W"})
     from homeassistant.components.recorder.statistics import async_import_statistics, statistics_during_period
@@ -77,22 +77,36 @@ async def test_statistics_policy_uses_real_recorder(recorder_mock, hass, policy,
     await async_recorder_block_till_done(hass)
     snapshot = await unit_history.statistics_snapshot(hass, "sensor.unit_example")
     assert snapshot is not None
-    flow, entry, result = await make_unit_flow(hass)
+    if policy == "restore":
+        from unittest.mock import patch
+        from custom_components.virtual_layer.sensor import VirtualSensor
+        sensor = VirtualSensor({"name": "Example", "native_templates": {
+            "native_unit_of_measurement": "{{ none }}"}}, False)
+        sensor.hass = hass
+        sensor.entity_id = "sensor.unit_example"
+        with patch("custom_components.virtual_layer.entity.VirtualEntity.async_added_to_hass"):
+            await sensor.async_added_to_hass()
+        assert sensor.native_unit_of_measurement == "W"
+    flow, entry, result = await make_unit_flow(hass, None if policy == "restore" else "kW")
     assert result["step_id"] == "unit_change"
-    if policy != "keep":
+    if policy == "restore":
+        assert result["data_schema"]({})["history_policy"] == "restore"
+    if policy not in ("keep", "restore"):
         result = await flow.async_step_unit_change({"history_policy": policy})
         assert result["errors"]["base"] == "unit_history_failed"
         assert await unit_history.statistics_snapshot(hass, "sensor.unit_example") == snapshot
-    result = await flow.async_step_unit_change({"history_policy": policy, "confirm_history": True})
+    result = await flow.async_step_unit_change({"history_policy": policy, "confirm_history": policy != "restore"})
     assert result["type"] == "create_entry"
+    if policy == "restore":
+        assert unit_history.configured_unit(hass, result["data"][ATTR_DEVICES]["Units"][0]) == (True, "W")
     updated = await unit_history.statistics_snapshot(hass, "sensor.unit_example")
-    assert updated["unit_of_measurement"] == ("W" if policy == "keep" else "kW")
+    assert updated["unit_of_measurement"] == ("W" if policy in ("keep", "restore") else "kW")
     # Query the stored statistics unit without HA converting to the live unit.
     hass.states.async_remove("sensor.unit_example")
     result = await recorder_mock.async_add_executor_job(partial(statistics_during_period,
         hass, start, None, {"sensor.unit_example"}, "hour", None, {"mean"}))
     assert result["sensor.unit_example"][0]["mean"] == expected
-    if policy != "keep":
+    if policy not in ("keep", "restore"):
         with pytest.raises(ValueError):
             await unit_history.apply_statistics_policy(hass, "sensor.unit_example", policy, "kW", snapshot)
 
@@ -120,8 +134,17 @@ async def test_unknown_entity_excluded_from_unit_changes(hass, state):
     result = await flow.async_step_unit_change()
     policy_selector = next(value for key, value in result["data_schema"].schema.items()
                            if key.schema == "history_policy")
-    assert policy_selector.config["options"] == ["keep"]
+    assert policy_selector.config["options"] == ["restore", "keep"]
     for policy in ("relabel", "convert"):
         result = await flow.async_step_unit_change({"history_policy": policy, "confirm_history": True})
         assert result["errors"] == {"base": "unit_history_failed"}
     assert entry.options[ATTR_DEVICES]["Units"][0]["unit_of_measurement"] == "W"
+
+
+async def test_normalized_unit_selection_overrides_template(hass):
+    flow, entry, _ = await make_unit_flow(hass)
+    record = entry.options[ATTR_DEVICES]["Units"][0]
+    defaults = flow_module._entity_form_defaults("Units", record, entry.options)
+    defaults["sensor_unit"] = "μg/m³"
+    _, entity = await flow_module._async_build_entity_config(hass, defaults, "sensor.unit_example")
+    assert unit_history.configured_unit(hass, entity) == (True, "μg/m³")

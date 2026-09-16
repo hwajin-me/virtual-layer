@@ -14,6 +14,7 @@ import copy
 import math
 import os
 import tempfile
+from datetime import timedelta
 from threading import get_ident
 from unittest.mock import AsyncMock, Mock, patch
 from pathlib import Path
@@ -155,6 +156,17 @@ assert light.supported_color_modes == {
 }
 assert LightEntityFeature.EFFECT not in light.supported_features
 assert LightEntityFeature.FLASH not in light.supported_features
+for property_name, value in {
+    "brightness": 128, "color_mode": "hs", "color_temp_kelvin": 4000,
+    "hs_color": [120, 50], "xy_color": [0.25, 0.5],
+    "rgb_color": [10, 20, 30], "rgbw_color": [10, 20, 30, 40],
+    "rgbww_color": [10, 20, 30, 40, 50],
+}.items():
+    light._apply_native_template_value(property_name, value)
+    previous = getattr(light, property_name)
+    for missing in (None, "None", "", "unknown", "unavailable"):
+        assert not light._apply_native_template_value(property_name, missing)
+        assert getattr(light, property_name) == previous
 assert sensor.CONCENTRATION_PARTS_PER_MILLION == (
     number.CONCENTRATION_PARTS_PER_MILLION
 )
@@ -400,6 +412,206 @@ async def test_tracker_timer_dispatch(hass):
             assert threads == [hass.loop_thread_id], (polygon, threads)
 
 
+async def test_dawarich_http_tracking(hass):
+    """Exercise real HTTP, UI validation and polygon selection in official HA."""
+    from aiohttp import web
+    from custom_components.virtual_layer.config_flow import _entity_schema, _async_build_entity_config
+
+    timestamp = dt_util.utcnow().timestamp()
+    requests = []
+
+    async def points(request):
+        assert request.headers.get("Authorization") == "Bearer docker-only-key"
+        requests.append(request.path)
+        return web.json_response([
+            {"latitude": "37.5", "longitude": "127.0", "timestamp": timestamp, "accuracy": 12},
+            {"latitude": 999, "longitude": 0, "timestamp": timestamp},
+        ])
+
+    async def visits(request):
+        assert "start_at" in request.query and "end_at" in request.query
+        return web.json_response([{"name": "Office", "started_at": timestamp - 60}])
+
+    app = web.Application()
+    app.router.add_get("/api/v1/points", points)
+    app.router.add_get("/api/v1/visits", visits)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = runner.addresses[0][1]
+    try:
+        for polygon in (False, True):
+            form = _entity_schema({"platform": "device_tracker", "entity_name": "Dawarich Docker"})({})
+            form.update({"device_name": "Dawarich Docker", "entity_id": "device_tracker.dawarich_docker"})
+            form["dawarich_settings"].update({
+                "dawarich_enabled": True, "dawarich_url": f"http://127.0.0.1:{port}",
+                "dawarich_api_key": "docker-only-key", "dawarich_test_connection": True,
+            })
+            if polygon:
+                form["domain_settings"]["polygon_geojson_json"] = {
+                    "type": "Feature", "properties": {"name": "Office"},
+                    "geometry": {"type": "Polygon", "coordinates": [[[126.9,37.4],[127.1,37.4],[127.1,37.6],[126.9,37.6],[126.9,37.4]]]},
+                }
+            _, config = await _async_build_entity_config(hass, form)
+            tracker = VirtualDeviceTracker(config)
+            tracker.hass = hass
+            tracker.async_schedule_update_ha_state = Mock()
+            tracker._create_state(config)
+            if polygon:
+                await tracker._async_reload_polygon_zones()
+            await tracker._async_refresh_dawarich()
+            assert tracker.latitude == 37.5, tracker.extra_state_attributes
+            assert tracker.extra_state_attributes["dawarich_visit"]["name"] == "Office"
+            assert tracker.extra_state_attributes["dawarich_stale"] is False
+            assert "docker-only-key" not in str(tracker.extra_state_attributes)
+            if polygon:
+                assert tracker.extra_state_attributes["polygon_zone"] == "Office"
+            await tracker.async_will_remove_from_hass()
+        assert len(requests) == 4
+        print("Dawarich HTTP smoke passed: UI connection test, actual HTTP, visits, standalone/polygon GPS, credential isolation")
+    finally:
+        await runner.cleanup()
+
+
+async def test_local_presence(hass):
+    """Exercise the real HA scanner registry without requiring host BLE hardware."""
+    from homeassistant.components import bluetooth
+    from habluetooth import BaseHaRemoteScanner
+    from types import SimpleNamespace
+
+    adapters = SimpleNamespace(refresh=AsyncMock(), adapters={}, history={}, default_adapter=None)
+    with patch("homeassistant.components.bluetooth.get_adapters", return_value=adapters), patch(
+        "homeassistant.components.bluetooth.manager.async_load_history_from_system", return_value=({}, {})
+    ), patch("homeassistant.components.bluetooth.BleakSlotManager.async_setup", new=AsyncMock()):
+        assert await async_setup_component(hass, "bluetooth", {})
+        await hass.async_block_till_done()
+    scanner = BaseHaRemoteScanner("ab_gateway", "AB Gateway", connectable=False)
+    stop = scanner.async_setup()
+    unregister = bluetooth.async_register_scanner(hass, scanner)
+    mac = "AA:BB:CC:DD:EE:FF"
+    config = {"name": "Local presence", "entity_id": "device_tracker.local_smoke",
+              "initial_value": "not_home", "initial_availability": True,
+              "local_presence": {"wifi_entities": ["binary_sensor.smoke_wifi"], "ble_addresses": [mac]}}
+    tracker = VirtualDeviceTracker(config)
+    tracker.hass = hass
+    tracker.async_schedule_update_ha_state = Mock()
+    tracker._create_state(config)
+    try:
+        hass.states.async_set("binary_sensor.smoke_wifi", "off")
+        tracker._update_location_from_sources()
+        assert tracker.state == "not_home"
+        scanner._async_on_advertisement(mac.lower(), -60, "Phone", [], {}, {}, None, {}, bluetooth.MONOTONIC_TIME())
+        tracker._update_location_from_sources()
+        assert tracker.state == "home"
+        assert tracker.latitude == hass.config.latitude
+        assert tracker.extra_state_attributes["location_presence_sources"] == ["ble:" + mac]
+        with patch("homeassistant.components.bluetooth.MONOTONIC_TIME", return_value=bluetooth.MONOTONIC_TIME() + 121):
+            tracker._update_location_from_sources()
+            assert tracker.state == "not_home"
+            hass.states.async_set("binary_sensor.smoke_wifi", "on")
+            tracker._update_location_from_sources()
+            assert tracker.state == "home"
+        print("Wi-Fi / AB Gateway presence smoke passed: HA scanner registry, advertisements, timeout, Wi-Fi home GPS")
+    finally:
+        unregister()
+        stop()
+
+
+def test_tracker_measurement_clock(hass):
+    """Delayed delivery and attribute refreshes must not replace fix time."""
+    config = {
+        "name": "Clock Smoke", "entity_id": "device_tracker.clock_smoke",
+        "initial_value": "not_home", "initial_availability": True,
+        "source_entities": ["device_tracker.clock_smoke_source"],
+        "location_helper": {"distance_threshold_meters": 300},
+    }
+    tracker = VirtualDeviceTracker(config)
+    tracker.hass = hass
+    tracker.async_schedule_update_ha_state = Mock()
+    tracker._create_state(config)
+    measured = dt_util.utcnow()
+    source = config["source_entities"][0]
+    hass.states.async_set(source, "not_home", {
+        "lat": 37.5, "lon": 127, "acc": 5, "last_seen": (measured - timedelta(seconds=120)).isoformat(),
+    })
+    tracker._update_location_from_sources()
+    hass.states.async_set(source, "not_home", {
+        "lat": 37.51, "lon": 127, "acc": 5, "last_seen": measured.isoformat(),
+    })
+    tracker._update_location_from_sources()
+    assert abs(tracker.extra_state_attributes["location_speed_m_s"] - 9.27) < 0.05
+    assert tracker.extra_state_attributes["location_bearing"] == 0
+    hass.states.async_set(source, "not_home", {
+        "lat": 38, "lon": 127, "acc": 5, "last_seen": (measured - timedelta(seconds=60)).isoformat(),
+    })
+    tracker._update_location_from_sources()
+    assert tracker.latitude == 37.51
+    assert tracker.extra_state_attributes["location_rejected_sources"][source] == "out_of_order"
+    assert tracker.extra_state_attributes["location_speed_m_s"] is None
+    print("Tracker measurement-clock smoke passed: aliases, delayed fixes, speed, bearing, out-of-order rejection")
+
+
+def test_tracker_adaptive_travel(hass):
+    """Check partial-device travel against the official HA State API."""
+    for polygon in (False, True):
+        sources = [f"device_tracker.docker_trip_{int(polygon)}_{i}" for i in range(3)]
+        config = {
+            "name": "Docker Trip", "entity_id": "device_tracker.docker_trip",
+            "initial_value": "not_home", "persistent": False,
+            "source_entities": sources,
+            "location_helper": {"distance_threshold_meters": 300},
+        }
+        if polygon:
+            config["polygonal_zone"] = {
+                "strategy": "adaptive",
+                "geojson": {
+                    "type": "Feature", "properties": {"name": "Home"},
+                    "geometry": {"type": "Polygon", "coordinates": [[
+                        [126.99, 37.49], [127.01, 37.49], [127.01, 37.505],
+                        [126.99, 37.505], [126.99, 37.49],
+                    ]]},
+                },
+            }
+        tracker = VirtualDeviceTracker(config)
+        tracker.hass = hass
+        tracker.async_schedule_update_ha_state = Mock()
+        tracker._create_state(config)
+        update = tracker._update_polygon_from_sources if polygon else tracker._update_location_from_sources
+        now = dt_util.utcnow() - timedelta(hours=1)
+        with (
+            patch("homeassistant.core.time.time", side_effect=lambda: now.timestamp()),
+            patch("homeassistant.util.dt.utcnow", side_effect=lambda: now),
+        ):
+            for source in sources:
+                hass.states.async_set(source, "not_home", {
+                    "latitude": 37.5, "longitude": 127, "gps_accuracy": 12,
+                })
+            update()
+            now += timedelta(seconds=60)
+            hass.states.async_set(sources[0], "not_home", {
+                "latitude": 37.51, "longitude": 127, "gps_accuracy": 12,
+            })
+            update()
+            assert tracker.latitude == 37.51, (polygon, tracker.extra_state_attributes)
+            assert tracker.location_accuracy == 12
+            now += timedelta(minutes=31)
+            for source in sources:
+                state = hass.states.get(source)
+                hass.states.async_set(source, state.state, dict(state.attributes))
+            update()
+            assert tracker.latitude == 37.51
+            assert tracker.extra_state_attributes["location_stale"] is False
+            now += timedelta(seconds=1)
+            hass.states.async_set(sources[0], "not_home", {
+                "latitude": 35, "longitude": 129, "gps_accuracy": 12,
+            })
+            update()
+            assert tracker.latitude == 37.51
+            assert tracker.extra_state_attributes["location_rejected_sources"][sources[0]] == "implausible_speed"
+    print("Adaptive tracker smoke passed: departure, stationary reports, accuracy, GPS jump; helper and polygon")
+
+
 async def test_source_startup_grace(hass):
     """Validate the startup grace callback against the real HA entity API."""
     hass.states.async_set("sensor.grace_source", "unknown")
@@ -510,6 +722,10 @@ async def test_config_flow_create_modify_runtime():
                 hass, start, None, {statistic_id}, "hour", None, {"mean"}))
             assert result[statistic_id][0]["mean"] == expected
         await test_tracker_timer_dispatch(hass)
+        test_tracker_adaptive_travel(hass)
+        test_tracker_measurement_clock(hass)
+        await test_local_presence(hass)
+        await test_dawarich_http_tracking(hass)
         await test_source_startup_grace(hass)
         await test_image_camera_encoding(hass)
 
@@ -632,10 +848,25 @@ async def test_config_flow_create_modify_runtime():
         assert len(usage_entries) == 2
         for usage in usage_entries:
             usage_state = hass.states.get(usage.entity_id)
-            assert usage_state.state == "1"
+            assert usage_state.state == hass.states.get("sensor.docker_flow_pm25").state
+            assert usage_state.attributes["virtual_entity_id"] == "sensor.docker_flow_pm25"
             assert usage_state.attributes["source_entity_id"] in source_ids
             assert usage_state.attributes["virtual_entities"] == ["sensor.docker_flow_pm25"]
             assert usage.device_id is None
+        # Recreate a missing reverse link from saved options during reload.
+        missing_usage = usage_entries[0]
+        registry.async_remove(missing_usage.entity_id)
+        await hass.async_block_till_done()
+        assert hass.states.get(missing_usage.entity_id) is None
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        repaired_usage = registry.async_get(missing_usage.entity_id)
+        assert repaired_usage.unique_id == missing_usage.unique_id
+        assert hass.states.get(repaired_usage.entity_id).attributes["virtual_entities"] == ["sensor.docker_flow_pm25"]
+        assert len([
+            item for item in er.async_entries_for_config_entry(registry, entry.entry_id)
+            if "source_usage:" in item.unique_id
+        ]) == 2
         assert created_registry_entry is not None
         assert created_registry_entry.device_id is not None
         original_unique_id = created_registry_entry.unique_id
@@ -708,11 +939,12 @@ async def test_config_flow_create_modify_runtime():
         await hass.async_block_till_done()
 
         assert hass.states.get("sensor.docker_flow_pm25") is None
-        modified_id = "sensor.docker_air_docker_pm2_5_maximum"
+        modified_id = "sensor.docker_flow_pm25_max"
         modified_state = hass.states.get(modified_id)
         assert modified_state is not None
         for usage in usage_entries:
             assert hass.states.get(usage.entity_id).attributes["virtual_entities"] == [modified_id]
+            assert hass.states.get(usage.entity_id).attributes["friendly_name"].endswith(f"({modified_id})")
         assert float(modified_state.state) == 20.0
         assert modified_state.attributes["unit_of_measurement"] == "μg/m³"
         modified_registry_entry = registry.async_get(modified_id)
@@ -743,6 +975,8 @@ async def test_config_flow_create_modify_runtime():
         await asyncio.sleep(0.1)
         await hass.async_block_till_done()
         assert float(hass.states.get(modified_id).state) == 60.0
+        for usage in usage_entries:
+            assert float(hass.states.get(usage.entity_id).state) == 60.0
         assert hass.states.get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").state == "poor"
 
         for source_id in source_ids:

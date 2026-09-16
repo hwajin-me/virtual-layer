@@ -1,6 +1,9 @@
 {
   "domain": "virtual_layer",
   "name": "Virtual Device and Entity Layer",
+  "after_dependencies": [
+    "bluetooth"
+  ],
   "codeowners": [
     "@twrecked",
     "@hwajin-me"
@@ -12,5 +15,5 @@
   "requirements": [
     "aiofiles"
   ],
-  "version": "1.0.107"
+  "version": "1.0.108"
 }
