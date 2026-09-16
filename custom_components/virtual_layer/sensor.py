@@ -57,6 +57,7 @@ from . import (
 from .const import *
 from .const import generic_entity_options
 from .entity import VirtualEntity, virtual_schema
+from .source_usage import SOURCE_USAGE, SourceUsageSensor
 
 try:
     from homeassistant.const import UnitOfDensity, UnitOfRatio
@@ -190,6 +191,11 @@ async def async_setup_entry(
 
     entities = []
     for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN):
+        if SOURCE_USAGE in entity and entity.get(ATTR_UNIQUE_ID, "").startswith(
+            f"{entry.entry_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}source_usage:"
+        ):
+            entities.append(SourceUsageSensor(entity))
+            continue
         entity = SENSOR_SCHEMA(entity)
         if entity.get(CONF_DIAGNOSTIC_SOURCE_ENTITY):
             entities.append(VirtualDiagnosticSensor(entity, False))

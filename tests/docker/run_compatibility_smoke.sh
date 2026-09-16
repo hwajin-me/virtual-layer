@@ -625,6 +625,17 @@ async def test_config_flow_create_modify_runtime():
 
         registry = er.async_get(hass)
         created_registry_entry = registry.async_get("sensor.docker_flow_pm25")
+        usage_entries = [
+            item for item in er.async_entries_for_config_entry(registry, entry.entry_id)
+            if "source_usage:" in item.unique_id
+        ]
+        assert len(usage_entries) == 2
+        for usage in usage_entries:
+            usage_state = hass.states.get(usage.entity_id)
+            assert usage_state.state == "1"
+            assert usage_state.attributes["source_entity_id"] in source_ids
+            assert usage_state.attributes["virtual_entities"] == ["sensor.docker_flow_pm25"]
+            assert usage.device_id is None
         assert created_registry_entry is not None
         assert created_registry_entry.device_id is not None
         original_unique_id = created_registry_entry.unique_id
@@ -700,6 +711,8 @@ async def test_config_flow_create_modify_runtime():
         modified_id = "sensor.docker_air_docker_pm2_5_maximum"
         modified_state = hass.states.get(modified_id)
         assert modified_state is not None
+        for usage in usage_entries:
+            assert hass.states.get(usage.entity_id).attributes["virtual_entities"] == [modified_id]
         assert float(modified_state.state) == 20.0
         assert modified_state.attributes["unit_of_measurement"] == "μg/m³"
         modified_registry_entry = registry.async_get(modified_id)

@@ -1857,7 +1857,7 @@ def _sensor_unit_conversion_transforms(
         unit, factors = profile
         return unit, tuple((factor, 0.0) for factor in factors)
 
-    normalized = tuple(str(unit).strip() if unit else "" for unit in units)
+    normalized = tuple(aq_options.normalize_unit(unit) for unit in units)
     converter = SENSOR_UNIT_CONVERTERS.get(device_class)
     if (
         not converter
@@ -4239,10 +4239,12 @@ def _air_quality_default_icon(platform, *names) -> str:
         return "mdi:air-filter"
     if platform not in ("sensor", "number", "binary_sensor"):
         return ""
-    name = " ".join(value for value in names if isinstance(value, str)).lower()
-    patterns = (*aq_options.NAME_HINTS.values(), r"air[ _-]*quality|공기[ _-]*질|미세먼지")
-    if any(re.search(r"(?<![a-z0-9])(?:" + pattern + r")(?![a-z0-9])", name)
-           for pattern in patterns):
+    if aq_options.pollutant_name_matches(*names, include_icon_only=True):
+        return "mdi:air-filter"
+    if any(re.search(
+        r"(?<![a-z0-9])(?:air[ _-]*quality|공기[ _-]*질|미세먼지)(?![a-z0-9])",
+        aq_options.normalize_pollutant_name(name),
+    ) for name in names):
         return "mdi:air-filter"
     return ""
 

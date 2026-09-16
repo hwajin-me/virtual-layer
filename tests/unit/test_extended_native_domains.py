@@ -1488,6 +1488,25 @@ def test_climate_and_humidifier_restore_home_assistant_native_target_keys():
     assert humidifier.mode == "normal"
 
 
+@pytest.mark.parametrize("sources", [[], ["sensor.one"], ["sensor.two", "sensor.one"]])
+def test_source_entities_attributes_remain_authoritative_after_restore(sources):
+    config = _config(SENSOR_SCHEMA, "sensor", "ready", source_entities=sources)
+    sensor = VirtualSensor(config, False)
+    sensor._restore_state(
+        SimpleNamespace(state="restored", attributes={
+            ATTR_VIRTUAL_ATTRIBUTES: ["source_entities"],
+            "source_entities": ["sensor.stale"],
+        }),
+        config,
+    )
+    sensor._update_attributes()
+    assert sensor.extra_state_attributes["source_entities"] == sources
+    assert "source_entities" not in sensor._virtual_attributes
+    sensor.extra_state_attributes["source_entities"].append("sensor.injected")
+    sensor._update_attributes()
+    assert sensor.extra_state_attributes["source_entities"] == sources
+
+
 def test_regular_entity_restore_drops_removed_config_attributes_only():
     config = _config(
         SENSOR_SCHEMA,

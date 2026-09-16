@@ -2,6 +2,7 @@
 
 import math
 import re
+import unicodedata
 from collections.abc import Mapping
 from itertools import pairwise
 
@@ -30,9 +31,118 @@ def voc_factors(unit):
 # Spelling aliases only: never infer a missing numerator or convert gas mass
 # concentrations into ppm. Preserve SI prefix case (mg is not Mg).
 UNIT_ALIASES = {unit: unit for unit in (*UNITS, "", "AQI")}
+_UNIT_SPELLINGS = {
+    "°C": ("℃", "° C", "degC", "deg C", "celsius", "Celsius", "celcius", "Celcius"),
+    "°F": ("℉", "° F", "degF", "deg F", "fahrenheit", "Fahrenheit", "farenheit"),
+    "%": ("％", "percent", "percentage"),
+    "ppm": ("PPM", "parts per million"),
+    "ppb": ("PPB", "parts per billion"),
+    "μg/m³": ("micrograms/m3", "micrograms per cubic meter", "micrograms per cubic metre"),
+    "mg/m³": ("milligrams/m3", "milligrams per cubic meter", "milligrams per cubic metre"),
+    "pCi/L": ("pCi/l", "pCi / L", "pCi / l"),
+    "m³": ("m3", "m^3", "㎥"),
+    "m²": ("m2", "m^2", "㎡"),
+    "kWh": ("kW h", "kW·h", "kW⋅h", "kW-h"),
+    "Wh": ("W h", "W·h", "W⋅h", "W-h"),
+    "km/h": ("km / h", "kmh", "kph"),
+    "m/s": ("m / s", "m/sec"),
+    "hPa": ("hpa",),
+    "lux": ("lx",),
+    "K": ("kelvin", "Kelvin", "켈빈"),
+    "W": ("watt", "watts", "와트"),
+    "kW": ("kilowatt", "kilowatts", "킬로와트", "㎾"),
+    "mW": ("milliwatt", "milliwatts"),
+    "MW": ("megawatt", "megawatts"),
+    "J": ("joule", "joules"),
+    "kJ": ("kilojoule", "kilojoules"),
+    "A": ("amp", "amps", "ampere", "amperes", "암페어"),
+    "mA": ("milliamp", "milliamps", "milliampere"),
+    "V": ("volt", "volts", "볼트"),
+    "mV": ("millivolt", "millivolts"),
+    "kV": ("kilovolt", "kilovolts"),
+    "Hz": ("hertz", "헤르츠"),
+    "kHz": ("kilohertz",),
+    "MHz": ("megahertz",),
+    "Ω": ("Ω", "ohm", "ohms", "옴"),
+    "kΩ": ("kΩ", "kohm", "kiloohm", "kiloohms"),
+    "Pa": ("pascal", "pascals"),
+    "kPa": ("kilopascal", "kilopascals"),
+    "mbar": ("millibar", "millibars"),
+    "mmHg": ("mm Hg",),
+    "inHg": ("in Hg",),
+    "inH₂O": ("inH2O", "in H2O", "in H₂O"),
+    "g": ("gram", "grams", "그램"),
+    "kg": ("kilogram", "kilograms", "킬로그램", "㎏"),
+    "mg": ("milligram", "milligrams", "㎎"),
+    "μg": ("ug", "µg", "microgram", "micrograms"),
+    "lb": ("lbs", "pound", "pounds"),
+    "oz": ("ounce", "ounces"),
+    "mm": ("millimeter", "millimeters", "millimetre", "millimetres", "㎜"),
+    "cm": ("centimeter", "centimeters", "centimetre", "centimetres", "㎝"),
+    "m": ("meter", "meters", "metre", "metres", "미터"),
+    "km": ("kilometer", "kilometers", "kilometre", "kilometres", "㎞"),
+    "in": ("inch", "inches"),
+    "ft": ("foot", "feet"),
+    "yd": ("yard", "yards"),
+    "mi": ("mile", "miles"),
+    "L": ("l", "ℓ", "liter", "liters", "litre", "litres", "리터"),
+    "mL": ("ml", "mℓ", "milliliter", "milliliters", "millilitre", "millilitres", "㎖"),
+    "s": ("sec", "secs", "second", "seconds", "초"),
+    "ms": ("msec", "millisecond", "milliseconds"),
+    "μs": ("us", "µs", "microsecond", "microseconds"),
+    "min": ("mins", "minute", "minutes", "분"),
+    "h": ("hr", "hrs", "hour", "hours", "시간"),
+    "d": ("day", "days", "일"),
+    "w": ("week", "weeks"),
+    "kn": ("kt", "kts", "knot", "knots"),
+    "B": ("byte", "bytes"),
+    "bit": ("bits",),
+    "kB": ("kilobyte", "kilobytes"),
+    "MB": ("megabyte", "megabytes"),
+    "GB": ("gigabyte", "gigabytes"),
+    "KiB": ("kibibyte", "kibibytes"),
+    "MiB": ("mebibyte", "mebibytes"),
+    "GiB": ("gibibyte", "gibibytes"),
+    "bit/s": ("bps", "bits/s", "bits per second"),
+    "kbit/s": ("kbps", "kbits/s"),
+    "Mbit/s": ("Mbps", "Mbits/s"),
+    "Gbit/s": ("Gbps", "Gbits/s"),
+    "B/s": ("Bps", "bytes/s", "bytes per second"),
+    "kB/s": ("kBps",),
+    "MB/s": ("MBps",),
+    "GB/s": ("GBps",),
+}
+for _canonical, _spellings in _UNIT_SPELLINGS.items():
+    UNIT_ALIASES[_canonical] = _canonical
+    UNIT_ALIASES.update(dict.fromkeys(_spellings, _canonical))
 for _prefix, _canonical in (("mg", "mg"), ("ug", "μg"), ("µg", "μg"), ("μg", "μg"), ("Bq", "Bq")):
-    for _volume in ("m3", "m^3", "m³"):
-        UNIT_ALIASES[f"{_prefix}/{_volume}"] = f"{_canonical}/m³"
+    for _volume in ("m3", "m^3", "m³", "㎥"):
+        for _separator in ("/", " /", "/ ", " / "):
+            UNIT_ALIASES[f"{_prefix}{_separator}{_volume}"] = f"{_canonical}/m³"
+
+# Generate only declared dimensional variants; no global lowercasing or
+# Unicode compatibility folding (which could confuse SI prefixes and symbols).
+for _base in ("mm", "cm", "m", "km", "in", "ft", "yd", "mi"):
+    for _suffix, _power in (("²", "2"), ("³", "3")):
+        _canonical = _base + _suffix
+        for _alias in (_canonical, _base + _power, _base + "^" + _power):
+            UNIT_ALIASES[_alias] = _canonical
+for _prefix in ("m", "", "k", "M", "G", "T"):
+    _canonical = _prefix + "Wh"
+    for _joiner in ("", " ", "·", "⋅", "-"):
+        UNIT_ALIASES[_prefix + "W" + _joiner + "h"] = _canonical
+for _numerator in ("L", "mL", "m³", "ft³", "gal", "m", "mm", "in", "ft", "km"):
+    for _denominator in ("s", "min", "h", "d"):
+        _canonical = f"{_numerator}/{_denominator}"
+        _numerators = {
+            "L": ("L", "l", "ℓ"), "mL": ("mL", "ml"),
+            "m³": ("m³", "m3", "m^3", "㎥"), "ft³": ("ft³", "ft3", "ft^3"),
+        }.get(_numerator, (_numerator,))
+        _denominators = {"s": ("s", "sec"), "min": ("min",), "h": ("h", "hr"), "d": ("d",)}[_denominator]
+        for _n in _numerators:
+            for _d in _denominators:
+                for _separator in ("/", " /", "/ ", " / "):
+                    UNIT_ALIASES[f"{_n}{_separator}{_d}"] = _canonical
 
 
 def normalize_unit(value):
@@ -41,14 +151,14 @@ def normalize_unit(value):
         return ""
     if not isinstance(value, str):
         return None
-    value = value.strip()
+    value = " ".join(value.split())
     return UNIT_ALIASES.get(value, value)
 
 
 def source_unit_expression(entity_id_expression="entity_id"):
     """Jinja equivalent of normalize_unit for an already escaped entity ID."""
     raw = f"state_attr({entity_id_expression}, 'unit_of_measurement')"
-    text = f"(({raw} if {raw} is not none else '') | string | trim)"
+    text = f"((({raw} if {raw} is not none else '') | string).split() | join(' '))"
     return repr(UNIT_ALIASES) + f".get({text}, {text})"
 
 REDUCERS = ("per_source", "mean", "median", "minimum", "maximum")
@@ -134,25 +244,84 @@ STARTER_PROFILES = {
     "volatile_organic_compounds": ("μg/m³", (200, 300, 500, 750, 950), "Local indoor TVOC display bands; UBA 950 μg/m³ precautionary reference is not a health threshold or six-grade scale"),
 }
 NAME_HINTS = {
-    "pm25": r"(?:pm|particulate[ _-]*matter)[ _.-]*2[ _.-]*5|초미세먼지",
+    "pm25": r"(?:pm|particulate[ _-]*matter)[ _.-]*2[ _.-]*5|초[ _-]*미세[ _-]*먼지",
     "pm10": r"(?:pm|particulate[ _-]*matter)[ _.-]*10",
     "pm4": r"(?:pm|particulate[ _-]*matter)[ _.-]*4(?:[_.]0)?(?![0-9]|[_.][0-9])",
     "pm1": r"(?:pm|particulate[ _-]*matter)[ _.-]*1(?:[_.]0)?(?![0-9]|[_.][0-9])",
     "radon": r"radon|라돈",
-    "formaldehyde": r"formaldehyde|hcho|ch2o|ch₂o|포름알데히드|포름알데하이드",
-    "carbon_dioxide": r"carbon[ _-]*dioxide|co2|co₂|이산화탄소",
-    "carbon_monoxide": r"carbon[ _-]*monoxide|co(?![ _-]*[0-9₂])|일산화탄소",
-    "nitrogen_dioxide": r"nitrogen[ _-]*dioxide|no2|no₂|이산화질소",
-    "nitrogen_monoxide": r"nitrogen[ _-]*monoxide|nitric[ _-]*oxide|일산화질소",
-    "nitrous_oxide": r"nitrous[ _-]*oxide|n2o|n₂o|아산화질소",
-    "sulphur_dioxide": r"sulphur[ _-]*dioxide|sulfur[ _-]*dioxide|so2|so₂|이산화황",
+    "formaldehyde": r"formaldehyde|methanal|hcho|ch2o|포름[ _-]*알데히드|포름[ _-]*알데하이드|메탄알",
+    "carbon_dioxide": r"carbon[ _-]*dioxide|co2|co₂|이산화[ _-]*탄소",
+    "carbon_monoxide": r"carbon[ _-]*monoxide|co(?![ _-]*[0-9₂])|일산화[ _-]*탄소",
+    "nitrogen_dioxide": r"nitrogen[ _-]*dioxide|no2|no₂|이산화[ _-]*질소",
+    "nitrogen_monoxide": r"nitrogen[ _-]*monoxide|nitric[ _-]*oxide|일산화[ _-]*질소",
+    "nitrous_oxide": r"nitrous[ _-]*oxide|n2o|n₂o|아산화[ _-]*질소",
+    "sulphur_dioxide": r"sulphur[ _-]*dioxide|sulfur[ _-]*dioxide|so2|so₂|이산화[ _-]*황",
     "ozone": r"ozone|o3|o₃|오존",
-    "volatile_organic_compounds": r"e[ _-]*tvoc|tvoc|voc|휘발성",
+    "volatile_organic_compounds": r"e[ _-]*tvoc|t[ _-]*voc|voc|(?:total[ _-]*)?volatile[ _-]*organic[ _-]*compounds?|(?:총[ _-]*)?휘발성(?:[ _-]*유기[ _-]*화합물)?",
     "benzene": r"benzene|c6h6|c₆h₆|벤젠",
     "ammonia": r"ammonia|nh3|nh₃|암모니아",
-    "hydrogen_sulfide": r"hydrogen[ _-]*sulfide|hydrogen[ _-]*sulphide|h2s|h₂s|황화수소",
+    "hydrogen_sulfide": r"hydrogen[ _-]*sulfide|hydrogen[ _-]*sulphide|h2s|h₂s|황화[ _-]*수소",
     "aqi": r"aqi|air[ _-]*quality[ _-]*index",
 }
+
+
+ICON_POLLUTANT_NAME_HINTS = {
+    # Name/icon recognition only: these have no automatic grading profile.
+    # Do not collapse individual solvents into TVOC or share mass/ppm factors.
+    "toluene": r"toluene|methyl[ _-]*benzene|톨루엔",
+    "xylene": r"xylene|dimethyl[ _-]*benzene|자일렌|크실렌",
+    "ethylbenzene": r"ethyl[ _-]*benzene|에틸[ _-]*벤젠",
+    "styrene": r"styrene|스티렌|스타이렌",
+    "acetone": r"acetone|propanone|아세톤",
+    "acetaldehyde": r"acetaldehyde|ethanal|아세트[ _-]*알데히드|아세트[ _-]*알데하이드",
+    "acrolein": r"acrolein|아크롤레인",
+    "methanol": r"methanol|methyl[ _-]*alcohol|메탄올|메틸[ _-]*알코올",
+    "methane": r"methane|ch4|메탄",
+    "propane": r"propane|c3h8|프로판",
+    "butane": r"butane|c4h10|부탄",
+    "chlorine": r"chlorine|cl2|염소",
+    "hydrogen_chloride": r"hydrogen[ _-]*chloride|hcl|염화[ _-]*수소",
+    "hydrogen_cyanide": r"hydrogen[ _-]*cyanide|hcn|시안화[ _-]*수소|청산[ _-]*가스",
+    "hydrogen_fluoride": r"hydrogen[ _-]*fluoride|불화[ _-]*수소|플루오린화[ _-]*수소",
+    "sulfur_trioxide": r"sulphur[ _-]*trioxide|sulfur[ _-]*trioxide|so3|삼산화[ _-]*황",
+    "nitrogen_oxides": r"nitrogen[ _-]*oxides|nox|질소[ _-]*산화물",
+    "sulfur_oxides": r"sulphur[ _-]*oxides|sulfur[ _-]*oxides|sox|황[ _-]*산화물",
+    "btex": r"btex",
+}
+
+
+def normalize_pollutant_name(value):
+    """Unify Unicode chemical digits, letter case and name separators."""
+    if not isinstance(value, str):
+        return ""
+    value = unicodedata.normalize("NFKC", value).casefold()
+    value = re.sub(r"[\s_\-‐‑‒–—−]+", "_", value)
+    return value.strip("_")
+
+
+def pollutant_name_matches(*names, include_icon_only=False):
+    """Return canonical names without resolving mixed or ambiguous substances."""
+    patterns = dict(NAME_HINTS)
+    if include_icon_only:
+        patterns.update(ICON_POLLUTANT_NAME_HINTS)
+    # Match labels independently; prefer full substance names to embedded ones
+    # (ethyl benzene is not benzene, and Korean methanol is not methane).
+    result = set()
+    for name in names:
+        normalized = normalize_pollutant_name(name)
+        matches = [
+            (key, match.start(), match.end())
+            for key, pattern in patterns.items()
+            for match in re.finditer(
+                r"(?<![a-z0-9])(?:" + pattern + r")(?![a-z0-9])", normalized
+            )
+        ]
+        result.update(key for key, start, end in matches if not any(
+            other_start <= start and end <= other_end
+            and (other_start < start or end < other_end)
+            for _, other_start, other_end in matches
+        ))
+    return result
 
 
 def infer_quantity(state):
@@ -160,12 +329,13 @@ def infer_quantity(state):
     declared = state.attributes.get("device_class")
     if declared:
         return declared if declared in QUANTITIES[1:] else None
-    name = f"{state.entity_id.split('.', 1)[-1]} {state.attributes.get('friendly_name', '')}".lower()
-    matches = {key for key, pattern in NAME_HINTS.items()
-               if re.search(r"(?<![a-z0-9])(?:" + pattern + r")(?![a-z0-9])", name)}
+    matches = pollutant_name_matches(
+        state.entity_id.split('.', 1)[-1], state.attributes.get("friendly_name"),
+        include_icon_only=True,
+    )
     if matches == {"volatile_organic_compounds"} and normalize_unit(state.attributes.get("unit_of_measurement")) in ("ppm", "ppb"):
         return "volatile_organic_compounds_parts"
-    return next(iter(matches)) if len(matches) == 1 else None
+    return next(iter(matches)) if len(matches) == 1 and matches <= set(QUANTITIES) else None
 
 
 def is_air_quality_binary(state):

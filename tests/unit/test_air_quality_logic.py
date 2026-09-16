@@ -103,6 +103,8 @@ def test_new_defaults_convert_units_and_preserve_custom_thresholds(hass, quantit
 @pytest.mark.parametrize("quantity,unit,value,expected", [
     ("formaldehyde", "mg/m3", "0.003", "good"),
     ("formaldehyde", " mg/m^3 ", "0.003", "good"),
+    ("formaldehyde", "mg\u00a0 /  ㎥", "0.003", "good"),
+    ("formaldehyde", "micrograms per cubic meter", "3", "good"),
     ("formaldehyde", "ug/m3", "3", "good"),
     ("pm25", "µg/m3", "40", "moderate"),
     ("pm25", "μg/m^3", "40", "moderate"),
@@ -110,6 +112,7 @@ def test_new_defaults_convert_units_and_preserve_custom_thresholds(hass, quantit
     ("radon", "Bq/m3", "54.07", "fair"),
     ("radon", "Bq/m^3", "54.07", "fair"),
     ("volatile_organic_compounds_parts", " ppb ", "20", "good"),
+    ("volatile_organic_compounds_parts", "PPB", "20", "good"),
 ])
 def test_equivalent_unit_spellings_work_in_prefill_and_live_templates(hass, quantity, unit, value, expected):
     source_id = "sensor.pollutant"
@@ -159,6 +162,70 @@ def test_composite_conversion_keeps_si_prefix_case():
     from custom_components.virtual_layer.config_flow import _sensor_unit_conversion_profile
     assert _sensor_unit_conversion_profile(["mg/m^3", "ug/m3"]) == ("μg/m³", (1000, 1))
     assert _sensor_unit_conversion_profile(["Mg/m³", "μg/m³"]) is None
+
+
+@pytest.mark.parametrize("alias,canonical", [
+    ("µg\u00a0 /  m^3", "μg/m³"), ("mg / ㎥", "mg/m³"),
+    ("PPM", "ppm"), ("parts per billion", "ppb"),
+    ("℃", "°C"), ("celcius", "°C"), ("farenheit", "°F"),
+    ("kW·h", "kWh"), ("％", "%"), ("pCi/l", "pCi/L"),
+    ("Mg/m3", "Mg/m3"), ("MW", "MW"), ("mW", "mW"),
+    ("unknown unit", "unknown unit"),
+    ("kilowatts", "kW"), ("megawatts", "MW"), ("milliwatts", "mW"),
+    ("M W", "M W"), ("MWh", "MWh"), ("mW·h", "mWh"),
+    ("millivolts", "mV"), ("암페어", "A"), ("kΩ", "kΩ"),
+    ("kilopascals", "kPa"), ("in H2O", "inH₂O"),
+    ("㎏", "kg"), ("lbs", "lb"), ("µg", "μg"),
+    ("kilometres", "km"), ("ft^2", "ft²"), ("cm3", "cm³"),
+    ("litres", "L"), ("㎖", "mL"), ("m3 / hr", "m³/h"),
+    ("ml / sec", "mL/s"), ("mm/hr", "mm/h"), ("knots", "kn"),
+    ("µs", "μs"), ("hrs", "h"), ("분", "min"),
+    ("Mbps", "Mbit/s"), ("MBps", "MB/s"), ("mebibytes", "MiB"),
+    ("KB", "KB"), ("mbps", "mbps"), ("gal", "gal"),
+])
+def test_alias_dictionary_matches_live_jinja(hass, alias, canonical):
+    assert aq.normalize_unit(alias) == canonical
+    assert aq.normalize_unit(canonical) == canonical
+    hass.states.async_set("sensor.alias", "1", {"unit_of_measurement": alias})
+    expression = aq.source_unit_expression("'sensor.alias'")
+    assert Template("{{ " + expression + " }}", hass).async_render() == canonical
+
+
+def test_temperature_aliases_use_ha_offset_conversion():
+    from custom_components.virtual_layer.config_flow import _sensor_unit_conversion_transforms
+    unit, transforms = _sensor_unit_conversion_transforms(["℃", "farenheit"], "temperature")
+    assert unit == "°C"
+    scale, offset = transforms[1]
+    assert 32 * scale + offset == pytest.approx(0)
+
+
+@pytest.mark.parametrize("units,device_class,expected", [
+    (["watts", "kilowatts"], "power", 1000),
+    (["Wh", "kW·h"], "energy", 1000),
+    (["grams", "kilograms"], "weight", 1000),
+    (["litres", "ml"], "volume", 0.001),
+    (["Pa", "kilopascals"], "pressure", 1000),
+    (["m³/h", "L / min"], "volume_flow_rate", 0.06),
+    (["bit/s", "Mbps"], "data_rate", 1000000),
+    (["seconds", "hrs"], "duration", 3600),
+])
+def test_extended_aliases_feed_native_unit_conversion(units, device_class, expected):
+    from custom_components.virtual_layer.config_flow import _sensor_unit_conversion_transforms
+    unit, transforms = _sensor_unit_conversion_transforms(units, device_class)
+    assert unit == aq.normalize_unit(units[0])
+    assert transforms[1] == pytest.approx((expected, 0))
+
+
+def test_all_aliases_are_idempotent_and_preserve_ha_units():
+    from homeassistant.util import unit_conversion
+    for alias, canonical in aq.UNIT_ALIASES.items():
+        assert aq.normalize_unit(alias) == canonical
+        assert aq.normalize_unit(canonical) == canonical
+    for converter in vars(unit_conversion).values():
+        if isinstance(converter, type) and hasattr(converter, "VALID_UNITS"):
+            for unit in converter.VALID_UNITS:
+                if unit is not None:
+                    assert aq.normalize_unit(unit) == unit
 
 
 @pytest.mark.parametrize("missing,expected", [("skip", "good"), ("unknown", "unknown")])

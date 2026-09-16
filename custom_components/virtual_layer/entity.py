@@ -504,6 +504,9 @@ class VirtualEntity(RestoreEntity):
             ATTR_AVAILABLE: self._attr_available,
         }
         self._attr_extra_state_attributes.update(self._virtual_attributes)
+        self._attr_extra_state_attributes[CONF_SOURCE_ENTITIES] = list(
+            self._source_entities
+        )
         if self._virtual_attributes:
             self._attr_extra_state_attributes[ATTR_VIRTUAL_ATTRIBUTES] = list(
                 self._virtual_attributes.keys()

@@ -52,7 +52,15 @@ async def test_doorbell_repeated_rings_and_device_lifecycle(hass, source_domain)
     assert all(
         entity.device_id == device_id
         for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if "source_usage:" not in entity.unique_id
     )
+    usage, = [
+        entity for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if "source_usage:" in entity.unique_id
+    ]
+    # The unregistered physical source has no device to attach its reverse link to.
+    assert usage.device_id is None
+    assert hass.states.get(usage.entity_id).attributes["virtual_entities"] == [ring_id]
     assert hass.states.get(ring_id).state == initial
     if source_domain == "event":
         assert hass.states.get(ring_id).attributes["device_class"] == "doorbell"

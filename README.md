@@ -38,6 +38,16 @@ and manage them from `Settings > Devices & services > Virtual Layer`.
 - Delete a complete virtual Device, including malformed legacy groups
 - Set entity name and entity ID from the UI
 - Create a virtual entity from one or more existing Home Assistant entities
+- Inspect each virtual entity's `source_entities` state attribute for its
+  configured source entity IDs in order (an empty list when no sources are set).
+- Each referenced source also gets a diagnostic usage sensor, attached to the
+  source's existing device when available (otherwise a standalone sensor).
+  Its state counts the virtual entities using that source; `virtual_entities`
+  lists their IDs and `source_entity_id` identifies the source. References are
+  grouped per Virtual Layer config entry, including explicit attribute/template
+  sources. Sensors update or disappear as references are edited or removed;
+  source outages do not erase configured usage. Original devices and entities
+  keep their metadata and ownership.
 - Convert one supported single source to a different virtual entity type, such
   as a real switch exposed as a virtual fan
 - Auto-generate useful helper templates when multiple source entities are
@@ -262,6 +272,21 @@ and their normal unknown/unavailable handling resumes. Source retries do not
 extend this deadline, and editing entities does not start a new recovery window.
 
 ## Composite Entities
+
+Source-unit matching uses an explicit spelling-alias dictionary shared by
+sensor conversion and air-quality helpers. For example, `µg / m^3`, `ug/m3`,
+and `μg/m³` match; `℃` and the common typo `celcius` become `°C`;
+`kW·h` becomes `kWh`. Whitespace is normalized, including nonbreaking spaces.
+Aliases preserve values; physical unit conversions remain a separate step.
+Unknown spellings are retained, and SI prefix case remains significant
+(`mg` is not `Mg`). Source entities are not modified.
+The dictionary also covers power/energy, electrical units, pressure, mass,
+distance/area/volume, flow, speed, duration, and data sizes/rates, including
+English unit names, selected Korean names, and compatibility symbols such as
+`㎏` and `㎖`. Examples: `litres` → `L`, `m3 / hr` → `m³/h`,
+`lbs` → `lb`, and `Mbps` → `Mbit/s`. Bytes and bits, decimal and binary
+prefixes, and milli/mega prefixes remain distinct. Ambiguous spellings such as
+`KB` or `mbps` are not guessed.
 
 When adding or editing an entity, select one or more existing Home Assistant
 entities first. Virtual Layer prefills the new virtual entity from those
@@ -530,6 +555,13 @@ entities and sensor/number/binary-sensor names containing air-quality terms
 (for example AQI, PM2.5, CO₂, TVOC, 공기질, or 미세먼지). Generated source
 icon helpers use the same icon. Explicit icons and custom icon templates remain
 editable and are preserved under the normal helper policy.
+Name matching also recognizes toluene, xylene, ethylbenzene, styrene, acetone,
+acetaldehyde, acrolein, methanol, methane, propane, butane, chlorine, hydrogen
+chloride/cyanide/fluoride, sulfur trioxide, NOx, SOx, and BTEX, including Korean
+names and common spelling variants. Unicode subscripts, full-width characters,
+and separator variants normalize consistently. These additional names share the
+default icon; recognition alone does not add automatic grading thresholds or
+concentration conversions. Ambiguous formulas such as C8H10 are not inferred.
 Source categories (including matterbridge-hass aliases) and explicit AQI values
 are converted into categorical strings for the separate bridge sensor. Multiple
 known sources use the worst category. Unavailable sources are skipped; no valid

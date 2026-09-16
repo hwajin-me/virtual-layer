@@ -391,6 +391,10 @@ async def async_setup_entry(
     vcfg = BlendedCfg(hass, entry.data, entry.options, entry)
     await vcfg.async_load()
 
+    from .source_usage import async_append_source_usage_sensors
+
+    async_append_source_usage_sensors(hass, entry, vcfg.entities)
+
     _, previous_group = _runtime_group_for_entry(hass, entry)
     previous_configs = (previous_group or {}).get("config_snapshot", {})
     # Entity constructors and registry guards may mutate runtime configs. Keep
@@ -1144,6 +1148,7 @@ def _state_only_attributes(entity):
             if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
         })
     attributes.update(generic_entity_options(entity))
+    attributes[CONF_SOURCE_ENTITIES] = list(entity.get(CONF_SOURCE_ENTITIES, []))
     return attributes
 
 
@@ -1271,6 +1276,7 @@ def _state_only_initial_state(hass, entity) -> tuple[object, dict]:
         entity.get(CONF_INITIAL_AVAILABILITY, DEFAULT_AVAILABILITY),
     )
     attributes.update(generic_entity_options(entity))
+    attributes[CONF_SOURCE_ENTITIES] = list(entity.get(CONF_SOURCE_ENTITIES, []))
     return value, attributes
 
 
@@ -2057,6 +2063,8 @@ def _assert_managed_virtual_entity(hass, entity_id) -> None:
     entity_entry = er.async_get(hass).async_get(entity_id)
     if entity_entry is None or entity_entry.platform != COMPONENT_DOMAIN:
         raise HomeAssistantError(f"{entity_id} is not managed by virtual_layer")
+    if f"{DIAGNOSTIC_UNIQUE_ID_MARKER}source_usage:" in entity_entry.unique_id:
+        raise HomeAssistantError(f"{entity_id} is a read-only source usage sensor")
 
 
 def _assert_managed_virtual_entities(hass, entity_ids) -> None:

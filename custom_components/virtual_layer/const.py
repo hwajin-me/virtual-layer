@@ -38,6 +38,7 @@ RESERVED_VIRTUAL_ATTRIBUTE_NAMES = frozenset({
     ATTR_PERSISTENT,
     ATTR_UNIQUE_ID,
     ATTR_VIRTUAL_ATTRIBUTES,
+    "source_entities",
 })
 
 # Home Assistant owns these state attributes. Camera/image access metadata is
