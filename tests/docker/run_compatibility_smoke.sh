@@ -11,6 +11,7 @@ docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
   homeassistant - <<'PY'
 import asyncio
 import copy
+import math
 import os
 import tempfile
 from threading import get_ident
@@ -301,6 +302,7 @@ async def test_sensor_conversion_runtime():
             ("pm10", "μg/m³", 30, "ug/m3", 10, "μg/m³", 20),
             ("carbon_dioxide", "ppm", 800, "ppb", 600000, "ppm", 700),
             ("carbon_monoxide", "ppb", 1000, "ppm", 3, "ppm", 2),
+            ("volatile_organic_compounds", "ppb", 100, "mg/m³", 0.45, "mg/m³", 0.45),
             (None, "Bq/m³", 37, "pCi/L", 1, "Bq/m³", 37),
         )
         for index, (
@@ -330,9 +332,8 @@ async def test_sensor_conversion_runtime():
                 _sensor_conversion_choices(source_ids, hass)["state"],
             )
             options = yaml.safe_load(defaults[CONF_DOMAIN_OPTIONS_JSON])
-            assert float(converted._render_template(
-                defaults[CONF_VALUE_TEMPLATE]
-            )) == expected_value
+            rendered = float(converted._render_template(defaults[CONF_VALUE_TEMPLATE]))
+            assert math.isclose(rendered, expected_value), (device_class, rendered, expected_value)
             assert options["unit_of_measurement"] == expected_unit
             assert options.get("class") == device_class
             if device_class is not None:
@@ -865,6 +866,7 @@ async def test_config_flow_create_modify_runtime():
         assert hass.states.get("sensor.docker_formaldehyde").state == "0.003"
         assert hass.states.get("sensor.docker_formaldehyde").attributes["unit_of_measurement"] == "mg/m3"
         assert hass.states.get("air_quality.docker_formaldehyde_aqi").state == "good"
+        assert hass.states.get("sensor.docker_formaldehyde_aqim").state == "good"
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
         assert hass.states.get("air_quality.docker_formaldehyde_aqi").state == "good"
@@ -918,6 +920,7 @@ async def test_config_flow_create_modify_runtime():
         assert float(hass.states.get("sensor.docker_co_detector_2_co").state) == 0
         assert hass.states.get("air_quality.docker_composite_co2_aqi").state == "moderate"
         assert hass.states.get("air_quality.docker_co_alarm_aqi").state == "good"
+        assert hass.states.get("sensor.docker_co_alarm_aqim").state == "good"
         for value, expected in [("on", "poor"), ("unavailable", "poor"), ("off", "good")]:
             hass.states.async_set("binary_sensor.docker_co_alarm_input", value)
             await hass.async_block_till_done()

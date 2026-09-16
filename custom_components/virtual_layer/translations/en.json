@@ -71,7 +71,7 @@
       },
       "entity": {
         "title": "Add Virtual Entity",
-        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed air_quality.object_id_aqi entity named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged. matterbridge-hass 1.5.0 needs a separate sensor-domain compatibility entity.",
+        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed air_quality.object_id_aqi entity named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged. A sensor.object_id_aqim compatibility mirror is also generated for matterbridge-hass 1.5.0; match that ID in the bridge's Air Quality Regex.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",
@@ -736,7 +736,7 @@
           "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
           "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
           "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
-          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. VOC uses the TVOC approximation 1 ppb = 0.0045 mg/m³ (default output: mg/m³), with reverse conversion supported; other gases do not convert between mass and volume ratios. Attribute values are assumed to use this declared unit.",
           "boundary_1": "Boundary between intervals 1 and 2; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
           "boundary_2": "Boundary between intervals 2 and 3; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
           "boundary_3": "Boundary between intervals 3 and 4; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
@@ -805,7 +805,7 @@
           "attribute": "Leave empty for entity state (or air_quality attribute in category mode). For measurements from an attribute, enter its exact name; the boundary unit is also the declared attribute unit.",
           "aggregation": "First valid selects the first usable category. Worst selects the most severe category after classifying each source. Applies to measurement mode only when classifying per source.",
           "missing": "Skip tries other valid sources; if none remain the result is unknown. Unknown requires every selected source to provide a valid value. Unavailable sources and invalid units count as missing.",
-          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit. PM/VOC mass requires μg/m³ or mg/m³; AQI requires unitless; VOC volume ratio requires ppm/ppb. Gases accept mass units or ppm/ppb, but no conversion between mass and volume ratios is performed.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. VOC uses the TVOC approximation 1 ppb = 0.0045 mg/m³ (default output: mg/m³), with reverse conversion supported; other gases do not convert between mass and volume ratios. Attribute values are assumed to use this declared unit. PM requires μg/m³ or mg/m³; AQI requires unitless. VOC accepts μg/m³, mg/m³, ppm and ppb using the stated approximation. Other gases accept mass units or ppm/ppb without conversion between the two families.",
           "quantity": "Automatic uses known source device classes. Explicit selection treats mismatching state device_class as missing. Attributes use your declared quantity and unit. PM1 is not PM0.1."
         }
       },
@@ -833,7 +833,7 @@
         },
         "data_description": {
           "sources": "Select 1–64 source entities in priority order. Use sources measuring the same quantity when applying measurement boundaries.",
-          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. No mass-to-volume conversion. Attribute values are assumed to use this declared unit. PM/VOC mass requires μg/m³ or mg/m³; AQI requires unitless; VOC volume ratio requires ppm/ppb. Gases accept mass units or ppm/ppb, but no conversion between mass and volume ratios is performed.",
+          "unit": "Unitless is for AQI or other unitless values. Entity-state units must match or be convertible between μg/m³ and mg/m³, or ppm and ppb. VOC uses the TVOC approximation 1 ppb = 0.0045 mg/m³ (default output: mg/m³), with reverse conversion supported; other gases do not convert between mass and volume ratios. Attribute values are assumed to use this declared unit. PM requires μg/m³ or mg/m³; AQI requires unitless. VOC accepts μg/m³, mg/m³, ppm and ppb using the stated approximation. Other gases accept mass units or ppm/ppb without conversion between the two families.",
           "boundary_1": "Boundary between intervals 1 and 2; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
           "boundary_2": "Boundary between intervals 2 and 3; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
           "boundary_3": "Boundary between intervals 3 and 4; nonnegative and greater than the previous boundary. Equality follows the selected boundary rule.",
@@ -1035,7 +1035,7 @@
       },
       "edit_entity": {
         "title": "Edit Virtual Entity",
-        "description": "Update this virtual entity and save the new configuration. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed air_quality.object_id_aqi entity named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged. matterbridge-hass 1.5.0 needs a separate sensor-domain compatibility entity.",
+        "description": "Update this virtual entity and save the new configuration. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed air_quality.object_id_aqi entity named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged. A sensor.object_id_aqim compatibility mirror is also generated for matterbridge-hass 1.5.0; match that ID in the bridge's Air Quality Regex.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",
@@ -1707,7 +1707,7 @@
       },
       "entity": {
         "title": "Add Virtual Entity",
-        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed air_quality.object_id_aqi entity named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged. matterbridge-hass 1.5.0 needs a separate sensor-domain compatibility entity.",
+        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed air_quality.object_id_aqi entity named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged. A sensor.object_id_aqim compatibility mirror is also generated for matterbridge-hass 1.5.0; match that ID in the bridge's Air Quality Regex.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",

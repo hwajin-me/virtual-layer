@@ -525,6 +525,11 @@ template its activity, battery level, fan speed list, current fan speed, and
 supported feature set without editing JSON.
 
 New air-quality entities default to **Automatic**, skipping the rule wizard.
+The config flow uses `mdi:air-filter` as the default icon for Air Quality
+entities and sensor/number/binary-sensor names containing air-quality terms
+(for example AQI, PM2.5, CO₂, TVOC, 공기질, or 미세먼지). Generated source
+icon helpers use the same icon. Explicit icons and custom icon templates remain
+editable and are preserved under the normal helper policy.
 Source categories (including matterbridge-hass aliases) and explicit AQI values
 are converted into categorical strings for the separate bridge sensor. Multiple
 known sources use the worst category. Unavailable sources are skipped; no valid
@@ -607,6 +612,14 @@ or infinity. Display precision must be a nonnegative integer.
 
 UI-managed virtual measurement sensors also receive an automatic companion on
 load: `air_quality.<measurement_object_id>_aqi`, named `<measurement name> Air Quality`.
+Each automatic companion also has a `sensor.<measurement_object_id>_aqim`
+Matterbridge compatibility mirror. It forwards the same textual grade and
+stale/partial status, has no numeric AQI device class or concentration unit,
+and is removed with its parent. Match this sensor ID in the Matterbridge
+Air Quality Regex; the integration does not change bridge settings.
+Formaldehyde names also recognize CH2O/CH₂O. A classless, generically named
+composite can inherit an unambiguous pollutant identity from its sources;
+declared parent device classes are never replaced.
 Legacy automatically generated `sensor.*_aqi` registry entries migrate to this
 domain on reload; original measurement sensors and independently configured
 entities are preserved. Generated identity and registry name/icon overrides are
@@ -674,10 +687,9 @@ Finish the source editor and save the final entity form to apply. Sensor recipes
 configure the managed `_aqi` companion without changing the parent's templates;
 combined-result profiles follow parent entity-ID changes. Existing custom Jinja
 remains governed by the selected helper update policy.
-These automatic companions now use the `air_quality` domain. matterbridge-hass
-1.5.0's sensor-based mapping cannot be enabled for them by a regex change alone.
-For that mapping, explicitly configure a separate Air Quality entity and use its
-existing `sensor.*_air_quality` compatibility companion described below.
+The primary automatic companion uses the `air_quality` domain. For
+matterbridge-hass 1.5.0's sensor-based mapping, use its `sensor.*_aqim` mirror.
+Explicit Air Quality entities retain their `sensor.*_air_quality` companion.
 The automatic AQI conversion mirrors matterbridge-hass 1.5.0's 0–500 linear
 mapping (`floor(AQI / 100 + 0.5)` selects one of six categories), not a health
 standard or a concentration-to-AQI formula. Values outside 0–500 are unknown.
@@ -707,8 +719,8 @@ for PM1.0, PM2.5, PM10, CO, NO2, AQI, radon, formaldehyde, CO2, ozone,
 SO2, NO and VOC (mass or parts). PM1 is never treated as PM0.1 or PM2.5.
 Additional local display bands are PM1 (μg/m³): 5/10/20/35/55;
 ozone (ppb): 20/40/60/80/100; SO2 and NO (ppb): 20/40/80/160/320;
-VOC parts (ppb): 50/100/200/400/800. These are editable local conventions,
-not official exposure limits. Gas mass and ppm/ppb are not interchangeable;
+VOC defaults use mg/m³: 0.2/0.3/0.5/0.75/0.95. These are editable local conventions,
+not official exposure limits. Other gas mass and ppm/ppb are not interchangeable;
 use explicit manual rules for units outside a profile's supported family.
 Benzene (C6H6/C₆H₆), ammonia (NH3/NH₃) and hydrogen sulfide (H2S/H₂S)
 are integration-specific quantities, not new HA device classes or native Matter
@@ -717,8 +729,14 @@ concentration clusters. Their local display bands are benzene (μg/m³):
 0.005/0.01/0.02/0.05/0.1. These are configurable display conventions,
 not safety limits or replacements for dedicated gas alarms. Their grades can
 use the same automatic and per-source categorical sensor helpers.
-TVOC/eTVOC names use the VOC mass or parts profile according to the supplied
-unit; eTVOC remains an estimated reading, not a chemically specific measurement.
+TVOC/eTVOC default helpers convert ppb to mg/m³ using **1 ppb = 0.0045 mg/m³**
+(100 ppb = 0.45 mg/m³), then aggregate compatible sources. Reverse conversion
+uses ppb = mg/m³ / 0.0045; ppm and μg/m³ prefixes are also supported.
+The output sensor uses the VOC mass device class. This is a mixture approximation
+based on [Sensirion's TVOC guidance](https://sensirion.com/media/documents/4B4D0E67/6520038C/GAS_AN_SGP4x_BuildingStandards_D1_1.pdf),
+not a universal gas constant or sensor-specific calibration. Generated Jinja
+helpers remain editable; existing saved units, thresholds and custom helpers
+are preserved. eTVOC remains an estimated reading, not a chemically specific measurement.
 Unitless VOC indices are not treated as concentrations. O3/O₃, CO and NO2/NO₂
 aliases are recognized. Atmospheric pressure and PIR stay native pressure and
 motion entities; neither contributes an air-pollution grade.
@@ -727,7 +745,7 @@ hints (including Korean names). Conflicting hints, mixed pollutants, explicit
 attribute inputs and unsupported profiles do not guess thresholds. Existing
 values, including rejected edits, remain untouched. Names identify a proposed
 profile, not trustworthy physical units: validate source metadata before saving.
-Mass and gas-ratio prefixes are converted only within compatible unit families;
+Except for the explicit VOC approximation, mass and gas-ratio prefixes are converted only within compatible unit families;
 radon additionally supports Bq/m³ and pCi/L (1 pCi/L = 37 Bq/m³).
 PM/CO/NO2 presets borrow [EPA concentration breakpoints](https://aqs.epa.gov/aqsweb/documents/codetables/aqi_breakpoints.html)
 but do not perform required time averaging or calculate official AQI. Radon
@@ -752,8 +770,8 @@ uses a 30-minute average, which this instantaneous helper does not calculate.
 [UBA's TVOC advice](https://www.umweltbundesamt.de/en/topics/health/commissions-working-groups/german-committee-on-indoor-air-guide-values)
 identifies concentrations above 950 μg/m³ as a precautionary concern and says TVOC
 alone cannot assess health risk. The lower four TVOC boundaries are local choices,
-not UBA categories. TVOC/eTVOC in ppb retain a separate profile; mass and parts
-are not interchangeable without sensor-specific calibration. CO/NO₂ and other
+not UBA categories. New TVOC/eTVOC profiles in ppb use the mass profile through
+the above approximation; existing explicit profiles retain their thresholds. CO/NO₂ and other
 gas profiles are not relaxed based on home size; these helpers never replace
 certified smoke/CO alarms. Radon and CO₂ retain their user-requested defaults.
 Generated PM2.5/PM10 helpers can read matching numeric sensor states, including
@@ -764,7 +782,7 @@ The input step also selects the measured quantity (PM1/PM2.5/PM10, AQI,
 CO₂/CO/O₃/NO₂/NO/SO₂, or VOC mass/volume ratio). Known quantities are detected
 from source device classes; different pollutants cannot share one numeric
 threshold rule. Classify pollutants separately and combine their categories.
-PM requires mass units, AQI is unitless, and VOC volume ratio requires ppm/ppb.
+PM requires mass units, AQI is unitless, and VOC supports mass and ppm/ppb with the above approximation.
 Explicit quantities also guard against changed source device classes at runtime.
 Attribute inputs rely on the user's declared quantity and unit.
 

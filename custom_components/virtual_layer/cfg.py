@@ -1077,6 +1077,15 @@ class BlendedCfg:
                 unit = import_module(".sensor", __package__).UNITS_OF_MEASUREMENT.get(device_class)
             attributes["unit_of_measurement"] = unit
             snapshot = State(entity_id, str(entity.get(CONF_INITIAL_VALUE, "unknown")), attributes)
+            if platform == "sensor" and not device_class and aq_options.infer_quantity(snapshot) is None:
+                source_states = [self._hass.states.get(source) for source in source_entities]
+                quantities = {aq_options.infer_quantity(state) if state else None for state in source_states}
+                if len(quantities) == 1 and None not in quantities:
+                    # Generic composite names can still represent an unambiguous
+                    # pollutant. Do not override a declared parent device class.
+                    quantity = next(iter(quantities))
+                    attributes["friendly_name"] = quantity
+                    snapshot = State(entity_id, snapshot.state, attributes)
             recipe = None
             try:
                 if CONF_AIR_QUALITY_LOGIC in entity:
@@ -1138,6 +1147,24 @@ class BlendedCfg:
                             "air_quality_logic": recipe,
                         },
                     })
+                    bridge_uid = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}aqim"
+                    bridge_id = self._reserve_entity_id("sensor", f"sensor.{object_id}_aqim", bridge_uid)
+                    if bridge_id is not None:
+                        sensor_entities.append({
+                            **{key: entity[key] for key in (
+                                CONF_MANUFACTURER, CONF_MODEL, CONF_SW_VERSION, CONF_HW_VERSION,
+                                CONF_SERIAL_NUMBER, CONF_CONFIGURATION_URL, CONF_SUGGESTED_AREA,
+                                CONF_VIA_DEVICE_ID,
+                            ) if key in entity},
+                            CONF_NAME: f"{entity[CONF_NAME]} Air Quality Matter",
+                            ATTR_ENTITY_ID: bridge_id, ATTR_UNIQUE_ID: bridge_uid,
+                            ATTR_DEVICE_ID: device_id, CONF_INITIAL_VALUE: "unknown",
+                            CONF_INITIAL_AVAILABILITY: True, CONF_PERSISTENT: True,
+                            CONF_SOURCE_ENTITIES: [companion_id], CONF_ICON: "mdi:air-filter",
+                            CONF_VALUE_TEMPLATE: "{{ states(" + repr(companion_id) + ") }}",
+                            CONF_ATTRIBUTES: {"virtual_entity_id": entity_id,
+                                "source_entity_id": companion_id, "sensor_type": "matter_air_quality"},
+                        })
         if platform == "air_quality":
             # matterbridge-hass consumes sensor states, not air_quality domain
             # attributes. Keep this categorical: numeric 0..6 is interpreted

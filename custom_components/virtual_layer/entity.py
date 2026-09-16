@@ -1431,7 +1431,9 @@ class VirtualEntity(RestoreEntity):
                         unit = next(iter(units))
                         source_units[parent.entity_id] = unit
                         states = [State(parent.entity_id, parent.state,
-                                        {**parent.attributes, "unit_of_measurement": unit})]
+                                        {**parent.attributes, "unit_of_measurement": unit,
+                                         **({"friendly_name": quantity} if not parent.attributes.get("device_class")
+                                            and aq_options.infer_quantity(parent) is None else {})})]
             live_recipe = aq_options.automatic_recipe(
                 sources, states, previous=recipe,
             )

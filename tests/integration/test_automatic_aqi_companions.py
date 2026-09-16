@@ -17,6 +17,45 @@ from custom_components.virtual_layer.const import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("name", ["CH2O", "CH₂O", "Indoor measurement"])
+async def test_formaldehyde_companion_and_matter_fallback(hass, tmp_path, monkeypatch, name):
+    monkeypatch.setattr("custom_components.virtual_layer.cfg.default_meta_file", lambda hass: str(tmp_path / "hcho.json"))
+    hass.states.async_set("sensor.physical_hcho", "0.003", {"device_class": "formaldehyde", "unit_of_measurement": "mg/m³"})
+    record = {CONF_PLATFORM: "sensor", ATTR_ENTITY_ID: "sensor.indoor_measurement",
+              CONF_NAME: name, CONF_SOURCE_ENTITIES: ["sensor.physical_hcho"],
+              CONF_VALUE_TEMPLATE: "{{ states('sensor.physical_hcho') }}"}
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Air"},
+                            options={ATTR_DEVICES: {"Air": [record]}})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    for entity_id in ["air_quality.indoor_measurement_aqi", "sensor.indoor_measurement_aqim"]:
+        assert hass.states.get(entity_id).state == "good"
+    bridge = hass.states.get("sensor.indoor_measurement_aqim")
+    assert "unit_of_measurement" not in bridge.attributes
+    assert "device_class" not in bridge.attributes
+    hass.states.async_set("sensor.physical_hcho", "0.09", {"device_class": "formaldehyde", "unit_of_measurement": "mg/m³"})
+    await hass.async_block_till_done()
+    await asyncio.sleep(0.1)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.indoor_measurement_aqim").state == "very_poor"
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.indoor_measurement_aqim").state == "very_poor"
+    assert hass.states.get("sensor.indoor_measurement").state == "0.09"
+    hass.states.async_set("sensor.physical_hcho", "unavailable")
+    await hass.async_block_till_done()
+    await asyncio.sleep(0.1)
+    await hass.async_block_till_done()
+    mirror = hass.states.get("sensor.indoor_measurement_aqim")
+    assert mirror.state == "very_poor"
+    assert mirror.attributes["air_quality_stale"] is True
+    hass.config_entries.async_update_entry(entry, options={ATTR_DEVICES: {"Air": []}})
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.indoor_measurement_aqim") is None
+    assert er.async_get(hass).async_get("sensor.indoor_measurement_aqim") is None
+
+
 async def test_legacy_sensor_aqi_migrates_domain_without_deleting_parent(hass, tmp_path, monkeypatch):
     from homeassistant.core import State
     from pytest_homeassistant_custom_component.common import mock_restore_cache

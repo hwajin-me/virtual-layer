@@ -1848,6 +1848,11 @@ def _sensor_unit_conversion_transforms(
     the flow supports temperature offsets (°F ↔ °C), as well as power, energy,
     distance, pressure, and other conversion families.
     """
+    if device_class in aq_options.VOC_QUANTITIES:
+        normalized_voc = tuple(aq_options.normalize_unit(unit) for unit in units)
+        if normalized_voc and all(unit in aq_options.VOC_MG_FACTORS for unit in normalized_voc):
+            return "mg/m³", tuple((aq_options.VOC_MG_FACTORS[unit], 0.0) for unit in normalized_voc)
+        return None
     if profile := _sensor_unit_conversion_profile(units):
         unit, factors = profile
         return unit, tuple((factor, 0.0) for factor in factors)
@@ -1910,7 +1915,9 @@ def _typed_measurement_properties(
         if hass is None:
             return None
         state = hass.states.get(entity_id)
-        device_class = state.attributes.get("device_class") if state else None
+        device_class = aq_options.canonical_quantity(state.attributes.get("device_class")) if state else None
+        if state is not None and aq_options.infer_quantity(state) in aq_options.VOC_QUANTITIES:
+            device_class = aq_options.VOC_QUANTITIES[0]
         if not isinstance(device_class, str) or not device_class:
             return {}
         return {device_class: ("state", "unit_of_measurement", "", "direct")}
@@ -1940,7 +1947,9 @@ def _sensor_source_conversion_choices(
     domain = entity_id.split(".", 1)[0]
     if domain in {"sensor", "number"}:
         state = hass.states.get(entity_id) if hass is not None else None
-        device_class = state.attributes.get("device_class") if state else None
+        device_class = aq_options.canonical_quantity(state.attributes.get("device_class")) if state else None
+        if state is not None and aq_options.infer_quantity(state) in aq_options.VOC_QUANTITIES:
+            device_class = aq_options.VOC_QUANTITIES[0]
         if device_class is not None and not isinstance(device_class, str):
             return {}
         return {"state": ("state", device_class, "unit_of_measurement", "", "direct")}
@@ -2161,10 +2170,12 @@ def _sensor_conversion_choices(
                         source_class = device_class
                         if source_class is None and attribute == "state" and state:
                             source_class = state.attributes.get("device_class")
+                            if aq_options.infer_quantity(state) in aq_options.VOC_QUANTITIES:
+                                source_class = aq_options.VOC_QUANTITIES[0]
                         unit = fallback_unit
                         if unit_attribute and state:
                             unit = state.attributes.get(unit_attribute) or fallback_unit
-                        source_classes.append(source_class or None)
+                        source_classes.append(aq_options.canonical_quantity(source_class) or None)
                         source_units.append(unit or None)
                     unit_profile = _sensor_unit_conversion_transforms(
                         source_units,
@@ -2212,7 +2223,10 @@ def _sensor_conversion_choices(
         return choices
     for entity_id in entity_ids:
         domain = entity_id.split(".", 1)[0]
-        if domain == "sensor":
+        if domain == "sensor" and not (
+            hass is not None
+            and aq_options.infer_quantity(hass.states.get(entity_id)) in aq_options.VOC_QUANTITIES
+        ):
             # A single sensor already copies its state, class, state class, and
             # unit through the normal helper path. Avoid forcing text, enum,
             # timestamp, and restored sensors through numeric measurement UI.
@@ -2228,6 +2242,8 @@ def _sensor_conversion_choices(
             transforms = ((1.0, 0.0),)
             if hass is not None and unit_attribute:
                 state = hass.states.get(entity_id)
+                if attribute == "state" and state is not None and aq_options.infer_quantity(state) in aq_options.VOC_QUANTITIES:
+                    device_class = aq_options.VOC_QUANTITIES[0]
                 source_unit = (
                     state.attributes.get(unit_attribute) if state else None
                 ) or fallback_unit
@@ -2237,6 +2253,8 @@ def _sensor_conversion_choices(
                     )
                 ) is not None:
                     fallback_unit, transforms = unit_profile
+                elif device_class in aq_options.VOC_QUANTITIES:
+                    continue
             choices[key] = (
                 (entity_id,),
                 attribute,
@@ -2582,7 +2600,9 @@ def _apply_sensor_conversion_defaults(
                 source_value, conversion, transform
             )
         ) is not None:
-            values.append(converted_value)
+            if device_class in aq_options.VOC_QUANTITIES and not math.isfinite(converted_value):
+                continue
+            values.append(round(converted_value, 12) if device_class in aq_options.VOC_QUANTITIES else converted_value)
     value = (
         values[0]
         if len(entity_ids) == 1 and values
@@ -2607,9 +2627,17 @@ def _apply_sensor_conversion_defaults(
             entity_ids, source_attributes, strict=True
         )
     ]
+    if device_class in aq_options.VOC_QUANTITIES:
+        # Follow live unit changes; a saved scale must not reinterpret new units.
+        expressions = [
+            f"((({raw} | float) * {aq_options.VOC_MG_FACTORS!r}.get({aq_options.source_unit_expression(repr(source_id))}, 0)) | round(12) "
+            f"if is_number({raw}) and {aq_options.source_unit_expression(repr(source_id))} in {list(aq_options.VOC_MG_FACTORS)!r} "
+            f"and state_attr({source_id!r}, 'device_class') in {[None, '', *aq_options.VOC_QUANTITIES]!r} else none)"
+            for source_id, raw in zip(entity_ids, raw_expressions, strict=True)
+        ]
     result[CONF_AVAILABILITY_TEMPLATE] = (
         "{{ (["
-        + ", ".join(f"{expression} | is_number" for expression in raw_expressions)
+        + ", ".join(f"{expression} | is_number" for expression in (expressions if device_class in aq_options.VOC_QUANTITIES else raw_expressions))
         + "] | select | list | count) > 0 }}"
     )
     if len(expressions) > 1:
@@ -2629,7 +2657,7 @@ def _apply_sensor_conversion_defaults(
         source_class = state.attributes.get("device_class")
         if isinstance(source_class, str) and source_class.strip():
             options[CONF_CLASS] = source_class
-    if len(entity_ids) == 1 and unit_attribute and state is not None:
+    if len(entity_ids) == 1 and unit_attribute and state is not None and device_class not in aq_options.VOC_QUANTITIES:
         unit = state.attributes.get(unit_attribute)
         if isinstance(unit, str) and unit.strip():
             unit_profile = _sensor_unit_conversion_profile((unit,))
@@ -3229,7 +3257,9 @@ def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         vol.Required(
             CONF_ENTITY_NAME, default=defaults.get(CONF_ENTITY_NAME, "Virtual Entity")
         ): str,
-        vol.Optional(CONF_ICON, default=defaults.get(CONF_ICON, "")): ICON_SELECTOR,
+        vol.Optional(CONF_ICON, default=defaults.get(CONF_ICON) or _air_quality_default_icon(
+            platform, defaults.get(CONF_ENTITY_NAME), defaults.get(ATTR_ENTITY_ID)
+        )): ICON_SELECTOR,
         _editable_optional(
             CONF_ICON_TEMPLATE,
             defaults.get(CONF_ICON_TEMPLATE, ""),
@@ -4203,6 +4233,20 @@ def _validate_virtual_entity_id_available(
         raise EntityIdAlreadyUsed
 
 
+def _air_quality_default_icon(platform, *names) -> str:
+    """Use one default icon for air-quality names across source integrations."""
+    if platform == "air_quality":
+        return "mdi:air-filter"
+    if platform not in ("sensor", "number", "binary_sensor"):
+        return ""
+    name = " ".join(value for value in names if isinstance(value, str)).lower()
+    patterns = (*aq_options.NAME_HINTS.values(), r"air[ _-]*quality|공기[ _-]*질|미세먼지")
+    if any(re.search(r"(?<![a-z0-9])(?:" + pattern + r")(?![a-z0-9])", name)
+           for pattern in patterns):
+        return "mdi:air-filter"
+    return ""
+
+
 def _build_entity_config(
     user_input: dict[str, Any],
     schema=None,
@@ -4240,7 +4284,9 @@ def _build_entity_config(
     raw_icon = user_input.get(CONF_ICON)
     if raw_icon is not None and not isinstance(raw_icon, str):
         raise InvalidFieldValue(CONF_ICON)
-    icon = _text_default(raw_icon).strip()
+    icon = _text_default(raw_icon).strip() or _air_quality_default_icon(
+        platform, entity_name, user_input.get(ATTR_ENTITY_ID)
+    )
     if icon:
         try:
             entity[CONF_ICON] = cv.icon(icon)
@@ -8718,7 +8764,15 @@ def _reference_entity_defaults(
             + repr(entity_ids[air_conditioner_index])
             + ") not in ['unknown', 'unavailable'] }}"
         )
-    if boiler_profile is not None:
+    air_quality_icon = _air_quality_default_icon(
+        platform, defaults.get(CONF_ENTITY_NAME), *entity_ids
+    )
+    if air_quality_icon:
+        defaults[CONF_ICON] = air_quality_icon
+        # Use the editable static fallback instead of a source icon; a later
+        # explicit icon choice must not be masked by this generated helper.
+        defaults[CONF_ICON_TEMPLATE] = _literal_template("")
+    elif boiler_profile is not None:
         climate_entity_id = entity_ids[boiler_profile[0]]
         defaults[CONF_ICON_TEMPLATE] = (
             f"{{{{ state_attr({climate_entity_id!r}, {CONF_ICON!r}) "
@@ -9162,6 +9216,22 @@ def _reference_entity_defaults(
             _literal_template(_LIGHT_CAPABILITY_MODES[capability])
         )
 
+    if platform == "sensor" and states and all(
+        aq_options.infer_quantity(state) in aq_options.VOC_QUANTITIES for state in states
+    ):
+        profile = _sensor_unit_conversion_transforms(
+            [state.attributes.get(CONF_UNIT_OF_MEASUREMENT) for state in states],
+            aq_options.VOC_QUANTITIES[0],
+        )
+        if profile is not None:
+            unit, transforms = profile
+            source_name = defaults.get(CONF_ENTITY_NAME)
+            defaults = _apply_sensor_conversion_defaults(
+                hass, defaults,
+                (tuple(entity_ids), "state", aq_options.VOC_QUANTITIES[0], None, unit, "direct", transforms),
+            )
+            if source_name is not None:
+                defaults[CONF_ENTITY_NAME] = source_name
     return defaults
 
 
@@ -10305,12 +10375,12 @@ class _AirQualityLogicFlow:
             else:
                 if mode == "measurement" and not sources["attribute"]:
                     quantities = {
-                        state.attributes.get("device_class")
+                        aq_options.canonical_quantity(state.attributes.get("device_class"))
                         for entity_id in sources["sources"]
                         if (state := self.hass.states.get(entity_id)) is not None
                         and state.attributes.get("device_class") in aq_options.QUANTITIES[1:]
                     }
-                    selected = sources.get("quantity", "any")
+                    selected = aq_options.canonical_quantity(sources.get("quantity", "any"))
                     if len(quantities) > 1 or (selected != "any" and quantities and quantities != {selected}):
                         self._aq_pending.update(user_input)
                         return self.async_show_form(
@@ -10338,6 +10408,8 @@ class _AirQualityLogicFlow:
                         "Bq/m³": {"Bq/m³", "pCi/L"},
                         "pCi/L": {"Bq/m³", "pCi/L"},
                     }
+                    if sources["quantity"] in aq_options.VOC_QUANTITIES:
+                        unit_groups.update({unit: set(aq_options.VOC_MG_FACTORS) for unit in aq_options.VOC_MG_FACTORS})
                     if any(
                         aq_options.normalize_unit(state.attributes.get("unit_of_measurement"))
                         not in unit_groups[sources["unit"]]
@@ -12590,6 +12662,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
         choices = ["keep"]
         metadata = self._unit_metadata
         if (self._unit_resolved and metadata and metadata.get("source") == "recorder"
+                and unit_history.entity_unit_available(self.hass, self._unit_old_id)
                 and self._unit_old_id == _virtual_entity_id(entity)
                 and metadata.get("unit_of_measurement") != self._unit_target):
             choices.append("relabel")

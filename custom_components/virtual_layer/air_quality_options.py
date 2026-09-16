@@ -13,6 +13,20 @@ from homeassistant.helpers import selector
 LEVELS = ("good", "fair", "moderate", "poor", "very_poor", "extremely_poor")
 MODES = ("automatic", "source", "measurement", "fixed", "custom")
 UNITS = ("unitless", "μg/m³", "mg/m³", "ppm", "ppb", "Bq/m³", "pCi/L")
+# TVOC mixture approximation (110 g/mol), not a universal gas conversion.
+VOC_QUANTITIES = ("volatile_organic_compounds", "volatile_organic_compounds_parts")
+VOC_MG_FACTORS = {"mg/m³": 1.0, "μg/m³": 0.001, "ppb": 0.0045, "ppm": 4.5}
+
+
+def canonical_quantity(quantity):
+    """Treat VOC mass and parts metadata as one convertible measurement."""
+    return VOC_QUANTITIES[0] if quantity in VOC_QUANTITIES else quantity
+
+
+def voc_factors(unit):
+    """Return source-to-target factors for the agreed TVOC approximation."""
+    return {source: factor / VOC_MG_FACTORS[unit] for source, factor in VOC_MG_FACTORS.items()}
+
 # Spelling aliases only: never infer a missing numerator or convert gas mass
 # concentrations into ppm. Preserve SI prefix case (mg is not Mg).
 UNIT_ALIASES = {unit: unit for unit in (*UNITS, "", "AQI")}
@@ -83,12 +97,12 @@ def validate_quantity_unit(quantity, unit):
     allowed = UNITS
     if quantity == "radon":
         allowed = ("Bq/m³", "pCi/L")
-    elif quantity in ("pm1", "pm25", "pm4", "pm10", "nitrous_oxide", "volatile_organic_compounds"):
+    elif quantity in VOC_QUANTITIES:
+        allowed = tuple(VOC_MG_FACTORS)
+    elif quantity in ("pm1", "pm25", "pm4", "pm10", "nitrous_oxide"):
         allowed = ("μg/m³", "mg/m³")
     elif quantity == "aqi":
         allowed = ("unitless",)
-    elif quantity == "volatile_organic_compounds_parts":
-        allowed = ("ppm", "ppb")
     elif quantity != "any":
         allowed = ("μg/m³", "mg/m³", "ppm", "ppb")
     if unit not in allowed:
@@ -108,7 +122,7 @@ STARTER_PROFILES = {
     "ozone": ("ppb", (20, 40, 60, 80, 100), "Local editable display bands; not health limits"),
     "sulphur_dioxide": ("ppb", (20, 40, 80, 160, 320), "Local editable display bands; not health limits"),
     "nitrogen_monoxide": ("ppb", (20, 40, 80, 160, 320), "Local editable display bands; not health limits"),
-    "volatile_organic_compounds_parts": ("ppb", (50, 100, 200, 400, 800), "Local editable display bands; not equivalent to VOC mass or health limits"),
+    "volatile_organic_compounds_parts": ("ppb", tuple(value / 4.5 for value in (200, 300, 500, 750, 950)), "Local TVOC mass bands converted with 1 ppb = 0.0045 mg/m³; approximate, not health limits"),
     "pm25": ("μg/m³", (9, 35.4, 55.4, 125.4, 225.4), "EPA PM2.5 concentration breakpoints; no time averaging"),
     "pm10": ("μg/m³", (54, 154, 254, 354, 424), "EPA PM10 concentration breakpoints; no time averaging"),
     "carbon_monoxide": ("ppm", (4.4, 9.4, 12.4, 15.4, 30.4), "EPA CO concentration breakpoints; no time averaging"),
@@ -125,7 +139,7 @@ NAME_HINTS = {
     "pm4": r"(?:pm|particulate[ _-]*matter)[ _.-]*4(?:[_.]0)?(?![0-9]|[_.][0-9])",
     "pm1": r"(?:pm|particulate[ _-]*matter)[ _.-]*1(?:[_.]0)?(?![0-9]|[_.][0-9])",
     "radon": r"radon|라돈",
-    "formaldehyde": r"formaldehyde|hcho|포름알데히드",
+    "formaldehyde": r"formaldehyde|hcho|ch2o|ch₂o|포름알데히드|포름알데하이드",
     "carbon_dioxide": r"carbon[ _-]*dioxide|co2|co₂|이산화탄소",
     "carbon_monoxide": r"carbon[ _-]*monoxide|co(?![ _-]*[0-9₂])|일산화탄소",
     "nitrogen_dioxide": r"nitrogen[ _-]*dioxide|no2|no₂|이산화질소",
@@ -172,11 +186,11 @@ def prefill_measurement(defaults, states):
     result = dict(defaults)
     if result.get("attribute"):
         return result, "Explicit attribute selected; no assumptions from the primary state."
-    quantities = {infer_quantity(state) for state in states if state is not None}
+    quantities = {canonical_quantity(infer_quantity(state)) for state in states if state is not None}
     if len(quantities) != 1 or None in quantities or not states or any(state is None for state in states):
         return result, "No unambiguous profile; enter your own thresholds."
     quantity = next(iter(quantities))
-    if result.get("quantity", "any") not in ("any", quantity):
+    if canonical_quantity(result.get("quantity", "any")) not in ("any", quantity):
         return result, "Selected quantity differs from source metadata; no preset applied."
     if quantity not in STARTER_PROFILES:
         return result, "No preset for this measurement; enter your own thresholds."
@@ -184,18 +198,21 @@ def prefill_measurement(defaults, states):
     source_unit = normalize_unit(states[0].attributes.get("unit_of_measurement") or unit)
     target_unit = normalize_unit(result["unit"]) if "unit" in result else None
     if "unit" not in result:
-        target_unit = source_unit if source_unit in UNITS else unit
+        target_unit = "mg/m³" if quantity in VOC_QUANTITIES else source_unit if source_unit in UNITS else unit
         result["unit"] = target_unit
     factors = {("μg/m³", "mg/m³"): 0.001, ("mg/m³", "μg/m³"): 1000,
                ("ppm", "ppb"): 1000, ("ppb", "ppm"): 0.001,
                ("Bq/m³", "pCi/L"): 1 / 37, ("pCi/L", "Bq/m³"): 37}
     factor = 1 if target_unit == unit else factors.get((unit, target_unit))
+    if quantity in VOC_QUANTITIES and target_unit in VOC_MG_FACTORS:
+        factor = voc_factors(target_unit)[unit]
+        label += "; TVOC approximation: 1 ppb = 0.0045 mg/m³"
     if factor is None:
         return result, "Preset unit is incompatible; enter your own thresholds."
     if not result.get("quantity") or result["quantity"] == "any":
         # Custom quantities explicitly support classless sources. Other
         # name-only inference cannot satisfy a strict device_class filter.
-        result["quantity"] = quantity if quantity in CUSTOM_QUANTITIES or all(s.attributes.get("device_class") == quantity for s in states) else "any"
+        result["quantity"] = quantity if quantity in (*CUSTOM_QUANTITIES, *VOC_QUANTITIES) or all(s.attributes.get("device_class") == quantity for s in states) else "any"
     if quantity in ("radon", "carbon_dioxide", "formaldehyde", "volatile_organic_compounds") and "thresholds" not in result:
         result.setdefault("boundary_rule", "lower_inclusive")
     if "thresholds" not in result:
@@ -652,6 +669,10 @@ def generate(recipe, *, source_units=None):
             quantity_check = " and state_attr(entity_id, 'device_class') in " + repr(
                 [None, "", recipe["quantity"]]
             )
+        if recipe["quantity"] in VOC_QUANTITIES:
+            quantity_check = " and state_attr(entity_id, 'device_class') in " + repr(
+                [None, "", *VOC_QUANTITIES]
+            )
     read = f"state_attr(entity_id, {attribute!r})" if attribute else "states(entity_id)"
     if mode == "source" and not attribute:
         read = "state_attr(entity_id, 'air_quality') if state_attr(entity_id, 'air_quality') is not none else states(entity_id)"
@@ -673,7 +694,7 @@ def generate(recipe, *, source_units=None):
             + " %}{% set grade = value %}{% endif %}"
         )
     else:
-        # No mass/volume conversion: ppm to micrograms needs gas-specific data.
+        # Only VOC has an explicitly chosen mass/volume approximation.
         factors = {
             "unitless": {"": 1},
             "μg/m³": {"μg/m³": 1, "mg/m³": 1000},
@@ -683,6 +704,8 @@ def generate(recipe, *, source_units=None):
             "Bq/m³": {"Bq/m³": 1, "pCi/L": 37},
             "pCi/L": {"Bq/m³": 1 / 37, "pCi/L": 1},
         }[recipe["unit"]]
+        if recipe["quantity"] in VOC_QUANTITIES:
+            factors = voc_factors(recipe["unit"])
         if recipe["unit"] == "unitless" and recipe["quantity"] == "aqi":
             # HA sources may explicitly label the dimensionless AQI index.
             # Do not accept this label for unrelated unitless measurements.
@@ -702,8 +725,9 @@ def generate(recipe, *, source_units=None):
             "{% if value is not boolean and is_number(value) and factor is not none %}"
             "{% set number = (value | float) * factor %}"
             "{% if is_number(number) and number >= 0 %}"
+            + ("{% set number = number | round(12) %}" if recipe["quantity"] in VOC_QUANTITIES else "")
             # Multiplication rather than exponentiation avoids overflow exceptions.
-            "{% set number = ("
+            + "{% set number = ("
             + repr(recipe["quadratic"])
             + " * number + "
             + repr(recipe["multiplier"])
