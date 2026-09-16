@@ -3215,7 +3215,7 @@ def _prefill_frigate_camera_stream(hass, defaults: dict[str, Any]) -> dict[str, 
     return {**defaults, CONF_NATIVE_VALUE_TEMPLATES: {**native, "stream_source": _literal_template(url)}}
 
 
-def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None) -> vol.Schema:
+def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include_tracking=True) -> vol.Schema:
     defaults = _flatten_entity_form_sections(defaults)
     defaults = _prefill_frigate_camera_stream(hass, defaults)
     platform = defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
@@ -3535,9 +3535,10 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None) -> vol.
             ),
             vol.Optional(CONF_DAWARICH_TEST_INPUT, default=defaults.get(CONF_DAWARICH_TEST_INPUT, False)): selector.BooleanSelector(),
         }
-        schema[vol.Optional(CONF_DAWARICH_SETTINGS, default=dict)] = section(
-            vol.Schema(dawarich_schema), {"collapsed": not defaults.get(CONF_DAWARICH_ENABLED_INPUT, False)},
-        )
+        if include_tracking:
+            schema[vol.Optional(CONF_DAWARICH_SETTINGS, default=dict)] = section(
+                vol.Schema(dawarich_schema), {"collapsed": not defaults.get(CONF_DAWARICH_ENABLED_INPUT, False)},
+            )
     if platform == "device_tracker":
         presence_schema = {
             vol.Optional(CONF_PRESENCE_ENABLED_INPUT, default=defaults.get(CONF_PRESENCE_ENABLED_INPUT, False)): selector.BooleanSelector(),
@@ -3551,9 +3552,10 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None) -> vol.
             presence_schema[vol.Optional("presence_" + key, default=defaults.get("presence_" + key, LOCAL_PRESENCE_DEFAULTS[key]))] = selector.NumberSelector(
                 selector.NumberSelectorConfig(min=minimum, max=maximum, step=1, mode=selector.NumberSelectorMode.BOX)
             )
-        schema[vol.Optional(CONF_LOCAL_PRESENCE_SETTINGS, default=dict)] = section(
-            vol.Schema(presence_schema), {"collapsed": not defaults.get(CONF_PRESENCE_ENABLED_INPUT, False)}
-        )
+        if include_tracking:
+            schema[vol.Optional(CONF_LOCAL_PRESENCE_SETTINGS, default=dict)] = section(
+                vol.Schema(presence_schema), {"collapsed": not defaults.get(CONF_PRESENCE_ENABLED_INPUT, False)}
+            )
     if domain_schema:
         schema[vol.Optional(CONF_DOMAIN_SETTINGS, default=dict)] = section(
             vol.Schema(domain_schema),
@@ -10475,6 +10477,109 @@ def _log_unhandled_flow_errors(cls):
     return cls
 
 
+def _dawarich_entry_defaults(entry):
+    """Read the upstream Dawarich component's config-entry contract only."""
+    values = {**entry.data, **entry.options}
+    host = values.get("host")
+    key = values.get("api_key")
+    if not isinstance(host, str) or not isinstance(key, str):
+        return {}
+    # Upstream stores host:port, with TLS separate; never copy its runtime
+    # coordinator, telemetry, or unrelated options into tracker configuration.
+    url = host if "://" in host else ("https://" if values.get("ssl") is True else "http://") + host
+    try:
+        config = normalize_dawarich_config({"url": url, "api_key": key})
+    except vol.Invalid:
+        return {}
+    return {CONF_DAWARICH_URL_INPUT: config["url"], CONF_DAWARICH_API_KEY_INPUT: config["api_key"]}
+
+
+def _tracker_settings_schema(defaults):
+    schema = _entity_schema({**defaults, CONF_PLATFORM: "device_tracker"})
+    return vol.Schema({key: value for key, value in schema.schema.items()
+                       if key.schema in {CONF_DAWARICH_SETTINGS, CONF_LOCAL_PRESENCE_SETTINGS}})
+
+
+class _TrackerSettingsFlow:
+    """Keep connection/presence details ahead of the common entity editor."""
+
+    def _tracker_needs_settings(self, defaults):
+        return (defaults or {}).get(CONF_PLATFORM) == "device_tracker" and not getattr(self, "_tracker_settings_done", False)
+
+    async def _async_tracker_start(self, edit=False):
+        self._tracker_edit = edit
+        defaults = self._entity_defaults or {}
+        if not edit and defaults.get(CONF_DAWARICH_ENABLED_INPUT) and not defaults.get(CONF_DAWARICH_URL_INPUT):
+            self._dawarich_connections = {
+                entry.entry_id: entry for entry in self.hass.config_entries.async_entries("dawarich")
+                if _dawarich_entry_defaults(entry)
+            }
+            if len(self._dawarich_connections) > 1:
+                return await self.async_step_dawarich_connection()
+            if self._dawarich_connections:
+                defaults.update(_dawarich_entry_defaults(next(iter(self._dawarich_connections.values()))))
+        self._entity_defaults = defaults
+        return await self.async_step_tracker_settings()
+
+    async def async_step_dawarich_connection(self, user_input=None):
+        entries = getattr(self, "_dawarich_connections", {})
+        errors = {}
+        if user_input is not None:
+            selected = user_input.get("dawarich_connection")
+            entry = self.hass.config_entries.async_get_entry(selected) if selected in entries else None
+            values = _dawarich_entry_defaults(entry) if entry is not None else {}
+            if selected == "manual" or values:
+                self._entity_defaults.update(values)
+                return await self.async_step_tracker_settings()
+            errors["dawarich_connection"] = "invalid_dawarich_config"
+        return self.async_show_form(step_id="dawarich_connection", errors=errors, data_schema=vol.Schema({
+            vol.Required("dawarich_connection", default="manual"): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=[{"value": "manual", "label": "직접 입력" if self.hass.config.language == "ko" else "Enter manually"}, *[
+                    {"value": entry_id, "label": entry.title} for entry_id, entry in entries.items()
+                ]], translation_key="dawarich_connection")
+            )
+        }))
+
+    async def async_step_tracker_settings(self, user_input=None):
+        defaults = self._entity_defaults or {}
+        errors = _flow_errors(self, "tracker_settings")
+        if user_input is not None:
+            submitted = _flatten_entity_form_sections(user_input)
+            defaults = {**defaults, **submitted}
+            # Validate only this step. The common editor may not yet have a
+            # name, entity ID, templates, polygons, or target Device.
+            validation = _flatten_entity_form_sections(_entity_schema({
+                CONF_PLATFORM: "device_tracker", CONF_ENTITY_NAME: "Tracker", CONF_DEVICE_NAME: "Tracker",
+            })({}))
+            settings = _flatten_entity_form_sections(_tracker_settings_schema(defaults)({}))
+            validation.update(settings)
+            try:
+                _, entity = _build_entity_config(validation, validate_platform=False)
+                if settings.get(CONF_DAWARICH_TEST_INPUT) and entity.get(CONF_DAWARICH):
+                    config = entity[CONF_DAWARICH]
+                    person = self.hass.states.get(config[CONF_DAWARICH_PERSON_ENTITY]) if config[CONF_DAWARICH_PERSON_ENTITY] else None
+                    await DawarichClient(async_get_clientsession(self.hass), config).async_fetch(
+                        person.name if person else "", include_visit=False,
+                    )
+            except InvalidFieldValue as err:
+                errors[err.field_name] = err.error_code
+            except DawarichError as err:
+                field = (
+                    CONF_DAWARICH_API_KEY_INPUT if err.code == "invalid_auth"
+                    else CONF_DAWARICH_MEMBER_INPUT if err.code in {"member_not_found", "ambiguous_member"}
+                    else CONF_DAWARICH_TEST_INPUT
+                )
+                errors[field] = "dawarich_" + err.code
+            if not errors:
+                defaults.update(settings)
+                defaults[CONF_DAWARICH_TEST_INPUT] = False
+                self._entity_defaults = defaults
+                self._tracker_settings_done = True
+                return await (self.async_step_edit_entity() if getattr(self, "_tracker_edit", False) else self.async_step_entity())
+        self._entity_defaults = defaults
+        return self.async_show_form(step_id="tracker_settings", data_schema=_tracker_settings_schema(defaults), errors=errors)
+
+
 class _AirQualityLogicFlow:
     """Share recipe steps across initial setup, options-add and options-edit."""
 
@@ -10953,7 +11058,7 @@ class _AirQualityLogicFlow:
 
 
 @_log_unhandled_flow_errors
-class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
+class VirtualFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
     """Virtual Layer config flow."""
 
     VERSION = 1
@@ -11416,6 +11521,8 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
 
     async def async_step_entity(self, user_input=None):
         """Add the first UI-managed virtual entity."""
+        if user_input is None and self._tracker_needs_settings(self._entity_defaults):
+            return await self._async_tracker_start()
         if user_input is None and self._aq_needs_setup(self._entity_defaults):
             return await self.async_step_air_quality()
         if (
@@ -11455,9 +11562,11 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
         ):
             user_input = _complete_domain_form_defaults(user_input)
             self._entity_defaults = user_input
+            if self._tracker_needs_settings(user_input):
+                return await self._async_tracker_start(edit=getattr(self, "_edit_index", None) is not None)
             return self.async_show_form(
                 step_id="entity",
-                data_schema=_entity_schema(user_input, hass=self.hass),
+                data_schema=_entity_schema(user_input, hass=self.hass, include_tracking=False),
             )
         if user_input is not None and not errors:
             user_input = _with_hidden_native_template_defaults(
@@ -11512,7 +11621,7 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
             self._entity_defaults = user_input
         return self.async_show_form(
             step_id="entity",
-            data_schema=_entity_schema(user_input or self._entity_defaults, hass=self.hass),
+            data_schema=_entity_schema(user_input or self._entity_defaults, hass=self.hass, include_tracking=False),
             errors=errors,
         )
 
@@ -11544,7 +11653,7 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
 
 
 @_log_unhandled_flow_errors
-class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow):
+class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, config_entries.OptionsFlow):
     """Virtual Layer options flow."""
 
     def __init__(self) -> None:
@@ -12051,6 +12160,8 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
 
     async def async_step_entity(self, user_input=None):
         """Add a UI-managed virtual entity."""
+        if user_input is None and self._tracker_needs_settings(self._entity_defaults):
+            return await self._async_tracker_start()
         if user_input is None and self._aq_needs_setup(self._entity_defaults):
             return await self.async_step_air_quality()
         if (
@@ -12090,9 +12201,11 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
         ):
             user_input = _complete_domain_form_defaults(user_input)
             self._entity_defaults = user_input
+            if self._tracker_needs_settings(user_input):
+                return await self._async_tracker_start(edit=getattr(self, "_edit_index", None) is not None)
             return self.async_show_form(
                 step_id="entity",
-                data_schema=_entity_schema(user_input, hass=self.hass),
+                data_schema=_entity_schema(user_input, hass=self.hass, include_tracking=False),
             )
         if user_input is not None and not errors:
             user_input = _with_hidden_native_template_defaults(
@@ -12143,7 +12256,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
             self._entity_defaults = user_input
         return self.async_show_form(
             step_id="entity",
-            data_schema=_entity_schema(user_input or self._entity_defaults, hass=self.hass),
+            data_schema=_entity_schema(user_input or self._entity_defaults, hass=self.hass, include_tracking=False),
             errors=errors,
         )
 
@@ -12500,6 +12613,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
 
     def _prepare_edit_entity_defaults(self, *, helper_update_mode: str) -> None:
         """Apply the selected helper policy to the pending source change."""
+        self._tracker_settings_done = False
         if self._edit_current_defaults is None or self._edit_source_entities is None:
             return
         self._edit_helper_update_mode = helper_update_mode
@@ -12659,7 +12773,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                 )
                 return self.async_show_form(
                     step_id="edit_entity",
-                    data_schema=_entity_schema(self._entity_defaults, hass=self.hass),
+                    data_schema=_entity_schema(self._entity_defaults, hass=self.hass, include_tracking=False),
                     errors=errors,
                 )
 
@@ -12789,6 +12903,9 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
         if self._edit_device_name is None or self._edit_index is None:
             return await self.async_step_select_entity()
 
+        if user_input is None and self._tracker_needs_settings(self._entity_defaults):
+            return await self._async_tracker_start(edit=True)
+
         if user_input is None and self._aq_needs_setup(self._entity_defaults, True):
             return await self.async_step_edit_air_quality()
 
@@ -12818,9 +12935,11 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
         if user_input is not None and _needs_domain_specific_form(user_input):
             user_input = _complete_domain_form_defaults(user_input)
             self._entity_defaults = user_input
+            if self._tracker_needs_settings(user_input):
+                return await self._async_tracker_start(edit=getattr(self, "_edit_index", None) is not None)
             return self.async_show_form(
                 step_id="edit_entity",
-                data_schema=_entity_schema(user_input, hass=self.hass),
+                data_schema=_entity_schema(user_input, hass=self.hass, include_tracking=False),
             )
         if user_input is not None:
             user_input = _with_hidden_native_template_defaults(
@@ -13008,7 +13127,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
 
         return self.async_show_form(
             step_id="edit_entity",
-            data_schema=_entity_schema(defaults, hass=self.hass),
+            data_schema=_entity_schema(defaults, hass=self.hass, include_tracking=False),
             errors=errors,
         )
 

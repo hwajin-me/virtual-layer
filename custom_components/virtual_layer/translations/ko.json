@@ -955,6 +955,70 @@
           "source": "이름과 엔티티 ID로 구분합니다. 선택한 원본의 측정값 또는 속성에만 역치를 적용합니다.",
           "action": "수정: 단위·역치·등급·수식 편집. 초기화: 해당 원본만 자동 사전값으로 복원. 완료: 엔티티 설정으로 돌아가기."
         }
+      },
+      "tracker_settings": {
+        "title": "Tracker 연결 및 재실 설정",
+        "description": "Dawarich와 Wi-Fi/BLE 세부 설정을 마친 뒤 공통 엔티티 편집으로 이동합니다. 생성 시 기존 Dawarich 연결이 하나면 서버와 API 키를 미리 채웁니다. 복사된 값은 수정할 수 있으며 원본 통합 구성요소에는 영향을 주지 않습니다. TLS 인증서 검증은 유지됩니다.",
+        "sections": {
+          "dawarich_settings": {
+            "name": "Dawarich",
+            "description": "Dawarich에서 위치와 이동 이력을 조회합니다.",
+            "data": {
+              "dawarich_enabled": "Dawarich 사용",
+              "dawarich_url": "Dawarich URL",
+              "dawarich_api_key": "Dawarich API 키",
+              "dawarich_auth_mode": "인증 방식",
+              "dawarich_poll_interval": "업데이트 간격",
+              "dawarich_history_limit": "이력 위치 수",
+              "dawarich_member": "가족 구성원 이메일 또는 사용자 ID",
+              "dawarich_person": "기존 가족 Person",
+              "dawarich_test_connection": "저장 전 연결 테스트"
+            },
+            "data_description": {
+              "dawarich_enabled": "이 트래커의 Dawarich 조회를 켭니다. 끄고 저장하면 저장된 Dawarich 설정을 제거합니다.",
+              "dawarich_url": "/api/v1을 제외한 기본 URL입니다. 예: https://dawarich.example.com",
+              "dawarich_api_key": "통합 구성에 저장됩니다. 암호 입력란은 화면에서 값을 숨기며 엔티티 속성에는 공개하지 않습니다.",
+              "dawarich_auth_mode": "Bearer 토큰 또는 api_key 쿼리 매개변수 인증을 선택합니다.",
+              "dawarich_poll_interval": "API 조회 간격(15–3600초)입니다. 위치의 최신 여부는 조회 시간이 아닌 측정 시각으로 판단합니다.",
+              "dawarich_history_limit": "dawarich_history에 보관할 최근 위치 요약 수(1–100)입니다. 가족 모드는 현재 위치만 제공합니다.",
+              "dawarich_member": "선택 사항인 정확한 Dawarich 가족 이메일 또는 사용자 ID입니다. Person보다 우선합니다. 둘 다 비우면 API 키 소유자의 위치를 조회합니다. 가족 위치 공유가 켜져 있어야 합니다.",
+              "dawarich_person": "구형 서버에서 Person 표시 이름을 가족 이름 또는 이메일과 일치시키는 단일 Person입니다. 본인 계정 조회 시 비우세요. 현재 서버에서는 구성원 직접 입력을 권장합니다.",
+              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요."
+            }
+          },
+          "local_presence_settings": {
+            "name": "Wi-Fi / BLE 재실 추적",
+            "description": "연결 상태와 AB Gateway Bluetooth 관측으로 특정 기기를 추적합니다.",
+            "data": {
+              "presence_enabled": "로컬 재실 추적 사용",
+              "presence_wifi_entities": "Wi-Fi 연결 소스",
+              "presence_wifi_ssids": "집 Wi-Fi SSID",
+              "presence_ble_addresses": "BLE 기기 주소",
+              "presence_ble_sources": "Bluetooth 스캐너 소스",
+              "presence_ble_timeout": "BLE 부재 판정 시간",
+              "presence_ble_min_rssi": "최소 BLE RSSI"
+            },
+            "data_description": {
+              "presence_enabled": "선택한 Wi-Fi 연결과 원격 BLE 관측을 GPS와 함께 집계합니다. 끄고 저장하면 이 로컬 재실 설정을 제거합니다.",
+              "presence_wifi_entities": "추적할 특정 기기의 공유기 device_tracker 또는 연결 binary_sensor를 선택하세요. Wi-Fi SSID sensor를 선택했다면 아래에 집 SSID를 정확히 입력하세요. 사용할 수 없는 소스는 연결 해제로 취급하지 않습니다.",
+              "presence_wifi_ssids": "대소문자를 구분하는 정확한 SSID를 한 줄에 하나씩 입력하세요. 선택한 sensor 엔티티에만 적용하며 하나라도 일치하면 집으로 판단합니다. Wi-Fi 비밀번호는 입력하지 마세요.",
+              "presence_ble_addresses": "고정 BLE MAC 주소를 한 줄에 하나씩 입력하세요. 지정한 기기만 추적합니다. 주소가 주기적으로 바뀌는 기기는 다른 통합에서 안정적인 식별자를 제공해야 합니다.",
+              "presence_ble_sources": "Home Assistant 원격 스캐너 소스 ID를 한 줄에 하나씩 입력하세요. AprilBrother component-ab-gateway의 기본값은 ab_gateway입니다. MQTT 토픽이나 개별 게이트웨이 MAC이 아닙니다. 게이트웨이 통합은 별도로 설정하세요.",
+              "presence_ble_timeout": "RSSI 기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 5초마다 확인하며 캐시를 다시 읽는 것으로 재실 시간이 연장되지 않습니다.",
+              "presence_ble_min_rssi": "이 값 이상의 dBm 광고를 가까운 기기로 인정합니다(-127–0). 약한 광고는 부재 타이머를 연장하지 않습니다. RSSI를 거리로 환산하지 않습니다."
+            }
+          }
+        }
+      },
+      "dawarich_connection": {
+        "title": "Dawarich 연결 선택",
+        "description": "기본 정보를 가져올 Dawarich 커스텀 컴포넌트 연결을 선택하거나 직접 입력하세요.",
+        "data": {
+          "dawarich_connection": "연결"
+        },
+        "data_description": {
+          "dawarich_connection": "서버와 API 키만 복사합니다. Tracker 설정은 원본 연결과 독립적으로 저장됩니다."
+        }
       }
     }
   },
@@ -2804,6 +2868,70 @@
           "source": "이름과 엔티티 ID로 구분합니다. 선택한 원본의 측정값 또는 속성에만 역치를 적용합니다.",
           "action": "수정: 단위·역치·등급·수식 편집. 초기화: 해당 원본만 자동 사전값으로 복원. 완료: 엔티티 설정으로 돌아가기."
         }
+      },
+      "tracker_settings": {
+        "title": "Tracker 연결 및 재실 설정",
+        "description": "Dawarich와 Wi-Fi/BLE 세부 설정을 마친 뒤 공통 엔티티 편집으로 이동합니다. 생성 시 기존 Dawarich 연결이 하나면 서버와 API 키를 미리 채웁니다. 복사된 값은 수정할 수 있으며 원본 통합 구성요소에는 영향을 주지 않습니다. TLS 인증서 검증은 유지됩니다.",
+        "sections": {
+          "dawarich_settings": {
+            "name": "Dawarich",
+            "description": "Dawarich에서 위치와 이동 이력을 조회합니다.",
+            "data": {
+              "dawarich_enabled": "Dawarich 사용",
+              "dawarich_url": "Dawarich URL",
+              "dawarich_api_key": "Dawarich API 키",
+              "dawarich_auth_mode": "인증 방식",
+              "dawarich_poll_interval": "업데이트 간격",
+              "dawarich_history_limit": "이력 위치 수",
+              "dawarich_member": "가족 구성원 이메일 또는 사용자 ID",
+              "dawarich_person": "기존 가족 Person",
+              "dawarich_test_connection": "저장 전 연결 테스트"
+            },
+            "data_description": {
+              "dawarich_enabled": "이 트래커의 Dawarich 조회를 켭니다. 끄고 저장하면 저장된 Dawarich 설정을 제거합니다.",
+              "dawarich_url": "/api/v1을 제외한 기본 URL입니다. 예: https://dawarich.example.com",
+              "dawarich_api_key": "통합 구성에 저장됩니다. 암호 입력란은 화면에서 값을 숨기며 엔티티 속성에는 공개하지 않습니다.",
+              "dawarich_auth_mode": "Bearer 토큰 또는 api_key 쿼리 매개변수 인증을 선택합니다.",
+              "dawarich_poll_interval": "API 조회 간격(15–3600초)입니다. 위치의 최신 여부는 조회 시간이 아닌 측정 시각으로 판단합니다.",
+              "dawarich_history_limit": "dawarich_history에 보관할 최근 위치 요약 수(1–100)입니다. 가족 모드는 현재 위치만 제공합니다.",
+              "dawarich_member": "선택 사항인 정확한 Dawarich 가족 이메일 또는 사용자 ID입니다. Person보다 우선합니다. 둘 다 비우면 API 키 소유자의 위치를 조회합니다. 가족 위치 공유가 켜져 있어야 합니다.",
+              "dawarich_person": "구형 서버에서 Person 표시 이름을 가족 이름 또는 이메일과 일치시키는 단일 Person입니다. 본인 계정 조회 시 비우세요. 현재 서버에서는 구성원 직접 입력을 권장합니다.",
+              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요."
+            }
+          },
+          "local_presence_settings": {
+            "name": "Wi-Fi / BLE 재실 추적",
+            "description": "연결 상태와 AB Gateway Bluetooth 관측으로 특정 기기를 추적합니다.",
+            "data": {
+              "presence_enabled": "로컬 재실 추적 사용",
+              "presence_wifi_entities": "Wi-Fi 연결 소스",
+              "presence_wifi_ssids": "집 Wi-Fi SSID",
+              "presence_ble_addresses": "BLE 기기 주소",
+              "presence_ble_sources": "Bluetooth 스캐너 소스",
+              "presence_ble_timeout": "BLE 부재 판정 시간",
+              "presence_ble_min_rssi": "최소 BLE RSSI"
+            },
+            "data_description": {
+              "presence_enabled": "선택한 Wi-Fi 연결과 원격 BLE 관측을 GPS와 함께 집계합니다. 끄고 저장하면 이 로컬 재실 설정을 제거합니다.",
+              "presence_wifi_entities": "추적할 특정 기기의 공유기 device_tracker 또는 연결 binary_sensor를 선택하세요. Wi-Fi SSID sensor를 선택했다면 아래에 집 SSID를 정확히 입력하세요. 사용할 수 없는 소스는 연결 해제로 취급하지 않습니다.",
+              "presence_wifi_ssids": "대소문자를 구분하는 정확한 SSID를 한 줄에 하나씩 입력하세요. 선택한 sensor 엔티티에만 적용하며 하나라도 일치하면 집으로 판단합니다. Wi-Fi 비밀번호는 입력하지 마세요.",
+              "presence_ble_addresses": "고정 BLE MAC 주소를 한 줄에 하나씩 입력하세요. 지정한 기기만 추적합니다. 주소가 주기적으로 바뀌는 기기는 다른 통합에서 안정적인 식별자를 제공해야 합니다.",
+              "presence_ble_sources": "Home Assistant 원격 스캐너 소스 ID를 한 줄에 하나씩 입력하세요. AprilBrother component-ab-gateway의 기본값은 ab_gateway입니다. MQTT 토픽이나 개별 게이트웨이 MAC이 아닙니다. 게이트웨이 통합은 별도로 설정하세요.",
+              "presence_ble_timeout": "RSSI 기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 5초마다 확인하며 캐시를 다시 읽는 것으로 재실 시간이 연장되지 않습니다.",
+              "presence_ble_min_rssi": "이 값 이상의 dBm 광고를 가까운 기기로 인정합니다(-127–0). 약한 광고는 부재 타이머를 연장하지 않습니다. RSSI를 거리로 환산하지 않습니다."
+            }
+          }
+        }
+      },
+      "dawarich_connection": {
+        "title": "Dawarich 연결 선택",
+        "description": "기본 정보를 가져올 Dawarich 커스텀 컴포넌트 연결을 선택하거나 직접 입력하세요.",
+        "data": {
+          "dawarich_connection": "연결"
+        },
+        "data_description": {
+          "dawarich_connection": "서버와 API 키만 복사합니다. Tracker 설정은 원본 연결과 독립적으로 저장됩니다."
+        }
       }
     }
   },
@@ -3021,6 +3149,11 @@
         "dawarich": "Dawarich 위치 추적",
         "wifi": "Wi-Fi 재실 추적",
         "ble": "BLE 재실 추적"
+      }
+    },
+    "dawarich_connection": {
+      "options": {
+        "manual": "직접 입력"
       }
     }
   },

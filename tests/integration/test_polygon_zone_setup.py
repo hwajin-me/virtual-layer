@@ -237,8 +237,13 @@ async def test_selecting_device_tracker_reopens_form_with_polygon_fields(hass):
     )
 
     assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "tracker_settings"
+    tracker_defaults = result["data_schema"]({})
+    dawarich_defaults = tracker_defaults["dawarich_settings"]
+    result = await hass.config_entries.options.async_configure(result["flow_id"], tracker_defaults)
+    assert result["step_id"] == "entity"
     polygon_defaults = result["data_schema"]({})
-    dawarich_defaults = polygon_defaults["dawarich_settings"]
+    assert "dawarich_settings" not in polygon_defaults
     polygon_defaults = polygon_defaults[CONF_DOMAIN_SETTINGS]
     assert CONF_POLYGON_GEOJSON_JSON in polygon_defaults
     assert polygon_defaults[CONF_POLYGON_STRATEGY_INPUT] == "majority"

@@ -23,6 +23,7 @@ from custom_components.virtual_layer.config_flow import (
     _select_device_schema,
     _select_entity_schema,
     _setup_schema,
+    _tracker_settings_schema,
 )
 from custom_components.virtual_layer.const import (
     ATTR_DEVICE_ATTRIBUTES,
@@ -261,6 +262,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
     }
 
     config_steps = {
+        "tracker_settings": _tracker_settings_schema({}),
         "user": _setup_schema({ATTR_GROUP_NAME: "Virtual Device"}),
         "reconfigure": _setup_schema(
             {ATTR_GROUP_NAME: "Virtual Device"},
@@ -272,6 +274,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
         "entity": _entity_schema(),
     }
     option_steps = {
+        "tracker_settings": _tracker_settings_schema({}),
         "init": _options_schema(entity_options),
         "select_entity": _select_entity_schema(entity_options),
         "select_device": _select_device_schema(entity_options),

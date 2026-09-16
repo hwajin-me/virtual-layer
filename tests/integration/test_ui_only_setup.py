@@ -3104,6 +3104,11 @@ async def test_device_tracker_edit_repairs_legacy_enum_repr_attribute_template(h
         result["flow_id"],
         {},
     )
+    assert result["step_id"] == "tracker_settings"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], suggested_form_values(result["data_schema"])
+    )
+    assert result["step_id"] == "edit_entity"
     defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     result = await hass.config_entries.options.async_configure(

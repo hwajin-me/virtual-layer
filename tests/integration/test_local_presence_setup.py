@@ -72,6 +72,8 @@ async def test_ab_gateway_wifi_ui_reload_and_absence(hass, freezer):
             }
         )
         result = await manager.async_configure(result["flow_id"], form)
+        assert result["step_id"] == "entity", result
+        result = await manager.async_configure(result["flow_id"], suggested_form_values(result["data_schema"]))
         assert result["type"] == "create_entry", result
         hass.config_entries.async_update_entry(entry, options=result["data"])
         hass.states.async_set("binary_sensor.phone_wifi", "off")
@@ -129,6 +131,8 @@ async def test_ab_gateway_wifi_ui_reload_and_absence(hass, freezer):
         assert form["local_presence_settings"]["presence_ble_addresses"] == MAC
         form["local_presence_settings"]["presence_enabled"] = False
         result = await manager.async_configure(result["flow_id"], form)
+        assert result["step_id"] == "edit_entity", result
+        result = await manager.async_configure(result["flow_id"], suggested_form_values(result["data_schema"]))
         assert result["type"] == "create_entry", result
         assert "local_presence" not in result["data"][ATTR_DEVICES][device_name][0]
         hass.config_entries.async_update_entry(entry, options=result["data"])

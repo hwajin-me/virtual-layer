@@ -955,6 +955,70 @@
           "source": "Identified by name and entity ID. Boundaries apply only to this source state or its selected attribute.",
           "action": "Edit units, boundaries, grades and formulas. Reset only this source to inferred defaults. Continue returns to entity settings."
         }
+      },
+      "tracker_settings": {
+        "title": "Tracker connection and presence settings",
+        "description": "Configure Dawarich and Wi-Fi/BLE here, then continue to the common entity editor. A single existing Dawarich connection pre-fills its server and API key on creation. These are editable copies; changing this tracker does not change the original integration. TLS certificate verification remains enabled.",
+        "sections": {
+          "dawarich_settings": {
+            "name": "Dawarich",
+            "description": "Read location and history from Dawarich.",
+            "data": {
+              "dawarich_enabled": "Enable Dawarich",
+              "dawarich_url": "Dawarich URL",
+              "dawarich_api_key": "Dawarich API key",
+              "dawarich_auth_mode": "Authentication",
+              "dawarich_poll_interval": "Update interval",
+              "dawarich_history_limit": "History points",
+              "dawarich_member": "Family member email or user ID",
+              "dawarich_person": "Legacy family Person",
+              "dawarich_test_connection": "Test connection before saving"
+            },
+            "data_description": {
+              "dawarich_enabled": "Enable polling for this tracker. Turn off to remove its saved Dawarich configuration.",
+              "dawarich_url": "Base URL without /api/v1, for example https://dawarich.example.com.",
+              "dawarich_api_key": "Stored in this integration configuration. The password field hides it on screen; it is not published in entity attributes.",
+              "dawarich_auth_mode": "Use Bearer token or api_key query-parameter authentication.",
+              "dawarich_poll_interval": "Seconds between API polls (15–3600). Point freshness uses its measurement timestamp, not poll time.",
+              "dawarich_history_limit": "Maximum recent location summaries retained in dawarich_history (1–100). Family mode returns only the current location.",
+              "dawarich_member": "Optional exact Dawarich family email or user ID. Takes precedence over Person. Leave both empty to read the API key owner’s points. Family sharing must be enabled.",
+              "dawarich_person": "Optional single Person for older servers matching its display name to a family name or email. Clear it for your own account; current servers should use the explicit member field.",
+              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline."
+            }
+          },
+          "local_presence_settings": {
+            "name": "Wi-Fi / BLE presence",
+            "description": "Track selected devices through connection state and AB Gateway Bluetooth observations.",
+            "data": {
+              "presence_enabled": "Enable local presence",
+              "presence_wifi_entities": "Wi-Fi connection sources",
+              "presence_wifi_ssids": "Home Wi-Fi SSIDs",
+              "presence_ble_addresses": "BLE device addresses",
+              "presence_ble_sources": "Bluetooth scanner sources",
+              "presence_ble_timeout": "BLE absence timeout",
+              "presence_ble_min_rssi": "Minimum BLE RSSI"
+            },
+            "data_description": {
+              "presence_enabled": "Combine selected Wi-Fi connections and remote BLE observations with GPS. Disable and save to remove these local-presence settings.",
+              "presence_wifi_entities": "Select router device trackers or connection binary sensors for the specific devices you want to track. For a Wi-Fi SSID sensor, also enter the exact home SSIDs below. Unavailable sources do not count as disconnected.",
+              "presence_wifi_ssids": "One exact, case-sensitive SSID per line. Used only for selected sensor entities; any matching SSID means home. Do not enter Wi-Fi passwords.",
+              "presence_ble_addresses": "One stable BLE MAC address per line. Only these devices are tracked; rotating private addresses require a stable identity supplied by another integration.",
+              "presence_ble_sources": "One Home Assistant remote scanner source ID per line. AprilBrother component-ab-gateway uses ab_gateway by default. These are scanner source IDs, not MQTT topics or individual gateway MACs. Configure the gateway integration separately.",
+              "presence_ble_timeout": "Seconds after the last advertisement at or above the RSSI threshold before marking away (10–3600). Checked every 5 seconds; rereading cached advertisements does not extend presence.",
+              "presence_ble_min_rssi": "Advertisements at or above this dBm value count as nearby (-127–0). Weaker advertisements do not renew the timeout. RSSI is not converted into distance."
+            }
+          }
+        }
+      },
+      "dawarich_connection": {
+        "title": "Choose Dawarich connection",
+        "description": "Choose an existing Dawarich custom-component connection to copy, or enter connection details manually.",
+        "data": {
+          "dawarich_connection": "Connection"
+        },
+        "data_description": {
+          "dawarich_connection": "Only server and API key are copied; your saved tracker settings remain independent."
+        }
       }
     }
   },
@@ -2804,6 +2868,70 @@
           "source": "Identified by name and entity ID. Boundaries apply only to this source state or its selected attribute.",
           "action": "Edit units, boundaries, grades and formulas. Reset only this source to inferred defaults. Continue returns to entity settings."
         }
+      },
+      "tracker_settings": {
+        "title": "Tracker connection and presence settings",
+        "description": "Configure Dawarich and Wi-Fi/BLE here, then continue to the common entity editor. A single existing Dawarich connection pre-fills its server and API key on creation. These are editable copies; changing this tracker does not change the original integration. TLS certificate verification remains enabled.",
+        "sections": {
+          "dawarich_settings": {
+            "name": "Dawarich",
+            "description": "Read location and history from Dawarich.",
+            "data": {
+              "dawarich_enabled": "Enable Dawarich",
+              "dawarich_url": "Dawarich URL",
+              "dawarich_api_key": "Dawarich API key",
+              "dawarich_auth_mode": "Authentication",
+              "dawarich_poll_interval": "Update interval",
+              "dawarich_history_limit": "History points",
+              "dawarich_member": "Family member email or user ID",
+              "dawarich_person": "Legacy family Person",
+              "dawarich_test_connection": "Test connection before saving"
+            },
+            "data_description": {
+              "dawarich_enabled": "Enable polling for this tracker. Turn off to remove its saved Dawarich configuration.",
+              "dawarich_url": "Base URL without /api/v1, for example https://dawarich.example.com.",
+              "dawarich_api_key": "Stored in this integration configuration. The password field hides it on screen; it is not published in entity attributes.",
+              "dawarich_auth_mode": "Use Bearer token or api_key query-parameter authentication.",
+              "dawarich_poll_interval": "Seconds between API polls (15–3600). Point freshness uses its measurement timestamp, not poll time.",
+              "dawarich_history_limit": "Maximum recent location summaries retained in dawarich_history (1–100). Family mode returns only the current location.",
+              "dawarich_member": "Optional exact Dawarich family email or user ID. Takes precedence over Person. Leave both empty to read the API key owner’s points. Family sharing must be enabled.",
+              "dawarich_person": "Optional single Person for older servers matching its display name to a family name or email. Clear it for your own account; current servers should use the explicit member field.",
+              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline."
+            }
+          },
+          "local_presence_settings": {
+            "name": "Wi-Fi / BLE presence",
+            "description": "Track selected devices through connection state and AB Gateway Bluetooth observations.",
+            "data": {
+              "presence_enabled": "Enable local presence",
+              "presence_wifi_entities": "Wi-Fi connection sources",
+              "presence_wifi_ssids": "Home Wi-Fi SSIDs",
+              "presence_ble_addresses": "BLE device addresses",
+              "presence_ble_sources": "Bluetooth scanner sources",
+              "presence_ble_timeout": "BLE absence timeout",
+              "presence_ble_min_rssi": "Minimum BLE RSSI"
+            },
+            "data_description": {
+              "presence_enabled": "Combine selected Wi-Fi connections and remote BLE observations with GPS. Disable and save to remove these local-presence settings.",
+              "presence_wifi_entities": "Select router device trackers or connection binary sensors for the specific devices you want to track. For a Wi-Fi SSID sensor, also enter the exact home SSIDs below. Unavailable sources do not count as disconnected.",
+              "presence_wifi_ssids": "One exact, case-sensitive SSID per line. Used only for selected sensor entities; any matching SSID means home. Do not enter Wi-Fi passwords.",
+              "presence_ble_addresses": "One stable BLE MAC address per line. Only these devices are tracked; rotating private addresses require a stable identity supplied by another integration.",
+              "presence_ble_sources": "One Home Assistant remote scanner source ID per line. AprilBrother component-ab-gateway uses ab_gateway by default. These are scanner source IDs, not MQTT topics or individual gateway MACs. Configure the gateway integration separately.",
+              "presence_ble_timeout": "Seconds after the last advertisement at or above the RSSI threshold before marking away (10–3600). Checked every 5 seconds; rereading cached advertisements does not extend presence.",
+              "presence_ble_min_rssi": "Advertisements at or above this dBm value count as nearby (-127–0). Weaker advertisements do not renew the timeout. RSSI is not converted into distance."
+            }
+          }
+        }
+      },
+      "dawarich_connection": {
+        "title": "Choose Dawarich connection",
+        "description": "Choose an existing Dawarich custom-component connection to copy, or enter connection details manually.",
+        "data": {
+          "dawarich_connection": "Connection"
+        },
+        "data_description": {
+          "dawarich_connection": "Only server and API key are copied; your saved tracker settings remain independent."
+        }
       }
     }
   },
@@ -3021,6 +3149,11 @@
         "dawarich": "Dawarich location tracker",
         "wifi": "Wi-Fi presence tracker",
         "ble": "BLE presence tracker"
+      }
+    },
+    "dawarich_connection": {
+      "options": {
+        "manual": "Enter manually"
       }
     }
   },

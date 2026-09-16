@@ -77,6 +77,8 @@ async def test_add_entity_without_sources(hass, platform, initial_setup):
         }
     )
     result = await manager.async_configure(result["flow_id"], submitted)
+    if result.get("step_id") == "tracker_settings":
+        result = await manager.async_configure(result["flow_id"], _suggested_values(result["data_schema"]))
     if result["type"] == FlowResultType.FORM:
         assert not result["errors"]
         submitted = _suggested_values(result["data_schema"])

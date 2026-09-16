@@ -49,10 +49,8 @@ async def test_tracker_creation_presets(hass, aioclient_mock, kind, initial):
             else [],
         },
     )
-    assert result["step_id"] == "entity"
+    assert result["step_id"] == "tracker_settings"
     form = result["data_schema"]({})
-    assert form["platform"] == "device_tracker"
-    form.update({"device_name": "Tracking", "entity_id": "device_tracker.test_tracker"})
     if kind == "dawarich":
         settings = form["dawarich_settings"]
         assert settings["dawarich_enabled"] is True
@@ -66,7 +64,12 @@ async def test_tracker_creation_presets(hass, aioclient_mock, kind, initial):
             assert settings["presence_wifi_entities"] == ["binary_sensor.phone_wifi"]
         else:
             settings["presence_ble_addresses"] = "AA:BB:CC:DD:EE:FF"
-    form = flow._flatten_entity_form_sections(form)
+    result = await manager.async_configure(result["flow_id"], form)
+    assert result["step_id"] == "entity", result
+    form = flow._flatten_entity_form_sections(result["data_schema"]({}))
+    assert "dawarich_settings" not in result["data_schema"]({})
+    assert "local_presence_settings" not in result["data_schema"]({})
+    form["entity_id"] = "device_tracker.test_tracker"
     form["device_name"] = "Tracking"
     result = await manager.async_configure(result["flow_id"], form)
     assert result["type"] == "create_entry", result
@@ -95,7 +98,7 @@ async def test_tracker_creation_presets(hass, aioclient_mock, kind, initial):
     result = await manager.async_configure(
         result["flow_id"], {flow.CONF_REFERENCE_ENTITY_ID: []}
     )
-    assert result["step_id"] == "edit_entity"
+    assert result["step_id"] == "tracker_settings"
     form = result["data_schema"]({})
     if kind == "dawarich":
         assert form["dawarich_settings"]["dawarich_api_key"] == "test-key"
@@ -104,6 +107,8 @@ async def test_tracker_creation_presets(hass, aioclient_mock, kind, initial):
         assert form["local_presence_settings"]["presence_enabled"] is True
         form["local_presence_settings"]["presence_ble_timeout"] = 180
     result = await manager.async_configure(result["flow_id"], form)
+    assert result["step_id"] == "edit_entity", result
+    result = await manager.async_configure(result["flow_id"], result["data_schema"]({}))
     assert result["type"] == "create_entry", result
     hass.config_entries.async_update_entry(entry, options=result["data"])
     saved = entry.options[ATTR_DEVICES][device_key][0]
@@ -140,7 +145,7 @@ async def test_invalid_tracker_source_can_be_corrected(hass):
     assert corrected[flow.CONF_REFERENCE_ENTITY_ID] == ["sensor.temperature"]
     corrected[flow.CONF_REFERENCE_ENTITY_ID] = []
     result = await handler.async_step_entity_source(corrected)
-    assert result["step_id"] == "entity"
+    assert result["step_id"] == "tracker_settings"
 
 
 @pytest.mark.parametrize(
@@ -167,7 +172,7 @@ async def test_presence_errors_target_the_invalid_field(hass, kind, changes, fie
     form["local_presence_settings"].update(changes)
     form = flow._flatten_entity_form_sections(form)
     form["device_name"] = "Phone"
-    result = await handler.async_step_entity(form)
+    result = await handler.async_step_tracker_settings(form)
     assert result["errors"] == {field: "invalid_local_presence"}
     reopened = result["data_schema"]({})["local_presence_settings"]
     for name, value in changes.items():

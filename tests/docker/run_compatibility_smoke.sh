@@ -580,19 +580,23 @@ async def test_tracker_creation_flows(hass):
                 if not initial:
                     source_input[vf.CONF_TARGET_DEVICE_NAME] = device_key
                 result = await configure_flow(manager, result, source_input)
+                assert result["step_id"] == "tracker_settings", result
+                values = suggested_form_values(result["data_schema"])
+                if kind == "dawarich":
+                    assert values["dawarich_settings"]["dawarich_enabled"]
+                    values["dawarich_settings"].update({"dawarich_url": url, "dawarich_api_key": "flow-test-key", "dawarich_test_connection": True})
+                else:
+                    assert values["local_presence_settings"]["presence_enabled"]
+                    if kind == "ble":
+                        values["local_presence_settings"]["presence_ble_addresses"] = mac
+                result = await configure_flow(manager, result, values)
                 assert result["step_id"] == "entity", result
                 values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
-                assert values["platform"] == "device_tracker"
+                assert "dawarich_settings" not in result["data_schema"]({})
+                assert "local_presence_settings" not in result["data_schema"]({})
                 values.update({"entity_id": entity_id, CONF_ENTITY_NAME: f"Flow {kind} {int(initial)}"})
                 if initial:
                     values["device_name"] = f"Flow {kind}"
-                if kind == "dawarich":
-                    assert values["dawarich_enabled"]
-                    values.update({"dawarich_url": url, "dawarich_api_key": "flow-test-key", "dawarich_test_connection": True})
-                else:
-                    assert values["presence_enabled"]
-                    if kind == "ble":
-                        values["presence_ble_addresses"] = mac
                 result = await configure_flow(manager, result, values)
                 assert result["type"] == FlowResultType.CREATE_ENTRY, result
                 if initial:
@@ -626,10 +630,13 @@ async def test_tracker_creation_flows(hass):
                 result = await manager.async_init(entry.entry_id, data={CONF_ACTION: vf.ACTION_EDIT_ENTITY})
                 result = await configure_flow(manager, result, {CONF_ENTITY_KEY: selection})
                 result = await configure_flow(manager, result, {CONF_REFERENCE_ENTITY_ID: []})
-                values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+                assert result["step_id"] == "tracker_settings", result
+                values = suggested_form_values(result["data_schema"])
                 field = "dawarich_poll_interval" if kind == "dawarich" else "presence_ble_timeout"
-                values[field] = 180
+                values["dawarich_settings" if kind == "dawarich" else "local_presence_settings"][field] = 180
                 result = await configure_flow(manager, result, values)
+                assert result["step_id"] == "edit_entity", result
+                result = await configure_flow(manager, result, suggested_form_values(result["data_schema"]))
                 assert result["type"] == FlowResultType.CREATE_ENTRY
                 await hass.async_block_till_done()
                 assert await hass.config_entries.async_reload(entry.entry_id)

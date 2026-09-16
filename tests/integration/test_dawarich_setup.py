@@ -73,6 +73,9 @@ async def test_dawarich_ui_create_edit_reload_and_disable(
             "dawarich_test_connection": True,
         }
     )
+    result = await manager.async_configure(result["flow_id"], form)
+    assert result["step_id"] == "entity", result
+    form = suggested_form_values(result["data_schema"])
     if polygon:
         form[flow.CONF_DOMAIN_SETTINGS][flow.CONF_POLYGON_GEOJSON_JSON] = json.dumps(
             {
@@ -133,11 +136,14 @@ async def test_dawarich_ui_create_edit_reload_and_disable(
     result = await manager.async_configure(
         result["flow_id"], {flow.CONF_REFERENCE_ENTITY_ID: []}
     )
-    assert result["step_id"] == "edit_entity", result
+    assert result["step_id"] == "tracker_settings", result
     form = suggested_form_values(result["data_schema"])
     assert form[flow.CONF_DAWARICH_SETTINGS]["dawarich_api_key"] == "private-test-key"
     assert form[flow.CONF_DAWARICH_SETTINGS]["dawarich_test_connection"] is False
     form[flow.CONF_DAWARICH_SETTINGS]["dawarich_enabled"] = False
+    result = await manager.async_configure(result["flow_id"], form)
+    assert result["step_id"] == "edit_entity", result
+    form = suggested_form_values(result["data_schema"])
     if polygon:
         form[flow.CONF_DOMAIN_SETTINGS][flow.CONF_POLYGON_GEOJSON_JSON] = ""
     result = await manager.async_configure(result["flow_id"], form)

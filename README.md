@@ -439,15 +439,17 @@ tracker** to open the corresponding enabled tracker settings directly. This is
 available during initial setup and **Add Entity** in the integration options.
 Wi-Fi source selections prefill connection inputs; Dawarich/BLE selections can
 add existing GPS trackers. Leave sources empty to configure a standalone tracker.
-Set its name, entity ID, and target Device, then save. Each tracker is a normal
+Complete **Tracker connection and presence settings** first, then set its name,
+entity ID, and target Device in the common entity editor. Each tracker is a normal
 managed entity: use **Edit Entity** to change connection settings or **Delete
 Entities** to remove it. Multiple trackers may share the same Device.
 Validation errors retain the selected creation type, sources, and target Device;
 Wi-Fi/BLE errors point to the input that needs correction. Explicit GPS sources
 also participate in Dawarich aggregation when they were offline during setup.
 
-In Add/Edit Virtual Entity, select `device_tracker` and enable **Wi-Fi / BLE
-presence tracking**. For a standalone presence tracker, leave the initial source
+Selecting or editing a `device_tracker` opens a separate **Tracker connection and
+presence settings** step before the common entity form. Enable **Wi-Fi / BLE
+presence tracking** there. For a standalone presence tracker, leave the initial source
 selection empty. For a composite tracker, also select your GPS source trackers.
 
 - **Wi-Fi entities:** select an existing router `device_tracker`, connection
@@ -557,8 +559,18 @@ virtual tracker updates or cleans up both generated entities normally.
 
 ## Dawarich Location Source
 
-Create or edit a `device_tracker` from the integration UI and open the
-**Dawarich** section. Enable it, enter the instance base URL (without `/api/v1`)
+Create or edit a `device_tracker` from the integration UI and use the **Dawarich**
+section in the separate **Tracker connection and presence settings** step.
+When creating a Dawarich tracker, an existing
+[Dawarich custom-component](https://github.com/AlbinLind/dawarich-home-assistant)
+connection supplies its server (`host` and `ssl`) and API key. If several
+connections exist, choose one or enter details manually. Values are editable
+copies; editing this tracker neither changes the original integration nor
+overwrites the tracker's saved settings from it. Certificate verification stays
+enabled, even if the source integration disables it. These connection controls
+are absent from the final common add/edit form.
+
+Enable Dawarich, enter the instance base URL (without `/api/v1`)
 and API key, and select Bearer or query authentication. You can configure the
 poll interval (15–3600 seconds), history limit (1–100 points), and optionally
 test authentication and a usable location before saving. Disable Dawarich and
