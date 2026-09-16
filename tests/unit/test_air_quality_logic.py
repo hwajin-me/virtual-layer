@@ -641,7 +641,7 @@ async def test_measurement_flow_reports_incompatible_source_units(hass, source_u
         ("pm25", "ppm"),
         ("pm1", "unitless"),
         ("aqi", "μg/m³"),
-        ("volatile_organic_compounds_parts", "mg/m³"),
+        ("volatile_organic_compounds_parts", "Bq/m³"),
         ("carbon_dioxide", "unitless"),
         ("invalid", "ppm"),
     ],
@@ -899,7 +899,7 @@ def test_all_automatic_profiles_use_their_own_units_and_boundaries(hass, quantit
     ("c6h6", "μg/m³", "3", "benzene", "moderate"),
     ("nh3", "ppb", "300", "ammonia", "moderate"),
     ("h2s", "ppm", "0.015", "hydrogen_sulfide", "moderate"),
-    ("etvoc", "ppb", "150", "volatile_organic_compounds_parts", "moderate"),
+    ("etvoc", "ppb", "150", "volatile_organic_compounds_parts", "poor"),
     ("tvoc", "mg/m³", "0.3", "volatile_organic_compounds", "moderate"),
     ("etvoc", "", "150", "volatile_organic_compounds", "unknown"),
 ])

@@ -919,6 +919,7 @@ def test_sensor_unit_conversion_profile(units, expected):
         ("pm10", "μg/m³", "30", "ug/m3", "10", "μg/m³", 20),
         ("carbon_dioxide", "ppm", "800", "ppb", "600000", "ppm", 700),
         ("carbon_monoxide", "ppb", "1000", "ppm", "3", "ppm", 2),
+        ("volatile_organic_compounds", "ppb", "100", "mg/m³", "0.45", "mg/m³", 0.45),
         (None, "Bq/m³", "37", "pCi/L", "1", "Bq/m³", 37),
     ],
 )
@@ -2894,6 +2895,30 @@ def test_fan_speed_number_scale_is_detected_and_normalized(
         )
         == expected_source_value
     )
+
+
+@pytest.mark.parametrize("name", ["Air Quality", "Living AQI", "PM2.5", "CO₂", "TVOC", "거실 공기질", "초미세먼지"])
+def test_air_quality_name_defaults_to_unified_icon(name):
+    values = _entity_input({CONF_ENTITY_NAME: name})
+    assert _entity_schema(values)({})[CONF_ICON] == "mdi:air-filter"
+    _, entity = _build_entity_config(values)
+    assert entity[CONF_ICON] == "mdi:air-filter"
+    _, custom = _build_entity_config({**values, CONF_ICON: "mdi:leaf", CONF_ICON_TEMPLATE: "{{ 'mdi:tree' }}"})
+    assert custom[CONF_ICON] == "mdi:leaf"
+    assert custom[CONF_ICON_TEMPLATE] == "{{ 'mdi:tree' }}"
+
+
+def test_air_quality_source_icon_is_consistent(hass):
+    hass.states.async_set("sensor.living_pm25", "12", {CONF_ICON: "mdi:cloud"})
+    defaults = _reference_entity_defaults(hass, ["sensor.living_pm25"])
+    assert defaults[CONF_ICON] == "mdi:air-filter"
+    assert Template(defaults[CONF_ICON_TEMPLATE], hass).async_render() == ""
+
+
+@pytest.mark.parametrize("name", ["Score", "Company", "Temperature", "Acoustic"])
+def test_unrelated_names_do_not_receive_air_quality_icon(name):
+    _, entity = _build_entity_config(_entity_input({CONF_ENTITY_NAME: name}))
+    assert CONF_ICON not in entity
 
 
 def test_build_entity_config_supports_composite_templates_and_attributes():

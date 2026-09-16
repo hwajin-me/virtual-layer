@@ -32,10 +32,17 @@ def configured_unit(hass, entity):
     else:
         value = entity.get(CONF_UNIT_OF_MEASUREMENT) or entity.get(CONF_ATTRIBUTES, {}).get(CONF_UNIT_OF_MEASUREMENT)
     if value is None or value == "":
-        return True, None
+        # A missing dynamic source attribute is not an explicit unit removal.
+        return not bool(template), None
     if not isinstance(value, str) or value.lower() in ("unknown", "unavailable", "none"):
         return False, None
     return True, value
+
+
+def entity_unit_available(hass, entity_id):
+    """Exclude unknown live entities from statistics unit changes."""
+    state = hass.states.get(entity_id)
+    return state is not None and state.state not in ("unknown", "unavailable")
 
 
 async def statistics_snapshot(hass, entity_id):

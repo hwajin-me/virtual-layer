@@ -10203,7 +10203,7 @@ async def test_options_updates_preserve_unrelated_entities(hass, tmp_path, monke
     ("3", "benzene", "μg/m³", "moderate"),
     ("0.3", "ammonia", "ppm", "moderate"),
     ("0.015", "hydrogen_sulfide", "ppm", "moderate"),
-    ("150", "etvoc", "ppb", "moderate"),
+    ("150", "etvoc", "ppb", "poor"),
 ])
 @pytest.mark.parametrize("per_source", [False, True])
 async def test_air_quality_default_skips_rules_and_preserves_source(hass, tmp_path, monkeypatch, source_value, source_class, source_unit, expected, per_source):

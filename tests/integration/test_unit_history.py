@@ -67,6 +67,7 @@ async def test_unit_edit_rejects_unconfirmed_history_and_stale_options(hass):
 
 @pytest.mark.parametrize("policy,expected", [("relabel", 1000), ("convert", 1), ("keep", 1000)])
 async def test_statistics_policy_uses_real_recorder(recorder_mock, hass, policy, expected):
+    hass.states.async_set("sensor.unit_example", "1000", {"unit_of_measurement": "W"})
     from homeassistant.components.recorder.statistics import async_import_statistics, statistics_during_period
     from pytest_homeassistant_custom_component.components.recorder.common import async_recorder_block_till_done
     start = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
@@ -86,6 +87,8 @@ async def test_statistics_policy_uses_real_recorder(recorder_mock, hass, policy,
     assert result["type"] == "create_entry"
     updated = await unit_history.statistics_snapshot(hass, "sensor.unit_example")
     assert updated["unit_of_measurement"] == ("W" if policy == "keep" else "kW")
+    # Query the stored statistics unit without HA converting to the live unit.
+    hass.states.async_remove("sensor.unit_example")
     result = await recorder_mock.async_add_executor_job(partial(statistics_during_period,
         hass, start, None, {"sensor.unit_example"}, "hour", None, {"mean"}))
     assert result["sensor.unit_example"][0]["mean"] == expected
@@ -97,3 +100,28 @@ async def test_statistics_policy_uses_real_recorder(recorder_mock, hass, policy,
 def test_unresolved_template_is_not_a_history_unit(hass):
     assert unit_history.configured_unit(hass, {CONF_NATIVE_TEMPLATES: {
         "native_unit_of_measurement": "{{ missing_variable }}"}}) == (False, None)
+
+
+@pytest.mark.parametrize("template", ["{{ none }}", "{{ '' }}", "{{ state_attr('sensor.missing', 'unit_of_measurement') }}"])
+def test_missing_dynamic_unit_is_not_a_history_unit(hass, template):
+    assert unit_history.configured_unit(hass, {CONF_NATIVE_TEMPLATES: {
+        "native_unit_of_measurement": template}}) == (False, None)
+
+
+@pytest.mark.parametrize("state", [None, "unknown", "unavailable"])
+async def test_unknown_entity_excluded_from_unit_changes(hass, state):
+    hass.states.async_set("sensor.unit_example", "1000", {"unit_of_measurement": "W"})
+    flow, entry, _ = await make_unit_flow(hass)
+    flow._unit_metadata = {"source": "recorder", "unit_of_measurement": "W", "unit_class": "power"}
+    if state is None:
+        hass.states.async_remove("sensor.unit_example")
+    else:
+        hass.states.async_set("sensor.unit_example", state)
+    result = await flow.async_step_unit_change()
+    policy_selector = next(value for key, value in result["data_schema"].schema.items()
+                           if key.schema == "history_policy")
+    assert policy_selector.config["options"] == ["keep"]
+    for policy in ("relabel", "convert"):
+        result = await flow.async_step_unit_change({"history_policy": policy, "confirm_history": True})
+        assert result["errors"] == {"base": "unit_history_failed"}
+    assert entry.options[ATTR_DEVICES]["Units"][0]["unit_of_measurement"] == "W"
