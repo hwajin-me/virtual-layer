@@ -41,8 +41,17 @@ Docker image:
 tests/docker/run_compatibility_smoke.sh
 ```
 
-The real config-entry, registry, service, reload, and all-domain behavior matrix
-is maintained in `tests/integration` and runs in the pytest CI job.
+The smoke also runs Dawarich, Wi-Fi, and BLE tracker creation through Home
+Assistant's config-flow and options-flow managers. For each type it checks initial
+creation and adding another tracker to the same Device, form serialization,
+persisted settings, live entity state, companion registry grouping, editing,
+reload, and deletion cleanup. Dawarich uses a local HTTP test server; BLE uses
+the real HA Bluetooth manager with injected AB Gateway-style advertisements;
+Wi-Fi uses connection-entity state changes. No physical gateway or router is
+required, so this does not certify hardware connectivity.
+
+The broader config-entry, registry, service, reload, and all-domain behavior
+matrix is maintained in `tests/integration` and runs in the pytest CI job.
 
 ## Stop
 

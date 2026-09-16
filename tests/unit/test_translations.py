@@ -266,7 +266,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
             {ATTR_GROUP_NAME: "Virtual Device"},
             include_entity_toggle=False,
         ),
-        "entity_source": _reference_entity_schema(),
+        "entity_source": _reference_entity_schema(creation=True),
         "entity_type": _entity_type_schema("switch.source", "switch"),
         "entity_helper": _helper_usage_schema(),
         "entity": _entity_schema(),
@@ -289,6 +289,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
         ),
         "entity": _entity_schema(),
         "entity_source": _reference_entity_schema(
+            creation=True,
             device_options=[{"value": "Laundry", "label": "Laundry"}],
         ),
         "entity_type": _entity_type_schema("switch.source", "switch"),

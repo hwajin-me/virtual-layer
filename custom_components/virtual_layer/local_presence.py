@@ -27,7 +27,7 @@ def normalize(value):
     for key in ("wifi_entities", "wifi_ssids", "ble_addresses", "ble_sources"):
         raw = value.get(key, DEFAULTS[key])
         if not isinstance(raw, list) or len(raw) > 64:
-            raise vol.Invalid("Invalid local presence list")
+            raise vol.Invalid("Invalid local presence list", path=[key])
         cleaned = []
         for item in raw:
             if (
@@ -36,20 +36,23 @@ def normalize(value):
                 or len(item) > 256
                 or any(ord(c) < 32 for c in item)
             ):
-                raise vol.Invalid("Invalid local presence value")
+                raise vol.Invalid("Invalid local presence value", path=[key])
             item = item if key == "wifi_ssids" else item.strip()
             if key == "wifi_entities":
-                item = cv.entity_id(item)
+                try:
+                    item = cv.entity_id(item)
+                except vol.Invalid as err:
+                    raise vol.Invalid("Invalid Wi-Fi entity ID", path=[key]) from err
                 if item.split(".")[0] not in {
                     "device_tracker",
                     "binary_sensor",
                     "sensor",
                 }:
-                    raise vol.Invalid("Invalid Wi-Fi source domain")
+                    raise vol.Invalid("Invalid Wi-Fi source domain", path=[key])
             if key == "ble_addresses":
                 raw_mac = item.replace(":", "").replace("-", "")
                 if not re.fullmatch(r"[a-fA-F0-9]{12}", raw_mac):
-                    raise vol.Invalid("Invalid BLE address")
+                    raise vol.Invalid("Invalid BLE address", path=[key])
                 item = ":".join(raw_mac[i : i + 2] for i in range(0, 12, 2)).upper()
             if item not in cleaned:
                 cleaned.append(item)
@@ -66,15 +69,19 @@ def normalize(value):
             ):
                 raise ValueError
         except (ValueError, TypeError, OverflowError) as err:
-            raise vol.Invalid("Invalid BLE threshold") from err
+            raise vol.Invalid("Invalid BLE threshold", path=[key]) from err
         result[key] = int(number)
     if result["ble_addresses"] and not result["ble_sources"]:
-        raise vol.Invalid("Select at least one Bluetooth scanner source")
+        raise vol.Invalid(
+            "Select at least one Bluetooth scanner source", path=["ble_sources"]
+        )
     if (
         any(e.startswith("sensor.") for e in result["wifi_entities"])
         and not result["wifi_ssids"]
     ):
-        raise vol.Invalid("SSID sensors require an explicit SSID list")
+        raise vol.Invalid(
+            "SSID sensors require an explicit SSID list", path=["wifi_ssids"]
+        )
     if not result["wifi_entities"] and not result["ble_addresses"]:
         raise vol.Invalid("Select a Wi-Fi source or BLE address")
     return result

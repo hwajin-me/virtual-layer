@@ -433,6 +433,19 @@ Virtual Layer retains its UI-only configuration and carried-device selection.
 
 ## Wi-Fi and AB Gateway Presence
 
+The entity creation source screen has an **Entity creation type** selector:
+choose **Dawarich location tracker**, **Wi-Fi presence tracker**, or **BLE presence
+tracker** to open the corresponding enabled tracker settings directly. This is
+available during initial setup and **Add Entity** in the integration options.
+Wi-Fi source selections prefill connection inputs; Dawarich/BLE selections can
+add existing GPS trackers. Leave sources empty to configure a standalone tracker.
+Set its name, entity ID, and target Device, then save. Each tracker is a normal
+managed entity: use **Edit Entity** to change connection settings or **Delete
+Entities** to remove it. Multiple trackers may share the same Device.
+Validation errors retain the selected creation type, sources, and target Device;
+Wi-Fi/BLE errors point to the input that needs correction. Explicit GPS sources
+also participate in Dawarich aggregation when they were offline during setup.
+
 In Add/Edit Virtual Entity, select `device_tracker` and enable **Wi-Fi / BLE
 presence tracking**. For a standalone presence tracker, leave the initial source
 selection empty. For a composite tracker, also select your GPS source trackers.

@@ -1458,6 +1458,8 @@ def _reference_entity_schema(
     entity_ids: list[str] | None = None,
     device_options: list[dict[str, str]] | None = None,
     default_device_name: str | None = None,
+    creation: bool = False,
+    creation_kind: str = "standard",
 ) -> vol.Schema:
     """Build the copy-source selector with the entity's current sources."""
     schema = {
@@ -1466,6 +1468,14 @@ def _reference_entity_schema(
             default=entity_ids or [],
         ): ENTITY_SELECTOR,
     }
+    if creation:
+        schema[vol.Optional("tracker_creation", default=creation_kind if creation_kind in ("standard", "dawarich", "wifi", "ble") else "standard")] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=["standard", "dawarich", "wifi", "ble"],
+                translation_key="tracker_creation",
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
     if device_options:
         valid_device_names = {option["value"] for option in device_options}
         default_device_name = (
@@ -1485,6 +1495,31 @@ def _reference_entity_schema(
             ),
         )
     return _complete_form_schema(vol.Schema(schema))
+
+
+def _tracker_creation_defaults(user_input):
+    """Start a managed tracker without requiring an existing tracker entity."""
+    kind = user_input.get("tracker_creation", "standard")
+    if kind == "standard":
+        return None
+    if kind not in {"dawarich", "wifi", "ble"}:
+        raise InvalidEntityReference(CONF_REFERENCE_ENTITY_ID)
+    sources = _normalize_reference_entity_ids(user_input.get(CONF_REFERENCE_ENTITY_ID))
+    if any(source.split(".", 1)[0] not in (
+        {"device_tracker", "binary_sensor", "sensor"} if kind == "wifi" else {"device_tracker"}
+    ) for source in sources):
+        raise InvalidEntityReference(CONF_REFERENCE_ENTITY_ID)
+    defaults = {
+        CONF_PLATFORM: "device_tracker",
+        CONF_ENTITY_NAME: {"dawarich": "Dawarich", "wifi": "Wi-Fi Presence", "ble": "BLE Presence"}[kind],
+        CONF_SOURCE_ENTITIES_TEXT: "\n".join(sources) if kind != "wifi" else "",
+    }
+    if kind == "dawarich":
+        defaults[CONF_DAWARICH_ENABLED_INPUT] = True
+    else:
+        defaults[CONF_PRESENCE_ENABLED_INPUT] = True
+        defaults["presence_wifi_entities"] = sources if kind == "wifi" else []
+    return _complete_domain_form_defaults(defaults)
 
 
 def _helper_update_schema(
@@ -4930,7 +4965,8 @@ def _build_entity_config(
         try:
             entity[CONF_LOCAL_PRESENCE] = normalize_local_presence(raw_presence)
         except vol.Invalid as err:
-            raise InvalidFieldValue(CONF_PRESENCE_ENABLED_INPUT, "invalid_local_presence") from err
+            field = "presence_" + err.path[0] if err.path and err.path[0] in LOCAL_PRESENCE_DEFAULTS else CONF_PRESENCE_ENABLED_INPUT
+            raise InvalidFieldValue(field, "invalid_local_presence") from err
 
     polygon_geojson_value = user_input.get(CONF_POLYGON_GEOJSON_JSON)
     polygon_files = [
@@ -11026,6 +11062,12 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
         errors = _flow_errors(self, "entity_source")
         if user_input is not None:
             try:
+                preset = _tracker_creation_defaults(user_input)
+                if preset is not None:
+                    self._reference_defaults = {}
+                    self._source_entities = _stored_entity_ids(preset.get(CONF_SOURCE_ENTITIES_TEXT))
+                    self._entity_defaults = preset
+                    return await self.async_step_entity()
                 self._source_entities = _normalize_reference_entity_ids(
                     user_input.get(CONF_REFERENCE_ENTITY_ID),
                 )
@@ -11052,7 +11094,7 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
                             return await self.async_step_sensor_conversion()
                         return self.async_show_form(
                             step_id="entity_source",
-                            data_schema=_reference_entity_schema(),
+                            data_schema=_reference_entity_schema(creation=True),
                             errors=errors,
                         )
                     if len(self._source_entities) == 1 or _has_entity_type_choice(
@@ -11082,7 +11124,11 @@ class VirtualFlowHandler(_AirQualityLogicFlow, config_entries.ConfigFlow, domain
 
         return self.async_show_form(
             step_id="entity_source",
-            data_schema=_reference_entity_schema(),
+            data_schema=_reference_entity_schema(
+                creation=True,
+                creation_kind=(user_input or {}).get("tracker_creation", "standard"),
+                entity_ids=_stored_entity_ids((user_input or {}).get(CONF_REFERENCE_ENTITY_ID)),
+            ),
             errors=errors,
         )
 
@@ -11617,6 +11663,15 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
         errors = _flow_errors(self, "entity_source")
         if user_input is not None:
             try:
+                preset = _tracker_creation_defaults(user_input)
+                if preset is not None:
+                    self._reference_defaults = {}
+                    self._add_source_entities = _stored_entity_ids(preset.get(CONF_SOURCE_ENTITIES_TEXT))
+                    self._add_target_device_name = user_input.get(CONF_TARGET_DEVICE_NAME)
+                    self._entity_defaults = _with_existing_device_defaults(
+                        preset, self.config_entry.options, self._add_target_device_name, self.hass
+                    )
+                    return await self.async_step_entity()
                 self._add_source_entities = _normalize_reference_entity_ids(
                     user_input.get(CONF_REFERENCE_ENTITY_ID),
                 )
@@ -11646,7 +11701,7 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
                             return await self.async_step_sensor_conversion()
                         return self.async_show_form(
                             step_id="entity_source",
-                            data_schema=_reference_entity_schema(
+                            data_schema=_reference_entity_schema(creation=True,
                                 device_options=_existing_device_options(
                                     self.hass, self.config_entry.options
                                 ),
@@ -11685,7 +11740,10 @@ class VirtualOptionsFlowHandler(_AirQualityLogicFlow, config_entries.OptionsFlow
 
         return self.async_show_form(
             step_id="entity_source",
-            data_schema=_reference_entity_schema(
+            data_schema=_reference_entity_schema(creation=True,
+                creation_kind=(user_input or {}).get("tracker_creation", "standard"),
+                entity_ids=_stored_entity_ids((user_input or {}).get(CONF_REFERENCE_ENTITY_ID)),
+                default_device_name=(user_input or {}).get(CONF_TARGET_DEVICE_NAME),
                 device_options=_existing_device_options(
                     self.hass, self.config_entry.options
                 ),

@@ -531,6 +531,10 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         self._dawarich_config = self._normalize_dawarich_config(
             config.get(CONF_DAWARICH)
         )
+        if self._dawarich_config and config.get(CONF_SOURCE_ENTITIES) and not self._location_helper:
+            # Explicit GPS sources must participate even when helper generation
+            # could not inspect them during setup (for example, offline phones).
+            self._location_helper = self._normalize_location_helper({})
         self._dawarich_state = None
         self._dawarich_task = None
         self._dawarich_removed = False

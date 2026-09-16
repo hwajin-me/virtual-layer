@@ -43,6 +43,17 @@ def snapshot(**kwargs):
     return DawarichSnapshot(value, [value], None)
 
 
+def test_explicit_gps_sources_work_without_generated_helpers(hass):
+    result, _ = tracker(hass, source_entities=["device_tracker.offline_phone"])
+    # Setup may run before a phone reports or while Dawarich is unreachable.
+    hass.states.async_set("device_tracker.offline_phone", "not_home", {
+        "latitude": 37.5, "longitude": 127, "gps_accuracy": 5,
+    })
+    result._update_location_from_sources()
+    assert (result.latitude, result.longitude) == (37.5, 127)
+    assert result.extra_state_attributes["location_stale"] is False
+
+
 async def test_old_response_cannot_roll_back_and_restore_preserves_measurement_time(
     hass, monkeypatch
 ):

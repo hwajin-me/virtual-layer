@@ -518,6 +518,135 @@ async def test_local_presence(hass):
         stop()
 
 
+async def test_tracker_creation_flows(hass):
+    """Create, edit, reload and delete all tracker presets through real HA flows."""
+    from aiohttp import web
+    from habluetooth import BaseHaRemoteScanner
+    from homeassistant.components import bluetooth
+    from custom_components.virtual_layer import config_flow as vf
+
+    requests = []
+
+    async def points(request):
+        assert request.headers.get("Authorization") == "Bearer flow-test-key"
+        requests.append(request.path)
+        return web.json_response([{"latitude": 37.5, "longitude": 127,
+                                  "timestamp": dt_util.utcnow().timestamp(), "accuracy": 8}])
+
+    app = web.Application()
+    app.router.add_get("/api/v1/points", points)
+    app.router.add_get("/api/v1/visits", lambda request: web.json_response([]))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    url = f"http://127.0.0.1:{runner.addresses[0][1]}"
+    scanner = BaseHaRemoteScanner("ab_gateway", "AB Gateway Flow", connectable=False)
+    stop = scanner.async_setup()
+    unregister = bluetooth.async_register_scanner(hass, scanner)
+    mac = "AA:BB:CC:DD:EE:01"
+    scanner._async_on_advertisement(mac.lower(), -55, "Phone", [], {}, {}, None, {}, bluetooth.MONOTONIC_TIME())
+    entries = []
+    registry = er.async_get(hass)
+    try:
+        for kind in ("dawarich", "wifi", "ble"):
+            entry = None
+            device_key = None
+            created_ids = []
+            for initial in (True, False):
+                entity_id = f"device_tracker.flow_{kind}_{int(initial)}"
+                created_ids.append(entity_id)
+                wifi_id = f"binary_sensor.flow_wifi_{int(initial)}"
+                hass.states.async_set(wifi_id, "on")
+                if initial:
+                    manager = hass.config_entries.flow
+                    result = await manager.async_init(COMPONENT_DOMAIN, context={"source": SOURCE_USER})
+                    result = await configure_flow(manager, result, {
+                        ATTR_GROUP_NAME: f"Flow {kind}", CONF_ADD_FIRST_ENTITY: True,
+                    })
+                else:
+                    manager = hass.config_entries.options
+                    result = await manager.async_init(entry.entry_id, data={CONF_ACTION: vf.ACTION_ADD_ENTITY})
+                source_input = {"tracker_creation": kind, CONF_REFERENCE_ENTITY_ID: [wifi_id] if kind == "wifi" else []}
+                if not initial:
+                    source_input[vf.CONF_TARGET_DEVICE_NAME] = device_key
+                result = await configure_flow(manager, result, source_input)
+                assert result["step_id"] == "entity", result
+                values = _flatten_entity_form_sections(result["data_schema"]({}))
+                assert values["platform"] == "device_tracker"
+                values.update({"entity_id": entity_id, CONF_ENTITY_NAME: f"Flow {kind} {int(initial)}"})
+                if initial:
+                    values["device_name"] = f"Flow {kind}"
+                if kind == "dawarich":
+                    assert values["dawarich_enabled"]
+                    values.update({"dawarich_url": url, "dawarich_api_key": "flow-test-key", "dawarich_test_connection": True})
+                else:
+                    assert values["presence_enabled"]
+                    if kind == "ble":
+                        values["presence_ble_addresses"] = mac
+                result = await configure_flow(manager, result, values)
+                assert result["type"] == FlowResultType.CREATE_ENTRY, result
+                if initial:
+                    entry = result["result"]
+                    entries.append(entry)
+                await hass.async_block_till_done()
+                device_key, entities = next(iter(entry.options["devices"].items()))
+                assert len(entities) == (1 if initial else 2)
+                saved = next(item for item in entities if item["entity_id"] == entity_id)
+                assert ("dawarich" if kind == "dawarich" else "local_presence") in saved
+                state = hass.states.get(entity_id)
+                assert state is not None, entity_id
+                assert state.attributes["latitude"] == (37.5 if kind == "dawarich" else hass.config.latitude), state
+                assert "flow-test-key" not in str(state.attributes)
+                primary = registry.async_get(entity_id)
+                assert registry.async_get(f"sensor.{entity_id.split('.')[1]}_info").device_id == primary.device_id
+                if not initial:
+                    assert primary.device_id == registry.async_get(created_ids[0]).device_id
+                if kind == "wifi":
+                    assert state.state == "home"
+                    hass.states.async_set(wifi_id, "off")
+                    await hass.async_block_till_done()
+                    assert hass.states.get(entity_id).state == "not_home"
+                    hass.states.async_set(wifi_id, "on")
+                    await hass.async_block_till_done()
+                if kind == "ble":
+                    assert state.attributes["location_presence_sources"] == ["ble:" + mac]
+                # Edit the just-created tracker using its stable selection key.
+                manager = hass.config_entries.options
+                selection = vf._selection_key_for_entity(device_key, entities.index(saved), saved)
+                result = await manager.async_init(entry.entry_id, data={CONF_ACTION: vf.ACTION_EDIT_ENTITY})
+                result = await configure_flow(manager, result, {CONF_ENTITY_KEY: selection})
+                result = await configure_flow(manager, result, {CONF_REFERENCE_ENTITY_ID: []})
+                values = _flatten_entity_form_sections(result["data_schema"]({}))
+                field = "dawarich_poll_interval" if kind == "dawarich" else "presence_ble_timeout"
+                values[field] = 180
+                result = await configure_flow(manager, result, values)
+                assert result["type"] == FlowResultType.CREATE_ENTRY
+                await hass.async_block_till_done()
+                assert await hass.config_entries.async_reload(entry.entry_id)
+                await hass.async_block_till_done()
+                assert hass.states.get(entity_id).attributes.get("latitude") is not None
+                updated = next(item for item in entry.options["devices"][device_key] if item["entity_id"] == entity_id)
+                assert updated["dawarich" if kind == "dawarich" else "local_presence"]["poll_interval" if kind == "dawarich" else "ble_timeout"] == 180
+            keys = [vf._selection_key_for_entity(device_key, i, entity) for i, entity in enumerate(entry.options["devices"][device_key])]
+            result = await manager.async_init(entry.entry_id, data={CONF_ACTION: vf.ACTION_DELETE_ENTITY})
+            result = await configure_flow(manager, result, {vf.CONF_ENTITY_KEYS: keys})
+            assert result["type"] == FlowResultType.CREATE_ENTRY
+            await hass.async_block_till_done()
+            for entity_id in created_ids:
+                assert hass.states.get(entity_id) is None
+                assert registry.async_get(entity_id) is None
+                assert registry.async_get(f"sensor.{entity_id.split('.')[1]}_info") is None
+            print(f"Tracker config-flow Docker passed: {kind}, initial + options creation, runtime, Device grouping, edit, reload, delete")
+        assert requests, "Dawarich config-flow trackers did not call the HTTP server"
+    finally:
+        for entry in entries:
+            await hass.config_entries.async_remove(entry.entry_id)
+        unregister()
+        stop()
+        await runner.cleanup()
+
+
 def test_tracker_measurement_clock(hass):
     """Delayed delivery and attribute refreshes must not replace fix time."""
     config = {
@@ -725,6 +854,7 @@ async def test_config_flow_create_modify_runtime():
         test_tracker_adaptive_travel(hass)
         test_tracker_measurement_clock(hass)
         await test_local_presence(hass)
+        await test_tracker_creation_flows(hass)
         await test_dawarich_http_tracking(hass)
         await test_source_startup_grace(hass)
         await test_image_camera_encoding(hass)
