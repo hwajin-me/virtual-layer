@@ -6534,9 +6534,9 @@ async def test_setup_entry_groups_multiple_virtual_entities_on_one_device(
         entity_registry.async_get(entity_id).device_id
         for entity_id in (
             "binary_sensor.refrigerator_door_open",
-            "sensor.refrigerator_door_open_info",
+            "sensor.src_refrigerator_door_open_info",
             "sensor.refrigerator_door_temperature",
-            "sensor.refrigerator_door_temperature_info",
+            "sensor.src_refrigerator_door_temperature_info",
         )
     }
     assert len(device_ids) == 1
@@ -6595,7 +6595,7 @@ async def test_new_entities_default_to_an_explicit_device_area(
 
     entity_registry = er.async_get(hass)
     primary = entity_registry.async_get("sensor.washer_phase")
-    info = entity_registry.async_get("sensor.washer_phase_info")
+    info = entity_registry.async_get("sensor.src_washer_phase_info")
     assert primary.area_id == kitchen.id
     assert info.area_id == kitchen.id
 
@@ -6606,7 +6606,7 @@ async def test_new_entities_default_to_an_explicit_device_area(
     await hass.async_block_till_done()
 
     assert entity_registry.async_get("sensor.washer_phase").area_id == office.id
-    assert entity_registry.async_get("sensor.washer_phase_info").area_id is None
+    assert entity_registry.async_get("sensor.src_washer_phase_info").area_id is None
 
 
 async def test_setup_entry_restores_stale_virtual_entity_registry_metadata(
@@ -6705,18 +6705,18 @@ async def test_setup_entry_restores_stale_virtual_entity_registry_metadata(
     await hass.async_block_till_done()
 
     primary = entity_registry.async_get("binary_sensor.refrigerator_door")
-    info = entity_registry.async_get("sensor.refrigerator_door_info")
+    info = entity_registry.async_get("sensor.src_refrigerator_door_info")
     debug1 = entity_registry.async_get("sensor.src_refrigerator_door_debug1")
 
     assert entity_registry.async_get("binary_sensor.virtual_entity") is None
-    assert entity_registry.async_get("sensor.virtual_entity_info") is None
+    assert entity_registry.async_get("sensor.src_virtual_entity_info") is None
     assert primary is not None
     assert info is not None
     assert debug1 is not None
     assert {primary.device_id, info.device_id, debug1.device_id} == {primary.device_id}
     assert primary.original_name == "Refrigerator Door"
     assert primary.original_icon == "mdi:door-open"
-    assert info.original_name == "Refrigerator Door - Configuration"
+    assert info.original_name == "[Source] - Refrigerator Door - Configuration"
     assert info.original_icon == "mdi:information-outline"
     assert device_registry.async_get(old_device.id) is None
 
@@ -7013,7 +7013,7 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
     assert await hass.config_entries.async_setup(entry.entry_id) is True
     await hass.async_block_till_done()
 
-    info = hass.states.get("sensor.virtual_washer_info")
+    info = hass.states.get("sensor.src_virtual_washer_info")
     debug_power = hass.states.get("sensor.src_virtual_washer_debug1")
     debug_door = hass.states.get("sensor.src_virtual_washer_debug2")
     assert info is not None
@@ -7030,7 +7030,9 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
     ]
     assert info.attributes["configuration"]["platform"] == "sensor"
     assert info.attributes["diagnostic_type"] == "configuration"
-    assert info.attributes["friendly_name"].endswith("Washer Summary - Configuration")
+    assert info.attributes["friendly_name"].endswith(
+        "[Source] - Washer Summary - Configuration"
+    )
     assert info.attributes["icon"] == "mdi:information-outline"
     assert debug_power.state == "150"
     assert debug_power.attributes["diagnostic_type"] == "source_state"
@@ -7068,7 +7070,7 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
     entity_registry = er.async_get(hass)
     primary_entry = entity_registry.async_get("sensor.virtual_washer")
     assert (
-        entity_registry.async_get("sensor.virtual_washer_info").device_id
+        entity_registry.async_get("sensor.src_virtual_washer_info").device_id
         == primary_entry.device_id
     )
     assert (
@@ -7087,8 +7089,8 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
     await hass.async_block_till_done()
 
     assert (
-        entity_registry.async_get("sensor.virtual_washer_info").original_name
-        == "Laundry Status - Configuration"
+        entity_registry.async_get("sensor.src_virtual_washer_info").original_name
+        == "[Source] - Laundry Status - Configuration"
     )
     assert (
         entity_registry.async_get("sensor.src_virtual_washer_debug1").original_name
@@ -7100,7 +7102,14 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
 
     assert await hass.config_entries.async_unload(entry.entry_id) is True
     # Simulate the registry left by an older integration version.
-    legacy_unique_ids = {}
+    legacy_unique_ids = {
+        "info": entity_registry.async_get("sensor.src_virtual_washer_info").unique_id,
+    }
+    entity_registry.async_update_entity(
+        "sensor.src_virtual_washer_info",
+        new_entity_id="sensor.virtual_washer_info",
+        original_name="Laundry Status - Configuration",
+    )
     for index in (1, 2):
         current_id = f"sensor.src_virtual_washer_debug{index}"
         legacy_unique_ids[index] = entity_registry.async_get(current_id).unique_id
@@ -7111,6 +7120,10 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
         )
     assert await hass.config_entries.async_setup(entry.entry_id) is True
     await hass.async_block_till_done()
+    assert entity_registry.async_get("sensor.virtual_washer_info") is None
+    migrated_info = entity_registry.async_get("sensor.src_virtual_washer_info")
+    assert migrated_info.unique_id == legacy_unique_ids["info"]
+    assert migrated_info.device_id == primary_entry.device_id
     for index in (1, 2):
         assert entity_registry.async_get(f"sensor.virtual_washer_debug{index}") is None
         migrated = entity_registry.async_get(f"sensor.src_virtual_washer_debug{index}")
@@ -7119,8 +7132,8 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
     assert entity_registry.async_get("sensor.src_virtual_washer_debug2").name == "My Door Diagnostics"
 
     assert (
-        entity_registry.async_get("sensor.virtual_washer_info").original_name
-        == "Laundry Status - Configuration"
+        entity_registry.async_get("sensor.src_virtual_washer_info").original_name
+        == "[Source] - Laundry Status - Configuration"
     )
     assert (
         entity_registry.async_get("sensor.src_virtual_washer_debug1").original_name
@@ -7130,8 +7143,8 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
     entity_registry.async_update_entity("sensor.virtual_washer", name=None)
     await hass.async_block_till_done()
     assert (
-        entity_registry.async_get("sensor.virtual_washer_info").original_name
-        == "Washer Summary - Configuration"
+        entity_registry.async_get("sensor.src_virtual_washer_info").original_name
+        == "[Source] - Washer Summary - Configuration"
     )
     assert (
         entity_registry.async_get("sensor.src_virtual_washer_debug1").original_name
@@ -7178,8 +7191,8 @@ async def test_setup_entry_creates_information_and_source_debug_sensors(
         == "Reconfigured Washer"
     )
     assert (
-        entity_registry.async_get("sensor.virtual_washer_info").original_name
-        == "Reconfigured Washer - Configuration"
+        entity_registry.async_get("sensor.src_virtual_washer_info").original_name
+        == "[Source] - Reconfigured Washer - Configuration"
     )
     assert (
         entity_registry.async_get("sensor.src_virtual_washer_debug1").original_name
@@ -7224,15 +7237,16 @@ async def test_diagnostic_registry_defaults_are_migrated_without_overwriting_use
             "sensor": [
                 {
                     ATTR_UNIQUE_ID: diagnostic.unique_id,
-                    CONF_NAME: "Virtual Entity - Configuration",
+                    CONF_NAME: "[Source] - Virtual Entity - Configuration",
                     CONF_ICON: "mdi:information-outline",
+                    CONF_ATTRIBUTES: {"diagnostic_type": "configuration"},
                 }
             ],
         },
     )
 
     migrated = entity_registry.async_get(diagnostic.entity_id)
-    assert migrated.original_name == "Virtual Entity - Configuration"
+    assert migrated.original_name == "[Source] - Virtual Entity - Configuration"
     assert migrated.original_icon == "mdi:information-outline"
     assert migrated.name == "My custom diagnostic name"
     assert migrated.icon == "mdi:star"
@@ -7712,7 +7726,7 @@ async def test_setup_entry_recovers_legacy_configuration_url(hass, tmp_path, mon
         assert device.configuration_url == (
             url if url == "https://example.test/device" else None
         )
-        for entity_id in ("sensor.environment_temperature", "sensor.environment_temperature_info"):
+        for entity_id in ("sensor.environment_temperature", "sensor.src_environment_temperature_info"):
             assert hass.states.get(entity_id) is not None
             assert er.async_get(hass).async_get(entity_id).device_id == device.id
         assert await hass.config_entries.async_unload(entry.entry_id)
@@ -7742,7 +7756,7 @@ async def test_bad_common_values_do_not_block_healthy_entities(
         assert hass.states.get("sensor.recovered").state == "12"
         assert hass.states.get("switch.healthy") is not None
         registry = er.async_get(hass)
-        assert registry.async_get("sensor.recovered").device_id == registry.async_get("sensor.recovered_info").device_id
+        assert registry.async_get("sensor.recovered").device_id == registry.async_get("sensor.src_recovered_info").device_id
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -7974,7 +7988,7 @@ async def test_device_id_change_moves_existing_entity_to_new_device(
     new_device_id = entity_registry.async_get("sensor.washer_phase").device_id
     assert new_device_id != old_device_id
     assert (
-        er.async_get(hass).async_get("sensor.washer_phase_info").device_id
+        er.async_get(hass).async_get("sensor.src_washer_phase_info").device_id
         == new_device_id
     )
     assert dr.async_get(hass).async_get(old_device_id) is None
@@ -9271,7 +9285,7 @@ async def test_state_only_entity_supports_state_and_event_hooks(
     assert "broken" not in state.attributes
     assert state.attributes["structured"] == {"values": ["received"]}
 
-    info = hass.states.get("sensor.hook_tag_info")
+    info = hass.states.get("sensor.src_hook_tag_info")
     debug = hass.states.get("sensor.src_hook_tag_debug1")
     assert info.attributes["configured_source_entities"] == [
         "sensor.tag_hook_source",
@@ -10249,7 +10263,7 @@ async def test_options_updates_preserve_unrelated_entities(hass, tmp_path, monke
     hass.states.async_set("tag.stable_tag", "runtime")
     await hass.async_block_till_done()
     before = {eid: hass.states.get(eid) for eid in (
-        "sensor.stable_sensor", "tag.stable_tag", "sensor.stable_sensor_info", "sensor.stable_tag_info")}
+        "sensor.stable_sensor", "tag.stable_tag", "sensor.src_stable_sensor_info", "sensor.src_stable_tag_info")}
     events = []
     unsub = hass.bus.async_listen(EVENT_STATE_CHANGED, lambda event: events.append(event))
     changed = {CONF_PLATFORM: changed_domain, CONF_NAME: "Changed",
@@ -10273,7 +10287,7 @@ async def test_options_updates_preserve_unrelated_entities(hass, tmp_path, monke
                 )
             else:
                 assert hass.states.get(f"{changed_domain}.changed") is None
-                assert hass.states.get("sensor.changed_info") is None
+                assert hass.states.get("sensor.src_changed_info") is None
         reload.assert_not_called()
     unsub()
     hass.states.async_set("sensor.incremental_source", "25")

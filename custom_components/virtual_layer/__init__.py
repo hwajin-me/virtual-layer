@@ -628,7 +628,10 @@ def _async_update_generated_entity_name(
 def _generated_name_prefix(entity) -> str:
     """Return the label preceding a generated entity's parent display name."""
     attributes = entity.get(CONF_ATTRIBUTES)
-    if isinstance(attributes, Mapping) and attributes.get("diagnostic_type") == "source_state":
+    if (
+        isinstance(attributes, Mapping)
+        and attributes.get("diagnostic_type") in {"configuration", "source_state"}
+    ):
         return "[Source] - "
     return ""
 

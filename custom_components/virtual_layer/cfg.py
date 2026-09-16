@@ -1040,7 +1040,7 @@ class BlendedCfg:
         diagnostics = [(
             "info",
             entity_id,
-            f"{entity[CONF_NAME]} - Configuration",
+            f"[Source] - {entity[CONF_NAME]} - Configuration",
             "mdi:information-outline",
             {
                 "diagnostic_type": "configuration",
@@ -1376,7 +1376,7 @@ class BlendedCfg:
             diagnostic_unique_id = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}{suffix}"
             diagnostic_entity_id = self._reserve_entity_id(
                 "sensor",
-                f"sensor.{'src_' if suffix != 'info' else ''}{object_id}_{suffix}",
+                f"sensor.src_{object_id}_{suffix}",
                 diagnostic_unique_id,
             )
             diagnostic_entity = {

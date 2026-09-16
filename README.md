@@ -162,8 +162,9 @@ If no device ID is provided, Virtual Layer generates a stable ID.
 
 ## Entities
 
-Source diagnostic sensors on the virtual Device use names beginning with
-`[Source] - ` and IDs such as `sensor.src_<parent_object_id>_debug1`.
+Source diagnostic sensors on the virtual Device, including the configuration
+summary, use names beginning with `[Source] - ` and IDs such as
+`sensor.src_<parent_object_id>_info` and `sensor.src_<parent_object_id>_debug1`.
 Existing source diagnostics migrate automatically on reload, retaining their
 unique IDs and customized display names.
 

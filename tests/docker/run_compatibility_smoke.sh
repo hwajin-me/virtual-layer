@@ -612,7 +612,7 @@ async def test_tracker_creation_flows(hass):
                 assert state.attributes["latitude"] == (37.5 if kind == "dawarich" else hass.config.latitude), state
                 assert "flow-test-key" not in str(state.attributes)
                 primary = registry.async_get(entity_id)
-                assert registry.async_get(f"sensor.{entity_id.split('.')[1]}_info").device_id == primary.device_id
+                assert registry.async_get(f"sensor.src_{entity_id.split('.')[1]}_info").device_id == primary.device_id
                 if not initial:
                     assert primary.device_id == registry.async_get(created_ids[0]).device_id
                 if kind == "wifi":
@@ -652,7 +652,7 @@ async def test_tracker_creation_flows(hass):
             for entity_id in created_ids:
                 assert hass.states.get(entity_id) is None
                 assert registry.async_get(entity_id) is None
-                assert registry.async_get(f"sensor.{entity_id.split('.')[1]}_info") is None
+                assert registry.async_get(f"sensor.src_{entity_id.split('.')[1]}_info") is None
             print(f"Tracker config-flow Docker passed: {kind}, initial + options creation, runtime, Device grouping, edit, reload, delete")
         assert requests, "Dawarich config-flow trackers did not call the HTTP server"
     finally:
@@ -1020,7 +1020,7 @@ async def test_config_flow_create_modify_runtime():
         aqi_unique_id = registry.async_get("air_quality.docker_flow_pm25_aqi").unique_id
         for suffix in ("info", "debug1", "debug2", "aqi"):
             companion_id = f"sensor.docker_flow_pm25_{suffix}"
-            if suffix.startswith("debug"):
+            if suffix != "aqi":
                 companion_id = companion_id.replace("sensor.", "sensor.src_", 1)
             if suffix == "aqi":
                 companion_id = companion_id.replace("sensor.", "air_quality.", 1)
@@ -1106,10 +1106,10 @@ async def test_config_flow_create_modify_runtime():
         assert registry.async_get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").unique_id == aqi_unique_id
         for suffix in ("info", "debug1", "debug2", "aqi"):
             old_domain = "air_quality" if suffix == "aqi" else "sensor"
-            prefix = "src_" if suffix.startswith("debug") else ""
+            prefix = "src_" if suffix != "aqi" else ""
             assert registry.async_get(f"{old_domain}.{prefix}docker_flow_pm25_{suffix}") is None
             companion_id = f"{modified_id}_{suffix}"
-            if suffix.startswith("debug"):
+            if suffix != "aqi":
                 companion_id = companion_id.replace("sensor.", "sensor.src_", 1)
             if suffix == "aqi":
                 companion_id = companion_id.replace("sensor.", "air_quality.", 1)
