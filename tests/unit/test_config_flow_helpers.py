@@ -4437,6 +4437,8 @@ def test_humidifier_entity_form_migrates_static_values_to_jinja_controls():
         {"min_humidity": 80, "max_humidity": 30},
         {"min_humidity": 30, "max_humidity": 80, "target_humidity": 90},
         {"target_humidity_step": 0},
+        {"current_humidity": -1},
+        {"current_humidity": 101},
         {"modes": ["auto", "auto"]},
         {"modes": ["auto"], "mode": "sleep"},
         {"action": "cooling"},

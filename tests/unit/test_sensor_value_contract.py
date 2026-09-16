@@ -78,3 +78,22 @@ def test_unitless_sensor_remains_unitless():
     sensor = make_sensor({"name": "Ratio", "initial_value": 0.5})
     sensor._apply_native_template_value("native_unit_of_measurement", None)
     assert sensor.native_unit_of_measurement is None
+
+
+@pytest.mark.parametrize("missing", [None, "", "  ", "None", "unknown", "unavailable"])
+@pytest.mark.parametrize("device_class", ["pm1", "pm25", "pm4", "pm10"])
+def test_first_missing_unit_preserves_particulate_default(missing, device_class):
+    sensor = make_sensor({"name": "Particulate", "class": device_class, "initial_value": 12})
+    sensor._apply_native_template_value("native_unit_of_measurement", missing)
+    sensor._native_templates_applied()
+    assert sensor.native_unit_of_measurement == "μg/m³"
+    assert sensor.native_value == 12
+
+
+@pytest.mark.parametrize("missing", [None, "", "  ", "None", "unknown", "unavailable"])
+@pytest.mark.parametrize("configured", [None, "mdi:blur"])
+def test_missing_native_icon_uses_configured_or_pm10_icon(missing, configured):
+    sensor = make_sensor({"name": "PM 10.0", "class": "pm10", "icon": configured})
+    sensor._apply_native_template_value("icon", "mdi:weather-dust")
+    sensor._apply_native_template_value("icon", missing)
+    assert sensor.icon == (configured or "mdi:air-filter")

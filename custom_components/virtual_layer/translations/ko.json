@@ -958,7 +958,7 @@
       },
       "tracker_settings": {
         "title": "Tracker 연결 및 재실 설정",
-        "description": "Dawarich와 Wi-Fi/BLE 세부 설정을 마친 뒤 공통 엔티티 편집으로 이동합니다. 생성 시 기존 Dawarich 연결이 하나면 서버와 API 키를 미리 채웁니다. 복사된 값은 수정할 수 있으며 원본 통합 구성요소에는 영향을 주지 않습니다. TLS 인증서 검증은 유지됩니다.",
+        "description": "Dawarich와 Wi-Fi/BLE 세부 설정을 마친 뒤 공통 엔티티 편집으로 이동합니다. 생성 시 기존 Dawarich 연결이 하나면 서버와 API 키를 미리 채웁니다. 복사된 값은 수정할 수 있으며 원본 통합 구성요소에는 영향을 주지 않습니다. Dawarich 연결 테스트와 실제 조회에서는 TLS 인증서를 항상 검증하지 않습니다.",
         "sections": {
           "dawarich_settings": {
             "name": "Dawarich",
@@ -2871,7 +2871,7 @@
       },
       "tracker_settings": {
         "title": "Tracker 연결 및 재실 설정",
-        "description": "Dawarich와 Wi-Fi/BLE 세부 설정을 마친 뒤 공통 엔티티 편집으로 이동합니다. 생성 시 기존 Dawarich 연결이 하나면 서버와 API 키를 미리 채웁니다. 복사된 값은 수정할 수 있으며 원본 통합 구성요소에는 영향을 주지 않습니다. TLS 인증서 검증은 유지됩니다.",
+        "description": "Dawarich와 Wi-Fi/BLE 세부 설정을 마친 뒤 공통 엔티티 편집으로 이동합니다. 생성 시 기존 Dawarich 연결이 하나면 서버와 API 키를 미리 채웁니다. 복사된 값은 수정할 수 있으며 원본 통합 구성요소에는 영향을 주지 않습니다. Dawarich 연결 테스트와 실제 조회에서는 TLS 인증서를 항상 검증하지 않습니다.",
         "sections": {
           "dawarich_settings": {
             "name": "Dawarich",
@@ -2936,6 +2936,61 @@
     }
   },
   "selector": {
+    "entity_type": {
+      "options": {
+        "ai_task": "AI 작업",
+        "air_quality": "공기질",
+        "alarm_control_panel": "보안 경보",
+        "assist_satellite": "Assist 위성",
+        "binary_sensor": "이진 센서",
+        "button": "버튼",
+        "calendar": "달력",
+        "camera": "카메라",
+        "climate": "냉난방",
+        "conversation": "대화",
+        "cover": "커버",
+        "date": "날짜",
+        "datetime": "날짜 및 시간",
+        "device_tracker": "기기 위치 추적",
+        "event": "이벤트",
+        "fan": "팬",
+        "geolocation": "지리적 위치",
+        "humidifier": "가습·제습기",
+        "image": "이미지",
+        "image_processing": "이미지 처리",
+        "infrared": "적외선",
+        "lawn_mower": "잔디 깎기",
+        "light": "조명",
+        "lock": "잠금장치",
+        "media_player": "미디어 플레이어",
+        "notify": "알림",
+        "number": "숫자",
+        "radio_frequency": "무선 주파수",
+        "remote": "리모컨",
+        "scene": "장면",
+        "select": "선택",
+        "sensor": "센서",
+        "siren": "사이렌",
+        "stt": "음성 인식",
+        "switch": "스위치",
+        "tag": "태그",
+        "text": "텍스트",
+        "time": "시간",
+        "todo": "할 일 목록",
+        "tts": "음성 합성",
+        "update": "업데이트",
+        "vacuum": "로봇 청소기",
+        "valve": "밸브",
+        "wake_word": "호출어",
+        "water_heater": "온수기",
+        "weather": "날씨"
+      }
+    },
+    "target_device": {
+      "options": {
+        "__new_device__": "새 장치 만들기"
+      }
+    },
     "motion_detection_logic": {
       "options": {
         "majority": "과반",

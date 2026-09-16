@@ -74,6 +74,7 @@ def test_invalid_fields_return_visible_flow_error(field, value):
     with pytest.raises(flow.InvalidFieldValue) as error:
         build(data)
     assert error.value.error_code == "invalid_dawarich_config"
+    assert error.value.field_name == field
 
 
 async def test_optional_connection_test_works_with_sectioned_form(hass, monkeypatch):

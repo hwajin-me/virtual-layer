@@ -129,7 +129,8 @@ def validate_domain_options(config) -> None:
         if field_name not in config:
             continue
         value = _finite_float(config[field_name], float("nan"))
-        if not math.isfinite(value) or not minimum <= value <= maximum:
+        lower, upper = (0, 100) if field_name == CONF_CURRENT_HUMIDITY else (minimum, maximum)
+        if not math.isfinite(value) or not lower <= value <= upper:
             raise vol.Invalid(f"{field_name} must be within the humidity range")
     if CONF_TARGET_HUMIDITY_STEP in config:
         step = _finite_float(config[CONF_TARGET_HUMIDITY_STEP], 0)
@@ -204,6 +205,7 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             self._attr_action = HumidifierAction.OFF
         self._attr_current_humidity = self._bounded_humidity(
             config.get(CONF_CURRENT_HUMIDITY),
+            measured=True,
         )
         self._attr_target_humidity = self._bounded_humidity(
             config.get(CONF_TARGET_HUMIDITY)
@@ -229,6 +231,7 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
                 CONF_CURRENT_HUMIDITY,
                 config.get(CONF_CURRENT_HUMIDITY),
             ),
+            measured=True,
         )
         self._attr_target_humidity = self._bounded_humidity(
             state.attributes.get(
@@ -251,7 +254,8 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             else None
         )
 
-    def _bounded_humidity(self, humidity):
+    def _bounded_humidity(self, humidity, *, measured=False):
+        """Bound readings to percentages and targets to the device's setpoint range."""
         if humidity is None or isinstance(humidity, bool):
             return None
         try:
@@ -260,10 +264,10 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             return None
         if not math.isfinite(humidity):
             return None
-        return max(
-            self._attr_min_humidity,
-            min(self._attr_max_humidity, humidity),
+        minimum, maximum = (0, 100) if measured else (
+            self._attr_min_humidity, self._attr_max_humidity
         )
+        return max(minimum, min(maximum, humidity))
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -303,7 +307,7 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
                 value = _finite_float(value, float("nan"))
                 if not math.isfinite(value):
                     raise ValueError(f"{name} must render a finite number")
-                value = self._bounded_humidity(value)
+                value = self._bounded_humidity(value, measured=name == CONF_CURRENT_HUMIDITY)
         elif name in {CONF_MIN_HUMIDITY, CONF_MAX_HUMIDITY}:
             value = _finite_float(value, float("nan"))
             if not math.isfinite(value):
@@ -325,7 +329,7 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
                 self._attr_min_humidity,
             )
         self._attr_current_humidity = self._bounded_humidity(
-            self._attr_current_humidity
+            self._attr_current_humidity, measured=True
         )
         self._attr_target_humidity = self._bounded_humidity(
             self._attr_target_humidity

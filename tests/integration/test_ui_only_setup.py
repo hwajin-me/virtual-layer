@@ -6194,6 +6194,44 @@ async def test_options_flow_composes_humidifier_from_mixed_source_domains(hass):
     }
 
 
+@pytest.mark.parametrize("humidity", [0, 25, 90, 100])
+async def test_options_flow_edits_humidifier_reading_outside_target_range(hass, humidity):
+    """Unchanged measured humidity must not prevent saving an existing entity."""
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={ATTR_DEVICES: {"Bedroom": [{
+            CONF_PLATFORM: "humidifier",
+            CONF_NAME: "Bedroom Humidifier",
+            ATTR_ENTITY_ID: "humidifier.virtual_bedroom",
+            CONF_INITIAL_VALUE: "off",
+            CONF_INITIAL_AVAILABILITY: True,
+            CONF_PERSISTENT: True,
+            "current_humidity": humidity,
+            "min_humidity": 30,
+            "max_humidity": 80,
+            "target_humidity": 50,
+        }]}},
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_ENTITY_KEY: _entity_key("Bedroom", 0)},
+    )
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "edit_entity"
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+    result = await hass.config_entries.options.async_configure(result["flow_id"], defaults)
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    saved = _first_stored_entity(result)
+    assert saved["current_humidity"] == humidity
+    assert saved["target_humidity"] == 50
+    assert saved[ATTR_ENTITY_ID] == "humidifier.virtual_bedroom"
+    assert saved[CONF_NATIVE_TEMPLATES] == defaults[CONF_NATIVE_VALUE_TEMPLATES]
+
+
 async def test_options_flow_can_edit_all_climate_modes(hass):
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,

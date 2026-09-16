@@ -124,6 +124,7 @@ async def test_points_filter_sort_bound_history_and_follow_last_visit_page():
     assert session.calls[0][1]["headers"]["Authorization"] == "Bearer private-test-key"
     assert session.calls[0][1]["allow_redirects"] is False
     assert session.calls[2][1]["params"]["page"] == 3
+    assert all(call[1]["ssl"] is False for call in session.calls)
     assert {"start_at", "end_at"} <= session.calls[1][1]["params"].keys()
 
 
@@ -151,6 +152,7 @@ async def test_family_uses_explicit_identity_and_never_account_visits(member):
     assert result.visit is None
     assert len(session.calls) == 1
     assert session.calls[0][0].endswith("/families/locations")
+    assert session.calls[0][1]["ssl"] is False
     assert "email" not in result.point
 
 
@@ -205,3 +207,4 @@ async def test_visit_failure_preserves_point_and_query_auth():
     assert result.visit_error == "http_error"
     assert session.calls[0][1]["params"]["api_key"] == "private-test-key"
     assert "Authorization" not in session.calls[0][1]["headers"]
+    assert all(call[1]["ssl"] is False for call in session.calls)

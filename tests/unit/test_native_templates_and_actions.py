@@ -1035,8 +1035,26 @@ def test_fan_native_templates_control_capabilities_and_values(hass):
     assert FanEntityFeature.OSCILLATE in entity.supported_features
 
 
-def test_humidifier_native_templates_render_target_action_and_modes(hass):
-    hass.states.async_set("sensor.room_humidity", "61")
+@pytest.mark.parametrize("humidity", [0, 15, 61, 90, 100])
+def test_humidifier_initial_and_restored_reading_ignores_target_range(humidity):
+    config = HUMIDIFIER_SCHEMA(_base(
+        "humidifier.measured", "on", current_humidity=humidity,
+        min_humidity=30, max_humidity=80, target_humidity=50,
+    ))
+    entity = VirtualHumidifier(config, False)
+    entity._create_state(config)
+    assert entity.current_humidity == humidity
+    assert entity.target_humidity == 50
+    entity._restore_state(State("humidifier.measured", "on", {
+        "current_humidity": 100 - humidity, "humidity": 60,
+    }), config)
+    assert entity.current_humidity == 100 - humidity
+    assert entity.target_humidity == 60
+
+
+@pytest.mark.parametrize("humidity", [0, 15, 61, 90, 100])
+def test_humidifier_native_templates_render_target_action_and_modes(hass, humidity):
+    hass.states.async_set("sensor.room_humidity", str(humidity))
     entity = VirtualHumidifier(
         HUMIDIFIER_SCHEMA(
             _base(
@@ -1068,7 +1086,7 @@ def test_humidifier_native_templates_render_target_action_and_modes(hass):
 
     assert entity.is_on is True
     assert entity.device_class == HumidifierDeviceClass.DEHUMIDIFIER
-    assert entity.current_humidity == 61
+    assert entity.current_humidity == humidity
     assert entity.target_humidity == 53
     assert entity.min_humidity == 20
     assert entity.max_humidity == 80

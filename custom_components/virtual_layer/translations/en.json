@@ -958,7 +958,7 @@
       },
       "tracker_settings": {
         "title": "Tracker connection and presence settings",
-        "description": "Configure Dawarich and Wi-Fi/BLE here, then continue to the common entity editor. A single existing Dawarich connection pre-fills its server and API key on creation. These are editable copies; changing this tracker does not change the original integration. TLS certificate verification remains enabled.",
+        "description": "Configure Dawarich and Wi-Fi/BLE here, then continue to the common entity editor. A single existing Dawarich connection pre-fills its server and API key on creation. These are editable copies; changing this tracker does not change the original integration. Dawarich TLS certificate verification is always disabled for connection tests and runtime reads.",
         "sections": {
           "dawarich_settings": {
             "name": "Dawarich",
@@ -2871,7 +2871,7 @@
       },
       "tracker_settings": {
         "title": "Tracker connection and presence settings",
-        "description": "Configure Dawarich and Wi-Fi/BLE here, then continue to the common entity editor. A single existing Dawarich connection pre-fills its server and API key on creation. These are editable copies; changing this tracker does not change the original integration. TLS certificate verification remains enabled.",
+        "description": "Configure Dawarich and Wi-Fi/BLE here, then continue to the common entity editor. A single existing Dawarich connection pre-fills its server and API key on creation. These are editable copies; changing this tracker does not change the original integration. Dawarich TLS certificate verification is always disabled for connection tests and runtime reads.",
         "sections": {
           "dawarich_settings": {
             "name": "Dawarich",
@@ -2936,6 +2936,61 @@
     }
   },
   "selector": {
+    "entity_type": {
+      "options": {
+        "ai_task": "AI task",
+        "air_quality": "Air quality",
+        "alarm_control_panel": "Alarm control panel",
+        "assist_satellite": "Assist satellite",
+        "binary_sensor": "Binary sensor",
+        "button": "Button",
+        "calendar": "Calendar",
+        "camera": "Camera",
+        "climate": "Climate",
+        "conversation": "Conversation",
+        "cover": "Cover",
+        "date": "Date",
+        "datetime": "Date and time",
+        "device_tracker": "Device tracker",
+        "event": "Event",
+        "fan": "Fan",
+        "geolocation": "Geolocation",
+        "humidifier": "Humidifier",
+        "image": "Image",
+        "image_processing": "Image processing",
+        "infrared": "Infrared",
+        "lawn_mower": "Lawn mower",
+        "light": "Light",
+        "lock": "Lock",
+        "media_player": "Media player",
+        "notify": "Notification",
+        "number": "Number",
+        "radio_frequency": "Radio frequency",
+        "remote": "Remote",
+        "scene": "Scene",
+        "select": "Select",
+        "sensor": "Sensor",
+        "siren": "Siren",
+        "stt": "Speech to text",
+        "switch": "Switch",
+        "tag": "Tag",
+        "text": "Text",
+        "time": "Time",
+        "todo": "To-do list",
+        "tts": "Text to speech",
+        "update": "Update",
+        "vacuum": "Vacuum",
+        "valve": "Valve",
+        "wake_word": "Wake word",
+        "water_heater": "Water heater",
+        "weather": "Weather"
+      }
+    },
+    "target_device": {
+      "options": {
+        "__new_device__": "Create a new Device"
+      }
+    },
     "motion_detection_logic": {
       "options": {
         "majority": "Majority",

@@ -1,6 +1,7 @@
 """Dedicated tracker creation paths use the normal managed entity lifecycle."""
 
 import pytest
+from unittest.mock import AsyncMock
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.virtual_layer import config_flow as flow
@@ -202,3 +203,55 @@ async def test_retry_keeps_existing_target_device(hass):
     defaults = result["data_schema"]({})
     assert defaults["tracker_creation"] == "ble"
     assert defaults[flow.CONF_TARGET_DEVICE_NAME] == "Phone"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("dawarich_url", "https://example.test?api_key=private"),
+    ("dawarich_api_key", ""),
+    ("dawarich_poll_interval", 15.5),
+    ("dawarich_poll_interval", 0),
+    ("dawarich_history_limit", 101),
+    ("dawarich_person", ["person.one", "person.two"]),
+])
+async def test_dawarich_invalid_input_stays_editable(hass, monkeypatch, field, value):
+    handler = flow.VirtualFlowHandler()
+    handler.hass = hass
+    result = await handler.async_step_entity_source({"tracker_creation": "dawarich"})
+    form = result["data_schema"]({})
+    settings = form["dawarich_settings"]
+    settings.update({"dawarich_url": "https://example.test", "dawarich_api_key": "test-key",
+                     "dawarich_test_connection": True})
+    valid = dict(settings)
+    settings[field] = value
+    fetch = AsyncMock()
+    monkeypatch.setattr(flow.DawarichClient, "async_fetch", fetch)
+    result = await handler.async_step_tracker_settings(form)
+    assert result["step_id"] == "tracker_settings"
+    assert result["errors"] == {field: "invalid_dawarich_config"}
+    fetch.assert_not_awaited()
+    section_schema = next(validator.schema for marker, validator in result["data_schema"].schema.items()
+                          if marker.schema == "dawarich_settings")
+    # A numeric value outside the selector range cannot validate through ({}),
+    # but its suggestion must still be returned so the user can correct it.
+    suggestions = {marker.schema: marker.description["suggested_value"]
+                   for marker in section_schema.schema}
+    assert suggestions[field] == value
+    assert suggestions["dawarich_url"] == settings["dawarich_url"]
+    assert suggestions["dawarich_api_key"] == settings["dawarich_api_key"]
+    suggestions[field] = valid[field]
+    result = await handler.async_step_tracker_settings({"dawarich_settings": suggestions})
+    assert result["step_id"] == "entity", result
+    assert result["errors"] == {}
+    fetch.assert_awaited_once_with("", include_visit=False)
+
+
+async def test_frontend_language_catalogs_load_for_selectors(hass):
+    from homeassistant.helpers.translation import async_get_translations
+
+    hass.config.language = "en"
+    for language, expected in (("en", "Humidifier"), ("ko", "가습·제습기")):
+        translated = await async_get_translations(hass, language, "selector", {COMPONENT_DOMAIN})
+        prefix = f"component.{COMPONENT_DOMAIN}.selector."
+        assert translated[prefix + "entity_type.options.humidifier"] == expected
+        assert translated[prefix + "target_device.options.__new_device__"]
+        assert translated[prefix + "dawarich_connection.options.manual"]

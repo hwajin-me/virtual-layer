@@ -1491,6 +1491,7 @@ def _reference_entity_schema(
         ] = selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=device_options,
+                translation_key="target_device",
                 mode=selector.SelectSelectorMode.DROPDOWN,
             ),
         )
@@ -1754,6 +1755,7 @@ def _entity_type_schema(
                     selector.SelectSelector(
                         selector.SelectSelectorConfig(
                             options=options,
+                            translation_key="entity_type",
                             mode=selector.SelectSelectorMode.DROPDOWN,
                         )
                     )
@@ -3345,7 +3347,11 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
         vol.Optional(ATTR_ENTITY_ID, default=""): str,
         vol.Required(
             CONF_PLATFORM, default=defaults.get(CONF_PLATFORM, DEFAULT_ENTITY_DOMAIN)
-        ): vol.In(VIRTUAL_ENTITY_DOMAINS),
+        ): selector.SelectSelector(selector.SelectSelectorConfig(
+            options=VIRTUAL_ENTITY_DOMAINS,
+            translation_key="entity_type",
+            mode=selector.SelectSelectorMode.DROPDOWN,
+        )),
         vol.Required(
             CONF_INITIAL_VALUE,
             default=defaults.get(CONF_INITIAL_VALUE, DEFAULT_ENTITY_VALUE),
@@ -5089,7 +5095,16 @@ def _build_entity_config(
         try:
             entity[CONF_DAWARICH] = normalize_dawarich_config(dawarich_config)
         except vol.Invalid as err:
-            raise InvalidFieldValue(CONF_DAWARICH_ENABLED_INPUT, "invalid_dawarich_config") from err
+            field = {
+                CONF_DAWARICH_URL: CONF_DAWARICH_URL_INPUT,
+                CONF_DAWARICH_API_KEY: CONF_DAWARICH_API_KEY_INPUT,
+                CONF_DAWARICH_AUTH_MODE: CONF_DAWARICH_AUTH_MODE_INPUT,
+                CONF_DAWARICH_POLL_INTERVAL: CONF_DAWARICH_POLL_INTERVAL_INPUT,
+                CONF_DAWARICH_HISTORY_LIMIT: CONF_DAWARICH_HISTORY_LIMIT_INPUT,
+                CONF_DAWARICH_PERSON_ENTITY: CONF_DAWARICH_PERSON_INPUT,
+                CONF_DAWARICH_MEMBER: CONF_DAWARICH_MEMBER_INPUT,
+            }.get(err.path[0] if err.path else None, CONF_DAWARICH_ENABLED_INPUT)
+            raise InvalidFieldValue(field, "invalid_dawarich_config") from None
     if platform == "device_tracker" and user_input.get(CONF_PRESENCE_CLASSIFICATION):
         entity[CONF_PRESENCE_CLASSIFICATION] = True
     _validate_entity_references(entity)
@@ -5493,11 +5508,8 @@ def _existing_device_options(hass, options: dict[str, Any]) -> list[dict[str, st
     device_options = [
         {
             "value": NEW_DEVICE_TARGET,
-            "label": (
-                "새 장치 만들기"
-                if hass.config.language.lower().startswith("ko")
-                else "Create a new Device"
-            ),
+            # The frontend translates this using the user's display language.
+            "label": "Create a new Device",
         }
     ]
     for device_key in _options_devices(options):
@@ -10526,7 +10538,7 @@ class _TrackerSettingsFlow:
             errors["dawarich_connection"] = "invalid_dawarich_config"
         return self.async_show_form(step_id="dawarich_connection", errors=errors, data_schema=vol.Schema({
             vol.Required("dawarich_connection", default="manual"): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=[{"value": "manual", "label": "직접 입력" if self.hass.config.language == "ko" else "Enter manually"}, *[
+                selector.SelectSelectorConfig(options=[{"value": "manual", "label": "Enter manually"}, *[
                     {"value": entry_id, "label": entry.title} for entry_id, entry in entries.items()
                 ]], translation_key="dawarich_connection")
             )
@@ -10543,9 +10555,9 @@ class _TrackerSettingsFlow:
             validation = _flatten_entity_form_sections(_entity_schema({
                 CONF_PLATFORM: "device_tracker", CONF_ENTITY_NAME: "Tracker", CONF_DEVICE_NAME: "Tracker",
             })({}))
-            settings = _flatten_entity_form_sections(_tracker_settings_schema(defaults)({}))
-            validation.update(settings)
             try:
+                settings = _flatten_entity_form_sections(_tracker_settings_schema(defaults)({}))
+                validation.update(settings)
                 _, entity = _build_entity_config(validation, validate_platform=False)
                 if settings.get(CONF_DAWARICH_TEST_INPUT) and entity.get(CONF_DAWARICH):
                     config = entity[CONF_DAWARICH]
@@ -10555,6 +10567,13 @@ class _TrackerSettingsFlow:
                     )
             except InvalidFieldValue as err:
                 errors[err.field_name] = err.error_code
+            except vol.Invalid as err:
+                # Invalid saved/submitted selector values must reopen the form,
+                # not escape as an unknown error before field validation runs.
+                field = next((part for part in reversed(err.path)
+                              if isinstance(part, str) and part in defaults), "base")
+                errors[field] = ("invalid_local_presence" if field.startswith("presence_")
+                                 else "invalid_dawarich_config")
             except DawarichError as err:
                 field = (
                     CONF_DAWARICH_API_KEY_INPUT if err.code == "invalid_auth"

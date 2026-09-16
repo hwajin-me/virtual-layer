@@ -254,6 +254,12 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             self._attr_native_unit_of_measurement = UNITS_OF_MEASUREMENT[
                 self._attr_device_class
             ]
+        # Particulate sensors must retain their default on the first missing
+        # source-unit render, before any valid source metadata has arrived.
+        if self._attr_device_class in {
+            SensorDeviceClass.PM1, SensorDeviceClass.PM25, SensorDeviceClass.PM10, "pm4",
+        }:
+            self._last_valid_unit = normalize_unit(self._attr_native_unit_of_measurement) or None
         # Keep this alias for old callers while SensorEntity uses the native unit.
         self._attr_unit_of_measurement = self._attr_native_unit_of_measurement
 

@@ -999,6 +999,13 @@ class VirtualEntity(RestoreEntity):
             return list(value)
         return value
 
+    def _resolve_template_icon(self, value):
+        """Use the configured icon when source metadata is missing."""
+        icon = value.strip() if isinstance(value, str) else ""
+        if icon.lower() in {"", "none", "unknown", "unavailable"}:
+            return self._configured_icon
+        return icon
+
     def _apply_native_template_value(self, name: str, value) -> bool:
         """Apply a rendered value to a Home Assistant native property."""
         if name == "state":
@@ -1011,7 +1018,7 @@ class VirtualEntity(RestoreEntity):
             self._attr_available = value
             return True
         if name == "icon":
-            value = str(value).strip() or self._configured_icon
+            value = self._resolve_template_icon(value)
             if self._attr_icon == value:
                 return False
             self._attr_icon = value
@@ -1574,10 +1581,9 @@ class VirtualEntity(RestoreEntity):
 
         if self._icon_template:
             try:
-                rendered_icon = str(
-                    self._render_template(self._icon_template),
-                ).strip()
-                next_icon = rendered_icon or self._configured_icon
+                next_icon = self._resolve_template_icon(
+                    self._render_template(self._icon_template)
+                )
                 if self._attr_icon != next_icon:
                     self._attr_icon = next_icon
                     changed = True

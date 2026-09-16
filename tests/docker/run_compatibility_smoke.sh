@@ -422,7 +422,12 @@ async def test_tracker_timer_dispatch(hass):
 
 
 async def test_dawarich_http_tracking(hass):
-    """Exercise real HTTP, UI validation and polygon selection in official HA."""
+    """Exercise self-signed HTTPS, UI validation and polygon selection in HA."""
+    import ssl
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
     from aiohttp import web
     from custom_components.virtual_layer.config_flow import _entity_schema, _async_build_entity_config
 
@@ -446,7 +451,22 @@ async def test_dawarich_http_tracking(hass):
     app.router.add_get("/api/v1/visits", visits)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    now = dt_util.utcnow()
+    certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                   .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                   .not_valid_before(now - timedelta(days=1))
+                   .not_valid_after(now + timedelta(days=1)).sign(key, hashes.SHA256()))
+    with tempfile.TemporaryDirectory() as directory:
+        cert_path = Path(directory) / "cert.pem"
+        key_path = Path(directory) / "key.pem"
+        cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+        key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                             serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert_path, key_path)
+    site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=context)
     await site.start()
     port = runner.addresses[0][1]
     try:
@@ -454,7 +474,7 @@ async def test_dawarich_http_tracking(hass):
             form = _entity_schema({"platform": "device_tracker", "entity_name": "Dawarich Docker"})({})
             form.update({"device_name": "Dawarich Docker", "entity_id": "device_tracker.dawarich_docker"})
             form["dawarich_settings"].update({
-                "dawarich_enabled": True, "dawarich_url": f"http://127.0.0.1:{port}",
+                "dawarich_enabled": True, "dawarich_url": f"https://127.0.0.1:{port}",
                 "dawarich_api_key": "docker-only-key", "dawarich_test_connection": True,
             })
             if polygon:
@@ -478,7 +498,7 @@ async def test_dawarich_http_tracking(hass):
                 assert tracker.extra_state_attributes["polygon_zone"] == "Office"
             await tracker.async_will_remove_from_hass()
         assert len(requests) == 4
-        print("Dawarich HTTP smoke passed: UI connection test, actual HTTP, visits, standalone/polygon GPS, credential isolation")
+        print("Dawarich HTTPS smoke passed: self-signed certificate, UI connection test, visits, standalone/polygon GPS, credential isolation")
     finally:
         await runner.cleanup()
 
@@ -844,6 +864,24 @@ async def test_config_flow_create_modify_runtime():
         assert "recorder" in hass.config.components
         assert await async_setup_component(hass, COMPONENT_DOMAIN, {})
         await hass.async_start()
+        from custom_components.virtual_layer.humidifier import (
+            HUMIDIFIER_SCHEMA, VirtualHumidifier, validate_domain_options,
+        )
+        for reading in (0, 25, 90, 100):
+            humidifier_config = HUMIDIFIER_SCHEMA({
+                "name": "Measured humidity", "initial_value": "on",
+                "current_humidity": reading, "target_humidity": 50,
+                "min_humidity": 30, "max_humidity": 80,
+            })
+            validate_domain_options(humidifier_config)
+            humidifier = VirtualHumidifier(humidifier_config, False)
+            humidifier._create_state(humidifier_config)
+            assert humidifier.current_humidity == reading
+            humidifier._apply_native_template_value("current_humidity", 100 - reading)
+            humidifier._native_templates_applied()
+            assert humidifier.current_humidity == 100 - reading
+            assert humidifier.target_humidity == 50
+        print("Humidifier smoke passed: measured humidity independent of target range")
         from custom_components.virtual_layer import unit_history
         from homeassistant.components.recorder import get_instance
         from homeassistant.components.recorder.statistics import async_import_statistics, statistics_during_period
@@ -1280,6 +1318,12 @@ async def test_config_flow_create_modify_runtime():
         })
         options = copy.deepcopy(dict(entry.options))
         next(iter(options["devices"].values())).append({
+            "platform": "sensor", "entity_id": "sensor.docker_pm10_metadata",
+            "name": "PM 10.0", "class": "pm10", "initial_value": "12",
+            "icon_template": "{{ state_attr('sensor.missing_pm10', 'icon') }}",
+            "native_templates": {"unit_of_measurement": "{{ none }}"},
+        })
+        next(iter(options["devices"].values())).append({
             "platform": "sensor", "entity_id": "sensor.docker_carbon_monoxide",
             "name": "Docker Carbon Monoxide", "class": "carbon_monoxide",
             "initial_value": "6", "source_entities": ["sensor.docker_co_raw"],
@@ -1307,6 +1351,9 @@ async def test_config_flow_create_modify_runtime():
         })
         hass.config_entries.async_update_entry(entry, options=options)
         await hass.async_block_till_done()
+        pm10 = hass.states.get("sensor.docker_pm10_metadata")
+        assert pm10.attributes["unit_of_measurement"] == "μg/m³"
+        assert pm10.attributes["icon"] == "mdi:air-filter"
         assert hass.states.get("air_quality.docker_carbon_monoxide_aqi").state == "fair"
         assert hass.states.get("air_quality.docker_carbon_monoxide_aqi").attributes["air_quality_evaluation_basis"] == "combined_inherited_unit"
         assert hass.states.get("air_quality.docker_composite_co2_aqi").state == "moderate"
@@ -1316,6 +1363,9 @@ async def test_config_flow_create_modify_runtime():
         assert hass.states.get("sensor.docker_co_detector_2_co").attributes.get("device_class") is None
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
+        pm10 = hass.states.get("sensor.docker_pm10_metadata")
+        assert pm10.attributes["unit_of_measurement"] == "μg/m³"
+        assert pm10.attributes["icon"] == "mdi:air-filter"
         assert hass.states.get("air_quality.docker_carbon_monoxide_aqi").state == "fair"
         assert hass.states.get("air_quality.docker_co_detector_2_co_aqi").state == "good"
         assert float(hass.states.get("sensor.docker_co_detector_2_co").state) == 0

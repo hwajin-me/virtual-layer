@@ -40,9 +40,9 @@ class DawarichError(Exception):
         super().__init__(code)
 
 
-def _integer(value, minimum, maximum):
+def _integer(value, minimum, maximum, field):
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-        raise vol.Invalid("invalid Dawarich interval")
+        raise vol.Invalid("invalid Dawarich interval", path=[field])
     try:
         number = float(value)
         if (
@@ -53,7 +53,7 @@ def _integer(value, minimum, maximum):
             raise ValueError
         return int(number)
     except (ValueError, TypeError, OverflowError) as err:
-        raise vol.Invalid("invalid Dawarich interval") from err
+        raise vol.Invalid("invalid Dawarich interval", path=[field]) from err
 
 
 def normalize_config(value):
@@ -71,7 +71,7 @@ def normalize_config(value):
         raise vol.Invalid("invalid Dawarich configuration")
     raw_url = value.get(CONF_DAWARICH_URL)
     if not isinstance(raw_url, str) or any(ord(char) < 32 for char in raw_url):
-        raise vol.Invalid("invalid Dawarich URL")
+        raise vol.Invalid("invalid Dawarich URL", path=[CONF_DAWARICH_URL])
     try:
         url = URL(raw_url.strip())
         if (
@@ -86,7 +86,7 @@ def normalize_config(value):
         ):
             raise ValueError
     except (ValueError, TypeError, UnicodeError) as err:
-        raise vol.Invalid("invalid Dawarich URL") from err
+        raise vol.Invalid("invalid Dawarich URL", path=[CONF_DAWARICH_URL]) from err
     key = value.get(CONF_DAWARICH_API_KEY)
     if (
         not isinstance(key, str)
@@ -94,31 +94,36 @@ def normalize_config(value):
         or len(key) > 4096
         or any(ord(char) < 32 for char in key)
     ):
-        raise vol.Invalid("Dawarich API key is required")
+        raise vol.Invalid("Dawarich API key is required", path=[CONF_DAWARICH_API_KEY])
     auth = value.get(CONF_DAWARICH_AUTH_MODE, "bearer")
     if not isinstance(auth, str) or auth not in {"bearer", "query"}:
-        raise vol.Invalid("invalid Dawarich authentication mode")
+        raise vol.Invalid("invalid Dawarich authentication mode", path=[CONF_DAWARICH_AUTH_MODE])
     person = value.get(CONF_DAWARICH_PERSON_ENTITY, "")
     if not isinstance(person, str):
-        raise vol.Invalid("invalid Dawarich person")
-    if person and (cv.entity_id(person) != person or not person.startswith("person.")):
-        raise vol.Invalid("invalid Dawarich person")
+        raise vol.Invalid("invalid Dawarich person", path=[CONF_DAWARICH_PERSON_ENTITY])
+    try:
+        if person and (cv.entity_id(person) != person or not person.startswith("person.")):
+            raise vol.Invalid("invalid Dawarich person")
+    except vol.Invalid:
+        raise vol.Invalid("invalid Dawarich person", path=[CONF_DAWARICH_PERSON_ENTITY]) from None
     member = value.get(CONF_DAWARICH_MEMBER, "")
     if (
         not isinstance(member, str)
         or len(member) > 256
         or any(ord(char) < 32 for char in member)
     ):
-        raise vol.Invalid("invalid Dawarich member")
+        raise vol.Invalid("invalid Dawarich member", path=[CONF_DAWARICH_MEMBER])
     return {
         CONF_DAWARICH_URL: str(url).rstrip("/"),
         CONF_DAWARICH_API_KEY: key.strip(),
         CONF_DAWARICH_AUTH_MODE: auth,
         CONF_DAWARICH_POLL_INTERVAL: _integer(
-            value.get(CONF_DAWARICH_POLL_INTERVAL, DEFAULT_POLL_INTERVAL), 15, 3600
+            value.get(CONF_DAWARICH_POLL_INTERVAL, DEFAULT_POLL_INTERVAL), 15, 3600,
+            CONF_DAWARICH_POLL_INTERVAL,
         ),
         CONF_DAWARICH_HISTORY_LIMIT: _integer(
-            value.get(CONF_DAWARICH_HISTORY_LIMIT, DEFAULT_HISTORY_LIMIT), 1, 100
+            value.get(CONF_DAWARICH_HISTORY_LIMIT, DEFAULT_HISTORY_LIMIT), 1, 100,
+            CONF_DAWARICH_HISTORY_LIMIT,
         ),
         CONF_DAWARICH_PERSON_ENTITY: person,
         CONF_DAWARICH_MEMBER: member.strip(),
@@ -338,6 +343,9 @@ class DawarichClient:
                     headers=headers,
                     params=params,
                     allow_redirects=False,
+                    # Dawarich instances may use private/self-signed certificates.
+                    # Apply the same policy to UI checks and every runtime read.
+                    ssl=False,
                 ) as response:
                     if response.status in {401, 403}:
                         raise DawarichError("invalid_auth")

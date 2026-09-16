@@ -140,6 +140,11 @@ state and source subscriptions without an integration reload.
 
 Use `Reconfigure` to update the integration entry's main device name.
 
+Entity type, new-Device and Dawarich connection choices follow the user's
+Home Assistant display language (English or Korean), independently of the server
+language. Dawarich connection validation identifies the invalid input field and
+keeps the submitted settings available for correction and retry.
+
 ## Devices
 
 Virtual Layer uses `Device` in the UI. Older internal/service fields may still
@@ -572,9 +577,9 @@ When creating a Dawarich tracker, an existing
 connection supplies its server (`host` and `ssl`) and API key. If several
 connections exist, choose one or enter details manually. Values are editable
 copies; editing this tracker neither changes the original integration nor
-overwrites the tracker's saved settings from it. Certificate verification stays
-enabled, even if the source integration disables it. These connection controls
-are absent from the final common add/edit form.
+overwrites the tracker's saved settings from it. Dawarich TLS certificate
+verification is always disabled for connection tests and runtime reads. These
+connection controls are absent from the final common add/edit form.
 
 Enable Dawarich, enter the instance base URL (without `/api/v1`)
 and API key, and select Bearer or query authentication. You can configure the

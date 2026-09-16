@@ -16,6 +16,8 @@ from custom_components.virtual_layer.config_flow import (
     _device_schema,
     _entity_schema,
     _entity_type_schema,
+    _existing_device_options,
+    NEW_DEVICE_TARGET,
     _helper_update_schema,
     _helper_usage_schema,
     _options_schema,
@@ -134,6 +136,31 @@ def test_korean_translation_covers_config_options_selectors_and_services():
     assert "backup_devices" not in korean["selector"]["options_action"]["options"]
     assert "restore_devices" not in korean["selector"]["options_action"]["options"]
     assert korean["services"]["set_attributes"]["name"] == "속성 설정"
+
+
+def test_domain_choices_and_new_device_use_frontend_translation(hass):
+    """Choice language follows the user, independently of the HA server locale."""
+    domain_selector = next(value for key, value in _entity_schema().schema.items()
+                           if key.schema == CONF_PLATFORM)
+    type_selector = next(iter(_entity_type_schema("switch.source", "switch").schema.values()))
+    for language in ("en", "ko"):
+        hass.config.language = language
+        device_options = _existing_device_options(hass, {ATTR_DEVICES: {"Laundry": []}})
+        schema = _reference_entity_schema(device_options=device_options)
+        device_selector = next(value for value in schema.schema.values()
+                               if getattr(value, "config", {}).get("translation_key") == "target_device")
+        assert device_selector(NEW_DEVICE_TARGET) == NEW_DEVICE_TARGET
+        assert device_selector("Laundry") == "Laundry"
+        assert device_options[0]["label"] == "Create a new Device"
+        catalog = json.loads((TRANSLATIONS / f"{language}.json").read_text())
+        labels = catalog["selector"]["entity_type"]["options"]
+        assert set(labels) == set(VIRTUAL_ENTITY_DOMAINS)
+        for field in (domain_selector, type_selector):
+            assert field.config["translation_key"] == "entity_type"
+            assert all(labels[option if isinstance(option, str) else option["value"]]
+                       for option in field.config["options"])
+        assert catalog["selector"]["target_device"]["options"][NEW_DEVICE_TARGET]
+    assert labels["humidifier"] == "가습·제습기"
 
 
 def test_virtual_entities_preserve_translated_source_mode_names():
