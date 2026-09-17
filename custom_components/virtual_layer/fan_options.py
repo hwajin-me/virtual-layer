@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -11,6 +12,32 @@ from homeassistant.components.fan import FanEntityFeature
 from .const import CONF_ATTRIBUTES
 
 FAN_MODE_LIST_FIELD = "modes"
+
+# Only explicit manual-speed families belong here. Auto/smart/nature/sleep,
+# eco/pet/turbo/boost and named speed presets have device-specific behavior.
+# VeSync uses normal; Xiaomi uses favorite. Keep vendor spelling for writes.
+MANUAL_PRESET_PRIORITY = {
+    "manual": 0, "manual mode": 0, "수동": 0, "수동 모드": 0,
+    "normal": 1, "normal mode": 1, "일반": 1, "일반 모드": 1,
+    "favorite": 2, "favourite": 2, "즐겨찾기": 2,
+}
+
+
+def _preset_key(mode: str) -> str:
+    return re.sub(r"[\s_-]+", " ", mode.strip().lower())
+
+
+def manual_preset_mode(modes, current=None):
+    """Find an advertised manual preset without changing its spelling."""
+    if not isinstance(modes, (list, tuple)):
+        return None
+    candidates = [mode for mode in modes if isinstance(mode, str)
+                  and _preset_key(mode) in MANUAL_PRESET_PRIORITY]
+    if current in candidates:
+        return current
+    return min(candidates, key=lambda mode: MANUAL_PRESET_PRIORITY[_preset_key(mode)], default=None)
+
+
 FAN_FORM_FIELDS = (
     "speed_count",
     "oscillate",

@@ -97,6 +97,25 @@ def test_numeric_and_iso_measurement_times():
         assert api.point_time({"timestamp": raw}) == expected
 
 
+def test_detailed_request_and_visit_options_are_normalized():
+    config = api.normalize_config(
+        {
+            **CONFIG,
+            "verify_ssl": True,
+            "request_timeout": 45,
+            "include_visits": False,
+            "visit_lookback_days": 90,
+        }
+    )
+    assert config["verify_ssl"] is True
+    assert config["request_timeout"] == 45
+    assert config["include_visits"] is False
+    assert config["visit_lookback_days"] == 90
+
+    with pytest.raises(vol.Invalid):
+        api.normalize_config({**CONFIG, "request_timeout": 61})
+
+
 async def test_points_filter_sort_bound_history_and_follow_last_visit_page():
     recent = point(2, speed=4, raw_data={"api_key": "secret"})
     previous = point(10)
@@ -208,3 +227,14 @@ async def test_visit_failure_preserves_point_and_query_auth():
     assert session.calls[0][1]["params"]["api_key"] == "private-test-key"
     assert "Authorization" not in session.calls[0][1]["headers"]
     assert all(call[1]["ssl"] is False for call in session.calls)
+
+
+async def test_visit_toggle_and_tls_setting_control_api_reads():
+    session = Session(Response([point()]))
+    result = await api.DawarichClient(
+        session,
+        {**CONFIG, "verify_ssl": True, "include_visits": False},
+    ).async_fetch()
+    assert result.visit is None
+    assert len(session.calls) == 1
+    assert session.calls[0][1]["ssl"] is True

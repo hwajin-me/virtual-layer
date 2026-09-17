@@ -32,6 +32,10 @@ def form():
             "dawarich_member": "alex@example.test",
             "dawarich_person": ["person.alex"],
             "dawarich_poll_interval": 120,
+            "dawarich_verify_ssl": True,
+            "dawarich_request_timeout": 30,
+            "dawarich_include_visits": False,
+            "dawarich_visit_lookback_days": 90,
         }
     )
     return result
@@ -52,6 +56,10 @@ def test_create_edit_clear_and_disable():
     assert section["dawarich_person"] == ["person.alex"]
     assert section["dawarich_api_key"] == "private-test-key"
     assert section["dawarich_poll_interval"] == 120
+    assert section["dawarich_verify_ssl"] is True
+    assert section["dawarich_request_timeout"] == 30
+    assert section["dawarich_include_visits"] is False
+    assert section["dawarich_visit_lookback_days"] == 90
     assert build(reopened)[CONF_DAWARICH] == entity[CONF_DAWARICH]
     section.update({"dawarich_member": "", "dawarich_person": []})
     assert build(reopened)[CONF_DAWARICH]["person_entity_id"] == ""
@@ -66,6 +74,8 @@ def test_create_edit_clear_and_disable():
         ("dawarich_api_key", ""),
         ("dawarich_url", "https://example.test?api_key=secret"),
         ("dawarich_person", ["person.alex", "person.other"]),
+        ("dawarich_request_timeout", 61),
+        ("dawarich_visit_lookback_days", 366),
     ],
 )
 def test_invalid_fields_return_visible_flow_error(field, value):

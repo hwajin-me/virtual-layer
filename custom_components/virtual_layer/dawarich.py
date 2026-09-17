@@ -24,12 +24,18 @@ from .const import (
     CONF_DAWARICH_MEMBER,
     CONF_DAWARICH_PERSON_ENTITY,
     CONF_DAWARICH_POLL_INTERVAL,
+    CONF_DAWARICH_REQUEST_TIMEOUT,
     CONF_DAWARICH_URL,
+    CONF_DAWARICH_VERIFY_SSL,
+    CONF_DAWARICH_INCLUDE_VISITS,
+    CONF_DAWARICH_VISIT_LOOKBACK_DAYS,
 )
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 DEFAULT_POLL_INTERVAL = 60
 DEFAULT_HISTORY_LIMIT = 10
+DEFAULT_REQUEST_TIMEOUT = 15
+DEFAULT_VISIT_LOOKBACK_DAYS = 30
 
 
 class DawarichError(Exception):
@@ -66,6 +72,10 @@ def normalize_config(value):
         CONF_DAWARICH_HISTORY_LIMIT,
         CONF_DAWARICH_PERSON_ENTITY,
         CONF_DAWARICH_MEMBER,
+        CONF_DAWARICH_VERIFY_SSL,
+        CONF_DAWARICH_REQUEST_TIMEOUT,
+        CONF_DAWARICH_INCLUDE_VISITS,
+        CONF_DAWARICH_VISIT_LOOKBACK_DAYS,
     }
     if not isinstance(value, dict) or set(value) - allowed:
         raise vol.Invalid("invalid Dawarich configuration")
@@ -113,6 +123,12 @@ def normalize_config(value):
         or any(ord(char) < 32 for char in member)
     ):
         raise vol.Invalid("invalid Dawarich member", path=[CONF_DAWARICH_MEMBER])
+    for field, default in (
+        (CONF_DAWARICH_VERIFY_SSL, False),
+        (CONF_DAWARICH_INCLUDE_VISITS, True),
+    ):
+        if not isinstance(value.get(field, default), bool):
+            raise vol.Invalid("invalid Dawarich boolean", path=[field])
     return {
         CONF_DAWARICH_URL: str(url).rstrip("/"),
         CONF_DAWARICH_API_KEY: key.strip(),
@@ -127,6 +143,18 @@ def normalize_config(value):
         ),
         CONF_DAWARICH_PERSON_ENTITY: person,
         CONF_DAWARICH_MEMBER: member.strip(),
+        # Keep the historic self-signed-certificate behaviour for existing
+        # trackers, while allowing secure public deployments to opt in.
+        CONF_DAWARICH_VERIFY_SSL: value.get(CONF_DAWARICH_VERIFY_SSL, False),
+        CONF_DAWARICH_REQUEST_TIMEOUT: _integer(
+            value.get(CONF_DAWARICH_REQUEST_TIMEOUT, DEFAULT_REQUEST_TIMEOUT), 5, 60,
+            CONF_DAWARICH_REQUEST_TIMEOUT,
+        ),
+        CONF_DAWARICH_INCLUDE_VISITS: value.get(CONF_DAWARICH_INCLUDE_VISITS, True),
+        CONF_DAWARICH_VISIT_LOOKBACK_DAYS: _integer(
+            value.get(CONF_DAWARICH_VISIT_LOOKBACK_DAYS, DEFAULT_VISIT_LOOKBACK_DAYS),
+            1, 365, CONF_DAWARICH_VISIT_LOOKBACK_DAYS,
+        ),
     }
 
 
@@ -337,15 +365,13 @@ class DawarichClient:
         else:
             headers["Authorization"] = "Bearer " + self.config[CONF_DAWARICH_API_KEY]
         try:
-            async with asyncio.timeout(15):
+            async with asyncio.timeout(self.config[CONF_DAWARICH_REQUEST_TIMEOUT]):
                 async with self.session.get(
                     self.config[CONF_DAWARICH_URL] + endpoint,
                     headers=headers,
                     params=params,
                     allow_redirects=False,
-                    # Dawarich instances may use private/self-signed certificates.
-                    # Apply the same policy to UI checks and every runtime read.
-                    ssl=False,
+                    ssl=self.config[CONF_DAWARICH_VERIFY_SSL],
                 ) as response:
                     if response.status in {401, 403}:
                         raise DawarichError("invalid_auth")
@@ -401,7 +427,7 @@ class DawarichClient:
             raise DawarichError("no_points")
         visit = None
         visit_error = None
-        if include_visit and not family:
+        if include_visit and self.config[CONF_DAWARICH_INCLUDE_VISITS] and not family:
             try:
                 visit = await self._latest_visit(points[0])
             except DawarichError as err:
@@ -411,7 +437,7 @@ class DawarichClient:
     async def _latest_visit(self, point):
         end = datetime.fromtimestamp(point["timestamp"], tz=timezone.utc)
         params = {
-            "start_at": (end - timedelta(days=30)).isoformat(),
+            "start_at": (end - timedelta(days=self.config[CONF_DAWARICH_VISIT_LOOKBACK_DAYS])).isoformat(),
             "end_at": end.isoformat(),
             "page": 1,
             "per_page": 100,

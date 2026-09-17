@@ -164,6 +164,26 @@ def test_composite_conversion_keeps_si_prefix_case():
     assert _sensor_unit_conversion_profile(["Mg/m³", "μg/m³"]) is None
 
 
+@pytest.mark.parametrize("device_class", [None, "formaldehyde"])
+def test_formaldehyde_sensor_copy_normalizes_milligrams_to_micrograms(hass, device_class):
+    from custom_components.virtual_layer.config_flow import (
+        _apply_sensor_conversion_defaults, _sensor_conversion_choices,
+    )
+
+    source = "sensor.living_room_formaldehyde"
+    hass.states.async_set(source, "0.05", {
+        "friendly_name": "Living Room Formaldehyde",
+        "device_class": device_class,
+        "unit_of_measurement": "mg/m³",
+    })
+    choices = _sensor_conversion_choices([source], hass)
+    choice = next(iter(choices.values()))
+    copied = _apply_sensor_conversion_defaults(hass, {}, choice)
+    assert "unit_of_measurement: μg/m³" in copied["domain_options_json"]
+    assert "class: formaldehyde" in copied["domain_options_json"]
+    assert "* 1000.0" in copied["value_template"]
+
+
 @pytest.mark.parametrize("alias,canonical", [
     ("µg\u00a0 /  m^3", "μg/m³"), ("mg / ㎥", "mg/m³"),
     ("PPM", "ppm"), ("parts per billion", "ppb"),
@@ -863,9 +883,11 @@ async def test_numeric_formaldehyde_source_defaults_to_measurement(hass, device_
     assert result["data_schema"]({})["mode"] == "measurement"
     result = await flow.async_step_air_quality({"mode": "measurement"})
     defaults = result["data_schema"]({f"boundary_{i}": i * 10 for i in range(1, 6)})
-    assert defaults["unit"] == "mg/m³"
+    assert defaults["unit"] == (
+        "mg/m³" if device_class == "volatile_organic_compounds" else "μg/m³"
+    )
     assert defaults["advanced"]["quantity"] == (
-        device_class if device_class in ("volatile_organic_compounds", "formaldehyde") else "any"
+        "formaldehyde" if device_class != "volatile_organic_compounds" else device_class
     )
 
 
@@ -948,6 +970,15 @@ def test_air_quality_profile_name_inference(hass, entity_id, name, declared, exp
     assert aq.infer_quantity(hass.states.get(entity_id)) == expected
 
 
+@pytest.mark.parametrize("device_class", ["gas", "volume", "volume_storage", "volume_flow_rate"])
+def test_formaldehyde_name_recovers_from_legacy_volume_metadata(hass, device_class):
+    hass.states.async_set("sensor.room_hcho", "0", {
+        "friendly_name": "Room Formaldehyde", "device_class": device_class,
+        "unit_of_measurement": "m³",
+    })
+    assert aq.infer_quantity(hass.states.get("sensor.room_hcho")) == "formaldehyde"
+
+
 @pytest.mark.parametrize("quantity", list(aq.STARTER_PROFILES))
 def test_all_automatic_profiles_use_their_own_units_and_boundaries(hass, quantity):
     unit, boundaries, _ = aq.STARTER_PROFILES[quantity]
@@ -994,7 +1025,7 @@ def test_manual_custom_gas_quantity_accepts_classless_source_not_wrong_class(has
 @pytest.mark.parametrize("quantity,unit,factor", [
     ("pm25", "μg/m³", 1), ("pm25", "mg/m³", 0.001),
     ("pm10", "μg/m³", 1), ("radon", "Bq/m³", 1),
-    ("radon", "pCi/L", 1 / 37), ("formaldehyde", "μg/m³", 1000),
+    ("radon", "pCi/L", 1 / 37), ("formaldehyde", "μg/m³", 1),
     ("carbon_dioxide", "ppb", 1000), ("aqi", "unitless", 1),
 ])
 async def test_preset_fills_all_required_fields_and_preserves_edits(hass, quantity, unit, factor):

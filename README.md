@@ -65,6 +65,10 @@ and manage them from `Settings > Devices & services > Virtual Layer`.
 - Optional Home Assistant Jinja templates for custom state, availability, and
   attributes
 - Periodic pull refresh for composite entities
+- Light-to-percentage sensor helpers show 0% while a source light is off and
+  its reported brightness percentage when on. Unknown/unavailable sources are
+  excluded. For existing sensors, regenerate the brightness conversion helper
+  in the edit flow to apply this behavior to the saved template.
 - Light groups with two or more light sources dispatch default commands to
   each bulb in parallel. After a group command, the virtual light retains its
   requested power, brightness and color; delayed member reports update
@@ -88,12 +92,47 @@ and manage them from `Settings > Devices & services > Virtual Layer`.
   not full RGB colour reproduction. Matter cluster/unit conversion remains
   the responsibility of the installed bridge plugin.
 - Korean and English UI translations
+- Humidifier target humidity defaults to 5% steps. Edit the humidity adjustment
+  step Jinja input in the entity's native settings (for example `{{ 10 }}`).
+  An advertised source step or an existing custom value remains authoritative.
+- Fans and air purifiers retain reported speed percentages in automatic presets.
+  When a fan and a separate `number`/`input_number` are selected as sources,
+  the selected number supplies speed in **every mode**, including Auto/Sleep
+  and Manual/Favorite. Its percent, level or RPM value is normalized to 0–100%.
+  If that value or its required scale is invalid/unavailable, the original fan's
+  percentage or known-range RPM is used instead. Missing both leaves speed
+  unknown while preserving the fan's on/off state. Off always displays 0%.
+  Select the number that actually reports speed; a control that retains only a
+  manual setpoint cannot supply an automatic-mode measurement.
+  RPM telemetry is normalized when its range is known. Positive speed commands
+  select an advertised Manual/Normal/Favorite/Favourite preset before adjusting the source;
+  zero remains a stop command. Regenerate existing command helpers to apply
+  this behavior, preserving custom actions with the helper policy as needed.
+  Case, whitespace and `manual_mode`/`manual-mode` variants are recognized,
+  along with 수동, 수동 모드, 일반, 일반 모드 and 즐겨찾기. The original
+  advertised spelling is used for source commands; an already selected manual
+  family is retained. Otherwise priority is Manual, Normal, then Favorite.
+  Auto, Smart, Nature, Sleep, Silent, Eco, Pet, Turbo, Boost and named speed
+  presets are never guessed to be manual controls. Sources without an advertised
+  manual mode receive their normal percentage command (or a write to the
+  explicitly selected speed number). This matches the distinct
+  [VeSync manual/normal](https://github.com/home-assistant/core/blob/dev/homeassistant/components/vesync/fan.py)
+  and [Xiaomi favorite](https://github.com/home-assistant/core/blob/dev/homeassistant/components/xiaomi_miio/fan.py)
+  control families. No reading or known RPM range means unknown speed, not a
+  fabricated value inferred from a preset name. Unavailable or invalid paired
+  speed numbers abort before changing source power or mode.
 - Sensor unit templates retain the last valid unit when a source returns an
   empty or unavailable unit. On reload, missing units recover from the entity's
   recorded statistics. Sensor forms offer normalized Home Assistant units;
   selecting one sets a fixed unit template without converting readings. The
   unit-change step can restore the sensor's recorded unit while leaving all
   historical statistics untouched.
+- Generated sensor/number metadata helpers skip unavailable sources and empty
+  or unknown units, including the literal `None`. Icons use sources with usable
+  units, then unit and English/Korean quantity-name hints. Explicit unit suffixes
+  in source names (for example `Room temperature (°C)`) supply a unit fallback;
+  quantity names alone do not guess a measurement scale. Regenerate helpers in
+  the entity edit flow to apply this behavior to previously saved templates.
 - Integration icons and brand assets
 
 ## Installation

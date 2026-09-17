@@ -181,6 +181,7 @@
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "sensor_unit": "Sensor unit",
               "climate_temperature_step": "Temperature adjustment step",
+              "boiler_room_temperature_entity_id": "Room temperature sensor",
               "media_player_source_priority": "Media source priority",
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
@@ -202,6 +203,7 @@
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
+              "boiler_room_temperature_entity_id": "Optional sensor used as the virtual climate's current room temperature. Raw boiler-water temperatures remain available as attributes.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
@@ -425,13 +427,13 @@
               "current_humidity": "Jinja template for current humidity. Source selection generates this helper automatically; manual edits are preserved.",
               "current_temperature": "Jinja template for current temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "hvac_action": "Jinja template for current hvac action. Source selection generates this helper automatically; manual edits are preserved.",
-              "max_humidity": "Jinja template for maximum humidity. Source selection generates this helper automatically; manual edits are preserved.",
+              "max_humidity": "Jinja template for maximum humidity. New humidifiers and dehumidifiers default to 70%; set a constant or dynamic Jinja value here. Source selection generates this helper automatically; manual edits are preserved.",
               "max_temp": "Jinja template for maximum temperature. Source selection generates this helper automatically; manual edits are preserved.",
-              "min_humidity": "Jinja template for minimum humidity. Source selection generates this helper automatically; manual edits are preserved.",
+              "min_humidity": "Jinja template for minimum humidity. New humidifiers and dehumidifiers default to 35%; set a constant or dynamic Jinja value here. Source selection generates this helper automatically; manual edits are preserved.",
               "min_temp": "Jinja template for minimum temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "mode": "Jinja template for current humidifier mode. Source selection generates this helper automatically; manual edits are preserved.",
               "target_humidity": "Jinja template for target humidity. Source selection generates this helper automatically; manual edits are preserved.",
-              "target_humidity_step": "Jinja template for humidity adjustment step. Source selection generates this helper automatically; manual edits are preserved.",
+              "target_humidity_step": "Jinja template for humidity adjustment step. New humidifiers and dehumidifiers default to 5%; use a constant Jinja value of 10 for 10% steps. A reported source step is used when available; manual edits are preserved.",
               "target_temperature": "Jinja template for target temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "target_temperature_high": "Jinja template for upper target temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "target_temperature_low": "Jinja template for lower target temperature. Source selection generates this helper automatically; manual edits are preserved.",
@@ -616,7 +618,11 @@
               "dawarich_history_limit": "History points",
               "dawarich_member": "Family member email or user ID",
               "dawarich_person": "Legacy family Person",
-              "dawarich_test_connection": "Test connection before saving"
+              "dawarich_test_connection": "Test connection before saving",
+              "dawarich_verify_ssl": "Verify TLS certificate",
+              "dawarich_request_timeout": "Request timeout",
+              "dawarich_include_visits": "Read latest visit",
+              "dawarich_visit_lookback_days": "Visit lookup period"
             },
             "data_description": {
               "dawarich_enabled": "Enable polling for this tracker. Turn off to remove its saved Dawarich configuration.",
@@ -627,7 +633,11 @@
               "dawarich_history_limit": "Maximum recent location summaries retained in dawarich_history (1–100). Family mode returns only the current location.",
               "dawarich_member": "Optional exact Dawarich family email or user ID. Takes precedence over Person. Leave both empty to read the API key owner’s points. Family sharing must be enabled.",
               "dawarich_person": "Optional single Person for older servers matching its display name to a family name or email. Clear it for your own account; current servers should use the explicit member field.",
-              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline."
+              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline.",
+              "dawarich_verify_ssl": "Verify the server TLS certificate. Keep off only for a trusted private server using a self-signed certificate; turning it on is recommended for public or properly certificated servers.",
+              "dawarich_request_timeout": "Maximum seconds to wait for each API response (5–60). A timeout records a connection error and the next scheduled poll retries.",
+              "dawarich_include_visits": "Fetch the latest visit separately after each successful own-account location poll. Turn off to reduce API calls; location and history still update.",
+              "dawarich_visit_lookback_days": "How many days before the latest point to search for a visit (1–365). A longer period can require reading more visit pages."
             }
           },
           "local_presence_settings": {
@@ -648,8 +658,8 @@
               "presence_wifi_ssids": "One exact, case-sensitive SSID per line. Used only for selected sensor entities; any matching SSID means home. Do not enter Wi-Fi passwords.",
               "presence_ble_addresses": "One stable BLE MAC address per line. Only these devices are tracked; rotating private addresses require a stable identity supplied by another integration.",
               "presence_ble_sources": "One Home Assistant remote scanner source ID per line. AprilBrother component-ab-gateway uses ab_gateway by default. These are scanner source IDs, not MQTT topics or individual gateway MACs. Configure the gateway integration separately.",
-              "presence_ble_timeout": "Seconds after the last advertisement at or above the RSSI threshold before marking away (10–3600). Checked every 5 seconds; rereading cached advertisements does not extend presence.",
-              "presence_ble_min_rssi": "Advertisements at or above this dBm value count as nearby (-127–0). Weaker advertisements do not renew the timeout. RSSI is not converted into distance."
+              "presence_ble_timeout": "Seconds after the last qualifying advertisement before marking away (10–3600). Start around 90–180 seconds; increase it for sparse advertisements or weak coverage, decrease it only when you need faster away detection. Checked every 5 seconds; rereading cached advertisements never extends presence.",
+              "presence_ble_min_rssi": "Only advertisements at or above this dBm level count as nearby (-127–0); values closer to 0 require a stronger signal. Start at -85 to -90 dBm, use about -70 to -80 dBm for room-level proximity, and lower it to -95 to -100 dBm for wider coverage. Walls, body blocking, phone orientation and gateway placement change RSSI, so calibrate from observed values; it is not a distance measurement."
             }
           }
         }
@@ -699,7 +709,7 @@
         },
         "data_description": {
           "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates.",
-          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual room-temperature request into the boiler water setpoint. Use temperature as the requested room value. At the target, the default maps 25°C to 40°C water, 27°C to 44°C, 30°C to 47°C, and 33°C to 50°C. While the current virtual room temperature is below the request, it adds 1.5°C of water temperature per 1°C gap, capped at 8°C, reducing the boost on subsequent commands as the room recovers. Tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula. Calculation runs only on a set_temperature command; it does not periodically resend a reduced setpoint. current_temperature must represent a real room sensor, not water temperature. The gain 1.5 and cap 8 are tunable starting values, not a model of heating delay or residual heat."
+          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual room-temperature request into the boiler water setpoint. Use temperature as the requested room value. At the target, the default maps 25°C to 40°C water, 27°C to 44°C, 30°C to 47°C, and 33°C to 50°C. While the current virtual room temperature is below the request, it adds 1.5°C of water temperature per 1°C gap, capped at 8°C, reducing the boost on subsequent commands as the room recovers. Tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula. A boiler-reported water target is converted back to the closest room target for display, so a 27°C request mapped to 52°C continues to display as 27°C. Calculation runs only on a set_temperature command; it does not periodically resend a reduced setpoint. current_temperature must represent a real room sensor, not water temperature. The gain 1.5 and cap 8 are tunable starting values, not a model of heating delay or residual heat."
         }
       },
       "matter_fan_levels": {
@@ -972,7 +982,11 @@
               "dawarich_history_limit": "History points",
               "dawarich_member": "Family member email or user ID",
               "dawarich_person": "Legacy family Person",
-              "dawarich_test_connection": "Test connection before saving"
+              "dawarich_test_connection": "Test connection before saving",
+              "dawarich_verify_ssl": "Verify TLS certificate",
+              "dawarich_request_timeout": "Request timeout",
+              "dawarich_include_visits": "Read latest visit",
+              "dawarich_visit_lookback_days": "Visit lookup period"
             },
             "data_description": {
               "dawarich_enabled": "Enable polling for this tracker. Turn off to remove its saved Dawarich configuration.",
@@ -983,7 +997,11 @@
               "dawarich_history_limit": "Maximum recent location summaries retained in dawarich_history (1–100). Family mode returns only the current location.",
               "dawarich_member": "Optional exact Dawarich family email or user ID. Takes precedence over Person. Leave both empty to read the API key owner’s points. Family sharing must be enabled.",
               "dawarich_person": "Optional single Person for older servers matching its display name to a family name or email. Clear it for your own account; current servers should use the explicit member field.",
-              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline."
+              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline.",
+              "dawarich_verify_ssl": "Verify the server TLS certificate. Keep off only for a trusted private server using a self-signed certificate; turning it on is recommended for public or properly certificated servers.",
+              "dawarich_request_timeout": "Maximum seconds to wait for each API response (5–60). A timeout records a connection error and the next scheduled poll retries.",
+              "dawarich_include_visits": "Fetch the latest visit separately after each successful own-account location poll. Turn off to reduce API calls; location and history still update.",
+              "dawarich_visit_lookback_days": "How many days before the latest point to search for a visit (1–365). A longer period can require reading more visit pages."
             }
           },
           "local_presence_settings": {
@@ -1004,8 +1022,8 @@
               "presence_wifi_ssids": "One exact, case-sensitive SSID per line. Used only for selected sensor entities; any matching SSID means home. Do not enter Wi-Fi passwords.",
               "presence_ble_addresses": "One stable BLE MAC address per line. Only these devices are tracked; rotating private addresses require a stable identity supplied by another integration.",
               "presence_ble_sources": "One Home Assistant remote scanner source ID per line. AprilBrother component-ab-gateway uses ab_gateway by default. These are scanner source IDs, not MQTT topics or individual gateway MACs. Configure the gateway integration separately.",
-              "presence_ble_timeout": "Seconds after the last advertisement at or above the RSSI threshold before marking away (10–3600). Checked every 5 seconds; rereading cached advertisements does not extend presence.",
-              "presence_ble_min_rssi": "Advertisements at or above this dBm value count as nearby (-127–0). Weaker advertisements do not renew the timeout. RSSI is not converted into distance."
+              "presence_ble_timeout": "Seconds after the last qualifying advertisement before marking away (10–3600). Start around 90–180 seconds; increase it for sparse advertisements or weak coverage, decrease it only when you need faster away detection. Checked every 5 seconds; rereading cached advertisements never extends presence.",
+              "presence_ble_min_rssi": "Only advertisements at or above this dBm level count as nearby (-127–0); values closer to 0 require a stronger signal. Start at -85 to -90 dBm, use about -70 to -80 dBm for room-level proximity, and lower it to -95 to -100 dBm for wider coverage. Walls, body blocking, phone orientation and gateway placement change RSSI, so calibrate from observed values; it is not a distance measurement."
             }
           }
         }
@@ -1151,13 +1169,13 @@
       },
       "unit_change": {
         "title": "Handle existing values after a unit change",
-        "description": "Entity: {entity_id}. Configured unit: {old_unit} → {new_unit}. Recorded statistics unit: {statistics_unit}. Keep history leaves all stored data unchanged. Correct label keeps statistic numbers and changes their unit only (for values already expressed in the new unit). Convert mathematically converts all short- and long-term statistics. These actions do not rewrite raw state history, current values, restored values, templates, or thresholds. The new configuration applies to future readings. Do not correct labels if the history contains mixed units; that requires a separate time-range repair. History actions are unavailable without statistics, with an unresolved template, or when the entity ID changes. A '?' unit could not be resolved.",
+        "description": "Entity: {entity_id}. Saving normally changes the Virtual Entity unit from {old_unit} to {new_unit}. Recorded statistics currently use {statistics_unit}.\n\n• Keep: Virtual Entity → {new_unit}; statistics numbers and unit stay unchanged.\n• Restore: Virtual Entity → {statistics_unit}; the selected/template unit is replaced and statistics stay unchanged.\n• Correct label: Virtual Entity and statistics unit → {new_unit}; numbers stay unchanged. Use only if historical numbers already use {new_unit}.\n• Convert: Virtual Entity and statistics unit → {new_unit}; every recorded short- and long-term statistic number is converted.\n\nRaw state history, current/restored values, templates, and thresholds never change. The saved Virtual Entity unit applies to future readings. '?' means the selected/template unit could not be resolved.",
         "data": {
           "history_policy": "Existing statistics",
           "confirm_history": "Confirm modification of all statistics for this entity"
         },
         "data_description": {
-          "history_policy": "Restore sensor unit uses the normalized recorded unit and preserves all statistics; it is the default when the new unit is missing. Keep preserves history without fixing the sensor. Relabel does not convert numbers; Convert uses Home Assistant unit conversion.",
+          "history_policy": "Keep existing history: entity unit becomes the selected/template unit; statistics are untouched. Restore from statistics: entity unit becomes the normalized recorded unit; statistics are untouched. Correct label: entity and statistics units become the selected/template unit, without changing numbers. Convert: entity and statistics units become the selected/template unit, with Home Assistant converting statistic numbers. Restore is preselected when the selected/template unit is missing.",
           "confirm_history": "Required for correction or conversion. Applies to all recorded statistical periods, not a selected date range. Cancel the flow to leave the entity configuration unchanged."
         }
       },
@@ -1264,6 +1282,7 @@
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "sensor_unit": "Sensor unit",
               "climate_temperature_step": "Temperature adjustment step",
+              "boiler_room_temperature_entity_id": "Room temperature sensor",
               "media_player_source_priority": "Media source priority",
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
@@ -1285,6 +1304,7 @@
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
+              "boiler_room_temperature_entity_id": "Optional sensor used as the virtual climate's current room temperature. Raw boiler-water temperatures remain available as attributes.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
@@ -1508,13 +1528,13 @@
               "current_humidity": "Jinja template for current humidity. Source selection generates this helper automatically; manual edits are preserved.",
               "current_temperature": "Jinja template for current temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "hvac_action": "Jinja template for current hvac action. Source selection generates this helper automatically; manual edits are preserved.",
-              "max_humidity": "Jinja template for maximum humidity. Source selection generates this helper automatically; manual edits are preserved.",
+              "max_humidity": "Jinja template for maximum humidity. New humidifiers and dehumidifiers default to 70%; set a constant or dynamic Jinja value here. Source selection generates this helper automatically; manual edits are preserved.",
               "max_temp": "Jinja template for maximum temperature. Source selection generates this helper automatically; manual edits are preserved.",
-              "min_humidity": "Jinja template for minimum humidity. Source selection generates this helper automatically; manual edits are preserved.",
+              "min_humidity": "Jinja template for minimum humidity. New humidifiers and dehumidifiers default to 35%; set a constant or dynamic Jinja value here. Source selection generates this helper automatically; manual edits are preserved.",
               "min_temp": "Jinja template for minimum temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "mode": "Jinja template for current humidifier mode. Source selection generates this helper automatically; manual edits are preserved.",
               "target_humidity": "Jinja template for target humidity. Source selection generates this helper automatically; manual edits are preserved.",
-              "target_humidity_step": "Jinja template for humidity adjustment step. Source selection generates this helper automatically; manual edits are preserved.",
+              "target_humidity_step": "Jinja template for humidity adjustment step. New humidifiers and dehumidifiers default to 5%; use a constant Jinja value of 10 for 10% steps. A reported source step is used when available; manual edits are preserved.",
               "target_temperature": "Jinja template for target temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "target_temperature_high": "Jinja template for upper target temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "target_temperature_low": "Jinja template for lower target temperature. Source selection generates this helper automatically; manual edits are preserved.",
@@ -1699,7 +1719,11 @@
               "dawarich_history_limit": "History points",
               "dawarich_member": "Family member email or user ID",
               "dawarich_person": "Legacy family Person",
-              "dawarich_test_connection": "Test connection before saving"
+              "dawarich_test_connection": "Test connection before saving",
+              "dawarich_verify_ssl": "Verify TLS certificate",
+              "dawarich_request_timeout": "Request timeout",
+              "dawarich_include_visits": "Read latest visit",
+              "dawarich_visit_lookback_days": "Visit lookup period"
             },
             "data_description": {
               "dawarich_enabled": "Enable polling for this tracker. Turn off to remove its saved Dawarich configuration.",
@@ -1710,7 +1734,11 @@
               "dawarich_history_limit": "Maximum recent location summaries retained in dawarich_history (1–100). Family mode returns only the current location.",
               "dawarich_member": "Optional exact Dawarich family email or user ID. Takes precedence over Person. Leave both empty to read the API key owner’s points. Family sharing must be enabled.",
               "dawarich_person": "Optional single Person for older servers matching its display name to a family name or email. Clear it for your own account; current servers should use the explicit member field.",
-              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline."
+              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline.",
+              "dawarich_verify_ssl": "Verify the server TLS certificate. Keep off only for a trusted private server using a self-signed certificate; turning it on is recommended for public or properly certificated servers.",
+              "dawarich_request_timeout": "Maximum seconds to wait for each API response (5–60). A timeout records a connection error and the next scheduled poll retries.",
+              "dawarich_include_visits": "Fetch the latest visit separately after each successful own-account location poll. Turn off to reduce API calls; location and history still update.",
+              "dawarich_visit_lookback_days": "How many days before the latest point to search for a visit (1–365). A longer period can require reading more visit pages."
             }
           },
           "local_presence_settings": {
@@ -1731,8 +1759,8 @@
               "presence_wifi_ssids": "One exact, case-sensitive SSID per line. Used only for selected sensor entities; any matching SSID means home. Do not enter Wi-Fi passwords.",
               "presence_ble_addresses": "One stable BLE MAC address per line. Only these devices are tracked; rotating private addresses require a stable identity supplied by another integration.",
               "presence_ble_sources": "One Home Assistant remote scanner source ID per line. AprilBrother component-ab-gateway uses ab_gateway by default. These are scanner source IDs, not MQTT topics or individual gateway MACs. Configure the gateway integration separately.",
-              "presence_ble_timeout": "Seconds after the last advertisement at or above the RSSI threshold before marking away (10–3600). Checked every 5 seconds; rereading cached advertisements does not extend presence.",
-              "presence_ble_min_rssi": "Advertisements at or above this dBm value count as nearby (-127–0). Weaker advertisements do not renew the timeout. RSSI is not converted into distance."
+              "presence_ble_timeout": "Seconds after the last qualifying advertisement before marking away (10–3600). Start around 90–180 seconds; increase it for sparse advertisements or weak coverage, decrease it only when you need faster away detection. Checked every 5 seconds; rereading cached advertisements never extends presence.",
+              "presence_ble_min_rssi": "Only advertisements at or above this dBm level count as nearby (-127–0); values closer to 0 require a stronger signal. Start at -85 to -90 dBm, use about -70 to -80 dBm for room-level proximity, and lower it to -95 to -100 dBm for wider coverage. Walls, body blocking, phone orientation and gateway placement change RSSI, so calibrate from observed values; it is not a distance measurement."
             }
           }
         }
@@ -1792,7 +1820,7 @@
         },
         "data_description": {
           "helper_update_mode": "Automatic preserves each template you edited and regenerates untouched helpers. Keep current means the helper is not used and every template stays unchanged. Force helper replaces generated and custom templates using the selected source entities.",
-          "boiler_temperature_calibration_template": "This is used only for a detected boiler climate. It converts the virtual room request (temperature) to the boiler water setpoint. The suggested recovery curve keeps the 25→40, 27→44, 30→47, and 33→50°C room-to-water targets, adds 1.5°C water per 1°C room gap while recovering, and limits that extra heat to 8°C. An old direct-pass-through default is automatically replaced in this form; any other saved formula is kept as your custom value. Calculation runs only on a set_temperature command; it does not periodically resend a reduced setpoint. current_temperature must represent a real room sensor, not water temperature. The gain 1.5 and cap 8 are tunable starting values, not a model of heating delay or residual heat."
+          "boiler_temperature_calibration_template": "This is used only for a detected boiler climate. It converts the virtual room request (temperature) to the boiler water setpoint. The suggested recovery curve keeps the 25→40, 27→44, 30→47, and 33→50°C room-to-water targets, adds 1.5°C water per 1°C room gap while recovering, and limits that extra heat to 8°C. An old direct-pass-through default is automatically replaced in this form; any other saved formula is kept as your custom value. A boiler-reported water target is converted back to the closest room target for display, so a 27°C request mapped to 52°C continues to display as 27°C. Calculation runs only on a set_temperature command; it does not periodically resend a reduced setpoint. current_temperature must represent a real room sensor, not water temperature. The gain 1.5 and cap 8 are tunable starting values, not a model of heating delay or residual heat."
         }
       },
       "entity_helper": {
@@ -1974,6 +2002,7 @@
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "sensor_unit": "Sensor unit",
               "climate_temperature_step": "Temperature adjustment step",
+              "boiler_room_temperature_entity_id": "Room temperature sensor",
               "media_player_source_priority": "Media source priority",
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
@@ -1995,6 +2024,7 @@
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
               "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
+              "boiler_room_temperature_entity_id": "Optional sensor used as the virtual climate's current room temperature. Raw boiler-water temperatures remain available as attributes.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
@@ -2218,13 +2248,13 @@
               "current_humidity": "Jinja template for current humidity. Source selection generates this helper automatically; manual edits are preserved.",
               "current_temperature": "Jinja template for current temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "hvac_action": "Jinja template for current hvac action. Source selection generates this helper automatically; manual edits are preserved.",
-              "max_humidity": "Jinja template for maximum humidity. Source selection generates this helper automatically; manual edits are preserved.",
+              "max_humidity": "Jinja template for maximum humidity. New humidifiers and dehumidifiers default to 70%; set a constant or dynamic Jinja value here. Source selection generates this helper automatically; manual edits are preserved.",
               "max_temp": "Jinja template for maximum temperature. Source selection generates this helper automatically; manual edits are preserved.",
-              "min_humidity": "Jinja template for minimum humidity. Source selection generates this helper automatically; manual edits are preserved.",
+              "min_humidity": "Jinja template for minimum humidity. New humidifiers and dehumidifiers default to 35%; set a constant or dynamic Jinja value here. Source selection generates this helper automatically; manual edits are preserved.",
               "min_temp": "Jinja template for minimum temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "mode": "Jinja template for current humidifier mode. Source selection generates this helper automatically; manual edits are preserved.",
               "target_humidity": "Jinja template for target humidity. Source selection generates this helper automatically; manual edits are preserved.",
-              "target_humidity_step": "Jinja template for humidity adjustment step. Source selection generates this helper automatically; manual edits are preserved.",
+              "target_humidity_step": "Jinja template for humidity adjustment step. New humidifiers and dehumidifiers default to 5%; use a constant Jinja value of 10 for 10% steps. A reported source step is used when available; manual edits are preserved.",
               "target_temperature": "Jinja template for target temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "target_temperature_high": "Jinja template for upper target temperature. Source selection generates this helper automatically; manual edits are preserved.",
               "target_temperature_low": "Jinja template for lower target temperature. Source selection generates this helper automatically; manual edits are preserved.",
@@ -2409,7 +2439,11 @@
               "dawarich_history_limit": "History points",
               "dawarich_member": "Family member email or user ID",
               "dawarich_person": "Legacy family Person",
-              "dawarich_test_connection": "Test connection before saving"
+              "dawarich_test_connection": "Test connection before saving",
+              "dawarich_verify_ssl": "Verify TLS certificate",
+              "dawarich_request_timeout": "Request timeout",
+              "dawarich_include_visits": "Read latest visit",
+              "dawarich_visit_lookback_days": "Visit lookup period"
             },
             "data_description": {
               "dawarich_enabled": "Enable polling for this tracker. Turn off to remove its saved Dawarich configuration.",
@@ -2420,7 +2454,11 @@
               "dawarich_history_limit": "Maximum recent location summaries retained in dawarich_history (1–100). Family mode returns only the current location.",
               "dawarich_member": "Optional exact Dawarich family email or user ID. Takes precedence over Person. Leave both empty to read the API key owner’s points. Family sharing must be enabled.",
               "dawarich_person": "Optional single Person for older servers matching its display name to a family name or email. Clear it for your own account; current servers should use the explicit member field.",
-              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline."
+              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline.",
+              "dawarich_verify_ssl": "Verify the server TLS certificate. Keep off only for a trusted private server using a self-signed certificate; turning it on is recommended for public or properly certificated servers.",
+              "dawarich_request_timeout": "Maximum seconds to wait for each API response (5–60). A timeout records a connection error and the next scheduled poll retries.",
+              "dawarich_include_visits": "Fetch the latest visit separately after each successful own-account location poll. Turn off to reduce API calls; location and history still update.",
+              "dawarich_visit_lookback_days": "How many days before the latest point to search for a visit (1–365). A longer period can require reading more visit pages."
             }
           },
           "local_presence_settings": {
@@ -2441,8 +2479,8 @@
               "presence_wifi_ssids": "One exact, case-sensitive SSID per line. Used only for selected sensor entities; any matching SSID means home. Do not enter Wi-Fi passwords.",
               "presence_ble_addresses": "One stable BLE MAC address per line. Only these devices are tracked; rotating private addresses require a stable identity supplied by another integration.",
               "presence_ble_sources": "One Home Assistant remote scanner source ID per line. AprilBrother component-ab-gateway uses ab_gateway by default. These are scanner source IDs, not MQTT topics or individual gateway MACs. Configure the gateway integration separately.",
-              "presence_ble_timeout": "Seconds after the last advertisement at or above the RSSI threshold before marking away (10–3600). Checked every 5 seconds; rereading cached advertisements does not extend presence.",
-              "presence_ble_min_rssi": "Advertisements at or above this dBm value count as nearby (-127–0). Weaker advertisements do not renew the timeout. RSSI is not converted into distance."
+              "presence_ble_timeout": "Seconds after the last qualifying advertisement before marking away (10–3600). Start around 90–180 seconds; increase it for sparse advertisements or weak coverage, decrease it only when you need faster away detection. Checked every 5 seconds; rereading cached advertisements never extends presence.",
+              "presence_ble_min_rssi": "Only advertisements at or above this dBm level count as nearby (-127–0); values closer to 0 require a stronger signal. Start at -85 to -90 dBm, use about -70 to -80 dBm for room-level proximity, and lower it to -95 to -100 dBm for wider coverage. Walls, body blocking, phone orientation and gateway placement change RSSI, so calibrate from observed values; it is not a distance measurement."
             }
           }
         }
@@ -2885,7 +2923,11 @@
               "dawarich_history_limit": "History points",
               "dawarich_member": "Family member email or user ID",
               "dawarich_person": "Legacy family Person",
-              "dawarich_test_connection": "Test connection before saving"
+              "dawarich_test_connection": "Test connection before saving",
+              "dawarich_verify_ssl": "Verify TLS certificate",
+              "dawarich_request_timeout": "Request timeout",
+              "dawarich_include_visits": "Read latest visit",
+              "dawarich_visit_lookback_days": "Visit lookup period"
             },
             "data_description": {
               "dawarich_enabled": "Enable polling for this tracker. Turn off to remove its saved Dawarich configuration.",
@@ -2896,7 +2938,11 @@
               "dawarich_history_limit": "Maximum recent location summaries retained in dawarich_history (1–100). Family mode returns only the current location.",
               "dawarich_member": "Optional exact Dawarich family email or user ID. Takes precedence over Person. Leave both empty to read the API key owner’s points. Family sharing must be enabled.",
               "dawarich_person": "Optional single Person for older servers matching its display name to a family name or email. Clear it for your own account; current servers should use the explicit member field.",
-              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline."
+              "dawarich_test_connection": "Verify authentication and a usable location before saving. No data is uploaded. Leave off to save while the server is offline.",
+              "dawarich_verify_ssl": "Verify the server TLS certificate. Keep off only for a trusted private server using a self-signed certificate; turning it on is recommended for public or properly certificated servers.",
+              "dawarich_request_timeout": "Maximum seconds to wait for each API response (5–60). A timeout records a connection error and the next scheduled poll retries.",
+              "dawarich_include_visits": "Fetch the latest visit separately after each successful own-account location poll. Turn off to reduce API calls; location and history still update.",
+              "dawarich_visit_lookback_days": "How many days before the latest point to search for a visit (1–365). A longer period can require reading more visit pages."
             }
           },
           "local_presence_settings": {
@@ -2917,8 +2963,8 @@
               "presence_wifi_ssids": "One exact, case-sensitive SSID per line. Used only for selected sensor entities; any matching SSID means home. Do not enter Wi-Fi passwords.",
               "presence_ble_addresses": "One stable BLE MAC address per line. Only these devices are tracked; rotating private addresses require a stable identity supplied by another integration.",
               "presence_ble_sources": "One Home Assistant remote scanner source ID per line. AprilBrother component-ab-gateway uses ab_gateway by default. These are scanner source IDs, not MQTT topics or individual gateway MACs. Configure the gateway integration separately.",
-              "presence_ble_timeout": "Seconds after the last advertisement at or above the RSSI threshold before marking away (10–3600). Checked every 5 seconds; rereading cached advertisements does not extend presence.",
-              "presence_ble_min_rssi": "Advertisements at or above this dBm value count as nearby (-127–0). Weaker advertisements do not renew the timeout. RSSI is not converted into distance."
+              "presence_ble_timeout": "Seconds after the last qualifying advertisement before marking away (10–3600). Start around 90–180 seconds; increase it for sparse advertisements or weak coverage, decrease it only when you need faster away detection. Checked every 5 seconds; rereading cached advertisements never extends presence.",
+              "presence_ble_min_rssi": "Only advertisements at or above this dBm level count as nearby (-127–0); values closer to 0 require a stronger signal. Start at -85 to -90 dBm, use about -70 to -80 dBm for room-level proximity, and lower it to -95 to -100 dBm for wider coverage. Walls, body blocking, phone orientation and gateway placement change RSSI, so calibrate from observed values; it is not a distance measurement."
             }
           }
         }
@@ -3037,10 +3083,10 @@
     },
     "unit_history_policy": {
       "options": {
-        "restore": "Restore sensor unit from statistics (preserve history)",
-        "keep": "Keep existing history",
-        "relabel": "Correct statistics unit label (keep numbers)",
-        "convert": "Convert statistics values to the new unit"
+        "restore": "Use recorded statistics unit for the Virtual Entity (preserve history)",
+        "keep": "Use selected unit for the Virtual Entity; keep statistics unchanged",
+        "relabel": "Use selected unit; correct statistics unit label only",
+        "convert": "Use selected unit; convert statistics values"
       }
     },
     "sensor_unit": {

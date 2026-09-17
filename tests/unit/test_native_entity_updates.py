@@ -151,6 +151,23 @@ async def test_native_commands_write_the_new_state(entity, command):
     entity.async_write_ha_state.assert_called_once()
 
 
+async def test_humidifier_defaults_to_35_70_range_and_five_percent_steps():
+    """The runtime defaults match the editable config-flow defaults."""
+    entity = VirtualHumidifier(
+        _config(HUMIDIFIER_SCHEMA, "humidifier.defaults", "off"),
+        False,
+    )
+    entity._create_state(entity._config)
+
+    assert entity.min_humidity == 35
+    assert entity.max_humidity == 70
+    assert entity.target_humidity_step == 5
+
+    entity.async_write_ha_state = Mock()
+    await entity.async_set_humidity(53)
+    assert entity.target_humidity == 55
+
+
 def test_virtual_camera_restores_explicit_power_instead_of_idle_state():
     entity = VirtualCamera(
         _config(CAMERA_SCHEMA, "camera.persistent", "on"),

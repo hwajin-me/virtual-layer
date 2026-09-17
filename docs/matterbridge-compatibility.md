@@ -40,6 +40,18 @@ the executable converter requires total_increasing.
 
 ## Configuration guidance and boundaries
 
+For a stepped fan, select the Matter three-level profile in the Virtual Layer
+fan flow when Low/Medium/High is the desired controller experience. It exposes
+the canonical `low`, `medium`, and `high` HA preset modes, reflects the active
+physical speed as one of those modes, and maps each Matter preset request back
+to the three source percentages selected in the UI. The normal percentage
+profile instead keeps Matter's 1–100% setting. Retain a source-specific preset
+only when it is required in Home Assistant; it is not a Matter-standard fan
+mode.
+Direction and oscillation are included only when the virtual fan declares the
+matching native feature and current value; Matterbridge uses those attributes
+when it constructs the FanControl cluster.
+
 Use the sensor's dedicated native metadata inputs and generated conversion
 helpers to publish the required units. Never relabel kW as W or Wh as kWh without
 converting the numerical value. Existing configurations are not silently

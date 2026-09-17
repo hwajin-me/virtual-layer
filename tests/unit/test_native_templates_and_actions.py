@@ -30,7 +30,7 @@ from homeassistant.components.siren import SirenEntityFeature
 from homeassistant.components.update import UpdateEntityFeature
 from homeassistant.components.vacuum import VacuumActivity, VacuumEntityFeature
 from homeassistant.components.water_heater import WaterHeaterEntityFeature
-from homeassistant.const import ATTR_ENTITY_ID, UnitOfTemperature
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import State
 from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
@@ -760,6 +760,34 @@ async def test_numeric_commands_snap_mismatched_values_to_advertised_steps():
     assert heater.target_temperature == 45
 
 
+async def test_matter_climate_setpoints_round_up_to_half_degrees():
+    climate = VirtualClimate(
+        CLIMATE_SCHEMA(
+            _base(
+                "climate.matter_step_fixer",
+                "off",
+                hvac_modes=["off", "heat"],
+                min_temp=10,
+                max_temp=30,
+                target_temperature_step=0.5,
+            )
+        ),
+        False,
+    )
+    climate._create_state(climate._config)
+    climate.async_write_ha_state = Mock()
+
+    await climate.async_set_temperature(temperature=20.2)
+
+    assert climate.target_temperature == 20.5
+    assert climate._command_service_data(
+        "set_temperature",
+        VirtualClimate.async_set_temperature,
+        (),
+        {ATTR_TEMPERATURE: 20.2},
+    ) == {ATTR_TEMPERATURE: 20.5}
+
+
 async def test_light_turn_on_rolls_back_all_values_when_validation_fails():
     light = VirtualLight(
         LIGHT_SCHEMA(
@@ -1025,7 +1053,7 @@ def test_fan_native_templates_control_capabilities_and_values(hass):
 
     assert entity.is_on is True
     assert entity.speed_count == 5
-    assert entity.percentage == 40
+    assert entity.percentage == 42
     assert entity.preset_modes == ["quiet", "boost"]
     assert entity.preset_mode == "boost"
     assert entity.current_direction == "reverse"
@@ -1087,7 +1115,7 @@ def test_humidifier_native_templates_render_target_action_and_modes(hass, humidi
     assert entity.is_on is True
     assert entity.device_class == HumidifierDeviceClass.DEHUMIDIFIER
     assert entity.current_humidity == humidity
-    assert entity.target_humidity == 53
+    assert entity.target_humidity == 55
     assert entity.min_humidity == 20
     assert entity.max_humidity == 80
     assert entity.target_humidity_step == 5

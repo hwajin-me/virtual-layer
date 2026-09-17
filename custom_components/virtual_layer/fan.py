@@ -33,7 +33,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, nonnegative_int, virtual_schema
-from .fan_options import migrate_legacy_fan_attributes
+from .fan_options import manual_preset_mode, migrate_legacy_fan_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -147,6 +147,7 @@ class VirtualFan(VirtualEntity, FanEntity):
         self._attr_oscillating = None
         self._attr_percentage = None
         self._attr_preset_mode = None
+        self._reported_is_on: bool | None = None
         self._configured_percentage = self._safe_percentage(
             config.get(CONF_PERCENTAGE)
         )
@@ -185,6 +186,13 @@ class VirtualFan(VirtualEntity, FanEntity):
         self._attr_supported_features = features
 
     @property
+    def is_on(self) -> bool:
+        """Keep explicit source power independent of missing speed telemetry."""
+        if self._reported_is_on is not None:
+            return self._reported_is_on
+        return bool(self._attr_percentage) or self._attr_preset_mode is not None
+
+    @property
     def speed_count(self) -> int:
         """Return a non-zero step count whenever percentage control is exposed."""
         if self._attr_speed_count > 0:
@@ -204,6 +212,22 @@ class VirtualFan(VirtualEntity, FanEntity):
         if self._attr_supported_features & FanEntityFeature.OSCILLATE:
             self._attr_oscillating = config.get(CONF_OSCILLATING, False)
         self._apply_initial_power_state(config.get(CONF_INITIAL_VALUE))
+
+    def _sources_pending_startup(self) -> bool:
+        """Let paired speed helpers fall back to a live fan during recovery."""
+        sources = self._source_entities
+        fans = [source for source in sources if source.startswith("fan.")]
+        numbers = [source for source in sources if source.split(".", 1)[0] in {"number", "input_number"}]
+        if len(sources) == 2 and len(fans) == len(numbers) == 1:
+            state = self.hass.states.get(fans[0])
+            pending = state is None or state.state in {"unknown", "unavailable"}
+        else:
+            pending = super()._sources_pending_startup()
+        # Once a live snapshot has been applied, a later outage is not startup.
+        # Keeping the grace flag armed would freeze the last speed on outages.
+        if not pending:
+            self._startup_source_grace = False
+        return pending
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
@@ -225,8 +249,6 @@ class VirtualFan(VirtualEntity, FanEntity):
         restored_percentage = self._safe_percentage(
             state.attributes.get(ATTR_PERCENTAGE)
         )
-        if restored_percentage is not None:
-            restored_percentage = self._nearest_percentage(restored_percentage)
         preset_mode = state.attributes.get(ATTR_PRESET_MODE)
         restored_preset_mode = (
             preset_mode if preset_mode in self._attr_preset_modes else None
@@ -249,7 +271,7 @@ class VirtualFan(VirtualEntity, FanEntity):
             return
         if self._configured_preset_mode in self._attr_preset_modes:
             self._attr_preset_mode = self._configured_preset_mode
-            self._attr_percentage = None
+            self._attr_percentage = self._configured_percentage
             return
         self._attr_preset_mode = None
         self._attr_percentage = self._configured_percentage or 67
@@ -290,11 +312,28 @@ class VirtualFan(VirtualEntity, FanEntity):
     def _command_service_data(self, command, method, args, kwargs) -> dict:
         """Expose fixed percentages to generated and customized command actions."""
         data = super()._command_service_data(command, method, args, kwargs)
+        if command == "turn_on" and data.get("preset_mode"):
+            data.pop("percentage", None)
         if command in {"set_percentage", "turn_on"} and "percentage" in data:
             percentage = self._safe_percentage(data["percentage"])
             if percentage is not None:
                 data["percentage"] = self._nearest_percentage(percentage)
         return data
+
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        """Reject invalid speeds before a preset or source value is changed."""
+        if command in {"set_percentage", "turn_on"}:
+            value = kwargs.get("percentage", args[0] if args else None)
+            if (value is not None or command == "set_percentage") and self._safe_percentage(value) is None:
+                raise ValueError("Fan percentage must be between 0 and 100")
+        if command == "set_preset_mode":
+            preset = kwargs.get("preset_mode", args[0] if args else None)
+        elif command == "turn_on":
+            preset = kwargs.get("preset_mode", args[1] if len(args) > 1 else None)
+        else:
+            return
+        if (preset is not None or command == "set_preset_mode") and preset not in self.preset_modes:
+            raise ValueError(f"Invalid preset mode: {preset}")
 
     def _preserve_optimistic_command_state(self, command, args, kwargs) -> bool:
         """Keep fan-off responsive until the physical source reports back."""
@@ -345,7 +384,7 @@ class VirtualFan(VirtualEntity, FanEntity):
                 parsed_percentage = self._safe_percentage(value)
                 if parsed_percentage is None:
                     raise ValueError("percentage must be between 0 and 100")
-                value = self._nearest_percentage(parsed_percentage)
+                value = parsed_percentage
         elif name == "speed_count":
             if value is None:
                 value = 0
@@ -367,14 +406,16 @@ class VirtualFan(VirtualEntity, FanEntity):
         elif name in {"state", "is_on"}:
             old_is_on = self.is_on
             requested_is_on = self._template_to_bool(value)
+            self._reported_is_on = requested_is_on
             if not requested_is_on:
                 self._apply_initial_power_state("off")
-            elif not self.is_on:
-                self._apply_initial_power_state("on")
             return old_is_on != self.is_on
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:
+        if self._reported_is_on is False:
+            self._attr_percentage = 0
+            self._attr_preset_mode = None
         if self._attr_preset_mode not in self._attr_preset_modes:
             self._attr_preset_mode = None
         self._refresh_supported_features()
@@ -382,18 +423,24 @@ class VirtualFan(VirtualEntity, FanEntity):
     def _set_percentage(self, percentage: int) -> None:
         if isinstance(percentage, bool):
             raise ValueError("Fan percentage must be between 0 and 100")
-        percentage = int(percentage)
-        if not 0 <= percentage <= 100:
+        percentage = self._safe_percentage(percentage)
+        if percentage is None:
             raise ValueError("Fan percentage must be between 0 and 100")
         self._attr_percentage = self._nearest_percentage(percentage)
-        self._attr_preset_mode = None
+        if self._reported_is_on is not None:
+            self._reported_is_on = percentage > 0
+        self._attr_preset_mode = (
+            manual_preset_mode(self.preset_modes, self._attr_preset_mode)
+            if percentage > 0 else None
+        )
         self._update_attributes()
         self._schedule_state_update()
 
     def _set_preset_mode(self, preset_mode: str) -> None:
         if preset_mode in self.preset_modes:
+            if self._reported_is_on is not None:
+                self._reported_is_on = True
             self._attr_preset_mode = preset_mode
-            self._attr_percentage = None
             self._update_attributes()
             self._schedule_state_update()
         else:

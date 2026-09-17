@@ -239,7 +239,7 @@ STARTER_PROFILES = {
     "nitrogen_dioxide": ("ppb", (53, 100, 360, 649, 1249), "EPA NO2 concentration breakpoints; no time averaging"),
     "aqi": ("unitless", (50, 150, 250, 350, 450), "matterbridge-hass 1.5.0 AQI mapping"),
     "radon": ("Bq/m³", (50, 75, 100, 125, 148), "Local radon display bands: below 50 good, 148 or above extremely_poor; not official health categories"),
-    "formaldehyde": ("mg/m³", (0.02, 0.04, 0.06, 0.08, 0.10), "Local indoor HCHO display bands; WHO 0.1 mg/m³ is a 30-minute guideline, not an instantaneous six-grade scale"),
+    "formaldehyde": ("μg/m³", (20, 40, 60, 80, 100), "Local indoor HCHO display bands; WHO 100 μg/m³ is a 30-minute guideline, not an instantaneous six-grade scale"),
     "carbon_dioxide": ("ppm", (600, 800, 1100, 1400, 2000), "Local CO2 display bands: 1100 or above poor, 1400 or above very_poor; not health limits"),
     "volatile_organic_compounds": ("μg/m³", (200, 300, 500, 750, 950), "Local indoor TVOC display bands; UBA 950 μg/m³ precautionary reference is not a health threshold or six-grade scale"),
 }
@@ -346,7 +346,15 @@ def infer_quantity(state):
     """Metadata wins; ambiguous token matches never guess a pollutant."""
     declared = state.attributes.get("device_class")
     if declared:
-        return declared if declared in QUANTITIES[1:] else None
+        if declared in QUANTITIES[1:]:
+            return declared
+        # Older virtual formaldehyde records could inherit the generic gas or
+        # volume class, which also supplied a bare m³ unit. The explicitly
+        # named chemical is still unambiguous in those legacy cases.
+        if not isinstance(declared, str) or declared not in {
+            "gas", "volume", "volume_storage", "volume_flow_rate"
+        }:
+            return None
     matches = pollutant_name_matches(
         state.entity_id.split('.', 1)[-1], state.attributes.get("friendly_name"),
         include_icon_only=True,
@@ -386,7 +394,14 @@ def prefill_measurement(defaults, states):
     source_unit = normalize_unit(states[0].attributes.get("unit_of_measurement") or unit)
     target_unit = normalize_unit(result["unit"]) if "unit" in result else None
     if "unit" not in result:
-        target_unit = "mg/m³" if quantity in VOC_QUANTITIES else source_unit if source_unit in UNITS else unit
+        # Formaldehyde has a canonical UI/default presentation even when an
+        # upstream device reports its concentration in mg/m³.
+        target_unit = (
+            "mg/m³" if quantity in VOC_QUANTITIES
+            else unit if quantity == "formaldehyde"
+            else source_unit if source_unit in UNITS
+            else unit
+        )
         result["unit"] = target_unit
     factors = {("μg/m³", "mg/m³"): 0.001, ("mg/m³", "μg/m³"): 1000,
                ("ppm", "ppb"): 1000, ("ppb", "ppm"): 0.001,

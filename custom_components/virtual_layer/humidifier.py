@@ -87,12 +87,16 @@ BASE_SCHEMA = virtual_schema(
             CONF_CLASS, default=HumidifierDeviceClass.HUMIDIFIER
         ): _as_device_class,
         vol.Optional(CONF_CURRENT_HUMIDITY): number_float,
-        vol.Optional(CONF_MAX_HUMIDITY, default=100): number_float,
-        vol.Optional(CONF_MIN_HUMIDITY, default=0): number_float,
+        # Keep virtual humidifiers/dehumidifiers useful out of the box. These
+        # remain configurable through the dedicated config-flow native-value
+        # inputs (or dynamic templates), but should not default to a full
+        # 0-100% controller range.
+        vol.Optional(CONF_MAX_HUMIDITY, default=70): number_float,
+        vol.Optional(CONF_MIN_HUMIDITY, default=35): number_float,
         vol.Optional(CONF_MODE): cv.string,
         vol.Optional(CONF_MODES, default=list): vol.All(cv.ensure_list, [cv.string]),
         vol.Optional(CONF_TARGET_HUMIDITY): number_float,
-        vol.Optional(CONF_TARGET_HUMIDITY_STEP): number_float,
+        vol.Optional(CONF_TARGET_HUMIDITY_STEP, default=5): number_float,
     },
 )
 
@@ -181,8 +185,8 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         if self._attr_available_modes:
             self._attr_supported_features |= HumidifierEntityFeature.MODES
 
-        self._attr_min_humidity = _finite_float(config.get(CONF_MIN_HUMIDITY), 0)
-        self._attr_max_humidity = _finite_float(config.get(CONF_MAX_HUMIDITY), 100)
+        self._attr_min_humidity = _finite_float(config.get(CONF_MIN_HUMIDITY), 35)
+        self._attr_max_humidity = _finite_float(config.get(CONF_MAX_HUMIDITY), 70)
         if self._attr_min_humidity > self._attr_max_humidity:
             self._attr_min_humidity, self._attr_max_humidity = (
                 self._attr_max_humidity,
@@ -192,7 +196,7 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         self._attr_target_humidity_step = (
             step
             if target_step is not None and (step := _finite_float(target_step, 0)) > 0
-            else None
+            else 5
         )
 
         _LOGGER.debug(f"VirtualHumidifier: {self.name} created")
@@ -209,6 +213,9 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         )
         self._attr_target_humidity = self._bounded_humidity(
             config.get(CONF_TARGET_HUMIDITY)
+        )
+        self._attr_target_humidity = self._aligned_target_humidity(
+            self._attr_target_humidity
         )
         configured_mode = config.get(CONF_MODE)
         self._attr_mode = (
@@ -242,6 +249,9 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
                 ),
             )
         )
+        self._attr_target_humidity = self._aligned_target_humidity(
+            self._attr_target_humidity
+        )
         restored_mode = state.attributes.get(CONF_MODE)
         configured_mode = config.get(CONF_MODE)
         self._attr_mode = (
@@ -268,6 +278,17 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             self._attr_min_humidity, self._attr_max_humidity
         )
         return max(minimum, min(maximum, humidity))
+
+    def _aligned_target_humidity(self, humidity):
+        """Align a target value to the configured Home Assistant UI step."""
+        if humidity is None:
+            return None
+        return nearest_step_value(
+            humidity,
+            self._attr_min_humidity,
+            self._attr_max_humidity,
+            self._attr_target_humidity_step,
+        )
 
     def _update_attributes(self):
         super()._update_attributes()
@@ -308,6 +329,8 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
                 if not math.isfinite(value):
                     raise ValueError(f"{name} must render a finite number")
                 value = self._bounded_humidity(value, measured=name == CONF_CURRENT_HUMIDITY)
+                if name == CONF_TARGET_HUMIDITY:
+                    value = self._aligned_target_humidity(value)
         elif name in {CONF_MIN_HUMIDITY, CONF_MAX_HUMIDITY}:
             value = _finite_float(value, float("nan"))
             if not math.isfinite(value):
@@ -332,6 +355,9 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             self._attr_current_humidity, measured=True
         )
         self._attr_target_humidity = self._bounded_humidity(
+            self._attr_target_humidity
+        )
+        self._attr_target_humidity = self._aligned_target_humidity(
             self._attr_target_humidity
         )
         if self._attr_mode not in self._attr_available_modes:
@@ -390,6 +416,13 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             mode = args[0] if args else kwargs.get("mode")
             if mode not in self._attr_available_modes:
                 raise ValueError(f"Invalid humidifier mode: {mode}")
+
+    def _command_service_data(self, command, method, args, kwargs) -> dict:
+        """Send the same stepped target that the virtual entity displays."""
+        data = super()._command_service_data(command, method, args, kwargs)
+        if command == "set_humidity" and "humidity" in data:
+            data["humidity"] = self._validate_humidity(data["humidity"])
+        return data
 
     async def async_set_humidity(self, humidity: int) -> None:
         self._attr_target_humidity = self._validate_humidity(humidity)

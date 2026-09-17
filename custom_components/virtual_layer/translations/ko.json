@@ -181,6 +181,7 @@
               "light_ignore_unresponsive": "응답 없는 전구 무시",
               "sensor_unit": "센서 단위",
               "climate_temperature_step": "온도 조절 간격",
+              "boiler_room_temperature_entity_id": "실내 온도 센서",
               "media_player_source_priority": "미디어 소스 우선순위",
               "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
               "air_quality_per_source": "소스별 1:1 공기질 센서 생성",
@@ -202,6 +203,7 @@
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
               "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
+              "boiler_room_temperature_entity_id": "가상 climate의 현재 실내온도로 쓸 선택 항목입니다. 실제 보일러 온수 온도는 attribute로 유지됩니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
               "configure_air_quality_rules": "PM1.0·PM2.5·PM4·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·N₂O·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 순간값 표시용이며 공식 건강 기준이나 노출시간 평가가 아닙니다. good은 안전을 보증하지 않습니다. PM4는 PM2.5 구간을 차용한 표시용 참고값, N₂O는 직업 노출 기준과 무관한 자체 표시 구간을 사용합니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
               "air_quality_per_source": "종합 공기질과 원본 센서를 유지하면서 이 Device에 각 소스만 판정하는 등급 센서를 추가합니다. 각 센서의 자동 프로필을 사용하며 미지원 측정값은 unknown입니다. Matterbridge Air Quality Regex와 endpoint 그룹 설정은 별도로 필요합니다.",
@@ -425,13 +427,13 @@
               "current_humidity": "현재 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "current_temperature": "현재 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "hvac_action": "현재 HVAC 동작에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
-              "max_humidity": "최고 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
+              "max_humidity": "최고 습도에 적용할 Jinja 템플릿입니다. 새 가습·제습기의 기본값은 70%이며, 상수 또는 동적 Jinja 값으로 변경할 수 있습니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "max_temp": "최고 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
-              "min_humidity": "최저 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
+              "min_humidity": "최저 습도에 적용할 Jinja 템플릿입니다. 새 가습·제습기의 기본값은 35%이며, 상수 또는 동적 Jinja 값으로 변경할 수 있습니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "min_temp": "최저 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "mode": "현재 가습기 모드에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "target_humidity": "목표 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
-              "target_humidity_step": "습도 조절 간격에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
+              "target_humidity_step": "습도 조절 간격 Jinja 템플릿입니다. 새 가습·제습기의 기본값은 5%이며 10% 간격은 상수 10을 반환하는 Jinja를 입력하세요. 원본이 제공하는 간격이 있으면 사용하며 직접 수정한 값은 보존됩니다.",
               "target_temperature": "목표 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "target_temperature_high": "목표 온도 상한에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "target_temperature_low": "목표 온도 하한에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
@@ -616,7 +618,11 @@
               "dawarich_history_limit": "이력 위치 수",
               "dawarich_member": "가족 구성원 이메일 또는 사용자 ID",
               "dawarich_person": "기존 가족 Person",
-              "dawarich_test_connection": "저장 전 연결 테스트"
+              "dawarich_test_connection": "저장 전 연결 테스트",
+              "dawarich_verify_ssl": "TLS 인증서 검증",
+              "dawarich_request_timeout": "요청 시간 제한",
+              "dawarich_include_visits": "최근 방문 조회",
+              "dawarich_visit_lookback_days": "방문 조회 기간"
             },
             "data_description": {
               "dawarich_enabled": "이 트래커의 Dawarich 조회를 켭니다. 끄고 저장하면 저장된 Dawarich 설정을 제거합니다.",
@@ -627,7 +633,11 @@
               "dawarich_history_limit": "dawarich_history에 보관할 최근 위치 요약 수(1–100)입니다. 가족 모드는 현재 위치만 제공합니다.",
               "dawarich_member": "선택 사항인 정확한 Dawarich 가족 이메일 또는 사용자 ID입니다. Person보다 우선합니다. 둘 다 비우면 API 키 소유자의 위치를 조회합니다. 가족 위치 공유가 켜져 있어야 합니다.",
               "dawarich_person": "구형 서버에서 Person 표시 이름을 가족 이름 또는 이메일과 일치시키는 단일 Person입니다. 본인 계정 조회 시 비우세요. 현재 서버에서는 구성원 직접 입력을 권장합니다.",
-              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요."
+              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요.",
+              "dawarich_verify_ssl": "서버 TLS 인증서를 검증합니다. 자체 서명 인증서를 쓰는 신뢰할 수 있는 사설 서버에서만 끄고, 공용 서버나 올바른 인증서가 있는 서버에서는 켜는 것을 권장합니다.",
+              "dawarich_request_timeout": "각 API 응답을 기다리는 최대 시간(5–60초)입니다. 시간 초과 시 연결 오류를 기록하고 다음 예약 조회에서 다시 시도합니다.",
+              "dawarich_include_visits": "본인 계정 위치 조회가 성공한 뒤 최근 방문을 별도로 가져옵니다. 끄면 API 호출은 줄고 위치와 이력은 계속 갱신됩니다.",
+              "dawarich_visit_lookback_days": "최근 위치보다 앞선 방문을 찾을 기간(1–365일)입니다. 기간이 길수록 더 많은 방문 페이지를 읽을 수 있습니다."
             }
           },
           "local_presence_settings": {
@@ -648,8 +658,8 @@
               "presence_wifi_ssids": "대소문자를 구분하는 정확한 SSID를 한 줄에 하나씩 입력하세요. 선택한 sensor 엔티티에만 적용하며 하나라도 일치하면 집으로 판단합니다. Wi-Fi 비밀번호는 입력하지 마세요.",
               "presence_ble_addresses": "고정 BLE MAC 주소를 한 줄에 하나씩 입력하세요. 지정한 기기만 추적합니다. 주소가 주기적으로 바뀌는 기기는 다른 통합에서 안정적인 식별자를 제공해야 합니다.",
               "presence_ble_sources": "Home Assistant 원격 스캐너 소스 ID를 한 줄에 하나씩 입력하세요. AprilBrother component-ab-gateway의 기본값은 ab_gateway입니다. MQTT 토픽이나 개별 게이트웨이 MAC이 아닙니다. 게이트웨이 통합은 별도로 설정하세요.",
-              "presence_ble_timeout": "RSSI 기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 5초마다 확인하며 캐시를 다시 읽는 것으로 재실 시간이 연장되지 않습니다.",
-              "presence_ble_min_rssi": "이 값 이상의 dBm 광고를 가까운 기기로 인정합니다(-127–0). 약한 광고는 부재 타이머를 연장하지 않습니다. RSSI를 거리로 환산하지 않습니다."
+              "presence_ble_timeout": "기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 90–180초부터 시작하고 광고가 드물거나 수신 범위가 약하면 늘리며, 빠른 외출 감지가 꼭 필요할 때만 줄이세요. 5초마다 확인하며 캐시를 다시 읽어도 재실 시간이 연장되지 않습니다.",
+              "presence_ble_min_rssi": "이 dBm 값 이상인 광고만 가까운 기기로 인정합니다(-127–0). 0에 가까울수록 더 강한 신호가 필요합니다. -85~-90 dBm부터 시작하고 방 단위 근접 감지는 -70~-80 dBm, 넓은 범위는 -95~-100 dBm 정도를 사용하세요. 벽, 인체 차폐, 휴대폰 방향과 게이트웨이 위치에 따라 RSSI가 달라지므로 실제 관측값으로 보정해야 하며 거리 측정값은 아닙니다."
             }
           }
         }
@@ -699,7 +709,7 @@
         },
         "data_description": {
           "use_template_helper": "켜면 상태값, 사용 가능 여부, 아이콘, 속성 및 도메인별 고유 속성 템플릿을 자동 생성합니다. 끄면 선택한 원본 엔티티, 현재 상태와 메타데이터만 가져오고 템플릿은 생성하지 않습니다.",
-          "boiler_temperature_calibration_template": "가상 climate의 실내 목표 temperature를 보일러 온수 설정값으로 바꾸는 Jinja 수식입니다. temperature를 요청한 실내 온도로 사용합니다. 목표에 도달했을 때 기본값은 실내 25°C를 온수 40°C, 27°C를 44°C, 30°C를 47°C, 33°C를 50°C로 변환합니다. 현재 가상 실내온도가 목표보다 낮으면 차이 1°C당 온수 온도를 1.5°C 더하고 최대 8°C까지만 가산하며, 다음 온도 명령에서 실내온도가 회복된 만큼 가산분을 줄입니다. 단열, 외기, 난방 배관에 따라 조정하세요. 식은 Jinja 구분자로 감싸야 하며, 계산 뒤 보일러 원본의 최소/최대/단계 제한이 적용됩니다. 계산은 set_temperature 명령 시에만 수행되며 주기적으로 자동 재전송하지 않습니다. current_temperature에는 실제 실내 센서 값이 필요하며 온수 센서 값을 사용하면 안 됩니다. 1.5와 8은 조정 가능한 시작값이며 난방 지연이나 잔열을 예측하는 제어기는 아닙니다."
+          "boiler_temperature_calibration_template": "가상 climate의 실내 목표 temperature를 보일러 온수 설정값으로 바꾸는 Jinja 수식입니다. temperature를 요청한 실내 온도로 사용합니다. 목표에 도달했을 때 기본값은 실내 25°C를 온수 40°C, 27°C를 44°C, 30°C를 47°C, 33°C를 50°C로 변환합니다. 현재 가상 실내온도가 목표보다 낮으면 차이 1°C당 온수 온도를 1.5°C 더하고 최대 8°C까지만 가산하며, 다음 온도 명령에서 실내온도가 회복된 만큼 가산분을 줄입니다. 단열, 외기, 난방 배관에 따라 조정하세요. 식은 Jinja 구분자로 감싸야 하며, 계산 뒤 보일러 원본의 최소/최대/단계 제한이 적용됩니다. 보일러가 보고한 온수 목표는 가장 가까운 실내 목표로 역환산해 표시하므로, 27°C 요청이 52°C로 변환되어도 화면에는 27°C로 유지됩니다. 계산은 set_temperature 명령 시에만 수행되며 주기적으로 자동 재전송하지 않습니다. current_temperature에는 실제 실내 센서 값이 필요하며 온수 센서 값을 사용하면 안 됩니다. 1.5와 8은 조정 가능한 시작값이며 난방 지연이나 잔열을 예측하는 제어기는 아닙니다."
         }
       },
       "matter_fan_levels": {
@@ -972,7 +982,11 @@
               "dawarich_history_limit": "이력 위치 수",
               "dawarich_member": "가족 구성원 이메일 또는 사용자 ID",
               "dawarich_person": "기존 가족 Person",
-              "dawarich_test_connection": "저장 전 연결 테스트"
+              "dawarich_test_connection": "저장 전 연결 테스트",
+              "dawarich_verify_ssl": "TLS 인증서 검증",
+              "dawarich_request_timeout": "요청 시간 제한",
+              "dawarich_include_visits": "최근 방문 조회",
+              "dawarich_visit_lookback_days": "방문 조회 기간"
             },
             "data_description": {
               "dawarich_enabled": "이 트래커의 Dawarich 조회를 켭니다. 끄고 저장하면 저장된 Dawarich 설정을 제거합니다.",
@@ -983,7 +997,11 @@
               "dawarich_history_limit": "dawarich_history에 보관할 최근 위치 요약 수(1–100)입니다. 가족 모드는 현재 위치만 제공합니다.",
               "dawarich_member": "선택 사항인 정확한 Dawarich 가족 이메일 또는 사용자 ID입니다. Person보다 우선합니다. 둘 다 비우면 API 키 소유자의 위치를 조회합니다. 가족 위치 공유가 켜져 있어야 합니다.",
               "dawarich_person": "구형 서버에서 Person 표시 이름을 가족 이름 또는 이메일과 일치시키는 단일 Person입니다. 본인 계정 조회 시 비우세요. 현재 서버에서는 구성원 직접 입력을 권장합니다.",
-              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요."
+              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요.",
+              "dawarich_verify_ssl": "서버 TLS 인증서를 검증합니다. 자체 서명 인증서를 쓰는 신뢰할 수 있는 사설 서버에서만 끄고, 공용 서버나 올바른 인증서가 있는 서버에서는 켜는 것을 권장합니다.",
+              "dawarich_request_timeout": "각 API 응답을 기다리는 최대 시간(5–60초)입니다. 시간 초과 시 연결 오류를 기록하고 다음 예약 조회에서 다시 시도합니다.",
+              "dawarich_include_visits": "본인 계정 위치 조회가 성공한 뒤 최근 방문을 별도로 가져옵니다. 끄면 API 호출은 줄고 위치와 이력은 계속 갱신됩니다.",
+              "dawarich_visit_lookback_days": "최근 위치보다 앞선 방문을 찾을 기간(1–365일)입니다. 기간이 길수록 더 많은 방문 페이지를 읽을 수 있습니다."
             }
           },
           "local_presence_settings": {
@@ -1004,8 +1022,8 @@
               "presence_wifi_ssids": "대소문자를 구분하는 정확한 SSID를 한 줄에 하나씩 입력하세요. 선택한 sensor 엔티티에만 적용하며 하나라도 일치하면 집으로 판단합니다. Wi-Fi 비밀번호는 입력하지 마세요.",
               "presence_ble_addresses": "고정 BLE MAC 주소를 한 줄에 하나씩 입력하세요. 지정한 기기만 추적합니다. 주소가 주기적으로 바뀌는 기기는 다른 통합에서 안정적인 식별자를 제공해야 합니다.",
               "presence_ble_sources": "Home Assistant 원격 스캐너 소스 ID를 한 줄에 하나씩 입력하세요. AprilBrother component-ab-gateway의 기본값은 ab_gateway입니다. MQTT 토픽이나 개별 게이트웨이 MAC이 아닙니다. 게이트웨이 통합은 별도로 설정하세요.",
-              "presence_ble_timeout": "RSSI 기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 5초마다 확인하며 캐시를 다시 읽는 것으로 재실 시간이 연장되지 않습니다.",
-              "presence_ble_min_rssi": "이 값 이상의 dBm 광고를 가까운 기기로 인정합니다(-127–0). 약한 광고는 부재 타이머를 연장하지 않습니다. RSSI를 거리로 환산하지 않습니다."
+              "presence_ble_timeout": "기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 90–180초부터 시작하고 광고가 드물거나 수신 범위가 약하면 늘리며, 빠른 외출 감지가 꼭 필요할 때만 줄이세요. 5초마다 확인하며 캐시를 다시 읽어도 재실 시간이 연장되지 않습니다.",
+              "presence_ble_min_rssi": "이 dBm 값 이상인 광고만 가까운 기기로 인정합니다(-127–0). 0에 가까울수록 더 강한 신호가 필요합니다. -85~-90 dBm부터 시작하고 방 단위 근접 감지는 -70~-80 dBm, 넓은 범위는 -95~-100 dBm 정도를 사용하세요. 벽, 인체 차폐, 휴대폰 방향과 게이트웨이 위치에 따라 RSSI가 달라지므로 실제 관측값으로 보정해야 하며 거리 측정값은 아닙니다."
             }
           }
         }
@@ -1151,13 +1169,13 @@
       },
       "unit_change": {
         "title": "단위 변경 후 기존 값 처리",
-        "description": "엔티티: {entity_id}. 설정 단위: {old_unit} → {new_unit}. 저장된 통계 단위: {statistics_unit}. 이력 유지는 저장된 데이터를 수정하지 않습니다. 표기 수정은 이미 새 단위로 측정된 기존 통계의 숫자를 유지하고 단위만 수정합니다. 환산은 모든 단기·장기 통계 수치를 새 단위로 환산합니다. 원시 상태 이력, 현재값, 복원값, 템플릿, 역치는 변경하지 않으며 새 설정은 이후 측정에 적용됩니다. 서로 다른 단위가 이력에 섞여 있으면 표기 수정을 하지 마세요. 기간별 별도 보정이 필요합니다. 통계가 없거나 템플릿 단위를 확인할 수 없거나 엔티티 ID가 바뀌면 통계 변경을 제공하지 않습니다. '?'는 단위 확인 실패입니다.",
+        "description": "엔티티: {entity_id}. 일반적으로 저장하면 Virtual Entity 단위가 {old_unit}에서 {new_unit}(으)로 바뀝니다. 저장된 통계의 현재 단위는 {statistics_unit}입니다.\n\n• 기존 이력 유지: Virtual Entity → {new_unit}; 통계 숫자와 단위는 그대로 유지합니다.\n• 통계 단위 복구: Virtual Entity → {statistics_unit}; 선택한 단위/템플릿 단위를 바꾸고 통계는 그대로 유지합니다.\n• 표기 수정: Virtual Entity·통계 단위 → {new_unit}; 숫자는 그대로 유지합니다. 과거 숫자가 이미 {new_unit} 단위일 때만 사용하세요.\n• 환산: Virtual Entity·통계 단위 → {new_unit}; 모든 단기·장기 통계 숫자를 환산합니다.\n\n원시 상태 이력, 현재값·복원값, 템플릿, 역치는 어떤 선택에서도 바뀌지 않습니다. 저장된 Virtual Entity 단위는 이후 측정값에 적용됩니다. '?'는 선택한 단위/템플릿 단위를 확인할 수 없다는 뜻입니다.",
         "data": {
           "history_policy": "기존 통계 처리",
           "confirm_history": "이 엔티티의 전체 통계 변경 확인"
         },
         "data_description": {
-          "history_policy": "센서 단위 복구는 정규화된 기존 통계 단위를 센서에 적용하며 통계를 보존합니다. 새 단위가 없으면 기본 선택됩니다. 이력 유지는 센서를 고치지 않습니다. 표기 수정은 숫자 환산이 아니며 환산은 Home Assistant 단위 변환을 사용합니다.",
+          "history_policy": "기존 이력 유지: 엔티티 단위는 선택한 단위/템플릿 단위가 되고 통계는 바뀌지 않습니다. 통계 단위 복구: 엔티티 단위는 정규화된 저장 통계 단위가 되고 통계는 바뀌지 않습니다. 표기 수정: 엔티티와 통계 단위가 선택한 단위/템플릿 단위가 되지만 숫자는 바뀌지 않습니다. 환산: 엔티티와 통계 단위가 선택한 단위/템플릿 단위가 되며 Home Assistant가 통계 숫자를 환산합니다. 선택한 단위/템플릿 단위가 없으면 통계 단위 복구가 기본 선택됩니다.",
           "confirm_history": "표기 수정·환산 시 필수입니다. 특정 기간이 아닌 전체 통계에 적용됩니다. 설정을 변경하지 않으려면 flow를 취소하세요."
         }
       },
@@ -1264,6 +1282,7 @@
               "light_ignore_unresponsive": "응답 없는 전구 무시",
               "sensor_unit": "센서 단위",
               "climate_temperature_step": "온도 조절 간격",
+              "boiler_room_temperature_entity_id": "실내 온도 센서",
               "media_player_source_priority": "미디어 소스 우선순위",
               "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
               "air_quality_per_source": "소스별 1:1 공기질 센서 생성",
@@ -1285,6 +1304,7 @@
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
               "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
+              "boiler_room_temperature_entity_id": "가상 climate의 현재 실내온도로 쓸 선택 항목입니다. 실제 보일러 온수 온도는 attribute로 유지됩니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
               "configure_air_quality_rules": "PM1.0·PM2.5·PM4·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·N₂O·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 순간값 표시용이며 공식 건강 기준이나 노출시간 평가가 아닙니다. good은 안전을 보증하지 않습니다. PM4는 PM2.5 구간을 차용한 표시용 참고값, N₂O는 직업 노출 기준과 무관한 자체 표시 구간을 사용합니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
               "air_quality_per_source": "종합 공기질과 원본 센서를 유지하면서 이 Device에 각 소스만 판정하는 등급 센서를 추가합니다. 각 센서의 자동 프로필을 사용하며 미지원 측정값은 unknown입니다. Matterbridge Air Quality Regex와 endpoint 그룹 설정은 별도로 필요합니다.",
@@ -1508,13 +1528,13 @@
               "current_humidity": "현재 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "current_temperature": "현재 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "hvac_action": "현재 HVAC 동작에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
-              "max_humidity": "최고 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
+              "max_humidity": "최고 습도에 적용할 Jinja 템플릿입니다. 새 가습·제습기의 기본값은 70%이며, 상수 또는 동적 Jinja 값으로 변경할 수 있습니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "max_temp": "최고 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
-              "min_humidity": "최저 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
+              "min_humidity": "최저 습도에 적용할 Jinja 템플릿입니다. 새 가습·제습기의 기본값은 35%이며, 상수 또는 동적 Jinja 값으로 변경할 수 있습니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "min_temp": "최저 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "mode": "현재 가습기 모드에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "target_humidity": "목표 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
-              "target_humidity_step": "습도 조절 간격에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
+              "target_humidity_step": "습도 조절 간격 Jinja 템플릿입니다. 새 가습·제습기의 기본값은 5%이며 10% 간격은 상수 10을 반환하는 Jinja를 입력하세요. 원본이 제공하는 간격이 있으면 사용하며 직접 수정한 값은 보존됩니다.",
               "target_temperature": "목표 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "target_temperature_high": "목표 온도 상한에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "target_temperature_low": "목표 온도 하한에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
@@ -1699,7 +1719,11 @@
               "dawarich_history_limit": "이력 위치 수",
               "dawarich_member": "가족 구성원 이메일 또는 사용자 ID",
               "dawarich_person": "기존 가족 Person",
-              "dawarich_test_connection": "저장 전 연결 테스트"
+              "dawarich_test_connection": "저장 전 연결 테스트",
+              "dawarich_verify_ssl": "TLS 인증서 검증",
+              "dawarich_request_timeout": "요청 시간 제한",
+              "dawarich_include_visits": "최근 방문 조회",
+              "dawarich_visit_lookback_days": "방문 조회 기간"
             },
             "data_description": {
               "dawarich_enabled": "이 트래커의 Dawarich 조회를 켭니다. 끄고 저장하면 저장된 Dawarich 설정을 제거합니다.",
@@ -1710,7 +1734,11 @@
               "dawarich_history_limit": "dawarich_history에 보관할 최근 위치 요약 수(1–100)입니다. 가족 모드는 현재 위치만 제공합니다.",
               "dawarich_member": "선택 사항인 정확한 Dawarich 가족 이메일 또는 사용자 ID입니다. Person보다 우선합니다. 둘 다 비우면 API 키 소유자의 위치를 조회합니다. 가족 위치 공유가 켜져 있어야 합니다.",
               "dawarich_person": "구형 서버에서 Person 표시 이름을 가족 이름 또는 이메일과 일치시키는 단일 Person입니다. 본인 계정 조회 시 비우세요. 현재 서버에서는 구성원 직접 입력을 권장합니다.",
-              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요."
+              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요.",
+              "dawarich_verify_ssl": "서버 TLS 인증서를 검증합니다. 자체 서명 인증서를 쓰는 신뢰할 수 있는 사설 서버에서만 끄고, 공용 서버나 올바른 인증서가 있는 서버에서는 켜는 것을 권장합니다.",
+              "dawarich_request_timeout": "각 API 응답을 기다리는 최대 시간(5–60초)입니다. 시간 초과 시 연결 오류를 기록하고 다음 예약 조회에서 다시 시도합니다.",
+              "dawarich_include_visits": "본인 계정 위치 조회가 성공한 뒤 최근 방문을 별도로 가져옵니다. 끄면 API 호출은 줄고 위치와 이력은 계속 갱신됩니다.",
+              "dawarich_visit_lookback_days": "최근 위치보다 앞선 방문을 찾을 기간(1–365일)입니다. 기간이 길수록 더 많은 방문 페이지를 읽을 수 있습니다."
             }
           },
           "local_presence_settings": {
@@ -1731,8 +1759,8 @@
               "presence_wifi_ssids": "대소문자를 구분하는 정확한 SSID를 한 줄에 하나씩 입력하세요. 선택한 sensor 엔티티에만 적용하며 하나라도 일치하면 집으로 판단합니다. Wi-Fi 비밀번호는 입력하지 마세요.",
               "presence_ble_addresses": "고정 BLE MAC 주소를 한 줄에 하나씩 입력하세요. 지정한 기기만 추적합니다. 주소가 주기적으로 바뀌는 기기는 다른 통합에서 안정적인 식별자를 제공해야 합니다.",
               "presence_ble_sources": "Home Assistant 원격 스캐너 소스 ID를 한 줄에 하나씩 입력하세요. AprilBrother component-ab-gateway의 기본값은 ab_gateway입니다. MQTT 토픽이나 개별 게이트웨이 MAC이 아닙니다. 게이트웨이 통합은 별도로 설정하세요.",
-              "presence_ble_timeout": "RSSI 기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 5초마다 확인하며 캐시를 다시 읽는 것으로 재실 시간이 연장되지 않습니다.",
-              "presence_ble_min_rssi": "이 값 이상의 dBm 광고를 가까운 기기로 인정합니다(-127–0). 약한 광고는 부재 타이머를 연장하지 않습니다. RSSI를 거리로 환산하지 않습니다."
+              "presence_ble_timeout": "기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 90–180초부터 시작하고 광고가 드물거나 수신 범위가 약하면 늘리며, 빠른 외출 감지가 꼭 필요할 때만 줄이세요. 5초마다 확인하며 캐시를 다시 읽어도 재실 시간이 연장되지 않습니다.",
+              "presence_ble_min_rssi": "이 dBm 값 이상인 광고만 가까운 기기로 인정합니다(-127–0). 0에 가까울수록 더 강한 신호가 필요합니다. -85~-90 dBm부터 시작하고 방 단위 근접 감지는 -70~-80 dBm, 넓은 범위는 -95~-100 dBm 정도를 사용하세요. 벽, 인체 차폐, 휴대폰 방향과 게이트웨이 위치에 따라 RSSI가 달라지므로 실제 관측값으로 보정해야 하며 거리 측정값은 아닙니다."
             }
           }
         }
@@ -1792,7 +1820,7 @@
         },
         "data_description": {
           "helper_update_mode": "자동 판별은 직접 수정한 template을 보존하고 수정하지 않은 helper만 다시 만듭니다. 현재 상태 유지는 helper를 사용하지 않고 모든 template을 그대로 둡니다. 강제 적용은 생성된 template과 custom template을 모두 선택한 source 기준으로 교체합니다.",
-          "boiler_temperature_calibration_template": "보일러 climate가 감지된 경우에만 쓰는 수식입니다. 가상 climate의 실내 요청값 temperature를 보일러 온수 설정값으로 변환합니다. 제안 수식은 실내→온수 25→40, 27→44, 30→47, 33→50°C 기준을 유지하고, 실내온도가 목표보다 낮을 때 차이 1°C당 온수 1.5°C를 더하되 추가 가열은 8°C로 제한합니다. 이전의 단순 직접 전달 기본식은 이 화면에서 자동으로 새 수식으로 제안하며, 그 밖의 저장된 수식은 사용자가 만든 수식으로 보고 그대로 보존합니다. 계산은 set_temperature 명령 시에만 수행되며 주기적으로 자동 재전송하지 않습니다. current_temperature에는 실제 실내 센서 값이 필요하며 온수 센서 값을 사용하면 안 됩니다. 1.5와 8은 조정 가능한 시작값이며 난방 지연이나 잔열을 예측하는 제어기는 아닙니다."
+          "boiler_temperature_calibration_template": "보일러 climate가 감지된 경우에만 쓰는 수식입니다. 가상 climate의 실내 요청값 temperature를 보일러 온수 설정값으로 변환합니다. 제안 수식은 실내→온수 25→40, 27→44, 30→47, 33→50°C 기준을 유지하고, 실내온도가 목표보다 낮을 때 차이 1°C당 온수 1.5°C를 더하되 추가 가열은 8°C로 제한합니다. 이전의 단순 직접 전달 기본식은 이 화면에서 자동으로 새 수식으로 제안하며, 그 밖의 저장된 수식은 사용자가 만든 수식으로 보고 그대로 보존합니다. 보일러가 보고한 온수 목표는 가장 가까운 실내 목표로 역환산해 표시하므로, 27°C 요청이 52°C로 변환되어도 화면에는 27°C로 유지됩니다. 계산은 set_temperature 명령 시에만 수행되며 주기적으로 자동 재전송하지 않습니다. current_temperature에는 실제 실내 센서 값이 필요하며 온수 센서 값을 사용하면 안 됩니다. 1.5와 8은 조정 가능한 시작값이며 난방 지연이나 잔열을 예측하는 제어기는 아닙니다."
         }
       },
       "entity_helper": {
@@ -1974,6 +2002,7 @@
               "light_ignore_unresponsive": "응답 없는 전구 무시",
               "sensor_unit": "센서 단위",
               "climate_temperature_step": "온도 조절 간격",
+              "boiler_room_temperature_entity_id": "실내 온도 센서",
               "media_player_source_priority": "미디어 소스 우선순위",
               "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
               "air_quality_per_source": "소스별 1:1 공기질 센서 생성",
@@ -1995,6 +2024,7 @@
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
               "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
               "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
+              "boiler_room_temperature_entity_id": "가상 climate의 현재 실내온도로 쓸 선택 항목입니다. 실제 보일러 온수 온도는 attribute로 유지됩니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
               "configure_air_quality_rules": "PM1.0·PM2.5·PM4·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·N₂O·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 순간값 표시용이며 공식 건강 기준이나 노출시간 평가가 아닙니다. good은 안전을 보증하지 않습니다. PM4는 PM2.5 구간을 차용한 표시용 참고값, N₂O는 직업 노출 기준과 무관한 자체 표시 구간을 사용합니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
               "air_quality_per_source": "종합 공기질과 원본 센서를 유지하면서 이 Device에 각 소스만 판정하는 등급 센서를 추가합니다. 각 센서의 자동 프로필을 사용하며 미지원 측정값은 unknown입니다. Matterbridge Air Quality Regex와 endpoint 그룹 설정은 별도로 필요합니다.",
@@ -2218,13 +2248,13 @@
               "current_humidity": "현재 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "current_temperature": "현재 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "hvac_action": "현재 HVAC 동작에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
-              "max_humidity": "최고 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
+              "max_humidity": "최고 습도에 적용할 Jinja 템플릿입니다. 새 가습·제습기의 기본값은 70%이며, 상수 또는 동적 Jinja 값으로 변경할 수 있습니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "max_temp": "최고 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
-              "min_humidity": "최저 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
+              "min_humidity": "최저 습도에 적용할 Jinja 템플릿입니다. 새 가습·제습기의 기본값은 35%이며, 상수 또는 동적 Jinja 값으로 변경할 수 있습니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "min_temp": "최저 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "mode": "현재 가습기 모드에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "target_humidity": "목표 습도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
-              "target_humidity_step": "습도 조절 간격에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
+              "target_humidity_step": "습도 조절 간격 Jinja 템플릿입니다. 새 가습·제습기의 기본값은 5%이며 10% 간격은 상수 10을 반환하는 Jinja를 입력하세요. 원본이 제공하는 간격이 있으면 사용하며 직접 수정한 값은 보존됩니다.",
               "target_temperature": "목표 온도에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "target_temperature_high": "목표 온도 상한에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
               "target_temperature_low": "목표 온도 하한에 적용할 Jinja 템플릿입니다. 원본 선택 시 helper가 자동 생성되며 직접 수정한 값은 보존됩니다.",
@@ -2409,7 +2439,11 @@
               "dawarich_history_limit": "이력 위치 수",
               "dawarich_member": "가족 구성원 이메일 또는 사용자 ID",
               "dawarich_person": "기존 가족 Person",
-              "dawarich_test_connection": "저장 전 연결 테스트"
+              "dawarich_test_connection": "저장 전 연결 테스트",
+              "dawarich_verify_ssl": "TLS 인증서 검증",
+              "dawarich_request_timeout": "요청 시간 제한",
+              "dawarich_include_visits": "최근 방문 조회",
+              "dawarich_visit_lookback_days": "방문 조회 기간"
             },
             "data_description": {
               "dawarich_enabled": "이 트래커의 Dawarich 조회를 켭니다. 끄고 저장하면 저장된 Dawarich 설정을 제거합니다.",
@@ -2420,7 +2454,11 @@
               "dawarich_history_limit": "dawarich_history에 보관할 최근 위치 요약 수(1–100)입니다. 가족 모드는 현재 위치만 제공합니다.",
               "dawarich_member": "선택 사항인 정확한 Dawarich 가족 이메일 또는 사용자 ID입니다. Person보다 우선합니다. 둘 다 비우면 API 키 소유자의 위치를 조회합니다. 가족 위치 공유가 켜져 있어야 합니다.",
               "dawarich_person": "구형 서버에서 Person 표시 이름을 가족 이름 또는 이메일과 일치시키는 단일 Person입니다. 본인 계정 조회 시 비우세요. 현재 서버에서는 구성원 직접 입력을 권장합니다.",
-              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요."
+              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요.",
+              "dawarich_verify_ssl": "서버 TLS 인증서를 검증합니다. 자체 서명 인증서를 쓰는 신뢰할 수 있는 사설 서버에서만 끄고, 공용 서버나 올바른 인증서가 있는 서버에서는 켜는 것을 권장합니다.",
+              "dawarich_request_timeout": "각 API 응답을 기다리는 최대 시간(5–60초)입니다. 시간 초과 시 연결 오류를 기록하고 다음 예약 조회에서 다시 시도합니다.",
+              "dawarich_include_visits": "본인 계정 위치 조회가 성공한 뒤 최근 방문을 별도로 가져옵니다. 끄면 API 호출은 줄고 위치와 이력은 계속 갱신됩니다.",
+              "dawarich_visit_lookback_days": "최근 위치보다 앞선 방문을 찾을 기간(1–365일)입니다. 기간이 길수록 더 많은 방문 페이지를 읽을 수 있습니다."
             }
           },
           "local_presence_settings": {
@@ -2441,8 +2479,8 @@
               "presence_wifi_ssids": "대소문자를 구분하는 정확한 SSID를 한 줄에 하나씩 입력하세요. 선택한 sensor 엔티티에만 적용하며 하나라도 일치하면 집으로 판단합니다. Wi-Fi 비밀번호는 입력하지 마세요.",
               "presence_ble_addresses": "고정 BLE MAC 주소를 한 줄에 하나씩 입력하세요. 지정한 기기만 추적합니다. 주소가 주기적으로 바뀌는 기기는 다른 통합에서 안정적인 식별자를 제공해야 합니다.",
               "presence_ble_sources": "Home Assistant 원격 스캐너 소스 ID를 한 줄에 하나씩 입력하세요. AprilBrother component-ab-gateway의 기본값은 ab_gateway입니다. MQTT 토픽이나 개별 게이트웨이 MAC이 아닙니다. 게이트웨이 통합은 별도로 설정하세요.",
-              "presence_ble_timeout": "RSSI 기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 5초마다 확인하며 캐시를 다시 읽는 것으로 재실 시간이 연장되지 않습니다.",
-              "presence_ble_min_rssi": "이 값 이상의 dBm 광고를 가까운 기기로 인정합니다(-127–0). 약한 광고는 부재 타이머를 연장하지 않습니다. RSSI를 거리로 환산하지 않습니다."
+              "presence_ble_timeout": "기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 90–180초부터 시작하고 광고가 드물거나 수신 범위가 약하면 늘리며, 빠른 외출 감지가 꼭 필요할 때만 줄이세요. 5초마다 확인하며 캐시를 다시 읽어도 재실 시간이 연장되지 않습니다.",
+              "presence_ble_min_rssi": "이 dBm 값 이상인 광고만 가까운 기기로 인정합니다(-127–0). 0에 가까울수록 더 강한 신호가 필요합니다. -85~-90 dBm부터 시작하고 방 단위 근접 감지는 -70~-80 dBm, 넓은 범위는 -95~-100 dBm 정도를 사용하세요. 벽, 인체 차폐, 휴대폰 방향과 게이트웨이 위치에 따라 RSSI가 달라지므로 실제 관측값으로 보정해야 하며 거리 측정값은 아닙니다."
             }
           }
         }
@@ -2885,7 +2923,11 @@
               "dawarich_history_limit": "이력 위치 수",
               "dawarich_member": "가족 구성원 이메일 또는 사용자 ID",
               "dawarich_person": "기존 가족 Person",
-              "dawarich_test_connection": "저장 전 연결 테스트"
+              "dawarich_test_connection": "저장 전 연결 테스트",
+              "dawarich_verify_ssl": "TLS 인증서 검증",
+              "dawarich_request_timeout": "요청 시간 제한",
+              "dawarich_include_visits": "최근 방문 조회",
+              "dawarich_visit_lookback_days": "방문 조회 기간"
             },
             "data_description": {
               "dawarich_enabled": "이 트래커의 Dawarich 조회를 켭니다. 끄고 저장하면 저장된 Dawarich 설정을 제거합니다.",
@@ -2896,7 +2938,11 @@
               "dawarich_history_limit": "dawarich_history에 보관할 최근 위치 요약 수(1–100)입니다. 가족 모드는 현재 위치만 제공합니다.",
               "dawarich_member": "선택 사항인 정확한 Dawarich 가족 이메일 또는 사용자 ID입니다. Person보다 우선합니다. 둘 다 비우면 API 키 소유자의 위치를 조회합니다. 가족 위치 공유가 켜져 있어야 합니다.",
               "dawarich_person": "구형 서버에서 Person 표시 이름을 가족 이름 또는 이메일과 일치시키는 단일 Person입니다. 본인 계정 조회 시 비우세요. 현재 서버에서는 구성원 직접 입력을 권장합니다.",
-              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요."
+              "dawarich_test_connection": "저장 전에 인증과 사용 가능한 위치를 확인합니다. 데이터를 업로드하지 않습니다. 서버가 오프라인일 때 저장하려면 끄세요.",
+              "dawarich_verify_ssl": "서버 TLS 인증서를 검증합니다. 자체 서명 인증서를 쓰는 신뢰할 수 있는 사설 서버에서만 끄고, 공용 서버나 올바른 인증서가 있는 서버에서는 켜는 것을 권장합니다.",
+              "dawarich_request_timeout": "각 API 응답을 기다리는 최대 시간(5–60초)입니다. 시간 초과 시 연결 오류를 기록하고 다음 예약 조회에서 다시 시도합니다.",
+              "dawarich_include_visits": "본인 계정 위치 조회가 성공한 뒤 최근 방문을 별도로 가져옵니다. 끄면 API 호출은 줄고 위치와 이력은 계속 갱신됩니다.",
+              "dawarich_visit_lookback_days": "최근 위치보다 앞선 방문을 찾을 기간(1–365일)입니다. 기간이 길수록 더 많은 방문 페이지를 읽을 수 있습니다."
             }
           },
           "local_presence_settings": {
@@ -2917,8 +2963,8 @@
               "presence_wifi_ssids": "대소문자를 구분하는 정확한 SSID를 한 줄에 하나씩 입력하세요. 선택한 sensor 엔티티에만 적용하며 하나라도 일치하면 집으로 판단합니다. Wi-Fi 비밀번호는 입력하지 마세요.",
               "presence_ble_addresses": "고정 BLE MAC 주소를 한 줄에 하나씩 입력하세요. 지정한 기기만 추적합니다. 주소가 주기적으로 바뀌는 기기는 다른 통합에서 안정적인 식별자를 제공해야 합니다.",
               "presence_ble_sources": "Home Assistant 원격 스캐너 소스 ID를 한 줄에 하나씩 입력하세요. AprilBrother component-ab-gateway의 기본값은 ab_gateway입니다. MQTT 토픽이나 개별 게이트웨이 MAC이 아닙니다. 게이트웨이 통합은 별도로 설정하세요.",
-              "presence_ble_timeout": "RSSI 기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 5초마다 확인하며 캐시를 다시 읽는 것으로 재실 시간이 연장되지 않습니다.",
-              "presence_ble_min_rssi": "이 값 이상의 dBm 광고를 가까운 기기로 인정합니다(-127–0). 약한 광고는 부재 타이머를 연장하지 않습니다. RSSI를 거리로 환산하지 않습니다."
+              "presence_ble_timeout": "기준을 만족한 마지막 광고 후 외출로 판단할 시간(10–3600초)입니다. 90–180초부터 시작하고 광고가 드물거나 수신 범위가 약하면 늘리며, 빠른 외출 감지가 꼭 필요할 때만 줄이세요. 5초마다 확인하며 캐시를 다시 읽어도 재실 시간이 연장되지 않습니다.",
+              "presence_ble_min_rssi": "이 dBm 값 이상인 광고만 가까운 기기로 인정합니다(-127–0). 0에 가까울수록 더 강한 신호가 필요합니다. -85~-90 dBm부터 시작하고 방 단위 근접 감지는 -70~-80 dBm, 넓은 범위는 -95~-100 dBm 정도를 사용하세요. 벽, 인체 차폐, 휴대폰 방향과 게이트웨이 위치에 따라 RSSI가 달라지므로 실제 관측값으로 보정해야 하며 거리 측정값은 아닙니다."
             }
           }
         }
@@ -3037,10 +3083,10 @@
     },
     "unit_history_policy": {
       "options": {
-        "restore": "통계의 원래 단위로 센서 복구 (이력 보존)",
-        "keep": "기존 이력 유지",
-        "relabel": "통계 단위 표기 수정 (숫자 유지)",
-        "convert": "통계 수치를 새 단위로 환산"
+        "restore": "저장 통계 단위로 Virtual Entity 설정 (이력 보존)",
+        "keep": "선택 단위로 Virtual Entity 설정, 통계는 유지",
+        "relabel": "선택 단위로 설정, 통계 단위 표기만 수정",
+        "convert": "선택 단위로 설정, 통계 수치 환산"
       }
     },
     "sensor_unit": {

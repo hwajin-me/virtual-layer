@@ -578,6 +578,15 @@ async def test_multiple_light_sources_create_live_average_brightness_sensor(hass
     sensor._apply_templates()
 
     assert float(sensor.native_value) == pytest.approx(50.0)
+    for power, attributes, expected in [
+        ("off", {"brightness": 255}, 0.0),
+        ("off", {}, 0.0),
+        ("on", {"brightness": 255}, 50.0),
+    ]:
+        hass.states.async_set("light.first", power, attributes)
+        sensor._apply_templates()
+        assert sensor.available is True
+        assert float(sensor.native_value) == pytest.approx(expected)
     hass.states.async_set("light.second", "on", {})
     sensor._apply_templates()
     assert float(sensor.native_value) == pytest.approx(100.0)
@@ -964,7 +973,7 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
     assert result["errors"] == {}
     defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "sensor"
-    assert defaults[CONF_INITIAL_VALUE] == "12.5"
+    assert defaults[CONF_INITIAL_VALUE] == "0"
     assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
         "class": "energy",
         "unit_of_measurement": "kWh",
@@ -1469,7 +1478,7 @@ async def test_options_flow_camera_alias_tracks_native_camera_states(hass):
     defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
 
     assert defaults[CONF_PLATFORM] == "camera"
-    assert defaults[CONF_INITIAL_VALUE] == CameraState.RECORDING
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert "access_token" not in _yaml_value(defaults[CONF_ATTRIBUTES_JSON] or "{}")
     assert "access_token" not in _yaml_value(
         defaults[CONF_ATTRIBUTE_TEMPLATES_JSON] or "{}"
@@ -1690,7 +1699,7 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
     defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "climate"
     assert defaults[CONF_ENTITY_NAME] == "Boiler"
-    assert defaults[CONF_INITIAL_VALUE] == "heat"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["hvac_modes"] == (
         "{{ ['off', 'heat'] }}"
     )
@@ -1751,7 +1760,10 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
     assert boiler.hvac_modes == [HVACMode.OFF, HVACMode.HEAT]
     assert boiler.hvac_mode is HVACMode.HEAT
     assert boiler.current_temperature == 29.0
-    assert boiler.target_temperature == 26.0
+    # Source target temperatures are boiler-water temperatures. The virtual
+    # climate converts them back to room temperatures instead of showing the
+    # raw source value.
+    assert boiler.target_temperature == 22.0
 
     calls = []
 
@@ -1804,13 +1816,9 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
 
     with pytest.raises(ValueError, match="configured minimum and maximum"):
         await boiler.async_set_temperature(temperature=100)
-    # Command actions run before the virtual entity rejects an out-of-range
-    # room request; the generated boiler action still uses the calibration.
-    assert [(domain, service) for domain, service, _data in calls] == [
-        ("switch", "turn_on"),
-        ("climate", "set_temperature"),
-    ]
-    assert calls[1][2]["temperature"] == 35
+    # Validate against the room-temperature range before invoking a physical
+    # boiler action. The boiler-water range is deliberately not the UI range.
+    assert calls == []
 
 
 async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(hass):
@@ -1866,7 +1874,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
             {
                 CONF_NAME: "Combined climate",
                 ATTR_ENTITY_ID: "climate.combined",
-                CONF_INITIAL_VALUE: defaults[CONF_INITIAL_VALUE],
+                    CONF_INITIAL_VALUE: defaults[CONF_INITIAL_VALUE],
                 CONF_VALUE_TEMPLATE: defaults[CONF_VALUE_TEMPLATE],
                 CONF_AVAILABILITY_TEMPLATE: defaults[CONF_AVAILABILITY_TEMPLATE],
                 CONF_NATIVE_TEMPLATES: defaults[CONF_NATIVE_VALUE_TEMPLATES],
@@ -2790,7 +2798,7 @@ async def test_options_flow_persists_every_combined_climate_helper_template(hass
     assert set(defaults[CONF_NATIVE_VALUE_TEMPLATES]) == set(
         CLIMATE_NATIVE_TEMPLATE_PROPERTIES
     )
-    assert defaults[CONF_INITIAL_VALUE] == "heat_cool"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert (
         "average"
         not in defaults[CONF_NATIVE_VALUE_TEMPLATES]["target_temperature_high"]
@@ -5147,7 +5155,7 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_ENTITY_NAME] == "Kitchen Lamp"
     assert defaults[CONF_PLATFORM] == "light"
-    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert defaults["attributes_json"] == {"brightness": 128}
 
     result = await hass.config_entries.options.async_configure(
@@ -5291,7 +5299,7 @@ async def test_creation_flows_apply_the_selected_template_helper_policy(hass):
     defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_ENTITY_NAME] == "Room Temperature"
     assert defaults[CONF_PLATFORM] == "sensor"
-    assert defaults[CONF_INITIAL_VALUE] == "21.5"
+    assert defaults[CONF_INITIAL_VALUE] == "0"
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "sensor.room_temperature"
     assert defaults[CONF_ATTRIBUTES_JSON] == {"quality": "good"}
     assert defaults[CONF_VALUE_TEMPLATE] == ""
@@ -5741,15 +5749,15 @@ async def test_options_flow_combines_fans_and_routes_matter_speed_to_stepped_sou
     )
     defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
-    speed_action = actions["set_percentage"][0]
+    speed_action = actions["set_percentage"][-1]
     assert speed_action["target"] == {ATTR_ENTITY_ID: xiaomi_home}
-    assert actions["turn_on"][0]["target"] == {ATTR_ENTITY_ID: miot}
-    assert actions["set_preset_mode"][0]["target"] == {ATTR_ENTITY_ID: miot}
+    assert actions["turn_on"][0]["default"][0]["target"] == {ATTR_ENTITY_ID: miot}
+    assert actions["set_preset_mode"][0]["default"][0]["target"] == {ATTR_ENTITY_ID: miot}
     assert actions["oscillate"][0]["target"] == {ATTR_ENTITY_ID: miot}
     assert actions["set_direction"][0]["target"] == {ATTR_ENTITY_ID: miot}
     native = defaults[CONF_NATIVE_VALUE_TEMPLATES]
     assert repr(miot) in native["is_on"]
-    assert repr(miot) in native["preset_mode"]
+    assert repr(xiaomi_home) in native["preset_mode"]
     assert repr(miot) in native["oscillating"]
     assert repr(miot) in native["current_direction"]
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["speed_count"] == "{{ 3 }}"
@@ -6305,7 +6313,7 @@ async def test_options_flow_can_edit_all_climate_modes(hass):
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = _first_stored_entity(result)
-    assert entity[CONF_INITIAL_VALUE] == "heat"
+    assert entity[CONF_INITIAL_VALUE] == "off"
     saved_templates = entity[CONF_NATIVE_TEMPLATES]
     assert saved_templates["hvac_modes"] == "{{ ['off', 'heat', 'cool'] }}"
     assert saved_templates["fan_modes"] == "{{ ['auto', 'quiet'] }}"
@@ -6399,7 +6407,7 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
 
     defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "binary_sensor"
-    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == (
         "binary_sensor.front_door\nbinary_sensor.back_door"
     )
@@ -6432,7 +6440,7 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
         "motion_detection_logic": "all_active",
         "motion_hold_minutes": 5,
         ATTR_ENTITY_ID: "binary_sensor.all_doors_ready",
-        CONF_INITIAL_VALUE: "on",
+        CONF_INITIAL_VALUE: "off",
         CONF_INITIAL_AVAILABILITY: True,
         CONF_PERSISTENT: True,
         CONF_ICON_TEMPLATE: defaults[CONF_ICON_TEMPLATE],
@@ -6855,7 +6863,7 @@ async def test_options_flow_can_prefill_composite_sensor_with_average_template(h
 
     defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert defaults[CONF_PLATFORM] == "sensor"
-    assert defaults[CONF_INITIAL_VALUE] == "23.0"
+    assert defaults[CONF_INITIAL_VALUE] == "0"
     assert "float(none)" in defaults[CONF_VALUE_TEMPLATE]
     assert "set threshold = 3" in defaults[CONF_VALUE_TEMPLATE]
     assert "values | average" in defaults[CONF_VALUE_TEMPLATE]

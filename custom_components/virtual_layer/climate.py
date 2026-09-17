@@ -868,12 +868,44 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             raise ValueError(
                 "Temperature must be within the configured minimum and maximum"
             )
+        if math.isclose(
+            self._attr_target_temperature_step,
+            0.5,
+            rel_tol=0,
+            abs_tol=1e-9,
+        ):
+            # Matter climate controls expose half-degree setpoints.  Never
+            # lower a requested setpoint while adapting it to that contract:
+            # a request such as 20.2 °C must become 20.5 °C, not 20.0 °C.
+            step_index = math.ceil(
+                ((temperature - self._attr_min_temp) / 0.5) - 1e-9
+            )
+            return round(
+                min(
+                    self._attr_max_temp,
+                    self._attr_min_temp + (step_index * 0.5),
+                ),
+                12,
+            )
         return nearest_step_value(
             temperature,
             self._attr_min_temp,
             self._attr_max_temp,
             self._attr_target_temperature_step,
         )
+
+    def _command_service_data(self, command, method, args, kwargs) -> dict:
+        """Use the same Matter setpoint rounding for source actions."""
+        data = super()._command_service_data(command, method, args, kwargs)
+        if command == "set_temperature":
+            for field_name in (
+                ATTR_TEMPERATURE,
+                ATTR_TARGET_TEMPERATURE_HIGH,
+                ATTR_TARGET_TEMPERATURE_LOW,
+            ):
+                if field_name in data:
+                    data[field_name] = self._validate_temperature(data[field_name])
+        return data
 
     def _validate_humidity(self, humidity) -> float:
         """Validate and align a requested target humidity."""

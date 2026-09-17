@@ -580,7 +580,7 @@ async def test_fan_initial_options_and_mode_transitions_are_consistent():
 
     assert fan.state == "on"
     assert fan.preset_mode == "eco"
-    assert fan.percentage is None
+    assert fan.percentage == 25
     assert fan.oscillating is True
     assert fan.current_direction == "reverse"
 
@@ -589,7 +589,7 @@ async def test_fan_initial_options_and_mode_transitions_are_consistent():
     assert fan.preset_mode is None
 
     await fan.async_set_preset_mode("boost")
-    assert fan.percentage is None
+    assert fan.percentage == 50
     assert fan.preset_mode == "boost"
 
     await fan.async_turn_off()
@@ -1855,9 +1855,9 @@ def test_climate_and_humidifier_recover_non_finite_configured_ranges():
     assert climate.max_temp == 35
     assert climate.target_temperature_step == 0.1
     assert climate._attr_target_humidity_step is None
-    assert humidifier.min_humidity == 0
-    assert humidifier.max_humidity == 100
-    assert humidifier._attr_target_humidity_step is None
+    assert humidifier.min_humidity == 35
+    assert humidifier.max_humidity == 70
+    assert humidifier._attr_target_humidity_step == 5
 
 
 def test_fan_light_and_vacuum_reject_malformed_restored_attributes():

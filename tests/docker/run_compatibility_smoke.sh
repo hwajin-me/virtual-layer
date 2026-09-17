@@ -881,7 +881,54 @@ async def test_config_flow_create_modify_runtime():
             humidifier._native_templates_applied()
             assert humidifier.current_humidity == 100 - reading
             assert humidifier.target_humidity == 50
+            assert humidifier.target_humidity_step == 5
+            assert humidifier._validate_humidity(53) == 55
+            humidifier._apply_native_template_value("target_humidity_step", 10)
+            assert humidifier._validate_humidity(53) == 50
         print("Humidifier smoke passed: measured humidity independent of target range")
+        from custom_components.virtual_layer.config_flow import (
+            _fan_manual_preset_prefix, _xiaomi_fan_percentage_template,
+            _xiaomi_fan_number_value_template, _fan_manual_preset_actions,
+        )
+        from custom_components.virtual_layer.fan import FAN_SCHEMA, VirtualFan
+        from homeassistant.helpers.template import Template
+        from homeassistant.helpers import config_validation as cv
+        hass.states.async_set("fan.docker_preset", "on", {
+            "preset_modes": ["Auto", "Normal", "Favourite"], "preset_mode": "Auto",
+            "motor_speed": 2200,
+        })
+        hass.states.async_set("number.docker_speed", "1460", {"min": 300, "max": 2200, "step": 1})
+        assert Template(_fan_manual_preset_prefix("fan.docker_preset") + "{{ manual }}", hass).async_render() == "Normal"
+        assert Template(_xiaomi_fan_percentage_template("fan.docker_preset", "number.docker_speed", "rpm"), hass).async_render() == 61
+        for source_domain in ("number", "input_number"):
+            speed_id = f"{source_domain}.docker_live_speed"
+            speed_template = Template(_xiaomi_fan_percentage_template("fan.docker_preset", speed_id, "rpm"), hass)
+            for preset in ("Auto", "Normal", "Sleep", "Favourite"):
+                hass.states.async_set("fan.docker_preset", "on", {
+                    "preset_modes": ["Auto", "Normal", "Sleep", "Favourite"], "preset_mode": preset,
+                    "percentage": 35,
+                })
+                for rpm, expected in [(1460, 61), (2200, 100), (0, 0)]:
+                    hass.states.async_set(speed_id, str(rpm), {"min": 300, "max": 2200, "step": 1})
+                    assert speed_template.async_render() == expected
+                hass.states.async_set(speed_id, "unavailable")
+                assert speed_template.async_render() == 35
+        hass.states.async_set("number.docker_level", "3", {"min": 1, "max": 5, "step": 1})
+        assert Template(_xiaomi_fan_number_value_template("number.docker_level", "level"), hass).async_render({"percentage": 1}) == 1
+        fan = VirtualFan(FAN_SCHEMA({"name": "Docker preset speed", "speed_count": 5,
+                                    "modes": ["Auto", "Normal"]}), False)
+        fan.hass = hass
+        fan._create_state(fan._config)
+        fan._apply_native_template_value("percentage", 43)
+        fan._apply_native_template_value("preset_mode", "Auto")
+        fan._native_templates_applied()
+        assert (fan.percentage, fan.preset_mode) == (43, "Auto")
+        sequence = await fan._render_command_data_templates(
+            _fan_manual_preset_actions("fan.docker_preset"),
+            {"percentage": 60, "command": "set_percentage", "command_data": {"percentage": 60}},
+        )
+        cv.SCRIPT_SCHEMA(sequence)
+        print("Fan preset smoke passed: normal/favourite detection, RPM telemetry, bounded levels, native speed, action schema")
         from custom_components.virtual_layer import unit_history
         from homeassistant.components.recorder import get_instance
         from homeassistant.components.recorder.statistics import async_import_statistics, statistics_during_period

@@ -147,6 +147,9 @@ UNITS_OF_MEASUREMENT = {
     SensorDeviceClass.POWER_FACTOR: PERCENTAGE,  # power factor (no unit, min: -1.0, max: 1.0)
     SensorDeviceClass.REACTIVE_POWER: UnitOfReactivePower.VOLT_AMPERE_REACTIVE,  # reactive power (var)
     SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS: CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,  # µg/m³ of vocs
+    # Home Assistant does not currently expose a formaldehyde SensorDeviceClass,
+    # but Virtual Layer supports it as an air-quality measurement.
+    "formaldehyde": CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     SensorDeviceClass.VOLTAGE: UnitOfElectricPotential.VOLT,  # voltage (V)
     SensorDeviceClass.GAS: UnitOfVolume.CUBIC_METERS,  # gas (m³)
     SensorDeviceClass.MOISTURE: PERCENTAGE,  # moisture percentage

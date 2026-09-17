@@ -88,6 +88,8 @@ from .fan_options import (
     FAN_MODE_LIST_FIELD,
     FAN_NATIVE_ATTRIBUTE_FIELDS,
     extract_fan_options,
+    manual_preset_mode,
+    MANUAL_PRESET_PRIORITY,
     migrate_legacy_fan_attributes,
 )
 from .humidifier_options import (
@@ -209,6 +211,10 @@ CONF_DAWARICH_SETTINGS = "dawarich_settings"
 CONF_DAWARICH_ENABLED_INPUT = "dawarich_enabled"
 CONF_DAWARICH_MEMBER_INPUT = "dawarich_member"
 CONF_DAWARICH_TEST_INPUT = "dawarich_test_connection"
+CONF_DAWARICH_VERIFY_SSL_INPUT = "dawarich_verify_ssl"
+CONF_DAWARICH_REQUEST_TIMEOUT_INPUT = "dawarich_request_timeout"
+CONF_DAWARICH_INCLUDE_VISITS_INPUT = "dawarich_include_visits"
+CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT = "dawarich_visit_lookback_days"
 CONF_LOCAL_PRESENCE_SETTINGS = "local_presence_settings"
 CONF_PRESENCE_ENABLED_INPUT = "presence_enabled"
 CAMERA_SOURCE_ENTITY_OPTION = "source_entity"
@@ -217,19 +223,12 @@ HELPER_UPDATE_AUTO = "automatic"
 HELPER_UPDATE_KEEP = "keep_current"
 HELPER_UPDATE_FORCE = "force_helper"
 # A boiler's climate setpoint is normally water temperature, while the virtual
-# climate entity presents a room-temperature setpoint. The two segments retain
-# the practical reference points: room 25/27°C -> water 40/44°C and room
-# 30/33°C -> water 47/50°C. Slow hydronic systems also receive a bounded
-# recovery boost while the virtual room temperature is below its request.
+# climate entity presents a room-temperature setpoint.  This deterministic
+# curve maps 32–33°C room requests to about 50.5–52°C water; it deliberately
+# has no recovery boost, since a changing output makes the displayed target
+# impossible to interpret or reverse reliably.
 DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE = (
-    "{% set room_temperature = temperature | float(0) %} "
-    "{% set current_temperature = state_attr(entity_id, 'current_temperature') "
-    "| float(room_temperature) %} "
-    "{% set base_water_temperature = (room_temperature * 2 - 10) "
-    "if room_temperature <= 27 else room_temperature + 17 %} "
-    "{% set recovery_boost = [((room_temperature - current_temperature) * 1.5), "
-    "0] | max %} "
-    "{{ base_water_temperature + [recovery_boost, 8] | min }}"
+    "{{ (temperature | float(0)) * 1.5 + 2.5 }}"
 )
 LEGACY_DIRECT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE = "{{ temperature | float(0) }}"
 NUMERIC_OUTLIER_THRESHOLD = 3
@@ -351,9 +350,9 @@ DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES = {
         "mode": None,
         "current_humidity": None,
         "target_humidity": 50,
-        "min_humidity": 0,
-        "max_humidity": 100,
-        "target_humidity_step": 1,
+        "min_humidity": 35,
+        "max_humidity": 70,
+        "target_humidity_step": 5,
     },
 }
 
@@ -1118,6 +1117,35 @@ DEFAULT_INITIAL_VALUES = {
     "fan": "off",
     "humidifier": "off",
 }
+# A source's current state is useful for building live templates, but is not a
+# suitable initial state for a newly created virtual entity.  Until the first
+# source/template update arrives, start in a conservative, domain-valid state.
+# This deliberately contains no source-derived values.
+REFERENCE_INITIAL_VALUES = {
+    "alarm_control_panel": "disarmed",
+    "binary_sensor": "off",
+    "calendar": "off",
+    "camera": "off",
+    "climate": "off",
+    "cover": "closed",
+    "device_tracker": "not_home",
+    "fan": "off",
+    "humidifier": "off",
+    "lawn_mower": "idle",
+    "light": "off",
+    "lock": "locked",
+    "media_player": "idle",
+    "number": str(DEFAULT_NUMBER_MIN),
+    "sensor": "0",
+    "siren": "off",
+    "switch": "off",
+    "vacuum": "docked",
+    "valve": "closed",
+    "water_heater": "off",
+    # State-only domains which have a defined inactive state.
+    "conversation": "idle",
+    "assist_satellite": "idle",
+}
 CLIMATE_INITIAL_VALUES = (
     "off",
     "heat",
@@ -1564,6 +1592,37 @@ def _boiler_calibration_form_default(value: Any) -> Any:
     ):
         return DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
     return value
+
+
+def _boiler_target_temperature_template(
+    climate_entity_id: str,
+    calibration_template: str,
+) -> str:
+    """Convert a reported boiler-water target back to a room target.
+
+    The calibration formula is deliberately one-way (room request -> boiler
+    setpoint).  Search the virtual climate's normal 22–40°C range at its 0.1°C
+    resolution for the closest resulting boiler value.  This keeps a request
+    such as 27°C -> 52°C displayed as 27°C after the boiler reports 52°C,
+    without requiring users to maintain a second, inverse formula.
+    """
+    return (
+        "{% set boiler_target = state_attr(" + repr(climate_entity_id)
+        + ", 'temperature') | float(none) %}"
+        "{% set ns = namespace(value=none, distance=none) %}"
+        "{% for step in range(220, 401) %}"
+        "{% set temperature = step / 10 %}"
+        "{% set command_data = {'temperature': temperature} %}"
+        "{% set entity_id = this.entity_id if this is not none else '' %}"
+        "{% set calibrated %}" + calibration_template + "{% endset %}"
+        "{% set candidate = calibrated | float(none) %}"
+        "{% if boiler_target is not none and candidate is not none %}"
+        "{% set distance = (candidate - boiler_target) | abs %}"
+        "{% if ns.distance is none or distance < ns.distance %}"
+        "{% set ns.value = temperature %}{% set ns.distance = distance %}"
+        "{% endif %}{% endif %}{% endfor %}"
+        "{{ ns.value if ns.value is not none else none }}"
+    )
 
 
 def _helper_usage_schema(
@@ -2274,7 +2333,8 @@ def _sensor_conversion_choices(
         domain = entity_id.split(".", 1)[0]
         if domain == "sensor" and not (
             hass is not None
-            and aq_options.infer_quantity(hass.states.get(entity_id)) in aq_options.VOC_QUANTITIES
+            and aq_options.infer_quantity(hass.states.get(entity_id))
+            in (*aq_options.VOC_QUANTITIES, "formaldehyde")
         ):
             # A single sensor already copies its state, class, state class, and
             # unit through the normal helper path. Avoid forcing text, enum,
@@ -2291,8 +2351,12 @@ def _sensor_conversion_choices(
             transforms = ((1.0, 0.0),)
             if hass is not None and unit_attribute:
                 state = hass.states.get(entity_id)
-                if attribute == "state" and state is not None and aq_options.infer_quantity(state) in aq_options.VOC_QUANTITIES:
-                    device_class = aq_options.VOC_QUANTITIES[0]
+                if attribute == "state" and state is not None:
+                    quantity = aq_options.infer_quantity(state)
+                    if quantity in aq_options.VOC_QUANTITIES:
+                        device_class = aq_options.VOC_QUANTITIES[0]
+                    elif quantity == "formaldehyde":
+                        device_class = quantity
                 source_unit = (
                     state.attributes.get(unit_attribute) if state else None
                 ) or fallback_unit
@@ -2494,9 +2558,10 @@ def _sensor_conversion_value_expression(
         )
     if conversion == "brightness_percent":
         return (
+            f"0 if is_state({entity_id!r}, 'off') else "
             f"([0, ((({numeric_value}) / 255 * 100) | round(1)), 100] "
             f"| sort)[1] "
-            f"if ({numeric_value}) is not none else none"
+            f"if is_state({entity_id!r}, 'on') and ({numeric_value}) is not none else none"
         )
     if conversion == "fraction_percent":
         return (
@@ -2632,32 +2697,10 @@ def _apply_sensor_conversion_defaults(
         else tuple(attribute for _entity_id in entity_ids)
     )
     state = hass.states.get(entity_ids[0])
-    values = []
-    for source_id, source_attribute, transform in zip(
-        entity_ids, source_attributes, transforms, strict=True
-    ):
-        source_state = hass.states.get(source_id)
-        source_value = (
-            source_state.state
-            if source_state is not None and source_attribute == "state"
-            else source_state.attributes.get(source_attribute)
-            if source_state is not None
-            else None
-        )
-        if (
-            converted_value := _convert_sensor_numeric_value(
-                source_value, conversion, transform
-            )
-        ) is not None:
-            if device_class in aq_options.VOC_QUANTITIES and not math.isfinite(converted_value):
-                continue
-            values.append(round(converted_value, 12) if device_class in aq_options.VOC_QUANTITIES else converted_value)
-    value = (
-        values[0]
-        if len(entity_ids) == 1 and values
-        else _aggregate_sensor_conversion_values(values, aggregation)
-    )
-    result[CONF_INITIAL_VALUE] = str(value) if value is not None else "unknown"
+    # The generated template below tracks and converts source values.  Do not
+    # snapshot those values into the new entity's initial state: it can be
+    # visible before the first template render and must be a stable minimum.
+    result[CONF_INITIAL_VALUE] = "0"
     expressions = [
         _sensor_conversion_value_expression(
             entity_id, source_attribute, conversion, transform
@@ -2684,9 +2727,14 @@ def _apply_sensor_conversion_defaults(
             f"and state_attr({source_id!r}, 'device_class') in {[None, '', *aq_options.VOC_QUANTITIES]!r} else none)"
             for source_id, raw in zip(entity_ids, raw_expressions, strict=True)
         ]
+    availability_expressions = raw_expressions
+    if device_class in aq_options.VOC_QUANTITIES:
+        availability_expressions = expressions
+    elif conversion == "brightness_percent":
+        availability_expressions = [f"({expression})" for expression in expressions]
     result[CONF_AVAILABILITY_TEMPLATE] = (
         "{{ (["
-        + ", ".join(f"{expression} | is_number" for expression in (expressions if device_class in aq_options.VOC_QUANTITIES else raw_expressions))
+        + ", ".join(f"{expression} | is_number" for expression in availability_expressions)
         + "] | select | list | count) > 0 }}"
     )
     if len(expressions) > 1:
@@ -2706,7 +2754,8 @@ def _apply_sensor_conversion_defaults(
         source_class = state.attributes.get("device_class")
         if isinstance(source_class, str) and source_class.strip():
             options[CONF_CLASS] = source_class
-    if len(entity_ids) == 1 and unit_attribute and state is not None and device_class not in aq_options.VOC_QUANTITIES:
+    if (len(entity_ids) == 1 and unit_attribute and state is not None
+            and device_class not in (*aq_options.VOC_QUANTITIES, "formaldehyde")):
         unit = state.attributes.get(unit_attribute)
         if isinstance(unit, str) and unit.strip():
             unit_profile = _sensor_unit_conversion_profile((unit,))
@@ -3487,6 +3536,17 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
                 mode=selector.SelectSelectorMode.DROPDOWN,
             )
         )
+        room_sensor = _text_default(
+            defaults.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
+        ).strip()
+        room_sensor_marker = (
+            vol.Optional(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID, default=room_sensor)
+            if room_sensor
+            else vol.Optional(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
+        )
+        domain_schema[room_sensor_marker] = selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor"),
+        )
     elif platform == "media_player":
         source_entities = [
             entity_id
@@ -3535,6 +3595,14 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
             ),
             vol.Optional(CONF_DAWARICH_HISTORY_LIMIT_INPUT, default=defaults.get(CONF_DAWARICH_HISTORY_LIMIT_INPUT, 10)): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=1, max=100, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Optional(CONF_DAWARICH_INCLUDE_VISITS_INPUT, default=defaults.get(CONF_DAWARICH_INCLUDE_VISITS_INPUT, True)): selector.BooleanSelector(),
+            vol.Optional(CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT, default=defaults.get(CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT, 30)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=365, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Optional(CONF_DAWARICH_VERIFY_SSL_INPUT, default=defaults.get(CONF_DAWARICH_VERIFY_SSL_INPUT, False)): selector.BooleanSelector(),
+            vol.Optional(CONF_DAWARICH_REQUEST_TIMEOUT_INPUT, default=defaults.get(CONF_DAWARICH_REQUEST_TIMEOUT_INPUT, 15)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=5, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Optional(CONF_DAWARICH_MEMBER_INPUT, default=defaults.get(CONF_DAWARICH_MEMBER_INPUT, "")): selector.TextSelector(),
             vol.Optional(CONF_DAWARICH_PERSON_INPUT, default=selected_person): selector.EntitySelector(
@@ -4641,6 +4709,21 @@ def _build_entity_config(
         if calibration_template:
             entity[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] = calibration_template
 
+    if platform == "climate":
+        room_sensor = _text_default(
+            user_input.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
+        ).strip()
+        if room_sensor:
+            try:
+                room_sensor = cv.entity_id(room_sensor)
+            except vol.Invalid as err:
+                raise InvalidEntityReference(
+                    CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID
+                ) from err
+            if not room_sensor.startswith("sensor."):
+                raise InvalidEntityReference(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
+            entity[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] = room_sensor
+
     template_sources = _parse_template_sources(
         user_input.get(CONF_TEMPLATE_SOURCES_JSON),
     )
@@ -4731,6 +4814,31 @@ def _build_entity_config(
                 native_templates["target_temperature_step"] = _literal_template(
                     float(temperature_step)
                 )
+        if room_sensor := entity.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID):
+            native_templates["current_temperature"] = (
+                "{{ states(" + repr(room_sensor) + ") | float(none) }}"
+            )
+            template_sources.setdefault(
+                "boiler_room_temperature",
+                {ATTR_ENTITY_ID: room_sensor, CONF_ATTRIBUTE: "state"},
+            )
+            entity[CONF_TEMPLATE_SOURCES] = template_sources
+        if CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE in entity:
+            boiler_source = next(
+                (source for source in source_entities if source.startswith("climate.")),
+                None,
+            )
+            if boiler_source:
+                attribute_templates.setdefault(
+                    "boiler_water_target_temperature",
+                    "{{ state_attr(" + repr(boiler_source) + ", 'temperature') }}",
+                )
+                attribute_templates.setdefault(
+                    "boiler_water_current_temperature",
+                    "{{ state_attr(" + repr(boiler_source)
+                    + ", 'current_temperature') }}",
+                )
+            entity[CONF_ATTRIBUTE_TEMPLATES] = attribute_templates
     if platform == "air_quality":
         matter_air_quality = user_input.get(CONF_MATTER_AIR_QUALITY, "source")
         if matter_air_quality not in MATTER_AIR_QUALITY_LEVELS:
@@ -5091,6 +5199,10 @@ def _build_entity_config(
             CONF_DAWARICH_HISTORY_LIMIT: user_input.get(CONF_DAWARICH_HISTORY_LIMIT_INPUT, 10),
             CONF_DAWARICH_PERSON_ENTITY: person,
             CONF_DAWARICH_MEMBER: user_input.get(CONF_DAWARICH_MEMBER_INPUT, ""),
+            "verify_ssl": user_input.get(CONF_DAWARICH_VERIFY_SSL_INPUT, False),
+            "request_timeout": user_input.get(CONF_DAWARICH_REQUEST_TIMEOUT_INPUT, 15),
+            "include_visits": user_input.get(CONF_DAWARICH_INCLUDE_VISITS_INPUT, True),
+            "visit_lookback_days": user_input.get(CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT, 30),
         }
         try:
             entity[CONF_DAWARICH] = normalize_dawarich_config(dawarich_config)
@@ -5103,6 +5215,10 @@ def _build_entity_config(
                 CONF_DAWARICH_HISTORY_LIMIT: CONF_DAWARICH_HISTORY_LIMIT_INPUT,
                 CONF_DAWARICH_PERSON_ENTITY: CONF_DAWARICH_PERSON_INPUT,
                 CONF_DAWARICH_MEMBER: CONF_DAWARICH_MEMBER_INPUT,
+                "verify_ssl": CONF_DAWARICH_VERIFY_SSL_INPUT,
+                "request_timeout": CONF_DAWARICH_REQUEST_TIMEOUT_INPUT,
+                "include_visits": CONF_DAWARICH_INCLUDE_VISITS_INPUT,
+                "visit_lookback_days": CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT,
             }.get(err.path[0] if err.path else None, CONF_DAWARICH_ENABLED_INPUT)
             raise InvalidFieldValue(field, "invalid_dawarich_config") from None
     if platform == "device_tracker" and user_input.get(CONF_PRESENCE_CLASSIFICATION):
@@ -6491,6 +6607,39 @@ def _device_name_for_source_entity(hass, entity_id: str) -> str:
     return device_entry.name_by_user or device_entry.name or "Virtual Device"
 
 
+def _source_metadata_unit(state) -> str | None:
+    """Ignore unusable metadata; accept explicit unit suffixes in source names."""
+    if state.state in {"unknown", "unavailable"}:
+        return None
+    unit = aq_options.normalize_unit(state.attributes.get("native_unit_of_measurement") or state.attributes.get("unit_of_measurement"))
+    if unit and unit.lower() not in {"none", "null", "unknown", "unavailable"}:
+        return unit
+    # Missing units are not inferred from quantity alone (temperature may be
+    # Celsius or Fahrenheit). Only an explicit suffix is unambiguous.
+    name = str(state.attributes.get(ATTR_FRIENDLY_NAME) or "")
+    units = {unit for values in DEVICE_CLASS_UNITS.values() for unit in values if unit}
+    for candidate in sorted(units, key=lambda value: (-len(value), value)):
+        if re.search(r"(?:\s|\(|\[)" + re.escape(candidate) + r"[)\]]?\s*$", name):
+            return candidate
+    return None
+
+
+def _source_metadata_template(entity_ids, attribute, fallback=None, *, require_unit=False):
+    """Select live usable metadata without letting missing members win."""
+    return (
+        "{% set ns = namespace(value=none) %}{% for entity_id in "
+        + repr(entity_ids)
+        + " %}{% set value = state_attr(entity_id, " + repr(attribute) + ") %}"
+        + ("{% set value = state_attr(entity_id, 'native_unit_of_measurement') or value %}" if attribute == "unit_of_measurement" else "")
+        + "{% set unit = state_attr(entity_id, 'unit_of_measurement') %}"
+        + "{% if ns.value is none and states(entity_id) not in ['unknown', 'unavailable']"
+        + (" and unit is string and unit | trim | lower not in ['', 'none', 'null', 'unknown', 'unavailable']" if require_unit else "")
+        + " and value is string and value | trim | lower not in ['', 'none', 'null', 'unknown', 'unavailable'] %}"
+        + "{% set ns.value = value | trim %}{% endif %}{% endfor %}"
+        + "{{ ns.value if ns.value is not none else " + (repr(fallback) if fallback is not None else "none") + " }}"
+    )
+
+
 def _source_icon(hass, entity_id: str, state) -> str | None:
     """Return the current source icon, with registry metadata as a fallback."""
     candidates = [state.attributes.get(CONF_ICON)]
@@ -6549,6 +6698,10 @@ def _native_source_template(
     attributes = state.attributes
     source_platform = entity_id.split(".", 1)[0]
     platform = platform or source_platform
+    if property_name == "native_unit_of_measurement":
+        return _source_metadata_template(
+            [entity_id], "unit_of_measurement", _source_metadata_unit(state),
+        )
     if platform == "air_quality" and property_name == "unit_of_measurement":
         # Overall quality is categorical; never copy a source concentration
         # (or a malformed volume unit) onto the category itself.
@@ -6687,6 +6840,8 @@ def _native_source_template(
         return f"{{{{ (({features} // {mask}) % 2) == 1 }}}}"
     if property_name == "reports_position":
         return f"{{{{ state_attr({entity_id!r}, 'current_position') is number }}}}"
+    if source_platform == "fan" and property_name == "percentage":
+        return _fan_reported_percentage_prefix(entity_id) + "{{ reported }}"
     if source_platform == "fan" and property_name == "speed_count":
         percentage_step = f"state_attr({entity_id!r}, 'percentage_step') | float(0)"
         fallback = _native_source_helper_default(
@@ -6735,6 +6890,12 @@ def _native_reference_templates(
         return {}
     templates = {}
     for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()):
+        if property_name == "native_unit_of_measurement":
+            fallback = next((unit for state in states if (unit := _source_metadata_unit(state))), None)
+            templates[property_name] = _source_metadata_template(
+                entity_ids, "unit_of_measurement", fallback,
+            )
+            continue
         if property_name == "air_quality" and len(entity_ids) > 1:
             source_values = [
                 _air_quality_source_expression(entity_id)
@@ -7817,17 +7978,8 @@ def _xiaomi_fan_number_profile(
     ]
     if len(fan_indexes) != 1 or len(number_indexes) != 1:
         return None
-    fan_state = states[fan_indexes[0]]
-    modes = fan_state.attributes.get("preset_modes", [])
-    if not isinstance(modes, (list, tuple, set, frozenset)):
-        modes = []
-    advertised_modes = {
-        str(mode).strip().lower()
-        for mode in [*modes, fan_state.attributes.get("preset_mode")]
-        if mode is not None
-    }
-    if not advertised_modes.intersection({"favorite", "manual"}):
-        return None
+    # Selecting a speed number establishes its role independently of whether
+    # the fan advertises a manual preset. Reads must work in every mode.
     return fan_indexes[0], number_indexes[0]
 
 
@@ -7856,14 +8008,16 @@ def _fan_number_speed_kind(number_entity_id: str, number_state) -> str:
     minimum = _finite_source_number(attributes.get("min"))
     maximum = _finite_source_number(attributes.get("max"))
 
-    if unit in {"%", "percent", "percentage"} or (minimum == 0 and maximum == 100):
+    if unit in {"%", "percent", "percentage"}:
         return "percentage"
     if (
         unit in {"rpm", "r/min", "rev/min"}
         or re.search(r"(^|[^a-z])rpm([^a-z]|$)", identity)
-        or maximum is not None
-        and maximum > 100
     ):
+        return "rpm"
+    if minimum == 0 and maximum == 100:
+        return "percentage"
+    if maximum is not None and maximum > 100:
         return "rpm"
     return "level"
 
@@ -7883,14 +8037,48 @@ def _xiaomi_fan_speed_count_template(
     if speed_kind == "percentage":
         return (
             "{% set step = " + step + " %}"
-            "{{ ([1, (100 / step) | round(0) | int] | max) if step > 0 else 100 }}"
+            "{{ ([1, (100 / step) | round(0) | int] | max) if 0 < step < 1e100 else 100 }}"
         )
     return (
         "{% set minimum = " + minimum + " %}"
         "{% set maximum = " + maximum + " %}"
         "{% set step = " + step + " %}"
-        "{{ ((((maximum - minimum) / step) | round(0) | int) + 1) "
-        "if step > 0 and maximum >= minimum else 100 }}"
+        "{{ ((((maximum - minimum) / step) | round(0, 'floor') | int) + 1) "
+        "if 0 < step < 1e100 and -1e100 < minimum <= maximum < 1e100 else 100 }}"
+    )
+
+
+def _fan_reported_percentage_prefix(entity_id: str, rpm_number_id: str | None = None) -> str:
+    """Read actual speed in every preset; only normalize RPM with a known range."""
+    maximum = (
+        f"state_attr({rpm_number_id!r}, 'max')" if rpm_number_id
+        else f"state_attr({entity_id!r}, 'max_rpm') or state_attr({entity_id!r}, 'max_motor_speed')"
+    )
+    minimum = f"state_attr({rpm_number_id!r}, 'min')" if rpm_number_id else "0"
+    return (
+        f"{{% set reported_raw = state_attr({entity_id!r}, 'percentage') %}}"
+        "{% set reported = reported_raw | float(none) if reported_raw is not boolean else none %}"
+        "{% if reported is none or not 0 <= reported <= 100 %}"
+        f"{{% set rpm_raw = state_attr({entity_id!r}, 'motor_speed') %}}"
+        "{% set rpm = rpm_raw | float(none) if rpm_raw is not boolean else none %}"
+        f"{{% if rpm is none %}}{{% set rpm_raw = state_attr({entity_id!r}, 'rpm') %}}"
+        "{% set rpm = rpm_raw | float(none) if rpm_raw is not boolean else none %}{% endif %}"
+        f"{{% set upper_raw = ({maximum}) %}}"
+        f"{{% set lower_raw = ({minimum}) %}}"
+        "{% set upper = upper_raw | float(0) if upper_raw is not boolean else 0 %}"
+        "{% set lower = lower_raw | float(0) if lower_raw is not boolean else -1 %}"
+        "{% if not (0 <= lower < upper < 1e100) %}"
+        f"{{% set upper_raw = state_attr({entity_id!r}, 'max_rpm') or state_attr({entity_id!r}, 'max_motor_speed') %}}"
+        "{% set upper = upper_raw | float(0) if upper_raw is not boolean else 0 %}"
+        "{% set lower = 0 %}{% endif %}"
+        "{% set reported = none %}"
+        "{% if rpm is not none and 0 <= rpm < 1e100 and 0 <= lower < upper < 1e100 %}"
+        "{% set reported = 0 if rpm == 0 else "
+        "([1, [100, 1 + (rpm - lower) * 99 / (upper - lower)] | min] | max) | round(0) | int %}"
+        "{% endif %}{% endif %}"
+        f"{{% if is_state({entity_id!r}, 'off') %}}{{% set reported = 0 %}}"
+        f"{{% elif states({entity_id!r}) in ['unknown', 'unavailable'] %}}"
+        "{% set reported = none %}{% endif %}"
     )
 
 
@@ -7899,41 +8087,46 @@ def _xiaomi_fan_percentage_template(
     number_entity_id: str,
     speed_kind: str,
 ) -> str:
-    """Normalize a separate percent, level, or RPM number for HA's fan UI."""
+    """Read the selected speed number in every mode, falling back to the fan."""
     prefix = (
-        "{% set mode = state_attr("
-        + repr(fan_entity_id)
-        + ", 'preset_mode') | string | lower %}"
         "{% set raw = states(" + repr(number_entity_id) + ") | float(none) %}"
-        "{% set minimum = state_attr("
-        + repr(number_entity_id)
-        + ", 'min') | float(0) %}"
-        "{% set maximum = state_attr("
-        + repr(number_entity_id)
-        + ", 'max') | float(100) %}"
-        "{% set step = state_attr(" + repr(number_entity_id) + ", 'step') | float(1) %}"
+        f"{{% set minimum_raw = state_attr({number_entity_id!r}, 'min') %}}"
+        f"{{% set maximum_raw = state_attr({number_entity_id!r}, 'max') %}}"
+        f"{{% set step_raw = state_attr({number_entity_id!r}, 'step') %}}"
+        "{% set minimum = minimum_raw | float(none) if minimum_raw is not boolean else none %}"
+        "{% set maximum = maximum_raw | float(none) if maximum_raw is not boolean else none %}"
+        "{% set step = step_raw | float(none) if step_raw is not boolean else none %}"
     )
-    fallback = "state_attr(" + repr(fan_entity_id) + ", 'percentage')"
+    prefix = _fan_reported_percentage_prefix(
+        fan_entity_id, number_entity_id if speed_kind == "rpm" else None
+    ) + prefix
+    prefix += f"{{% set running = is_state({fan_entity_id!r}, 'on') %}}"
+    prefix += (
+        "{% set use_number = running and raw is not none and 0 <= raw < 1e100 %}"
+        "{% set valid_range = minimum is not none and maximum is not none "
+        "and 0 <= minimum <= maximum < 1e100 %}"
+    )
+    fallback = "reported"
     if speed_kind == "percentage":
-        normalized = "[0, [100, raw] | min] | max | round(0) | int"
+        return prefix + "{{ raw | round(0) | int if use_number and raw <= 100 else reported }}"
     elif speed_kind == "rpm":
         normalized = (
-            "1 if raw <= minimum else "
+            "0 if raw == 0 else 1 if raw <= minimum else "
             "(100 if raw >= maximum else "
             "(1 + ((raw - minimum) * 99 / (maximum - minimum))) | round(0) | int)"
         )
     else:
         normalized = (
-            "{% set count = (((maximum - minimum) / step) | round(0) | int) + 1 %}"
+            "{% if use_number and valid_range and step is not none and 0 < step < 1e100 %}"
+            "{% set count = (((maximum - minimum) / step) | round(0, 'floor') | int) + 1 %}"
             "{% set index = (((raw - minimum) / step) | round(0) | int) + 1 %}"
-            "{{ ([1, [count, index] | min] | max) * 100 / count "
-            "if mode in ['favorite', 'manual'] and raw is not none and "
-            "step > 0 and maximum >= minimum else " + fallback + " }}"
+            "{{ 0 if raw == 0 and minimum > 0 else ([1, [count, index] | min] | max) * 100 / count "
+            "}}{% else %}{{ " + fallback + " }}{% endif %}"
         )
         return prefix + normalized
     return (
-        prefix + "{{ (" + normalized + ") if mode in ['favorite', 'manual'] "
-        "and raw is not none and maximum > minimum else " + fallback + " }}"
+        prefix + "{{ (" + normalized + ") if use_number "
+        "and valid_range and maximum > minimum else " + fallback + " }}"
     )
 
 
@@ -7951,6 +8144,7 @@ def _xiaomi_fan_number_value_template(
         + repr(number_entity_id)
         + ", 'max') | float(100) %}"
         "{% set step = state_attr(" + repr(number_entity_id) + ", 'step') | float(1) %}"
+        "{% if -1e100 < minimum <= maximum < 1e100 and 0 < step < 1e100 %}"
     )
     if speed_kind == "percentage":
         raw = "requested"
@@ -7958,13 +8152,14 @@ def _xiaomi_fan_number_value_template(
         raw = "minimum if requested <= 1 else minimum + ((requested - 1) * (maximum - minimum) / 99)"
     else:
         raw = (
-            "minimum + (((((requested * ((((maximum - minimum) / step) | round(0) | int) + 1) "
+            "minimum + (((((requested * ((((maximum - minimum) / step) | round(0, 'floor') | int) + 1) "
             "/ 100) - 1) | round(0) | int)) * step)"
         )
     return (
         prefix + "{% set raw = " + raw + " %}"
-        "{{ minimum + (((((raw - minimum) / step) + 0.5) | int) * step) "
-        "if step > 0 and maximum >= minimum else raw }}"
+        "{% set count = ((maximum - minimum) / step) | round(0, 'floor') | int %}"
+        "{% set index = [0, [count, (((raw - minimum) / step) + 0.5) | int] | min] | max %}"
+        "{{ minimum + index * step }}{% else %}{{ none }}{% endif %}"
     )
 
 
@@ -7974,19 +8169,33 @@ def _xiaomi_fan_command_actions(
     speed_kind: str,
     actions: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Route fan percentage writes to the range number in manual modes."""
+    """Select an advertised manual mode before writing its speed number."""
     result = dict(actions)
     number_domain = number_entity_id.split(".", 1)[0]
     choose: dict[str, Any] = {
         "choose": [
             {
                 "conditions": (
-                    "{{ state_attr("
-                    + repr(fan_entity_id)
-                    + ", 'preset_mode') | string | lower in ['favorite', 'manual'] "
-                    "and percentage | float(0) > 0 }}"
+                    "{{ percentage | float(0) > 0 }}"
                 ),
                 "sequence": [
+                    {"choose": [{
+                        "conditions": (
+                            f"{{% set minimum = state_attr({number_entity_id!r}, 'min') %}}"
+                            f"{{% set maximum = state_attr({number_entity_id!r}, 'max') %}}"
+                            f"{{% set step = state_attr({number_entity_id!r}, 'step') %}}"
+                            f"{{{{ states({number_entity_id!r}) in ['unknown', 'unavailable'] "
+                            "or minimum is boolean or maximum is boolean or step is boolean "
+                            "or not (-1e100 < minimum | float(-1e100) <= maximum | float(1e100) < 1e100) "
+                            "or not (0 < step | float(0) < 1e100) }}"
+                        ),
+                        "sequence": [{"stop": "Fan speed number is unavailable or has an invalid range", "error": True}],
+                    }]},
+                    {"choose": [{
+                        "conditions": f"{{{{ is_state({fan_entity_id!r}, 'off') }}}}",
+                        "sequence": [{"action": "fan.turn_on", "target": {ATTR_ENTITY_ID: fan_entity_id}}],
+                    }]},
+                    *_fan_manual_preset_actions(fan_entity_id),
                     {
                         "action": f"{number_domain}.set_value",
                         "target": {ATTR_ENTITY_ID: number_entity_id},
@@ -8013,23 +8222,69 @@ def _xiaomi_fan_command_actions(
     if isinstance(existing, list) and existing:
         choose["default"] = existing
     result["set_percentage"] = [choose]
+    if isinstance(result.get("turn_on"), list):
+        result["turn_on"] = [{
+            "choose": [{
+                "conditions": "{{ not preset_mode | default(none) and percentage is defined and percentage is not none }}",
+                "sequence": [choose],
+            }],
+            "default": result["turn_on"],
+        }]
     return result
+
+
+def _fan_manual_preset_prefix(entity_id: str) -> str:
+    """Use the same conservative preset catalog as the native fan at runtime."""
+    return (
+        f"{{% set modes = state_attr({entity_id!r}, 'preset_modes') %}}"
+        f"{{% set current = state_attr({entity_id!r}, 'preset_mode') %}}"
+        f"{{% set priorities = {MANUAL_PRESET_PRIORITY!r} %}}"
+        "{% set selection = namespace(mode=none, rank=99) %}"
+        "{% if modes is sequence and modes is not string and modes is not mapping %}"
+        "{% for candidate in modes if candidate is string %}"
+        "{% set key = candidate | trim | lower | regex_replace('[\\\\s_-]+', ' ') %}"
+        "{% if key in priorities %}"
+        "{% set rank = -1 if candidate == current else priorities[key] %}"
+        "{% if rank < selection.rank %}"
+        "{% set selection.mode = candidate %}{% set selection.rank = rank %}"
+        "{% endif %}{% endif %}{% endfor %}{% endif %}"
+        "{% set manual = selection.mode %}"
+    )
+
+
+def _fan_manual_preset_actions(
+    entity_id: str, requested: str = "percentage | default(0) | float(0)",
+    *, respect_preset: bool = True,
+) -> list[dict[str, Any]]:
+    """Switch only for positive explicit speed requests, never for power-off."""
+    prefix = _fan_manual_preset_prefix(entity_id)
+    return [{"alias": "Virtual Layer: select manual fan preset", "choose": [{
+        "conditions": prefix + "{{ (" + requested + ") > 0 "
+        + ("and (command | default('') != 'turn_on' or not preset_mode | default(none)) " if respect_preset else "")
+        +
+        f"and manual is not none and manual != state_attr({entity_id!r}, 'preset_mode') }}}}",
+        "sequence": [{
+            "action": "fan.set_preset_mode",
+            "target": {ATTR_ENTITY_ID: entity_id},
+            "data": prefix + "{% set preset_command_data = {'preset_mode': manual} %}{{ preset_command_data }}",
+        }],
+    }]}]
+
+
+def _fan_manual_actions(sequence) -> list[dict[str, Any]]:
+    """Extract only our marked mode switches, never arbitrary choose actions."""
+    if not isinstance(sequence, list):
+        return []
+    return [step for step in sequence if isinstance(step, dict)
+            and step.get("alias") == "Virtual Layer: select manual fan preset"]
 
 
 def _xiaomi_fan_availability_template(
     fan_entity_id: str,
     number_entity_id: str,
 ) -> str:
-    """Require the separate speed number only while its value is selected."""
-    return (
-        "{% set mode = state_attr("
-        + repr(fan_entity_id)
-        + ", 'preset_mode') | string | lower %}"
-        "{{ states(" + repr(fan_entity_id) + ") not in ['unknown', 'unavailable'] and "
-        "(mode not in ['favorite', 'manual'] or states("
-        + repr(number_entity_id)
-        + ") not in ['unknown', 'unavailable']) }}"
-    )
+    """Keep power and presets available while missing speed falls back to fan."""
+    return f"{{{{ states({fan_entity_id!r}) not in ['unknown', 'unavailable'] }}}}"
 
 
 def _boiler_mode_template(climate_entity_id: str) -> str:
@@ -8441,6 +8696,18 @@ def _source_command_actions(
                 }
                 for entity_id in source_entities
             ]
+            if platform == "fan" and command in {"set_percentage", "turn_on"}:
+                actions[command] = [
+                    step
+                    for entity_id, action in zip(source_entities, actions[command], strict=True)
+                    for step in [
+                        *(_fan_manual_preset_actions(entity_id) if any(
+                            source_id == entity_id and manual_preset_mode(state.attributes.get("preset_modes"))
+                            for source_id, state in zip(entity_ids, states, strict=True)
+                        ) else []),
+                        action,
+                    ]
+                ]
             continue
         target_entity_id: str | list[str]
         if len(source_entities) == 1:
@@ -8550,6 +8817,12 @@ def _action_targets_entity(action: Any, entity_id: str) -> bool:
     """Return whether a generated action targets an entity directly."""
     if not isinstance(action, Mapping):
         return False
+    if any(
+        _action_targets_entity(step, entity_id)
+        for choice in action.get("choose", [])
+        for step in choice.get("sequence", [])
+    ):
+        return True
     target = action.get("target")
     if not isinstance(target, Mapping):
         return False
@@ -8597,17 +8870,21 @@ def _apply_fan_source_roles(
     if main := roles.get("main"):
         native["is_on"] = "{{ is_state(" + repr(main) + ", 'on') }}"
     if speed := roles.get("speed"):
-        native["percentage"] = (
-            "{{ state_attr(" + repr(speed) + ", 'percentage') | int(0) }}"
-        )
+        native["percentage"] = _fan_reported_percentage_prefix(speed) + "{{ reported }}"
     else:
         native["speed_count"] = "{{ 0 }}"
         native.pop("percentage", None)
         result["speed_count"] = 0
     if preset := roles.get("preset"):
+        native["preset_modes"] = f"{{{{ state_attr({preset!r}, 'preset_modes') | default([], true) }}}}"
         native["preset_mode"] = (
             "{{ state_attr(" + repr(preset) + ", 'preset_mode') or '' }}"
         )
+        if roles.get("speed") and "set_percentage" in actions:
+            actions["set_percentage"] = [
+                *_fan_manual_preset_actions(preset),
+                *[step for step in actions["set_percentage"] if step not in _fan_manual_actions(actions["set_percentage"])],
+            ]
     else:
         native["preset_modes"] = "{{ [] }}"
         native.pop("preset_mode", None)
@@ -8629,6 +8906,7 @@ def _apply_fan_source_roles(
         native.pop("current_direction", None)
         result["direction"] = False
     result[CONF_NATIVE_VALUE_TEMPLATES] = native
+    result[CONF_COMMAND_ACTIONS_JSON] = _json_default(actions)
     return result
 
 
@@ -8645,8 +8923,22 @@ def _fan_source_role_defaults(
         "direction": "set_direction",
     }
     restored: dict[str, str] = {}
+
+    def service_steps(sequence, service):
+        for action in sequence if isinstance(sequence, list) else []:
+            if not isinstance(action, Mapping) or action in _fan_manual_actions(sequence):
+                continue
+            if action.get("action", action.get("service")) == service:
+                yield action
+            # A reduced Matter preset's default still carries the vendor
+            # preset source; its canonical branch carries the speed source.
+            yield from service_steps(action.get("default"), service)
+            for choice in action.get("choose", []):
+                if isinstance(choice, Mapping):
+                    yield from service_steps(choice.get("sequence"), service)
+
     for role, command in role_commands.items():
-        for action in actions.get(command, []):
+        for action in service_steps(actions.get(command), f"fan.{command}"):
             for candidate in choices.get(role, ()):
                 if _action_targets_entity(action, candidate):
                     restored[role] = candidate
@@ -8694,6 +8986,30 @@ def _matter_fan_level_templates(
         + str(high)
         + " }}"
     )
+    # matterbridge-hass exposes a Matter FanModeSequence from HA
+    # ``preset_modes`` and sends a controller's Low/Medium/High selection as
+    # ``fan.turn_on(preset_mode=...)``.  Advertise those canonical modes for
+    # the deliberately reduced profile and route each one back to the chosen
+    # physical percentage.  Without this, the bridge can expose a writable
+    # FanMode but Home Assistant rejects its request before the source action
+    # gets a chance to run.
+    preset_mode = (
+        "{% set raw = state_attr(" + repr(entity_id) + ", 'percentage') | float(0) %}"
+        "{% if raw <= 0 %}{{ none }}{% elif raw < "
+        + str((low + medium) / 2)
+        + " %}low{% elif raw < "
+        + str((medium + high) / 2)
+        + " %}medium{% else %}high{% endif %}"
+    )
+    preset_percentage = (
+        "{{ "
+        + str(low)
+        + " if preset_mode == 'low' else "
+        + str(medium)
+        + " if preset_mode == 'medium' else "
+        + str(high)
+        + " }}"
+    )
     actions = {
         "set_percentage": [
             {
@@ -8702,8 +9018,15 @@ def _matter_fan_level_templates(
                 "data": {"percentage": requested},
             }
         ],
+        "set_preset_mode": [
+            {
+                "action": "fan.set_percentage",
+                "target": {ATTR_ENTITY_ID: entity_id},
+                "data": {"percentage": preset_percentage},
+            }
+        ],
     }
-    return percentage, actions
+    return percentage, preset_mode, actions
 
 
 def _matter_fan_turn_on_data_template(low: int, medium: int, high: int) -> str:
@@ -8736,9 +9059,7 @@ def _apply_matter_fan_percentage_helper(
     native.update(
         {
             "speed_count": "{{ 100 }}",
-            "percentage": (
-                "{{ state_attr(" + repr(entity_id) + ", 'percentage') | int(0) }}"
-            ),
+            "percentage": _fan_reported_percentage_prefix(entity_id) + "{{ reported }}",
         }
     )
     result[CONF_NATIVE_VALUE_TEMPLATES] = native
@@ -8749,12 +9070,15 @@ def _apply_matter_fan_percentage_helper(
         "data": {"percentage": "{{ percentage }}"},
     }
     actions = _parse_command_actions(result.get(CONF_COMMAND_ACTIONS_JSON), "fan")
-    actions["set_percentage"] = [percentage_action]
+    actions["set_percentage"] = [
+        *_fan_manual_actions(actions.get("set_percentage")),
+        percentage_action,
+    ]
     turn_on = actions.get("turn_on")
     if isinstance(turn_on, list):
         if any(_action_targets_entity(action, entity_id) for action in turn_on):
             for action in turn_on:
-                if isinstance(action, dict) and _action_targets_entity(
+                if isinstance(action, dict) and "action" in action and _action_targets_entity(
                     action, entity_id
                 ):
                     action["data"] = "{{ command_data }}"
@@ -8768,7 +9092,7 @@ def _apply_matter_fan_percentage_helper(
                     "choose": [
                         {
                             "conditions": "{{ command_data.get('percentage') is number }}",
-                            "sequence": [percentage_action],
+                            "sequence": actions["set_percentage"],
                         }
                     ],
                 }
@@ -8793,19 +9117,56 @@ def _apply_matter_fan_level_helper(
     if not 0 < low < medium < high <= 100:
         raise vol.Invalid("Matter fan levels must be distinct and ascending")
     result = dict(defaults)
-    percentage, actions = _matter_fan_level_templates(entity_id, low, medium, high)
+    percentage, preset_mode, actions = _matter_fan_level_templates(
+        entity_id, low, medium, high
+    )
     native = _native_template_defaults("fan", result)
-    native.update({"speed_count": "{{ 3 }}", "percentage": percentage})
+    native.update(
+        {
+            "speed_count": "{{ 3 }}",
+            "percentage": percentage,
+            "preset_modes": "{{ ['low', 'medium', 'high'] }}",
+            "preset_mode": preset_mode,
+        }
+    )
     result[CONF_NATIVE_VALUE_TEMPLATES] = native
     # Native templates are applied after setup, but the static value is also
     # needed before the first render and by consumers that inspect config.
     result["speed_count"] = 3
-    # Keep source power, preset, oscillation, and direction actions. The
-    # reduced mapping owns only percentage writes.
+    # Keep source power, oscillation, and direction actions. The reduced
+    # Matter profile owns its percentage and canonical preset-mode writes.
     existing_actions = _parse_command_actions(
         result.get(CONF_COMMAND_ACTIONS_JSON), "fan"
     )
+    existing_preset_actions = existing_actions.get("set_preset_mode")
+    manual_actions = _fan_manual_actions(existing_actions.get("set_percentage"))
+    # Canonical low/medium/high are speed writes too. Preserve the selected
+    # preset source rather than accidentally switching the speed-only source.
+    for switch in manual_actions:
+        target = switch["choose"][0]["sequence"][0]["target"][ATTR_ENTITY_ID]
+        actions["set_preset_mode"] = [
+            *_fan_manual_preset_actions(target, "1", respect_preset=False),
+            *actions["set_preset_mode"],
+        ]
+    actions["set_percentage"] = [*manual_actions, *actions["set_percentage"]]
     existing_actions.update(actions)
+    if isinstance(existing_preset_actions, list):
+        # A source may also expose vendor-specific presets such as ``eco``.
+        # Keep those actions reachable; only the four Matter-standard values
+        # are redirected to the selected physical levels.
+        existing_actions["set_preset_mode"] = [
+            {
+                "choose": [
+                    {
+                        "conditions": (
+                            "{{ preset_mode in ['low', 'medium', 'high'] }}"
+                        ),
+                        "sequence": actions["set_preset_mode"],
+                    }
+                ],
+                "default": existing_preset_actions,
+            }
+        ]
     turn_on_data = _matter_fan_turn_on_data_template(low, medium, high)
     turn_on = existing_actions.get("turn_on")
     if isinstance(turn_on, list):
@@ -8846,6 +9207,18 @@ def _apply_matter_fan_level_helper(
                 "data": turn_on_data,
             }
         ]
+    power_actions = [
+        {**step, "data": {}}
+        for step in existing_actions.get("turn_on", [])
+        if isinstance(step, dict) and step.get("action") == "fan.turn_on"
+    ]
+    existing_actions["turn_on"] = [{
+        "choose": [{
+            "conditions": "{{ preset_mode | default(none) in ['low', 'medium', 'high'] }}",
+            "sequence": [*power_actions, *actions["set_preset_mode"]],
+        }],
+        "default": existing_actions.get("turn_on", []),
+    }]
     result[CONF_COMMAND_ACTIONS_JSON] = _json_default(existing_actions)
     return result
 
@@ -8947,64 +9320,7 @@ def _reference_entity_defaults(
         platform = target_platform
 
     first_state = states[0]
-    if boiler_profile is not None:
-        climate_index, _hot_water_switch_id = boiler_profile
-        initial_value = "heat" if states[climate_index].state == "heat" else "off"
-    elif boiler_air_conditioner_profile is not None:
-        boiler_index, air_conditioner_index, _hot_water_switch_id = (
-            boiler_air_conditioner_profile
-        )
-        air_conditioner_state = states[air_conditioner_index].state
-        initial_value = (
-            air_conditioner_state
-            if air_conditioner_state not in {"off", "unknown", "unavailable"}
-            else "heat"
-            if states[boiler_index].state == "heat"
-            else "off"
-        )
-    elif fan_number_profile is not None:
-        initial_value = states[fan_number_profile[0]].state
-    elif platform == "humidifier" and humidifier_component_profile is not None:
-        initial_value = states[humidifier_component_profile["switch"]].state
-    elif platform == "binary_sensor":
-        if presence_or_motion_class:
-            initial_value = (
-                "on"
-                if sum(_source_state_is_true(state) for state in states)
-                > len(states) / 2
-                else "off"
-            )
-        elif safety_boolean_sources:
-            initial_value = (
-                "on" if any(_source_state_is_true(state) for state in states) else "off"
-            )
-        else:
-            initial_value = (
-                "on" if all(_source_state_is_true(state) for state in states) else "off"
-            )
-    elif platform == "device_tracker" and all_presence_distance:
-        initial_value = "not_home"
-    elif platform == "camera" and source_domains == ["image"]:
-        initial_value = "on"
-    elif len(states) == 1:
-        initial_value = first_state.state
-    elif all_number:
-        initial_value = _average_known_states(states)
-    elif all_datetime:
-        initial_value = _latest_datetime_state(states)
-    elif all_date or all_time:
-        initial_value = _latest_state(states)
-    elif all_location:
-        initial_value = _location_state(states)
-    elif all_enum or (
-        len(set(source_domains)) == 1
-        and platform == source_domains[0]
-        and platform != "sensor"
-        and platform in DOMAIN_NATIVE_TEMPLATE_PROPERTIES
-    ):
-        initial_value = _first_known_state(states)
-    else:
-        initial_value = "".join(str(state.state) for state in states)
+    initial_value = REFERENCE_INITIAL_VALUES.get(platform, DEFAULT_ENTITY_VALUE)
 
     attributes = {}
     if len(states) == 1 and not all_location:
@@ -9123,11 +9439,54 @@ def _reference_entity_defaults(
             + "] | reject('in', [none, '']) | list %}"
             "{{ icons[0] if icons else '' }}"
         )
+    if platform in {"sensor", "number"}:
+        metadata_states = [state for state in states if _source_metadata_unit(state)]
+        inferred_icon = next(
+            (icon for state in metadata_states
+             if (icon := _source_icon(hass, state.entity_id, state))),
+            None,
+        )
+        if not inferred_icon:
+            unit_icons = {"°C": "mdi:thermometer", "°F": "mdi:thermometer",
+                          "K": "mdi:thermometer", "W": "mdi:flash", "kW": "mdi:flash",
+                          "Wh": "mdi:lightning-bolt", "kWh": "mdi:lightning-bolt",
+                          "V": "mdi:flash", "A": "mdi:current-ac"}
+            inferred_icon = next(
+                (icon for state in metadata_states
+                 if (icon := unit_icons.get(_source_metadata_unit(state)))), None,
+            )
+        if not inferred_icon:
+            for state in metadata_states:
+                name = " ".join((state.entity_id, state.name,
+                                 str(state.attributes.get("device_class") or ""))).lower()
+                for pattern, icon in (
+                    (r"humidity|습도", "mdi:water-percent"),
+                    (r"battery|배터리", "mdi:battery"),
+                    (r"temperature|온도", "mdi:thermometer"),
+                    (r"pressure|기압|압력", "mdi:gauge"),
+                ):
+                    if re.search(pattern, name):
+                        inferred_icon = icon
+                        break
+                if inferred_icon:
+                    break
+        defaults.pop(CONF_ICON, None)
+        if inferred_icon:
+            defaults[CONF_ICON] = inferred_icon
+        elif metadata_states:
+            defaults[CONF_ICON] = _air_quality_default_icon(
+                platform, *(state.name for state in metadata_states),
+            )
+        if air_quality_icon:
+            defaults[CONF_ICON] = air_quality_icon
+        defaults[CONF_ICON_TEMPLATE] = _source_metadata_template(
+            entity_ids, CONF_ICON, "", require_unit=True,
+        ) if not air_quality_icon else _literal_template("")
     source_device_classes = {
         str(state.attributes.get("device_class", "")).lower() for state in states
     }
     source_units = {
-        str(state.attributes.get(CONF_UNIT_OF_MEASUREMENT, "")) for state in states
+        unit for state in states if (unit := _source_metadata_unit(state))
     }
     if (
         platform == "sensor"
@@ -9462,6 +9821,16 @@ def _reference_entity_defaults(
             {
                 "hvac_modes": "{{ ['off', 'heat'] }}",
                 "hvac_mode": _boiler_mode_template(entity_ids[climate_index]),
+                # Never expose the raw boiler-water target as a room target.
+                # The outgoing command uses the forward formula; this template
+                # uses its nearest inverse for source updates and reloads.
+                "target_temperature": _boiler_target_temperature_template(
+                    entity_ids[climate_index], boiler_calibration_template
+                ),
+                # A boiler's water range must not become the UI's room range.
+                "min_temp": _literal_template(22),
+                "max_temp": _literal_template(40),
+                "target_temperature_step": _literal_template(0.1),
             }
         )
     elif boiler_air_conditioner_profile is not None:
@@ -10252,6 +10621,9 @@ def _entity_form_defaults(
                 _text_default(entity[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE])
             )
         )
+        defaults[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] = _text_default(
+            entity.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
+        )
     polygon = entity.get(CONF_POLYGONAL_ZONE)
     if not isinstance(polygon, Mapping):
         polygon = {}
@@ -10331,6 +10703,18 @@ def _entity_form_defaults(
             ))),
             CONF_DAWARICH_HISTORY_LIMIT_INPUT: min(100, max(1, _nonnegative_int_default(
                 dawarich.get(CONF_DAWARICH_HISTORY_LIMIT) or 10
+            ))),
+            CONF_DAWARICH_VERIFY_SSL_INPUT: _boolean_default(
+                dawarich.get("verify_ssl"), False
+            ),
+            CONF_DAWARICH_REQUEST_TIMEOUT_INPUT: min(60, max(5, _nonnegative_int_default(
+                dawarich.get("request_timeout") or 15
+            ))),
+            CONF_DAWARICH_INCLUDE_VISITS_INPUT: _boolean_default(
+                dawarich.get("include_visits"), True
+            ),
+            CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT: min(365, max(1, _nonnegative_int_default(
+                dawarich.get("visit_lookback_days") or 30
             ))),
             CONF_DAWARICH_PERSON_INPUT: dawarich_person,
             CONF_PRESENCE_CLASSIFICATION: _boolean_default(
@@ -10739,9 +11123,14 @@ class _AirQualityLogicFlow:
             ):
                 unit = source_states[0].attributes.get("unit_of_measurement") or "unitless"
                 unit = aq_options.normalize_unit(unit)
-                quantities = {state.attributes.get("device_class") for state in source_states}
+                quantities = {aq_options.infer_quantity(state) for state in source_states}
+                quantity = next(iter(quantities)) if len(quantities) == 1 else "any"
+                # The formaldehyde profile is always edited and emitted in
+                # μg/m³, converting a compatible mg/m³ source as needed.
+                if quantity == "formaldehyde":
+                    unit = "μg/m³"
                 recipe = {"mode": "measurement", "unit": unit if unit in aq_options.UNITS else "unitless",
-                          "quantity": next(iter(quantities)) if len(quantities) == 1 and next(iter(quantities)) in aq_options.QUANTITIES[1:] else "any"}
+                          "quantity": quantity if quantity in aq_options.QUANTITIES[1:] else "any"}
             if edit and level == "source" and _native_template_mapping(
                 defaults.get(CONF_NATIVE_VALUE_TEMPLATES)
             ).get("air_quality"):

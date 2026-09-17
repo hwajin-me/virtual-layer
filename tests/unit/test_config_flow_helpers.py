@@ -40,6 +40,7 @@ from custom_components.virtual_layer.config_flow import (
     LEGACY_DIRECT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     CONF_CLIMATE_TEMPERATURE_STEP_INPUT,
     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
+    CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID,
     CONF_ADVANCED_SETTINGS,
     CONF_ATTRIBUTE_SOURCES_JSON,
     CONF_ATTRIBUTE_TEMPLATES_JSON,
@@ -95,6 +96,7 @@ from custom_components.virtual_layer.config_flow import (
     _async_build_entity_config,
     _auto_helper_profile,
     _boiler_calibration_form_default,
+    _boiler_target_temperature_template,
     _apply_fan_source_roles,
     _apply_media_player_source_priorities,
     _apply_matter_fan_level_helper,
@@ -561,7 +563,7 @@ def test_single_switch_source_can_target_fan_with_power_command_helpers(hass):
     )
 
     assert defaults[CONF_PLATFORM] == "fan"
-    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert defaults[CONF_VALUE_TEMPLATE]
     assert defaults[CONF_NATIVE_VALUE_TEMPLATES]["is_on"] == (
         "{{ states('switch.source') not in ['off', 'unknown', 'unavailable'] }}"
@@ -618,7 +620,7 @@ def test_climate_sensor_conversion_generates_typed_temperature_helper(hass):
     )
 
     assert converted[CONF_PLATFORM] == "sensor"
-    assert converted[CONF_INITIAL_VALUE] == "21.5"
+    assert converted[CONF_INITIAL_VALUE] == "0"
     assert converted[CONF_VALUE_TEMPLATE] == (
         "{{ state_attr('climate.living_room', 'current_temperature') | float(none) }}"
     )
@@ -706,10 +708,46 @@ def test_native_domains_offer_semantically_safe_sensor_conversions(
         assert converted[CONF_VALUE_TEMPLATE] == expected_template
     else:
         assert "float(none)" in converted[CONF_VALUE_TEMPLATE]
-    assert converted[CONF_INITIAL_VALUE] == expected_value
+    assert converted[CONF_INITIAL_VALUE] == "0"
     assert float(
         Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(parse_result=True)
     ) == pytest.approx(float(expected_value))
+
+
+@pytest.mark.parametrize(
+    ("power", "attributes", "expected"),
+    [
+        ("off", {"brightness": 128}, 0.0),
+        ("off", {}, 0.0),
+        ("on", {"brightness": 128}, 50.2),
+        ("on", {}, None),
+        ("unavailable", {"brightness": 128}, None),
+        ("unknown", {"brightness": 128}, None),
+    ],
+)
+def test_light_percentage_follows_power(hass, power, attributes, expected):
+    entity_id = "light.desk"
+    hass.states.async_set(entity_id, power, attributes)
+    converted = _apply_sensor_conversion_defaults(
+        hass,
+        _reference_entity_defaults(hass, [entity_id], "sensor"),
+        _sensor_conversion_choices([entity_id])["light.desk:brightness"],
+    )
+    assert converted[CONF_INITIAL_VALUE] == "0"
+    template = Template(converted[CONF_VALUE_TEMPLATE], hass)
+    availability = Template(converted[CONF_AVAILABILITY_TEMPLATE], hass)
+    assert template.async_render(parse_result=True) == expected
+    assert availability.async_render(parse_result=True) is (expected is not None)
+    # Reuse the saved helper while the light switches off and back on.
+    for state, attrs, value in [
+        ("on", {"brightness": 204}, 80.0),
+        ("off", {"brightness": 204}, 0.0),
+        ("off", {}, 0.0),
+        ("on", {"brightness": 204}, 80.0),
+    ]:
+        hass.states.async_set(entity_id, state, attrs)
+        assert template.async_render(parse_result=True) == value
+        assert availability.async_render(parse_result=True) is True
 
 
 def test_multiple_climate_sources_convert_one_common_measurement_to_average_sensor(
@@ -728,7 +766,7 @@ def test_multiple_climate_sources_convert_one_common_measurement_to_average_sens
         hass, defaults, choices["current_temperature"]
     )
 
-    assert converted[CONF_INITIAL_VALUE] == "22.0"
+    assert converted[CONF_INITIAL_VALUE] == "0"
     assert (
         "state_attr('climate.first', 'current_temperature')"
         in converted[CONF_VALUE_TEMPLATE]
@@ -764,7 +802,7 @@ def test_climate_and_temperature_sensor_convert_to_one_average_temperature_senso
         hass, defaults, choices["temperature"]
     )
 
-    assert float(converted[CONF_INITIAL_VALUE]) == pytest.approx(68)
+    assert converted[CONF_INITIAL_VALUE] == "0"
     assert "state_attr('climate.living_room', 'current_temperature')" in converted[
         CONF_VALUE_TEMPLATE
     ]
@@ -795,7 +833,7 @@ def test_humidifier_and_humidity_sensor_convert_to_one_average_sensor(hass):
         hass, defaults, _sensor_conversion_choices(source_ids, hass)["humidity"]
     )
 
-    assert float(converted[CONF_INITIAL_VALUE]) == pytest.approx(45)
+    assert converted[CONF_INITIAL_VALUE] == "0"
     assert "state_attr('humidifier.bedroom', 'current_humidity')" in converted[
         CONF_VALUE_TEMPLATE
     ]
@@ -854,7 +892,7 @@ def test_multi_sensor_conversion_supports_selectable_aggregation(
         hass, defaults, choices["current_temperature"], aggregation
     )
 
-    assert float(converted[CONF_INITIAL_VALUE]) == pytest.approx(expected)
+    assert converted[CONF_INITIAL_VALUE] == "0"
     assert float(
         Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(parse_result=True)
     ) == pytest.approx(expected)
@@ -900,7 +938,7 @@ def test_multi_sensor_conversion_allows_incompatible_measurements_as_unitless(ha
         choices["state"],
     )
 
-    assert converted[CONF_INITIAL_VALUE] == "35.0"
+    assert converted[CONF_INITIAL_VALUE] == "0"
     assert _yaml_value(converted[CONF_DOMAIN_OPTIONS_JSON]) == {
         "state_class": "measurement"
     }
@@ -967,7 +1005,7 @@ def test_multi_pollution_sensors_normalize_units_before_aggregation(
         choices["state"],
     )
 
-    assert float(converted[CONF_INITIAL_VALUE]) == pytest.approx(expected)
+    assert converted[CONF_INITIAL_VALUE] == "0"
     assert Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(
         parse_result=True
     ) == pytest.approx(expected)
@@ -1052,7 +1090,7 @@ def test_multi_sensor_conversion_uses_home_assistant_unit_converters(
         choices["state"],
     )
 
-    assert float(converted[CONF_INITIAL_VALUE]) == pytest.approx(expected)
+    assert converted[CONF_INITIAL_VALUE] == "0"
     assert Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(
         parse_result=True
     ) == pytest.approx(expected)
@@ -1149,7 +1187,7 @@ def test_scaled_sensor_conversion_keeps_missing_attribute_unknown(hass):
         _sensor_conversion_choices(["light.source"], hass)["light.source:brightness"],
     )
 
-    assert converted[CONF_INITIAL_VALUE] == "unknown"
+    assert converted[CONF_INITIAL_VALUE] == "0"
     assert (
         Template(converted[CONF_VALUE_TEMPLATE], hass).async_render(parse_result=True)
         is None
@@ -2167,7 +2205,7 @@ def test_numeric_helper_rejects_non_finite_source_states(hass):
         ["sensor.nan", "sensor.infinity"],
     )
 
-    assert defaults[CONF_INITIAL_VALUE] == "naninf"
+    assert defaults[CONF_INITIAL_VALUE] == "0"
     assert "average" not in defaults[CONF_VALUE_TEMPLATE]
 
 
@@ -2761,7 +2799,7 @@ def test_clearing_media_player_priority_resets_only_generated_helper():
     assert reset[CONF_MEDIA_PLAYER_SOURCE_PRIORITIES] == {}
     assert "media_player.samsung_tv" in reset[CONF_NATIVE_VALUE_TEMPLATES]["media_title"]
 
-def test_xiaomi_fan_uses_number_speed_only_for_favorite_and_manual_modes(hass):
+def test_xiaomi_fan_uses_selected_number_speed_in_every_mode(hass):
     fan_entity_id = "fan.air_purifier_purifier_1"
     number_entity_id = "number.air_purifier_favorite_level"
     hass.states.async_set(
@@ -2788,7 +2826,7 @@ def test_xiaomi_fan_uses_number_speed_only_for_favorite_and_manual_modes(hass):
     )
 
     assert defaults[CONF_PLATFORM] == "fan"
-    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert "source_available" in _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON])
     percentage_template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["percentage"]
     Template(percentage_template, hass).ensure_valid()
@@ -2805,14 +2843,14 @@ def test_xiaomi_fan_uses_number_speed_only_for_favorite_and_manual_modes(hass):
             "supported_features": 57,
         },
     )
-    assert Template(percentage_template, hass).async_render(parse_result=True) == 35
+    assert Template(percentage_template, hass).async_render(parse_result=True) == 72
 
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     speed_choice = actions["set_percentage"][0]
-    assert speed_choice["choose"][0]["sequence"][0]["target"] == {
+    assert speed_choice["choose"][0]["sequence"][-1]["target"] == {
         ATTR_ENTITY_ID: number_entity_id,
     }
-    assert speed_choice["default"][0]["target"] == {ATTR_ENTITY_ID: fan_entity_id}
+    assert speed_choice["default"][-1]["target"] == {ATTR_ENTITY_ID: fan_entity_id}
 
 
 @pytest.mark.parametrize(
@@ -2901,7 +2939,7 @@ def test_fan_speed_number_scale_is_detected_and_normalized(
     )
 
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
-    speed_action = actions["set_percentage"][0]["choose"][0]["sequence"][0]
+    speed_action = actions["set_percentage"][0]["choose"][0]["sequence"][-1]
     assert speed_action["action"] == f"{number_entity_id.split('.', 1)[0]}.set_value"
     value_template = speed_action["data"]["value"]
     Template(value_template, hass).ensure_valid()
@@ -3943,7 +3981,7 @@ def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
     defaults = _reference_entity_defaults(hass, ["climate.living_room"])
 
     assert defaults[CONF_PLATFORM] == "climate"
-    assert defaults[CONF_INITIAL_VALUE] == "cool"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert defaults["current_temperature"] == 24.0
     assert defaults["max_temp"] == 30.0
     assert defaults["min_temp"] == 18.0
@@ -4031,7 +4069,7 @@ def test_reference_heating_only_climate_builds_heat_off_boiler_helper(hass):
     defaults = _reference_entity_defaults(hass, ["climate.boiler"])
 
     assert defaults[CONF_PLATFORM] == "climate"
-    assert defaults[CONF_INITIAL_VALUE] == "heat"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert defaults["hvac_modes"] == ["off", "heat"]
     assert defaults[CONF_VALUE_TEMPLATE] == (
         "{{ 'heat' if states('climate.boiler') == 'heat' else 'off' }}"
@@ -4129,6 +4167,20 @@ def test_boiler_temperature_calibration_helper_maps_before_source_clamp(hass):
     assert command_data["temperature"] == 41
 
 
+def test_boiler_calibration_keeps_room_target_when_source_reports_water_target(hass):
+    """A 27°C room request remains 27°C after a boiler reports 52°C water."""
+    hass.states.async_set("climate.boiler", "heat", {"temperature": 52})
+
+    target_template = Template(
+        _boiler_target_temperature_template(
+            "climate.boiler", "{{ temperature | float(0) + 25 }}"
+        ),
+        hass,
+    )
+
+    assert target_template.async_render({"this": None}, parse_result=True) == 27.0
+
+
 def test_boiler_calibration_edit_default_replaces_only_legacy_direct_formula():
     """Editing proposes recovery without replacing an explicit calibration."""
     assert (
@@ -4143,7 +4195,7 @@ def test_boiler_calibration_edit_default_replaces_only_legacy_direct_formula():
 
 @pytest.mark.parametrize(
     ("room_temperature", "water_temperature"),
-    ((25, 40), (27, 44), (30, 47), (33, 50)),
+    ((25, 40), (27, 43), (30, 48), (33, 52)),
 )
 def test_default_boiler_temperature_calibration_maps_room_to_water(
     hass, room_temperature, water_temperature
@@ -4181,8 +4233,8 @@ def test_default_boiler_temperature_calibration_maps_room_to_water(
     assert command_data["temperature"] == water_temperature
 
 
-def test_default_boiler_temperature_calibration_adds_bounded_recovery_boost(hass):
-    """A cold room receives extra water temperature until it approaches target."""
+def test_default_boiler_temperature_calibration_is_not_room_temperature_dependent(hass):
+    """A room request has one deterministic boiler-water target."""
     hass.states.async_set(
         "climate.boiler",
         "heat",
@@ -4210,8 +4262,7 @@ def test_default_boiler_temperature_calibration_adds_bounded_recovery_boost(hass
         parse_result=True,
     )
 
-    # 51.5°C is rounded to the physical source's 1°C grid.
-    assert command_data["temperature"] == 52
+    assert command_data["temperature"] == 43
 
 
 def test_reference_virtual_boiler_off_does_not_send_unsupported_fan_only(hass):
@@ -4250,7 +4301,14 @@ def test_climate_entity_form_exposes_temperature_step_and_jinja_native_controls(
     )
     outer = {marker.schema: validator for marker, validator in schema.schema.items()}
     domain_validators = _section_validators(schema, CONF_DOMAIN_SETTINGS)
-    assert set(domain_validators) == {CONF_CLIMATE_TEMPERATURE_STEP_INPUT}
+    assert set(domain_validators) == {
+        CONF_CLIMATE_TEMPERATURE_STEP_INPUT,
+        CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID,
+    }
+    assert isinstance(
+        domain_validators[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID],
+        selector.EntitySelector,
+    )
     validators = _section_validators(schema, CONF_NATIVE_VALUE_TEMPLATES)
     assert set(validators) == set(CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
     assert all(
@@ -4428,6 +4486,17 @@ def test_humidifier_entity_form_migrates_static_values_to_jinja_controls():
     assert entity["target_humidity"] == 50
     assert entity["modes"] == ["auto", "sleep"]
     assert entity["mode"] == "auto"
+
+
+def test_humidifier_entity_form_defaults_to_35_70_range_and_five_percent_step():
+    """New humidifiers expose editable, safe setpoint defaults in the UI."""
+    form = _entity_schema({CONF_PLATFORM: "humidifier"})
+
+    templates = form({})[CONF_NATIVE_VALUE_TEMPLATES]
+
+    assert templates["min_humidity"] == "{{ 35 }}"
+    assert templates["max_humidity"] == "{{ 70 }}"
+    assert templates["target_humidity_step"] == "{{ 5 }}"
 
 
 @pytest.mark.parametrize(
@@ -4752,7 +4821,7 @@ def test_reference_humidifier_promotes_native_options(hass):
 
     defaults = _reference_entity_defaults(hass, ["humidifier.basement"])
     assert defaults[CONF_PLATFORM] == "humidifier"
-    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert defaults["class"] == "dehumidifier"
     assert defaults["action"] == "drying"
     assert defaults["current_humidity"] == 65
@@ -4799,7 +4868,7 @@ def test_mixed_humidifier_components_offer_type_and_generate_helpers(hass):
     defaults = _reference_entity_defaults(hass, entity_ids, "humidifier")
     templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
     assert defaults[CONF_PLATFORM] == "humidifier"
-    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert Template(templates["is_on"], hass).async_render(parse_result=True) is True
     assert (
         Template(templates["device_class"], hass).async_render(parse_result=True)
@@ -4962,7 +5031,7 @@ def test_reference_entity_defaults_combines_boolean_sources_with_and_template(ha
     )
 
     assert defaults[CONF_PLATFORM] == "binary_sensor"
-    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert (
         defaults[CONF_SOURCE_ENTITIES_TEXT]
         == "binary_sensor.front_door\nswitch.alarm_ready"
@@ -5116,7 +5185,7 @@ def test_presence_motion_helper_uses_majority_and_delayed_all_off_clear(
     defaults = _reference_entity_defaults(hass, source_ids)
 
     assert defaults[CONF_PLATFORM] == "binary_sensor"
-    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {CONF_CLASS: "motion"}
     assert "(active | count) > 3 / 2" in defaults[CONF_VALUE_TEMPLATE]
     assert "all_off" in defaults[CONF_VALUE_TEMPLATE]
@@ -5315,7 +5384,7 @@ def test_reference_entity_defaults_combines_number_sources_with_average_template
     )
 
     assert defaults[CONF_PLATFORM] == "sensor"
-    assert defaults[CONF_INITIAL_VALUE] == "22.0"
+    assert defaults[CONF_INITIAL_VALUE] == "0"
     assert "float(none)" in defaults[CONF_VALUE_TEMPLATE]
     assert "values | average" in defaults[CONF_VALUE_TEMPLATE]
     assert (
@@ -5378,7 +5447,7 @@ def test_reference_entity_defaults_treats_zero_one_sensors_as_numbers(hass):
     )
 
     assert defaults[CONF_PLATFORM] == "sensor"
-    assert defaults[CONF_INITIAL_VALUE] == "0.5"
+    assert defaults[CONF_INITIAL_VALUE] == "0"
     assert "values | average" in defaults[CONF_VALUE_TEMPLATE]
 
 
@@ -5392,7 +5461,7 @@ def test_reference_entity_defaults_ignores_unknown_number_in_initial_average(has
     )
 
     assert defaults[CONF_PLATFORM] == "sensor"
-    assert defaults[CONF_INITIAL_VALUE] == "30.0"
+    assert defaults[CONF_INITIAL_VALUE] == "0"
 
 
 def test_number_helper_ignores_invalid_runtime_values(hass):
@@ -5433,7 +5502,7 @@ def test_number_helper_is_generated_with_one_temporarily_invalid_sensor(hass):
 
     defaults = _reference_entity_defaults(hass, ["sensor.first", "sensor.second"])
 
-    assert defaults[CONF_INITIAL_VALUE] == "20.0"
+    assert defaults[CONF_INITIAL_VALUE] == "0"
     assert "float(none)" in defaults[CONF_VALUE_TEMPLATE]
     assert (
         Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
@@ -5453,7 +5522,7 @@ def test_number_helper_rejects_non_finite_values(hass):
         ["number.nan_reading", "number.infinite_reading", "number.valid_reading"],
     )
 
-    assert defaults[CONF_INITIAL_VALUE] == "400.0"
+    assert defaults[CONF_INITIAL_VALUE] == "0"
     assert (
         Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
             variables={
@@ -5497,7 +5566,34 @@ def test_number_helper_filters_positive_spikes(hass, states, expected):
         )
         == expected
     )
-    assert float(defaults[CONF_INITIAL_VALUE]) == expected
+    assert defaults[CONF_INITIAL_VALUE] == "0"
+
+
+@pytest.mark.parametrize("bad_unit", [None, "None", "none", "", "unavailable", "unknown"])
+def test_reference_metadata_skips_invalid_units_and_offline_sources(hass, bad_unit):
+    hass.states.async_set("sensor.bad", "1", {"unit_of_measurement": bad_unit, "icon": "mdi:close"})
+    hass.states.async_set("sensor.offline", "unavailable", {"unit_of_measurement": "W", "icon": "mdi:close"})
+    hass.states.async_set("sensor.good", "20", {"unit_of_measurement": "°C", "icon": "mdi:thermometer"})
+    defaults = _reference_entity_defaults(hass, ["sensor.bad", "sensor.offline", "sensor.good"])
+    templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    unit = Template(templates["native_unit_of_measurement"], hass)
+    icon = Template(defaults[CONF_ICON_TEMPLATE], hass)
+    assert unit.async_render() == "°C"
+    assert icon.async_render() == "mdi:thermometer"
+    assert defaults[CONF_ICON] == "mdi:thermometer"
+    hass.states.async_set("sensor.good", "unavailable", {"unit_of_measurement": "°C"})
+    assert unit.async_render() == "°C"
+    hass.states.async_set("sensor.bad", "3", {"unit_of_measurement": "°F", "icon": "mdi:thermometer-lines"})
+    assert unit.async_render() == "°F"
+    assert icon.async_render() == "mdi:thermometer-lines"
+
+
+def test_reference_metadata_infers_explicit_unit_from_name(hass):
+    hass.states.async_set("sensor.room", "20", {"friendly_name": "거실 온도 (°C)"})
+    defaults = _reference_entity_defaults(hass, ["sensor.room"])
+    templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert Template(templates["native_unit_of_measurement"], hass).async_render() == "°C"
+    assert defaults[CONF_ICON] == "mdi:thermometer"
 
 
 def test_reference_entity_defaults_preserves_water_usage_class_and_unit(hass):
@@ -5563,7 +5659,7 @@ def test_reference_entity_defaults_accepts_standard_energy_sensor(hass):
     defaults = _reference_entity_defaults(hass, ["sensor.energy_monitor"])
 
     assert defaults[CONF_PLATFORM] == "sensor"
-    assert defaults[CONF_INITIAL_VALUE] == "12.5"
+    assert defaults[CONF_INITIAL_VALUE] == "0"
     assert defaults[CONF_DOMAIN_OPTIONS_JSON]
 
 
@@ -5640,7 +5736,7 @@ def test_reference_entity_defaults_combines_string_sources_with_concat_template(
     )
 
     assert defaults[CONF_PLATFORM] == "sensor"
-    assert defaults[CONF_INITIAL_VALUE] == "washeco"
+    assert defaults[CONF_INITIAL_VALUE] == "0"
     assert "values | join('')" in defaults[CONF_VALUE_TEMPLATE]
     assert "washer_phase, washer_mode" in defaults[CONF_VALUE_TEMPLATE]
     assert _yaml_value(defaults[CONF_ATTRIBUTE_TEMPLATES_JSON]) == {
@@ -5729,7 +5825,7 @@ def test_reference_camera_defaults_create_image_and_stream_alias(hass):
     defaults = _reference_entity_defaults(hass, ["camera.front_door"])
 
     assert defaults[CONF_PLATFORM] == "camera"
-    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert defaults[CONF_SOURCE_ENTITIES_TEXT] == "camera.front_door"
     assert defaults[CONF_VALUE_TEMPLATE] == "{{ front_door }}"
     assert _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON]) == {
@@ -5829,7 +5925,7 @@ def test_reference_entity_defaults_combines_date_sources_with_latest_template(ha
     )
 
     assert defaults[CONF_PLATFORM] == "date"
-    assert defaults[CONF_INITIAL_VALUE] == "2026-08-04"
+    assert defaults[CONF_INITIAL_VALUE] == "unknown"
     assert "sort | last" in defaults[CONF_VALUE_TEMPLATE]
 
 
@@ -5843,7 +5939,7 @@ def test_reference_entity_defaults_combines_time_sources_with_latest_template(ha
     )
 
     assert defaults[CONF_PLATFORM] == "time"
-    assert defaults[CONF_INITIAL_VALUE] == "21:15:00"
+    assert defaults[CONF_INITIAL_VALUE] == "unknown"
     assert "sort | last" in defaults[CONF_VALUE_TEMPLATE]
 
 
@@ -5858,7 +5954,7 @@ def test_reference_entity_defaults_combines_datetime_sources_with_latest_templat
     )
 
     assert defaults[CONF_PLATFORM] == "datetime"
-    assert defaults[CONF_INITIAL_VALUE] == "2026-08-03T20:00:00+00:00"
+    assert defaults[CONF_INITIAL_VALUE] == "unknown"
     assert "as_timestamp" in defaults[CONF_VALUE_TEMPLATE]
     assert (
         Template(defaults[CONF_VALUE_TEMPLATE], hass).async_render(
@@ -5884,7 +5980,7 @@ def test_reference_entity_defaults_combines_enum_sources_with_first_available_te
     )
 
     assert defaults[CONF_PLATFORM] == "select"
-    assert defaults[CONF_INITIAL_VALUE] == "eco"
+    assert defaults[CONF_INITIAL_VALUE] == "unknown"
     assert "values[0] if values else 'unknown'" in defaults[CONF_VALUE_TEMPLATE]
 
 
@@ -7954,7 +8050,7 @@ def test_generated_helpers_are_editable_values_and_yaml_suggestions(hass):
     form_data = _flatten_entity_form_sections(schema({}))
     actions = form_data[CONF_COMMAND_ACTIONS_JSON]
     assert actions == _yaml_value(command_marker.description["suggested_value"])
-    assert actions["set_percentage"][0]["choose"][0]["sequence"][0]["target"] == {
+    assert actions["set_percentage"][0]["choose"][0]["sequence"][-1]["target"] == {
         ATTR_ENTITY_ID: number_entity_id
     }
 
@@ -8147,6 +8243,10 @@ def test_matter_fan_helper_reduces_stepped_source_and_writes_selected_levels(has
     assert native["speed_count"] == "{{ 3 }}"
     assert generated["speed_count"] == 3
     assert Template(native["percentage"], hass).async_render() == 67
+    assert Template(native["preset_modes"], hass).async_render(
+        parse_result=True
+    ) == ["low", "medium", "high"]
+    assert Template(native["preset_mode"], hass).async_render() == "medium"
     actions = _parse_command_actions(generated[CONF_COMMAND_ACTIONS_JSON], "fan")
     assert actions["turn_off"][0]["action"] == "fan.turn_off"
     command_template = actions["set_percentage"][0]["data"]["percentage"]
@@ -8180,7 +8280,27 @@ def test_matter_fan_helper_reduces_stepped_source_and_writes_selected_levels(has
         )
         == 100
     )
-    turn_on_template = actions["turn_on"][0]["data"]
+    preset_action = actions["set_preset_mode"][0]
+    assert preset_action["action"] == "fan.set_percentage"
+    assert (
+        Template(preset_action["data"]["percentage"], hass).async_render(
+            variables={"preset_mode": "low"}, parse_result=True
+        )
+        == 20
+    )
+    assert (
+        Template(preset_action["data"]["percentage"], hass).async_render(
+            variables={"preset_mode": "medium"}, parse_result=True
+        )
+        == 60
+    )
+    assert (
+        Template(preset_action["data"]["percentage"], hass).async_render(
+            variables={"preset_mode": "high"}, parse_result=True
+        )
+        == 100
+    )
+    turn_on_template = actions["turn_on"][0]["default"][0]["data"]
     assert Template(turn_on_template, hass).async_render(
         variables={"command_data": {"percentage": 67}}, parse_result=True
     ) == {"percentage": 60}
