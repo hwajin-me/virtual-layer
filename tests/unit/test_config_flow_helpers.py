@@ -1,5 +1,6 @@
 """Unit tests for Virtual Layer config flow helpers."""
 
+import copy
 import json
 import logging
 from datetime import timedelta
@@ -158,6 +159,8 @@ from custom_components.virtual_layer.config_flow import (
     _reference_edit_defaults,
     _reference_entity_defaults,
     _reference_entity_schema,
+    _regenerate_entity_ids_schema,
+    _regenerate_ui_entity_ids,
     _refresh_add_reference_defaults,
     _replace_ui_device,
     _replace_ui_entity,
@@ -548,10 +551,71 @@ def test_all_config_flow_forms_are_frontend_serializable():
         ("select_device", _select_device_schema(options)),
         ("select_entity", _select_entity_schema(options)),
         ("delete_entities", _delete_entities_schema(options)),
+        ("regenerate_entity_ids", _regenerate_entity_ids_schema()),
     ]
 
     for name, schema in schemas:
         assert convert(schema, custom_serializer=cv.custom_serializer), name
+
+
+def test_regenerate_ui_entity_ids_uses_names_and_avoids_collisions(hass):
+    hass.states.async_set("sensor.temp", "21")
+    options = {
+        ATTR_DEVICES: {
+            "Kitchen": [
+                    {
+                        CONF_PLATFORM: "sensor",
+                        CONF_NAME: "Temperature",
+                        ATTR_ENTITY_ID: "sensor.old_temperature",
+                    },
+                    {
+                        CONF_PLATFORM: "sensor",
+                        CONF_NAME: "Temperature",
+                        ATTR_ENTITY_ID: "sensor.other_temperature",
+                    },
+                    {
+                        CONF_PLATFORM: "sensor",
+                        CONF_NAME: "",
+                        ATTR_ENTITY_ID: "sensor.keep_invalid",
+                    },
+            ]
+        }
+    }
+
+    regenerated = _regenerate_ui_entity_ids(hass, options)
+
+    assert [entity[ATTR_ENTITY_ID] for entity in regenerated[ATTR_DEVICES]["Kitchen"]] == [
+        "sensor.temp_2",
+        "sensor.temp_3",
+        "sensor.keep_invalid",
+    ]
+    assert options[ATTR_DEVICES]["Kitchen"][0][ATTR_ENTITY_ID] == "sensor.old_temperature"
+
+
+def test_regenerate_ui_entity_ids_changes_no_entity_values_except_ids(hass):
+    entity = {
+        CONF_PLATFORM: "sensor",
+        CONF_NAME: "Laundry Temperature",
+        ATTR_ENTITY_ID: "sensor.legacy_laundry_temperature",
+        CONF_SOURCE_ENTITIES: ["sensor.washer_temperature"],
+        CONF_VALUE_TEMPLATE: "{{ states('sensor.washer_temperature') }}",
+        CONF_ATTRIBUTES: {"nested": {"preserve": ["all", "values"]}},
+        CONF_COMMAND_ACTIONS: {"turn_on": {"action": "homeassistant.update_entity"}},
+    }
+    options = {
+        ATTR_DEVICES: {"Laundry": [entity]},
+        ATTR_DEVICE_ATTRIBUTES: {"Laundry": {ATTR_DEVICE_ID: "laundry-1"}},
+        "vendor_extension": {"keep": True},
+    }
+    expected = copy.deepcopy(options)
+
+    regenerated = _regenerate_ui_entity_ids(hass, options)
+    regenerated_entity = regenerated[ATTR_DEVICES]["Laundry"][0]
+
+    assert regenerated_entity[ATTR_ENTITY_ID] == "sensor.laundry_temp"
+    expected[ATTR_DEVICES]["Laundry"][0][ATTR_ENTITY_ID] = regenerated_entity[ATTR_ENTITY_ID]
+    assert regenerated == expected
+    assert options[ATTR_DEVICES]["Laundry"][0][ATTR_ENTITY_ID] == "sensor.legacy_laundry_temperature"
 
 
 def test_single_switch_source_can_target_fan_with_power_command_helpers(hass):

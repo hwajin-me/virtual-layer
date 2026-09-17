@@ -161,6 +161,7 @@ CONF_DEVICE_VIA_DEVICE_ID = "device_via_device_id"
 CONF_ENTITY_NAME = "entity_name"
 CONF_ENTITY_KEY = "entity_key"
 CONF_ENTITY_KEYS = "entity_keys"
+CONF_CONFIRM_REGENERATE_ENTITY_IDS = "confirm_regenerate_entity_ids"
 CONF_MANAGED_DEVICE_NAME = "managed_device_name"
 CONF_REFERENCE_ENTITY_ID = "reference_entity_id"
 CONF_TARGET_ENTITY_TYPE = "target_entity_type"
@@ -1105,6 +1106,7 @@ ACTION_DELETE_DEVICE = "delete_device"
 ACTION_EDIT_ENTITY = "edit_entity"
 ACTION_FINISH = "finish"
 ACTION_MANAGE_DEVICES = "manage_devices"
+ACTION_REGENERATE_ENTITY_IDS = "regenerate_entity_ids"
 
 DEFAULT_ENTITY_DOMAIN = "sensor"
 DEFAULT_ENTITY_VALUE = "unknown"
@@ -2994,6 +2996,8 @@ def _options_schema(options: dict[str, Any]) -> vol.Schema:
         actions.append(ACTION_EDIT_ENTITY)
     if _entity_choices(options, include_invalid=True):
         actions.append(ACTION_DELETE_ENTITY)
+    if _entity_choices(options):
+        actions.append(ACTION_REGENERATE_ENTITY_IDS)
     if _options_devices(options):
         actions.append(ACTION_MANAGE_DEVICES)
         actions.append(ACTION_DELETE_DEVICE)
@@ -5692,6 +5696,75 @@ def _select_device_schema(options: dict[str, Any]) -> vol.Schema:
             }
         )
     )
+
+
+def _regenerate_entity_ids_schema() -> vol.Schema:
+    """Require an explicit acknowledgement before changing every entity ID."""
+    return _complete_form_schema(
+        vol.Schema({vol.Required(CONF_CONFIRM_REGENERATE_ENTITY_IDS): bool})
+    )
+
+
+def _regenerated_entity_id(platform: str, name: str, reserved: set[str]) -> str:
+    """Generate a unique automatic ID without using an ID reserved by HA."""
+    base = _default_virtual_entity_id(platform, name)
+    if not base:
+        raise InvalidEntityId
+    candidate = base
+    suffix = 2
+    while candidate in reserved:
+        object_id = base.split(".", 1)[1]
+        suffix_text = f"_{suffix}"
+        object_id = object_id[: MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH - len(suffix_text)]
+        candidate = f"{platform}.{object_id.rstrip('_')}{suffix_text}"
+        suffix += 1
+    return candidate
+
+
+def _regenerate_ui_entity_ids(hass: HomeAssistant, options: Mapping) -> dict[str, Any]:
+    """Replace every valid configured ID with its name-derived automatic ID.
+
+    Invalid legacy records are intentionally retained unchanged so this bulk
+    maintenance operation never turns recoverable configuration into data loss.
+    """
+    next_options = _plain_options(options)
+    own_ids = {
+        entity_id
+        for entity in _iter_option_entities(next_options)
+        if (entity_id := _virtual_entity_id(entity))
+    }
+    reserved = {
+        entry.entity_id
+        for entry in er.async_get(hass).entities.values()
+        if entry.entity_id not in own_ids
+    }
+    reserved.update(
+        state.entity_id
+        for state in hass.states.async_all()
+        if state.entity_id not in own_ids
+    )
+
+    devices = next_options.get(ATTR_DEVICES, {})
+    if not isinstance(devices, dict):
+        return next_options
+    for entities in devices.values():
+        if not isinstance(entities, list):
+            continue
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            platform = entity.get(CONF_PLATFORM)
+            name = entity.get(CONF_NAME)
+            if (
+                platform not in VIRTUAL_ENTITY_DOMAINS
+                or not isinstance(name, str)
+                or not name.strip()
+            ):
+                continue
+            entity_id = _regenerated_entity_id(platform, name.strip(), reserved)
+            entity[ATTR_ENTITY_ID] = entity_id
+            reserved.add(entity_id)
+    return next_options
 
 
 def _device_form_defaults(
@@ -12128,6 +12201,8 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                 return await self.async_step_select_entity()
             if user_input[CONF_ACTION] == ACTION_DELETE_ENTITY:
                 return await self.async_step_delete_entities()
+            if user_input[CONF_ACTION] == ACTION_REGENERATE_ENTITY_IDS:
+                return await self.async_step_regenerate_entity_ids()
             if user_input[CONF_ACTION] == ACTION_MANAGE_DEVICES:
                 return await self.async_step_select_device()
             if user_input[CONF_ACTION] == ACTION_DELETE_DEVICE:
@@ -12138,6 +12213,25 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
             step_id="init",
             data_schema=_options_schema(self.config_entry.options),
             errors=errors,
+        )
+
+    async def async_step_regenerate_entity_ids(self, user_input=None):
+        """Regenerate all valid virtual entity IDs after explicit confirmation."""
+        if not _entity_choices(self.config_entry.options):
+            return await self.async_step_init()
+        if user_input is not None:
+            if user_input.get(CONF_CONFIRM_REGENERATE_ENTITY_IDS) is True:
+                return self.async_create_entry(
+                    data=_regenerate_ui_entity_ids(self.hass, self.config_entry.options)
+                )
+            return self.async_show_form(
+                step_id="regenerate_entity_ids",
+                data_schema=_regenerate_entity_ids_schema(),
+                errors={CONF_CONFIRM_REGENERATE_ENTITY_IDS: "required"},
+            )
+        return self.async_show_form(
+            step_id="regenerate_entity_ids",
+            data_schema=_regenerate_entity_ids_schema(),
         )
 
     async def async_step_select_device(self, user_input=None):

@@ -86,6 +86,8 @@ from custom_components.virtual_layer.config_flow import (
     ACTION_EDIT_ENTITY,
     ACTION_FINISH,
     ACTION_MANAGE_DEVICES,
+    ACTION_REGENERATE_ENTITY_IDS,
+    CONF_CONFIRM_REGENERATE_ENTITY_IDS,
     CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     CONF_ACTION,
@@ -3858,6 +3860,46 @@ async def test_options_flow_allows_device_name_collision_with_different_id(hass)
         ATTR_DEVICE_ID: "different-id",
         CONF_NAME: "HVAC",
     }
+
+
+async def test_options_flow_regenerates_all_entity_ids_after_confirmation(hass):
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "ui"},
+        options={
+            ATTR_DEVICES: {
+                "Laundry": [
+                    {
+                        CONF_PLATFORM: "sensor",
+                        CONF_NAME: "Washer Phase",
+                        ATTR_ENTITY_ID: "sensor.legacy_phase",
+                    },
+                    {
+                        CONF_PLATFORM: "binary_sensor",
+                        CONF_NAME: "Washer Door",
+                        ATTR_ENTITY_ID: "binary_sensor.legacy_door",
+                    },
+                ]
+            }
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_REGENERATE_ENTITY_IDS}
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "regenerate_entity_ids"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_CONFIRM_REGENERATE_ENTITY_IDS: True}
+    )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert [
+        entity[ATTR_ENTITY_ID] for entity in result["data"][ATTR_DEVICES]["Laundry"]
+    ] == ["sensor.washer_phase", "binary_sensor.washer_door"]
 
 
 async def test_options_flow_can_delete_multiple_entities(hass):

@@ -1099,6 +1099,16 @@
           "entity_key": "소스, helper 템플릿, 네이티브 값, Action 또는 소속 장치를 변경할 엔티티를 선택합니다."
         }
       },
+      "regenerate_entity_ids": {
+        "title": "가상 엔티티 ID 자동 재생성",
+        "description": "이 구성의 유효한 모든 가상 엔티티 ID를 이름 기반 자동 ID로 바꿉니다. 이전 ID를 사용하는 참조, 대시보드, 자동화 및 기록은 직접 업데이트해야 합니다.",
+        "data": {
+          "confirm_regenerate_entity_ids": "모든 가상 엔티티 ID가 변경됨을 이해했습니다"
+        },
+        "data_description": {
+          "confirm_regenerate_entity_ids": "유효한 모든 가상 엔티티 ID를 재생성하려면 확인하세요. 이름 충돌에는 숫자 접미사가 붙으며, 다른 엔티티가 사용 중인 ID는 피합니다."
+        }
+      },
       "select_device": {
         "title": "가상 장치 관리",
         "description": "관리할 가상 장치를 선택하세요. 그룹을 쉽게 확인할 수 있도록 엔티티 수를 표시합니다.",
@@ -3071,6 +3081,7 @@
         "add_entity": "가상 엔티티 추가",
         "edit_entity": "가상 엔티티 수정",
         "delete_entity": "가상 엔티티 삭제",
+        "regenerate_entity_ids": "전체 가상 엔티티 ID 자동 재생성",
         "manage_devices": "가상 장치 관리",
         "delete_device": "가상 장치 삭제",
         "finish": "완료"
