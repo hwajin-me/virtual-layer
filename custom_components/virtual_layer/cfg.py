@@ -35,6 +35,7 @@ from .entity import (
     repair_legacy_template_data,
     virtual_schema,
 )
+from .sensor_units import UNITS_OF_MEASUREMENT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1085,7 +1086,7 @@ class BlendedCfg:
             unit = entity.get(CONF_UNIT_OF_MEASUREMENT) or attributes.get("unit_of_measurement")
             metadata_valid = metadata_valid and (unit is None or isinstance(unit, str))
             if not unit and metadata_valid:
-                unit = import_module(".sensor", __package__).UNITS_OF_MEASUREMENT.get(device_class)
+                unit = UNITS_OF_MEASUREMENT.get(device_class)
             attributes["unit_of_measurement"] = unit
             snapshot = State(entity_id, str(entity.get(CONF_INITIAL_VALUE, "unknown")), attributes)
             if platform == "sensor" and not device_class and aq_options.infer_quantity(snapshot) is None:
