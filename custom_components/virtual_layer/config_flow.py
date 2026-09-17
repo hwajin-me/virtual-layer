@@ -1105,6 +1105,7 @@ _ATTRIBUTE_HELPER_METADATA_NAMES = (
 )
 
 ACTION_ADD_ENTITY = "add_entity"
+ACTION_COPY_ENTITY = "copy_entity"
 ACTION_DELETE_ENTITY = "delete_entity"
 ACTION_DELETE_DEVICE = "delete_device"
 ACTION_EDIT_ENTITY = "edit_entity"
@@ -3025,6 +3026,7 @@ def _options_schema(options: dict[str, Any]) -> vol.Schema:
     actions = [ACTION_ADD_ENTITY]
     if _entity_choices(options):
         actions.append(ACTION_EDIT_ENTITY)
+        actions.append(ACTION_COPY_ENTITY)
     if _entity_choices(options, include_invalid=True):
         actions.append(ACTION_DELETE_ENTITY)
     if _entity_choices(options):
@@ -6202,6 +6204,44 @@ def _select_entity_schema(options: dict[str, Any]) -> vol.Schema:
             }
         )
     )
+
+
+def _copied_entity_id(hass, entity: Mapping, entity_name: str) -> str:
+    """Return a unique, editable ID suggestion for a copied virtual entity."""
+    platform = entity.get(CONF_PLATFORM)
+    if platform not in VIRTUAL_ENTITY_DOMAINS:
+        platform = DEFAULT_ENTITY_DOMAIN
+    source_id = _virtual_entity_id(entity)
+    if source_id is None:
+        source_id = _default_virtual_entity_id(platform, entity_name)
+    if not source_id:
+        return ""
+    object_id = source_id.split(".", 1)[1]
+    base_object_id = (
+        object_id[: MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH - 5].rstrip("_")
+        + "_copy"
+    )
+    base = f"{platform}.{base_object_id}"
+    # Config entries are the authoritative persisted collision set; registry
+    # and current states also reserve IDs that do not belong to this entry.
+    reserved = {
+        entity_id
+        for entry in hass.config_entries.async_entries(COMPONENT_DOMAIN)
+        for configured_entity in _iter_option_entities(entry.options)
+        if (entity_id := _virtual_entity_id(configured_entity))
+    }
+    reserved.update(entry.entity_id for entry in er.async_get(hass).entities.values())
+    reserved.update(state.entity_id for state in hass.states.async_all())
+    candidate = base
+    suffix = 2
+    while candidate in reserved:
+        suffix_text = f"_{suffix}"
+        object = base_object_id[
+            : MAX_GENERATED_ENTITY_OBJECT_ID_LENGTH - len(suffix_text)
+        ].rstrip("_")
+        candidate = f"{platform}.{object}{suffix_text}"
+        suffix += 1
+    return candidate
 
 
 def _delete_entities_schema(options: dict[str, Any]) -> vol.Schema:
@@ -12418,6 +12458,7 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
         self._add_target_device_name: str | None = None
         self._add_source_entities: list[str] = []
         self._add_use_template_helper = True
+        self._copy_auto_helper_profile: dict[str, Any] | None = None
         self._add_matter_fan_levels: tuple[int, ...] = ()
         self._add_matter_fan_level_sources: dict[str, tuple[int, ...]] = {}
         self._add_matter_fan_speed_source: str | None = None
@@ -12450,6 +12491,8 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                 )
             if user_input[CONF_ACTION] == ACTION_EDIT_ENTITY:
                 return await self.async_step_select_entity()
+            if user_input[CONF_ACTION] == ACTION_COPY_ENTITY:
+                return await self.async_step_copy_entity()
             if user_input[CONF_ACTION] == ACTION_DELETE_ENTITY:
                 return await self.async_step_delete_entities()
             if user_input[CONF_ACTION] == ACTION_REGENERATE_ENTITY_IDS:
@@ -12996,6 +13039,10 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                     user_input,
                     (self._reference_defaults if self._add_use_template_helper else {}),
                 )
+                if self._copy_auto_helper_profile is not None:
+                    entity[CONF_AUTO_HELPER] = copy.deepcopy(
+                        self._copy_auto_helper_profile
+                    )
                 device_config = _build_device_config(user_input, device_name, self.hass)
                 options = _append_ui_entity(
                     self.config_entry.options,
@@ -13085,6 +13132,49 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
 
         return self.async_show_form(
             step_id="select_entity",
+            data_schema=_select_entity_schema(self.config_entry.options),
+            errors=errors,
+        )
+
+    async def async_step_copy_entity(self, user_input=None):
+        """Copy a virtual entity into a new editable entity on the same Device."""
+        errors = _flow_errors(self, "copy_entity")
+        if not _entity_choices(self.config_entry.options):
+            return await self.async_step_init()
+
+        if user_input is not None:
+            try:
+                device_name, index = _find_entity_by_selection_key(
+                    self.config_entry.options, user_input[CONF_ENTITY_KEY]
+                )
+                entity = _get_ui_entity(self.config_entry.options, device_name, index)
+                defaults = _entity_form_defaults(
+                    device_name, entity, self.config_entry.options
+                )
+                original_name = defaults[CONF_ENTITY_NAME]
+                defaults[CONF_ENTITY_NAME] = f"{original_name} Copy"
+                defaults[ATTR_ENTITY_ID] = _copied_entity_id(
+                    self.hass, entity, defaults[CONF_ENTITY_NAME]
+                )
+                self._entity_defaults = _complete_domain_form_defaults(defaults)
+                self._reference_defaults = {}
+                profile = entity.get(CONF_AUTO_HELPER)
+                self._copy_auto_helper_profile = (
+                    copy.deepcopy(profile) if isinstance(profile, Mapping) else None
+                )
+                self._add_source_entities = _stored_entity_ids(
+                    defaults.get(CONF_SOURCE_ENTITIES_TEXT)
+                )
+                # A copy preserves its configured templates verbatim instead
+                # of regenerating them from sources while it is first saved.
+                self._add_use_template_helper = False
+                self._add_motion_hold_configured = tuple(self._add_source_entities)
+                return await self.async_step_entity()
+            except InvalidEntitySelection:
+                errors[CONF_ENTITY_KEY] = "entity_not_found"
+
+        return self.async_show_form(
+            step_id="copy_entity",
             data_schema=_select_entity_schema(self.config_entry.options),
             errors=errors,
         )

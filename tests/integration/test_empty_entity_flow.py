@@ -8,16 +8,19 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.virtual_layer.config_flow import (
     ACTION_ADD_ENTITY,
+    ACTION_COPY_ENTITY,
     CONF_ACTION,
     CONF_ADD_FIRST_ENTITY,
     CONF_DEVICE_NAME,
     CONF_ENTITY_NAME,
     CONF_INITIAL_VALUE,
+    CONF_ENTITY_KEY,
     _flatten_entity_form_sections,
     _entity_schema,
 )
 from custom_components.virtual_layer.const import (
     ATTR_DEVICES,
+    ATTR_ENTITY_ID,
     ATTR_GROUP_NAME,
     COMPONENT_DOMAIN,
 )
@@ -84,3 +87,47 @@ async def test_add_entity_without_sources(hass, platform, initial_setup):
         submitted = _suggested_values(result["data_schema"])
         result = await manager.async_configure(result["flow_id"], submitted)
     assert result["type"] == FlowResultType.CREATE_ENTRY, result
+
+
+async def test_copy_entity_opens_editable_copy_with_new_id_and_preserves_original(hass):
+    """Copying starts a new entity flow and never replaces the source record."""
+    entry = MockConfigEntry(
+        domain=COMPONENT_DOMAIN,
+        data={ATTR_GROUP_NAME: "Kitchen"},
+        options={
+            ATTR_DEVICES: {
+                "Kitchen": [
+                    {
+                        "platform": "sensor",
+                        "name": "Temperature",
+                        ATTR_ENTITY_ID: "sensor.kitchen_temperature",
+                        "source_entities": ["sensor.source_temperature"],
+                        "value_template": "{{ states('sensor.source_temperature') }}",
+                    }
+                ]
+            }
+        },
+    )
+    entry.add_to_hass(hass)
+    hass.states.async_set("sensor.source_temperature", "21")
+
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_COPY_ENTITY}
+    )
+    assert result["step_id"] == "copy_entity"
+    selection = _suggested_values(result["data_schema"])[CONF_ENTITY_KEY]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_ENTITY_KEY: selection}
+    )
+    assert result["step_id"] == "entity"
+
+    submitted = _flatten_entity_form_sections(_suggested_values(result["data_schema"]))
+    assert submitted[CONF_ENTITY_NAME] == "Temperature Copy"
+    assert submitted[ATTR_ENTITY_ID] == "sensor.kitchen_temperature_copy"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], submitted)
+    assert result["type"] == FlowResultType.CREATE_ENTRY, result
+    copied = result["data"][ATTR_DEVICES]["Kitchen"]
+    assert len(copied) == 2
+    assert copied[0][ATTR_ENTITY_ID] == "sensor.kitchen_temperature"
+    assert copied[1][ATTR_ENTITY_ID] == "sensor.kitchen_temperature_copy"
+    assert copied[1]["source_entities"] == ["sensor.source_temperature"]

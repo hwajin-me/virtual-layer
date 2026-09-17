@@ -1107,6 +1107,16 @@
           "entity_key": "소스, helper 템플릿, 네이티브 값, Action 또는 소속 장치를 변경할 엔티티를 선택합니다."
         }
       },
+      "copy_entity": {
+        "title": "가상 엔티티 복사",
+        "description": "복사할 가상 엔티티를 선택하세요. 설정과 Device 연결을 복사한 뒤 다음 화면에서 새 엔티티의 이름과 ID를 지정할 수 있습니다.",
+        "data": {
+          "entity_key": "가상 엔티티"
+        },
+        "data_description": {
+          "entity_key": "구성을 복사할 가상 엔티티를 선택하세요. 원본 엔티티는 변경되지 않습니다."
+        }
+      },
       "regenerate_entity_ids": {
         "title": "가상 엔티티 ID 자동 재생성",
         "description": "이 구성의 유효한 모든 가상 엔티티 ID를 이름 기반 자동 ID로 바꿉니다. 이전 ID를 사용하는 참조, 대시보드, 자동화 및 기록은 직접 업데이트해야 합니다.",
@@ -3104,6 +3114,7 @@
       "options": {
         "add_entity": "가상 엔티티 추가",
         "edit_entity": "가상 엔티티 수정",
+        "copy_entity": "가상 엔티티 복사",
         "delete_entity": "가상 엔티티 삭제",
         "regenerate_entity_ids": "전체 가상 엔티티 ID 자동 재생성",
         "manage_devices": "가상 장치 관리",

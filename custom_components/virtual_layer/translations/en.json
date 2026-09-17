@@ -1107,6 +1107,16 @@
           "entity_key": "Select the entity whose source, helper templates, native values, actions, or device assignment should be changed."
         }
       },
+      "copy_entity": {
+        "title": "Copy Virtual Entity",
+        "description": "Choose a virtual entity to copy. Its settings and Device assignment are copied; give the new entity its own name and ID on the next screen.",
+        "data": {
+          "entity_key": "Virtual entity"
+        },
+        "data_description": {
+          "entity_key": "Select the virtual entity whose configuration should be copied. The original entity is not changed."
+        }
+      },
       "regenerate_entity_ids": {
         "title": "Regenerate Virtual Entity IDs",
         "description": "Replace the IDs of all valid virtual entities in this configuration with automatic IDs based on their names. Existing references, dashboards, automations, and history using the old IDs will need to be updated.",
@@ -3104,6 +3114,7 @@
       "options": {
         "add_entity": "Add a virtual entity",
         "edit_entity": "Edit a virtual entity",
+        "copy_entity": "Copy a virtual entity",
         "delete_entity": "Delete virtual entities",
         "regenerate_entity_ids": "Regenerate all virtual entity IDs",
         "manage_devices": "Manage virtual devices",
