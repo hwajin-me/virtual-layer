@@ -1565,6 +1565,59 @@ def test_sensor_details_offer_template_backed_native_properties_and_icon():
     }
 
 
+def test_binary_sensor_display_type_is_editable_and_imported_from_source(hass):
+    """Binary-sensor device class drives HA's rendered on/off presentation."""
+    source = "binary_sensor.front_door"
+    hass.states.async_set(source, "off", {"device_class": "door"})
+
+    defaults = _reference_entity_defaults(hass, [source])
+    template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["device_class"]
+
+    assert defaults[CONF_PLATFORM] == "binary_sensor"
+    assert Template(template, hass).async_render(parse_result=True) == "door"
+
+    schema = _entity_schema(defaults)
+    native = _section_validators(schema, CONF_NATIVE_VALUE_TEMPLATES)
+    assert isinstance(native["device_class"], selector.TemplateSelector)
+
+    hass.states.async_set(source, "off", {"device_class": "window"})
+    assert Template(template, hass).async_render(parse_result=True) == "window"
+
+
+def test_binary_sensor_display_type_helper_obeys_source_update_policy(hass):
+    """Automatic refresh replaces only an untouched display-type helper."""
+    old_source = "binary_sensor.old_door"
+    new_source = "binary_sensor.new_window"
+    hass.states.async_set(old_source, "off", {"device_class": "door"})
+    hass.states.async_set(new_source, "off", {"device_class": "window"})
+
+    generated = _reference_entity_defaults(hass, [old_source])
+    replacement = _reference_entity_defaults(hass, [new_source])
+    refreshed = _reference_edit_defaults(
+        generated,
+        replacement,
+        _auto_helper_profile(generated),
+    )
+
+    assert Template(
+        refreshed[CONF_NATIVE_VALUE_TEMPLATES]["device_class"], hass
+    ).async_render(parse_result=True) == "window"
+
+    customized = {
+        **generated,
+        CONF_NATIVE_VALUE_TEMPLATES: {
+            **generated[CONF_NATIVE_VALUE_TEMPLATES],
+            "device_class": "{{ 'moisture' }}",
+        },
+    }
+    preserved = _reference_edit_defaults(
+        customized,
+        replacement,
+        _auto_helper_profile(generated),
+    )
+    assert preserved[CONF_NATIVE_VALUE_TEMPLATES]["device_class"] == "{{ 'moisture' }}"
+
+
 def test_light_form_persists_matter_device_type():
     schema = _entity_schema({CONF_PLATFORM: "light"})
     outer = {marker.schema: validator for marker, validator in schema.schema.items()}

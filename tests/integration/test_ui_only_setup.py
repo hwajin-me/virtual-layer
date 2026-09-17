@@ -6484,8 +6484,12 @@ async def test_edit_three_occupancy_sources_helper_policy(hass, policy):
 async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_entities(
     hass,
 ):
-    hass.states.async_set("binary_sensor.front_door", "on")
-    hass.states.async_set("binary_sensor.back_door", "on")
+    hass.states.async_set(
+        "binary_sensor.front_door", "on", {"device_class": "door"}
+    )
+    hass.states.async_set(
+        "binary_sensor.back_door", "on", {"device_class": "door"}
+    )
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "ui"},
@@ -6518,6 +6522,8 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
         "binary_sensor.front_door\nbinary_sensor.back_door"
     )
     assert " and " in defaults[CONF_VALUE_TEMPLATE]
+    display_type_template = defaults[CONF_NATIVE_VALUE_TEMPLATES]["device_class"]
+    assert Template(display_type_template, hass).async_render(parse_result=True) == "door"
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -6532,6 +6538,26 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = _first_stored_entity(result)
+    runtime_config = {
+        key: value
+        for key, value in entity.items()
+        if key not in {CONF_PLATFORM, ATTR_ENTITY_KEY, CONF_AUTO_HELPER}
+    }
+    virtual_entity = virtual_binary_sensor.VirtualBinarySensor(
+        virtual_binary_sensor.BINARY_SENSOR_SCHEMA(runtime_config), False
+    )
+    virtual_entity.hass = hass
+    virtual_entity._create_state(virtual_entity._config)
+    virtual_entity.async_schedule_update_ha_state = Mock()
+    virtual_entity._apply_templates()
+    assert virtual_entity._attr_device_class.value == "door"
+
+    # The imported helper remains dynamic after the saved config is loaded.
+    hass.states.async_set(
+        "binary_sensor.front_door", "on", {"device_class": "window"}
+    )
+    virtual_entity._apply_templates()
+    assert virtual_entity._attr_device_class.value == "window"
     entity.pop(ATTR_ENTITY_KEY)
     entity.pop("auto_helper")
     for generated_field in (
@@ -6566,7 +6592,9 @@ async def test_options_flow_can_prefill_composite_binary_sensor_from_multiple_en
         },
         CONF_VALUE_TEMPLATE: defaults[CONF_VALUE_TEMPLATE],
         CONF_AVAILABILITY_TEMPLATE: defaults[CONF_AVAILABILITY_TEMPLATE],
-        CONF_NATIVE_TEMPLATES: {"device_class": "{{ None }}"},
+        CONF_NATIVE_TEMPLATES: {
+            "device_class": display_type_template,
+        },
     }
 
 
