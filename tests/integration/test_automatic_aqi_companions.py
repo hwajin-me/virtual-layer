@@ -413,7 +413,7 @@ async def test_existing_measurement_gets_live_companion_and_cleanup(hass, tmp_pa
     await hass.async_block_till_done()
     assert hass.states.get(old_child_id) is None
     assert registry.async_get(child_id).unique_id == uid
-    assert registry.async_get(child_id).original_name == f"Renamed {quantity} Air Quality"
+    assert registry.async_get(child_id).original_name == f"Renamed {quantity} AQ"
     hass.states.async_set("sensor.physical", "0")
     await hass.async_block_till_done()
     assert hass.states.get(parent_id).state == "0"

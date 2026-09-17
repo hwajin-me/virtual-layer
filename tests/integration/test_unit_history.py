@@ -12,6 +12,7 @@ from homeassistant.util import dt as dt_util
 from custom_components.virtual_layer import config_flow as flow_module, unit_history
 from custom_components.virtual_layer.const import (
     COMPONENT_DOMAIN, ATTR_DEVICES, ATTR_GROUP_NAME, CONF_NATIVE_TEMPLATES,
+    CONF_SOURCE_ENTITIES,
 )
 
 pytestmark = pytest.mark.integration
@@ -65,6 +66,48 @@ async def test_unit_edit_rejects_unconfirmed_history_and_stale_options(hass):
     hass.config_entries.async_update_entry(entry, options={ATTR_DEVICES: {"Units": []}})
     result = await flow.async_step_unit_change({"history_policy": "keep"})
     assert result["type"] == "abort"
+
+
+async def test_edit_flow_recommends_and_applies_formaldehyde_microgram_conversion(hass):
+    source = "sensor.physical_hcho"
+    target = "sensor.legacy_hcho"
+    hass.states.async_set(source, "0.05", {
+        "device_class": "formaldehyde", "unit_of_measurement": "mg/m³",
+    })
+    hass.states.async_set(target, "0.05", {"unit_of_measurement": "m³"})
+    record = {
+        "platform": "sensor", "entity_id": target, "name": "Legacy HCHO",
+        "unit_of_measurement": "m³", CONF_SOURCE_ENTITIES: [source],
+        "value_template": "{{ states('sensor.physical_hcho') }}",
+    }
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Air"},
+                            options={ATTR_DEVICES: {"Air": [record]}})
+    entry.add_to_hass(hass)
+    flow = flow_module.VirtualOptionsFlowHandler()
+    flow.hass = hass
+    flow.handler = entry.entry_id
+    flow.context = {"entry_id": entry.entry_id}
+    flow._edit_device_name = "Air"
+    flow._edit_index = 0
+    flow._entity_defaults = flow_module._entity_form_defaults("Air", record, entry.options)
+    result = await flow.async_step_edit_entity()
+    assert result["step_id"] == "recommended_formaldehyde_unit"
+    result = await flow.async_step_recommended_formaldehyde_unit({"apply": True})
+    assert result["step_id"] == "edit_entity"
+    values = flow._entity_defaults
+    assert "* 1000.0" in values["value_template"]
+    assert "unit_of_measurement: μg/m³" in values["domain_options_json"]
+    assert values["entity_id"] == target
+    submitted = flow_module._flatten_entity_form_sections(
+        suggested_form_values(result["data_schema"])
+    )
+    result = await flow.async_step_edit_entity(submitted)
+    assert result["step_id"] == "unit_change"
+    result = await flow.async_step_unit_change({"history_policy": "keep"})
+    assert result["type"] == "create_entry"
+    saved = result["data"][ATTR_DEVICES]["Air"][0]
+    assert saved["entity_id"] == target
+    assert "* 1000.0" in saved["value_template"]
 
 
 @pytest.mark.parametrize("policy,expected", [("relabel", 1000), ("convert", 1), ("keep", 1000), ("restore", 1000)])

@@ -2802,6 +2802,33 @@ def _apply_sensor_conversion_defaults(
     return result
 
 
+def _formaldehyde_unit_upgrade_choice(hass, defaults: Mapping):
+    """Offer a safe repair only for a legacy m³ virtual HCHO sensor.
+
+    A bare cubic-metre unit is not a formaldehyde concentration.  We require
+    one live, unambiguous HCHO source with a convertible concentration unit,
+    then reuse the normal typed-sensor helper so the value and unit change as
+    one operation.
+    """
+    if defaults.get(CONF_PLATFORM) != "sensor":
+        return None
+    entity_id = defaults.get(ATTR_ENTITY_ID)
+    current = hass.states.get(entity_id) if isinstance(entity_id, str) else None
+    if current is None or aq_options.normalize_unit(
+        current.attributes.get(CONF_UNIT_OF_MEASUREMENT)
+    ) != "m³":
+        return None
+    sources = _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT))
+    if len(sources) != 1:
+        return None
+    source = hass.states.get(sources[0])
+    if source is None or aq_options.infer_quantity(source) != "formaldehyde":
+        return None
+    choices = _sensor_conversion_choices(sources, hass)
+    return next((choice for choice in choices.values()
+                 if choice[2] == "formaldehyde" and choice[4] == "μg/m³"), None)
+
+
 BOOLEAN_SOURCE_DOMAINS = {
     "binary_sensor",
     "fan",
@@ -12700,6 +12727,7 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                 )
                 entity = _get_ui_entity(self.config_entry.options, device_name, index)
                 self._edit_selection_key = user_input[CONF_ENTITY_KEY]
+                self._formaldehyde_unit_recommendation_seen = False
                 self._edit_entity_snapshot = _plain_options(entity)
                 self._edit_device_name = device_name
                 self._edit_index = index
@@ -13297,6 +13325,40 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
             raise InvalidEntitySelection
         self._edit_index = index
 
+    async def async_step_recommended_formaldehyde_unit(self, user_input=None):
+        """Let users repair legacy HCHO volume sensors without guessing values."""
+        defaults = self._entity_defaults or {}
+        choice = _formaldehyde_unit_upgrade_choice(self.hass, defaults)
+        if choice is None:
+            return await self.async_step_edit_entity()
+        if user_input is not None:
+            self._formaldehyde_unit_recommendation_seen = True
+            if user_input.get("apply"):
+                name = defaults.get(CONF_ENTITY_NAME)
+                entity_id = defaults.get(ATTR_ENTITY_ID)
+                device_name = defaults.get(CONF_DEVICE_NAME)
+                defaults = _apply_sensor_conversion_defaults(self.hass, defaults, choice)
+                # This is a unit repair, not a rename or an entity-ID change.
+                defaults[CONF_ENTITY_NAME] = name
+                defaults[ATTR_ENTITY_ID] = entity_id
+                defaults[CONF_DEVICE_NAME] = device_name
+                self._entity_defaults = defaults
+            # The recommendation repairs the existing source binding. Keep the
+            # edit router aligned with that binding so submitting the next form
+            # cannot be misread as a new source selection and loop back into
+            # type/helper steps before the statistics-policy step.
+            self._edit_source_entities = _stored_entity_ids(
+                self._entity_defaults.get(CONF_SOURCE_ENTITIES_TEXT)
+            )
+            return await self.async_step_edit_entity()
+        return self.async_show_form(
+            step_id="recommended_formaldehyde_unit",
+            data_schema=vol.Schema({
+                vol.Required("apply", default=True): selector.BooleanSelector(),
+            }),
+            description_placeholders={"source": choice[0][0]},
+        )
+
     async def async_step_edit_entity(self, user_input=None):
         """Edit a UI-managed virtual entity."""
         errors = _flow_errors(self, "edit_entity")
@@ -13308,6 +13370,11 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
 
         if user_input is None and self._aq_needs_setup(self._entity_defaults, True):
             return await self.async_step_edit_air_quality()
+
+        if (user_input is None
+                and not getattr(self, "_formaldehyde_unit_recommendation_seen", False)
+                and _formaldehyde_unit_upgrade_choice(self.hass, self._entity_defaults or {})):
+            return await self.async_step_recommended_formaldehyde_unit()
 
         if (
             user_input is None

@@ -118,6 +118,7 @@ from custom_components.virtual_layer.config_flow import (
     _entity_schema,
     _entity_type_schema,
     _apply_sensor_conversion_defaults,
+    _formaldehyde_unit_upgrade_choice,
     _sensor_conversion_choices,
     _sensor_conversion_schema,
     _sensor_aggregation_from_defaults,
@@ -957,6 +958,27 @@ def test_multi_sensor_conversion_allows_incompatible_measurements_as_unitless(ha
 )
 def test_sensor_unit_conversion_profile(units, expected):
     assert _sensor_unit_conversion_profile(units) == expected
+
+
+def test_formaldehyde_unit_recommendation_requires_a_convertible_hcho_source(hass):
+    source = "sensor.physical_hcho"
+    target = "sensor.legacy_formaldehyde"
+    hass.states.async_set(source, "0.05", {
+        "device_class": "formaldehyde", "unit_of_measurement": "mg/m³",
+    })
+    hass.states.async_set(target, "0.05", {"unit_of_measurement": "m³"})
+    defaults = {
+        CONF_PLATFORM: "sensor", ATTR_ENTITY_ID: target,
+        CONF_SOURCE_ENTITIES_TEXT: source,
+    }
+    choice = _formaldehyde_unit_upgrade_choice(hass, defaults)
+    assert choice is not None
+    assert choice[2] == "formaldehyde"
+    assert choice[4] == "μg/m³"
+    hass.states.async_set(source, "0.05", {
+        "device_class": "formaldehyde", "unit_of_measurement": "m³",
+    })
+    assert _formaldehyde_unit_upgrade_choice(hass, defaults) is None
 
 
 @pytest.mark.parametrize(

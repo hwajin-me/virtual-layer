@@ -1167,6 +1167,16 @@
           "mode": "Source: use textual categories. Measurement: classify finite measurements with your own five boundaries. Fixed: publish one chosen category. Custom: keep or write Jinja on the next screen."
         }
       },
+      "recommended_formaldehyde_unit": {
+        "title": "Recommended Formaldehyde Unit",
+        "description": "This virtual sensor currently publishes m³, but its source {source} is identified as formaldehyde. Apply the recommended repair to publish μg/m³ and generate a source-aware conversion template. The source is unchanged; mg/m³ source values are multiplied by 1,000. After you review the normal edit form and save, the next step asks how to handle any existing statistics.",
+        "data": {
+          "apply": "Use μg/m³ and convert the source value"
+        },
+        "data_description": {
+          "apply": "Recommended. This changes this virtual sensor's value and unit templates only. It does not modify the source entity or stable entity ID. Saving then opens the existing-statistics policy step; choose Keep unless historical numbers already need relabelling or conversion. Turn this off to keep the current configuration."
+        }
+      },
       "unit_change": {
         "title": "Handle existing values after a unit change",
         "description": "Entity: {entity_id}. Saving normally changes the Virtual Entity unit from {old_unit} to {new_unit}. Recorded statistics currently use {statistics_unit}.\n\n• Keep: Virtual Entity → {new_unit}; statistics numbers and unit stay unchanged.\n• Restore: Virtual Entity → {statistics_unit}; the selected/template unit is replaced and statistics stay unchanged.\n• Correct label: Virtual Entity and statistics unit → {new_unit}; numbers stay unchanged. Use only if historical numbers already use {new_unit}.\n• Convert: Virtual Entity and statistics unit → {new_unit}; every recorded short- and long-term statistic number is converted.\n\nRaw state history, current/restored values, templates, and thresholds never change. The saved Virtual Entity unit applies to future readings. '?' means the selected/template unit could not be resolved.",
