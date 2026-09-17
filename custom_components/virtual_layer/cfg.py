@@ -954,7 +954,7 @@ def _pop_entity_meta(meta_data, entity_key, name, platform):
 
 def _make_suffix(platform, device_class):
     """Make a suitable suffix for an unnamed entity.
-    
+
     Binary sensors, covers and sensors have a class so we append that,
     everything else gets left as-is.
     """
@@ -1167,7 +1167,7 @@ class BlendedCfg:
                                 CONF_SERIAL_NUMBER, CONF_CONFIGURATION_URL, CONF_SUGGESTED_AREA,
                                 CONF_VIA_DEVICE_ID,
                             ) if key in entity},
-                            CONF_NAME: f"{entity[CONF_NAME]} Air Quality Matter",
+                            CONF_NAME: f"{entity[CONF_NAME]} AQIM",
                             ATTR_ENTITY_ID: bridge_id, ATTR_UNIQUE_ID: bridge_uid,
                             ATTR_DEVICE_ID: device_id, CONF_INITIAL_VALUE: "unknown",
                             CONF_INITIAL_AVAILABILITY: True, CONF_PERSISTENT: True,
