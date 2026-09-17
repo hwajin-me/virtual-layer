@@ -29,6 +29,7 @@ from custom_components.virtual_layer.const import (
     CONF_ATTRIBUTE_TEMPLATES,
     CONF_ATTRIBUTES,
     CONF_AVAILABILITY_TEMPLATE,
+    CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID,
     CONF_COMMAND_ACTIONS,
     CONF_EVENT_HOOKS,
     CONF_ICON_TEMPLATE,
@@ -889,6 +890,37 @@ async def test_blended_cfg_migrates_legacy_domain_attributes_before_validation(
     assert entity["fan_modes"] == ["auto", "turbo"]
     assert entity["fan_mode"] == "auto"
     assert entity[CONF_ATTRIBUTES] == {"vendor": "preserved"}
+
+
+@pytest.mark.asyncio
+async def test_blended_cfg_loads_boiler_climate_with_persisted_room_sensor(
+    hass,
+    tmp_path,
+    monkeypatch,
+):
+    """A boiler climate must remain available to bridges after a restart."""
+    meta_file = tmp_path / "virtual_layer.meta.json"
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.cfg.default_meta_file",
+        lambda _hass: str(meta_file),
+    )
+    cfg = BlendedCfg(
+        hass,
+        {ATTR_GROUP_NAME: "ui"},
+        {ATTR_DEVICES: {"Boiler": [{
+            CONF_PLATFORM: "climate",
+            CONF_NAME: "Virtual Boiler",
+            CONF_INITIAL_VALUE: "off",
+            "hvac_modes": ["off", "heat"],
+            CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID: "sensor.boiler_room_temperature",
+        }]}},
+    )
+
+    await cfg.async_load()
+
+    assert cfg.entities["climate"][0][
+        CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID
+    ] == "sensor.boiler_room_temperature"
 
 
 @pytest.mark.asyncio

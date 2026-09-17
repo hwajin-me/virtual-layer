@@ -3651,6 +3651,22 @@ def test_climate_schema_rejects_unknown_hvac_modes():
         )
 
 
+def test_climate_schema_accepts_persisted_boiler_room_temperature_sensor():
+    """Keep the boiler form's selected sensor valid after options are saved."""
+    from custom_components.virtual_layer.climate import CLIMATE_SCHEMA
+
+    config = CLIMATE_SCHEMA(
+        {
+            CONF_NAME: "Virtual boiler",
+            CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID: "sensor.boiler_room_temperature",
+        }
+    )
+
+    assert config[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] == (
+        "sensor.boiler_room_temperature"
+    )
+
+
 @pytest.mark.parametrize(
     "domain_options",
     [
@@ -8287,6 +8303,59 @@ def test_vacuum_domain_selection_reopens_with_dedicated_jinja_fields():
         "supported_features",
     }
     assert not _needs_domain_specific_form(vacuum_defaults)
+
+
+async def test_matter_onoff_fan_maps_all_nonzero_percentages_to_power(hass):
+    """A Matter percentage command must never reach an on/off-only source."""
+    source = "fan.onoff"
+    hass.states.async_set(source, "on")
+
+    generated = _reference_entity_defaults(hass, [source])
+    native = generated[CONF_NATIVE_VALUE_TEMPLATES]
+    assert generated["speed_count"] == 100
+    assert Template(native["percentage"], hass).async_render(parse_result=True) == 100
+    hass.states.async_set(source, "off")
+    assert Template(native["percentage"], hass).async_render(parse_result=True) == 0
+
+    # Exercise the generated actions through the entity as Matterbridge does.
+    calls = []
+
+    async def capture(call):
+        calls.append((call.service, dict(call.data)))
+
+    hass.services.async_register("fan", "turn_on", capture)
+    hass.services.async_register("fan", "turn_off", capture)
+    entity = VirtualFan(
+        FAN_SCHEMA(
+            {
+                CONF_NAME: "Matter on/off fan",
+                ATTR_ENTITY_ID: "fan.matter_onoff",
+                ATTR_UNIQUE_ID: "matter-onoff-fan",
+                CONF_INITIAL_VALUE: "off",
+                CONF_SOURCE_ENTITIES: [source],
+                CONF_NATIVE_TEMPLATES: native,
+                CONF_COMMAND_ACTIONS: _parse_command_actions(
+                    generated[CONF_COMMAND_ACTIONS_JSON], "fan"
+                ),
+            }
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._setup_templates()
+    entity._apply_templates()
+    entity.async_write_ha_state = Mock()
+
+    await entity.async_set_percentage(1)
+    await entity.async_set_percentage(100)
+    await entity.async_set_percentage(0)
+
+    assert calls == [
+        ("turn_on", {ATTR_ENTITY_ID: [source]}),
+        ("turn_on", {ATTR_ENTITY_ID: [source]}),
+        ("turn_off", {ATTR_ENTITY_ID: [source]}),
+    ]
 
 
 def test_matter_fan_helper_reduces_stepped_source_and_writes_selected_levels(hass):

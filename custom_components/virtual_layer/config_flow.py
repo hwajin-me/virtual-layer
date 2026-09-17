@@ -9150,6 +9150,64 @@ def _matter_fan_turn_on_without_percentage_template() -> str:
     return "{{ dict(command_data | dictsort | rejectattr('0', 'eq', 'percentage')) }}"
 
 
+def _is_onoff_only_fan(state) -> bool:
+    """Return whether a source fan has power control but no speed contract."""
+    if state is None or any(
+        name in state.attributes for name in ("percentage", "percentage_step")
+    ):
+        return False
+    try:
+        features = FanEntityFeature(int(state.attributes.get("supported_features", 0)))
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return FanEntityFeature.SET_SPEED not in features
+
+
+def _apply_matter_fan_onoff_helper(
+    defaults: Mapping[str, Any], entity_id: str
+) -> dict[str, Any]:
+    """Expose an on/off fan as Matter's 0–100% fan control.
+
+    Matter controllers commonly use ``set_percentage`` even for a fan that
+    only has an OnOff cluster.  Keep the virtual fan's percentage contract
+    usable: zero powers the source off; every non-zero requested value powers
+    it on.  Reporting is deliberately 0 or 100 because the source has no
+    speed telemetry to preserve.
+    """
+    result = dict(defaults)
+    native = _native_template_defaults("fan", result)
+    native.update(
+        {
+            "speed_count": "{{ 100 }}",
+            "percentage": (
+                "{% if is_state(" + repr(entity_id) + ", 'on') %}{{ 100 }}"
+                "{% elif is_state(" + repr(entity_id) + ", 'off') %}{{ 0 }}"
+                "{% else %}{{ none }}{% endif %}"
+            ),
+        }
+    )
+    result[CONF_NATIVE_VALUE_TEMPLATES] = native
+    result["speed_count"] = 100
+    actions = _parse_command_actions(result.get(CONF_COMMAND_ACTIONS_JSON), "fan")
+    turn_on = {"action": "fan.turn_on", "target": {ATTR_ENTITY_ID: entity_id}}
+    turn_off = {"action": "fan.turn_off", "target": {ATTR_ENTITY_ID: entity_id}}
+    actions["turn_on"] = [turn_on]
+    actions["turn_off"] = [turn_off]
+    actions["set_percentage"] = [
+        {
+            "choose": [
+                {
+                    "conditions": "{{ percentage | float(0) > 0 }}",
+                    "sequence": [turn_on],
+                }
+            ],
+            "default": [turn_off],
+        }
+    ]
+    result[CONF_COMMAND_ACTIONS_JSON] = _json_default(actions)
+    return result
+
+
 def _apply_matter_fan_percentage_helper(
     defaults: Mapping[str, Any], entity_id: str
 ) -> dict[str, Any]:
@@ -10002,6 +10060,13 @@ def _reference_entity_defaults(
             platform,
             {CONF_NATIVE_VALUE_TEMPLATES: native_templates},
         )
+    if (
+        platform == "fan"
+        and len(entity_ids) == 1
+        and entity_ids[0].startswith("fan.")
+        and _is_onoff_only_fan(states[0])
+    ):
+        defaults = _apply_matter_fan_onoff_helper(defaults, entity_ids[0])
     if platform == "light" and len(states) > 1:
         # The selected Matter type remains an explicit config-flow control,
         # but the generated helper never advertises a mode beyond the least

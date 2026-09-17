@@ -199,6 +199,11 @@ BASE_SCHEMA = virtual_schema(
     DEFAULT_CLIMATE_VALUE,
     {
         vol.Optional(CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE): cv.string,
+        # This UI-only setting records the sensor selected for a boiler's room
+        # temperature.  The config flow turns it into ``current_temperature``
+        # and a template source, but retains the ID so an existing entity can
+        # be edited without losing the selection.
+        vol.Optional(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID): cv.entity_id,
         vol.Optional(CONF_CURRENT_HUMIDITY): number_float,
         vol.Optional(CONF_CURRENT_TEMPERATURE): number_float,
         vol.Optional(CONF_FAN_MODE): cv.string,
