@@ -1113,6 +1113,11 @@ ACTION_FINISH = "finish"
 ACTION_MANAGE_DEVICES = "manage_devices"
 ACTION_REGENERATE_ENTITY_IDS = "regenerate_entity_ids"
 
+_COPY_ENTITY_NAME_SUFFIXES = {
+    "en": "Copy",
+    "ko": "복사본",
+}
+
 DEFAULT_ENTITY_DOMAIN = "sensor"
 DEFAULT_ENTITY_VALUE = "unknown"
 MAX_GENERATED_ENTITY_NAME_LENGTH = 80
@@ -13152,15 +13157,17 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                     device_name, entity, self.config_entry.options
                 )
                 original_name = defaults[CONF_ENTITY_NAME]
-                defaults[CONF_ENTITY_NAME] = f"{original_name} Copy"
+                language = self.hass.config.language.partition("-")[0].lower()
+                suffix = _COPY_ENTITY_NAME_SUFFIXES.get(language, "Copy")
+                defaults[CONF_ENTITY_NAME] = f"{original_name} {suffix}"
                 defaults[ATTR_ENTITY_ID] = _copied_entity_id(
                     self.hass, entity, defaults[CONF_ENTITY_NAME]
                 )
                 self._entity_defaults = _complete_domain_form_defaults(defaults)
                 self._reference_defaults = {}
-                profile = entity.get(CONF_AUTO_HELPER)
+                profile = _plain_options(entity.get(CONF_AUTO_HELPER))
                 self._copy_auto_helper_profile = (
-                    copy.deepcopy(profile) if isinstance(profile, Mapping) else None
+                    profile if isinstance(profile, dict) else None
                 )
                 self._add_source_entities = _stored_entity_ids(
                     defaults.get(CONF_SOURCE_ENTITIES_TEXT)

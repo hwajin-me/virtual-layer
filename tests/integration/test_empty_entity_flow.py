@@ -89,7 +89,12 @@ async def test_add_entity_without_sources(hass, platform, initial_setup):
     assert result["type"] == FlowResultType.CREATE_ENTRY, result
 
 
-async def test_copy_entity_opens_editable_copy_with_new_id_and_preserves_original(hass):
+@pytest.mark.parametrize(
+    ("language", "copy_suffix"), [("en", "Copy"), ("ko", "복사본")]
+)
+async def test_copy_entity_opens_editable_copy_with_new_id_and_preserves_original(
+    hass, language, copy_suffix
+):
     """Copying starts a new entity flow and never replaces the source record."""
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
@@ -109,6 +114,7 @@ async def test_copy_entity_opens_editable_copy_with_new_id_and_preserves_origina
         },
     )
     entry.add_to_hass(hass)
+    hass.config.language = language
     hass.states.async_set("sensor.source_temperature", "21")
 
     result = await hass.config_entries.options.async_init(
@@ -122,7 +128,7 @@ async def test_copy_entity_opens_editable_copy_with_new_id_and_preserves_origina
     assert result["step_id"] == "entity"
 
     submitted = _flatten_entity_form_sections(_suggested_values(result["data_schema"]))
-    assert submitted[CONF_ENTITY_NAME] == "Temperature Copy"
+    assert submitted[CONF_ENTITY_NAME] == f"Temperature {copy_suffix}"
     assert submitted[ATTR_ENTITY_ID] == "sensor.kitchen_temperature_copy"
     result = await hass.config_entries.options.async_configure(result["flow_id"], submitted)
     assert result["type"] == FlowResultType.CREATE_ENTRY, result

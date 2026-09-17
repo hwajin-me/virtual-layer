@@ -304,6 +304,7 @@ def test_english_translation_covers_config_flow_forms_and_errors():
         "tracker_settings": _tracker_settings_schema({}),
         "init": _options_schema(entity_options),
         "select_entity": _select_entity_schema(entity_options),
+        "copy_entity": _select_entity_schema(entity_options),
         "select_device": _select_device_schema(entity_options),
         "edit_device": _device_schema({CONF_DEVICE_NAME: "Laundry"}),
         "delete_entities": _delete_entities_schema(entity_options),
