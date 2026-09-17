@@ -1133,7 +1133,7 @@ class BlendedCfg:
                             CONF_HW_VERSION, CONF_SERIAL_NUMBER, CONF_CONFIGURATION_URL,
                             CONF_SUGGESTED_AREA, CONF_VIA_DEVICE_ID,
                         ) if key in entity},
-                        CONF_NAME: f"{entity[CONF_NAME]} Air Quality",
+                        CONF_NAME: f"{entity[CONF_NAME]} AQ",
                         ATTR_ENTITY_ID: companion_id,
                         ATTR_UNIQUE_ID: companion_unique_id,
                         ATTR_DEVICE_ID: device_id,

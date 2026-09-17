@@ -394,7 +394,7 @@ async def test_existing_measurement_gets_live_companion_and_cleanup(hass, tmp_pa
     registry = er.async_get(hass)
     child = registry.async_get(child_id)
     assert child.device_id == registry.async_get(parent_id).device_id
-    assert child.original_name == f"{quantity} Air Quality"
+    assert child.original_name == f"{quantity} AQ"
     uid = child.unique_id
     # Companions are runtime-derived, not recursively added to stored options.
     assert len(entry.options[ATTR_DEVICES]["Room"]) == 1
