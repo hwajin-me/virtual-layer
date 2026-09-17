@@ -97,6 +97,28 @@ def test_generic_domain_schemas_accept_direct_ui_options():
         assert validated["yaml_only_option"] == direct_option, domain
 
 
+def test_alarm_control_panel_uses_the_native_service_interface():
+    """Alarm services require Home Assistant's alarm entity handler methods."""
+    from homeassistant.components.alarm_control_panel import AlarmControlPanelEntity
+
+    from custom_components.virtual_layer.alarm_control_panel import (
+        VirtualAlarmControlPanel,
+    )
+    from custom_components.virtual_layer.const import VIRTUAL_ENTITY_COMMANDS
+
+    assert issubclass(VirtualAlarmControlPanel, AlarmControlPanelEntity)
+    assert callable(VirtualAlarmControlPanel.async_handle_alarm_disarm)
+    assert VIRTUAL_ENTITY_COMMANDS["alarm_control_panel"] == {
+        "alarm_arm_away",
+        "alarm_arm_custom_bypass",
+        "alarm_arm_home",
+        "alarm_arm_night",
+        "alarm_arm_vacation",
+        "alarm_disarm",
+        "alarm_trigger",
+    }
+
+
 def test_climate_native_templates_override_stale_static_fallbacks():
     """Jinja native values must be able to replace legacy copied options."""
     from custom_components.virtual_layer.climate import validate_domain_options

@@ -618,7 +618,30 @@ class VirtualLight(VirtualEntity, LightEntity):
 
     async def _async_run_command_action(self, command, method, args, kwargs):
         if len(self._group_sources()) < 2 or command not in {"turn_on", "turn_off"}:
-            return await super()._async_run_command_action(command, method, args, kwargs)
+            # A single-source light previously only started its reconciliation
+            # window after forwarding the command.  A state event emitted by a
+            # slow bulb while that action was running could therefore render
+            # the old ``off`` source value over the requested virtual ``on``
+            # value.  Hold source rendering from the beginning of an
+            # optimistic power command, just as grouped lights do below.
+            # Explicit ``optimistic: false`` actions remain source-authoritative.
+            spec = self._command_action_spec(command)
+            hold_source_state = bool(
+                self._source_entities
+                and command in {"turn_on", "turn_off"}
+                and (spec is None or spec[1])
+                and self._response_delay > 0
+            )
+            if hold_source_state:
+                self._response_pending = True
+            try:
+                return await super()._async_run_command_action(
+                    command, method, args, kwargs
+                )
+            except Exception:
+                if hold_source_state:
+                    self._response_pending = False
+                raise
         # A callback may invoke the opposite command on this same group. Do
         # not wait for a lock already held by its own action chain.
         if self._group_removed or any(

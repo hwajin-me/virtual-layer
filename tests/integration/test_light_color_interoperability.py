@@ -83,3 +83,34 @@ async def test_kelvin_group_converts_to_native_color_and_accepts_response(hass, 
         "entity_id": group.entity_id, "brightness": 0,
     }, blocking=True)
     assert not group.is_on and not rgb.is_on and not cct.is_on
+
+
+async def test_single_source_ignores_stale_off_event_while_turning_on(hass):
+    """A source's pre-command state must not undo an optimistic turn-on."""
+    assert await async_setup_component(hass, "light", {})
+    component = hass.data[DATA_COMPONENT]
+
+    class SlowBulb(RecordingBulb):
+        async def async_turn_on(self, **kwargs):
+            # Some bridges publish their previous state before the device has
+            # acknowledged the command.  The later on report is deliberately
+            # omitted here to exercise the reconciliation window.
+            self.hass.states.async_set(self.entity_id, "off")
+
+    bulb = SlowBulb("Slow bulb", ColorMode.BRIGHTNESS)
+    await component.async_add_entities([bulb])
+    light = VirtualLight(LIGHT_SCHEMA({
+        "name": "Single-source light", "entity_id": "light.single_source",
+        "initial_value": "off", "matter_light_type": "dimmable",
+        "source_entities": [bulb.entity_id],
+        "native_templates": {"is_on": "{{ is_state(" + repr(bulb.entity_id) + ", 'on') }}"},
+        "persistent": False,
+    }), False)
+    await component.async_add_entities([light])
+
+    await hass.services.async_call(
+        "light", "turn_on", {"entity_id": light.entity_id}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert light.is_on

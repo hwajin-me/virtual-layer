@@ -254,6 +254,10 @@ STATE_ONLY_ENTITY_DOMAINS = [
 # Public native commands implemented by each virtual platform. Config flows and
 # damaged-data recovery use this without importing platform modules on HA's loop.
 VIRTUAL_ENTITY_COMMANDS = {
+    "alarm_control_panel": frozenset({
+        "alarm_arm_away", "alarm_arm_custom_bypass", "alarm_arm_home",
+        "alarm_arm_night", "alarm_arm_vacation", "alarm_disarm", "alarm_trigger",
+    }),
     "button": frozenset({"press"}),
     "camera": frozenset({
         "disable_motion_detection", "enable_motion_detection", "turn_off", "turn_on",

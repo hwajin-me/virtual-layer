@@ -443,6 +443,13 @@ async def test_native_building_block_services_update_virtual_entities(
     )
     entities = [
         {
+            CONF_PLATFORM: "alarm_control_panel",
+            CONF_NAME: "Native Alarm",
+            CONF_INITIAL_VALUE: "armed_away",
+            "code_arm_required": False,
+            "supported_features": 63,
+        },
+        {
             CONF_PLATFORM: "select",
             CONF_NAME: "Native Select",
             CONF_INITIAL_VALUE: "eco",
@@ -508,6 +515,24 @@ async def test_native_building_block_services_update_virtual_entities(
     await hass.async_block_till_done()
 
     await hass.services.async_call(
+        "alarm_control_panel",
+        "alarm_disarm",
+        {ATTR_ENTITY_ID: "alarm_control_panel.native_alarm"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "alarm_control_panel",
+        "alarm_arm_home",
+        {ATTR_ENTITY_ID: "alarm_control_panel.native_alarm"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "alarm_control_panel",
+        "alarm_trigger",
+        {ATTR_ENTITY_ID: "alarm_control_panel.native_alarm"},
+        blocking=True,
+    )
+    await hass.services.async_call(
         "select",
         "select_option",
         {ATTR_ENTITY_ID: "select.native_select", "option": "boost"},
@@ -572,6 +597,7 @@ async def test_native_building_block_services_update_virtual_entities(
         blocking=True,
     )
 
+    assert hass.states.get("alarm_control_panel.native_alarm").state == "triggered"
     assert hass.states.get("select.native_select").state == "boost"
     assert hass.states.get("text.native_text").state == "updated"
     assert hass.states.get("button.native_button").state != "unknown"
