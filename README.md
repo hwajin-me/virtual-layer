@@ -29,8 +29,12 @@ and manage them from `Settings > Devices & services > Virtual Layer`.
 
 ## Dynamic boiler feedback (opt-in)
 
-Enable **Dynamic boiler control** in the climate domain settings and select
-room-temperature sensors. Use one boiler climate source, Celsius virtual
+The boiler helper step now shows the **base room-to-water formula** separately
+from **dynamic water-target formula**, including during creation and editing.
+Enable dynamic boiler feedback there or in the climate domain settings, then
+select room-temperature sensors. The base linear conversion remains unchanged;
+room warming and residual heat belong in the dynamic formula, which is retained
+through the next form and save. Use one boiler climate source, Celsius virtual
 temperature units and the existing room-to-water calibration formula. The
 boiler's `current_temperature` must measure heating water. Source temperatures
 in Fahrenheit are converted to Celsius.

@@ -1618,7 +1618,8 @@ async def test_options_flow_adds_h264_camera_beside_non_streaming_camera(hass):
 
 
 @pytest.mark.parametrize("step", ["setup", "add", "edit"])
-async def test_boiler_helper_rejects_bad_formula_at_input_step(hass, step):
+@pytest.mark.parametrize("field", ["boiler_temperature_calibration_template", "boiler_dynamic_template"])
+async def test_boiler_helper_rejects_bad_formula_at_input_step(hass, step, field):
     from custom_components.virtual_layer.config_flow import (
         CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
         VirtualFlowHandler,
@@ -1632,8 +1633,9 @@ async def test_boiler_helper_rejects_bad_formula_at_input_step(hass, step):
     }
     flow._reference_defaults = dict(original)
     submitted = {
-        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE: "{{ temperature + }}",
+        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE: "{{ temperature }}",
         CONF_USE_TEMPLATE_HELPER: True,
+        field: "{{ temperature + }}",
     }
     if step == "edit":
         flow._edit_current_defaults = dict(original)
@@ -1648,12 +1650,74 @@ async def test_boiler_helper_rejects_bad_formula_at_input_step(hass, step):
         "edit_entity_helper" if step == "edit" else "entity_helper"
     )
     assert result["errors"] == {
-        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE: "invalid_template",
+        field: "invalid_template",
     }
     assert suggested_form_values(result["data_schema"])[
-        CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
-    ] == submitted[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE]
+        field
+    ] == submitted[field]
     assert flow._reference_defaults == original
+
+
+@pytest.mark.parametrize("policy", [HELPER_UPDATE_AUTO, HELPER_UPDATE_KEEP, HELPER_UPDATE_FORCE])
+async def test_boiler_feedback_helper_options_survive_next_form_and_save(hass, policy):
+    from custom_components.virtual_layer import boiler_control as bc
+    from custom_components.virtual_layer.config_flow import CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID
+
+    hass.states.async_set("climate.boiler", "heat", {
+        "hvac_modes": ["off", "heat", "fan_only"], "temperature": 40,
+        "current_temperature": 45, "min_temp": 25, "max_temp": 65,
+    })
+    hass.states.async_set("sensor.room", "21", {"unit_of_measurement": "°C"})
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "ui"}, options={ATTR_DEVICES: {}})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {
+        CONF_REFERENCE_ENTITY_ID: ["climate.boiler"],
+    })
+    if result["step_id"] == "entity_type":
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "climate"})
+    assert result["step_id"] == "entity_helper"
+    helper = suggested_form_values(result["data_schema"])
+    assert helper[bc.FORMULA] == bc.DEFAULT_FORMULA
+    formula = "{{ base_water_temperature - heat_accumulation / 150 }}"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {
+        **helper, bc.ENABLED: True, bc.FORMULA: formula,
+    })
+    assert result["step_id"] == "entity"
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+    assert defaults[bc.ENABLED] is True
+    assert defaults[bc.FORMULA] == formula
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {
+        **defaults, CONF_DEVICE_NAME: "Boiler", ATTR_ENTITY_ID: "climate.feedback_boiler",
+        CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID: ["sensor.room"],
+    })
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    stored = _first_stored_entity(result)
+    assert stored[bc.ENABLED] is True
+    assert stored[bc.FORMULA] == formula
+    hass.config_entries.async_update_entry(entry, options=result["data"])
+    result = await hass.config_entries.options.async_init(entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {
+        CONF_ENTITY_KEY: json.dumps(["key", stored[ATTR_ENTITY_KEY]], separators=(",", ":")),
+    })
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: ["climate.boiler"]})
+    if result["step_id"] == "edit_entity_type":
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "climate"})
+    assert result["step_id"] == "edit_entity_helper"
+    helper = suggested_form_values(result["data_schema"])
+    assert helper[bc.FORMULA] == formula
+    assert helper[bc.ENABLED] is True
+    changed_formula = "{{ base_water_temperature - heat_accumulation / 200 }}"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {
+        **helper, CONF_HELPER_UPDATE_MODE: policy, bc.FORMULA: changed_formula,
+    })
+    assert result["step_id"] == "edit_entity"
+    defaults = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+    assert defaults[bc.FORMULA] == changed_formula
+    assert defaults[bc.ENABLED] is True
+    result = await hass.config_entries.options.async_configure(result["flow_id"], defaults)
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert _first_stored_entity(result)[bc.FORMULA] == changed_formula
 
 
 async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass):

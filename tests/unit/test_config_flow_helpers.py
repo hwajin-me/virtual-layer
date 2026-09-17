@@ -5749,6 +5749,36 @@ def test_reference_metadata_infers_explicit_unit_from_name(hass):
     assert defaults[CONF_ICON] == "mdi:thermometer"
 
 
+def test_auto_helper_source_update_keeps_explicit_unit_when_source_is_offline(hass):
+    """An offline replacement source must not persist a unitless helper."""
+    current = {
+        CONF_PLATFORM: "sensor",
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.old",
+        CONF_NATIVE_VALUE_TEMPLATES: {
+            "native_unit_of_measurement": _literal_template("W"),
+        },
+    }
+    reference = {
+        CONF_PLATFORM: "sensor",
+        CONF_SOURCE_ENTITIES_TEXT: "sensor.replacement",
+        CONF_NATIVE_VALUE_TEMPLATES: {
+            "native_unit_of_measurement": (
+                "{% set ns = namespace(value=none) %}{{ ns.value if ns.value "
+                "is not none else none }}"
+            ),
+        },
+    }
+
+    merged = _reference_edit_defaults(
+        current,
+        reference,
+        _auto_helper_profile(current),
+    )
+
+    template = merged[CONF_NATIVE_VALUE_TEMPLATES]["native_unit_of_measurement"]
+    assert template.endswith("else 'W' }}")
+
+
 def test_reference_entity_defaults_preserves_water_usage_class_and_unit(hass):
     hass.states.async_set(
         "sensor.water_meter_one",
@@ -6037,6 +6067,47 @@ def test_reference_icon_uses_source_registry_original_icon_as_fallback(hass):
     assert defaults[CONF_ICON] == "mdi:toggle-switch-off-outline"
     assert defaults[CONF_ICON_TEMPLATE] == (
         f"{{{{ state_attr({source_entity_id!r}, 'icon') | default('', true) }}}}"
+    )
+
+
+def test_reference_ventilation_name_generates_stateful_icon_helper(hass):
+    hass.states.async_set("fan.air_ventilator", "on")
+
+    defaults = _reference_entity_defaults(hass, ["fan.air_ventilator"])
+
+    assert defaults[CONF_ICON] == "mdi:hvac"
+    assert defaults[CONF_ICON_TEMPLATE] == (
+        "{{ 'mdi:hvac' if is_state('fan.air_ventilator', 'on') else "
+        "'mdi:hvac-off' }}"
+    )
+    hass.states.async_set("fan.air_ventilator", "off")
+    assert Template(defaults[CONF_ICON_TEMPLATE], hass).async_render() == "mdi:hvac-off"
+
+
+def test_reference_icon_helper_ignores_unknown_sources_when_matching_types(hass):
+    hass.states.async_set("fan.ventilator_one", "unknown", {CONF_ICON: "mdi:close"})
+    hass.states.async_set("fan.ventilator_two", "on", {CONF_ICON: "mdi:hvac"})
+
+    defaults = _reference_entity_defaults(
+        hass, ["fan.ventilator_one", "fan.ventilator_two"]
+    )
+
+    assert defaults[CONF_ICON] == "mdi:hvac"
+    assert "ventilator_one" not in defaults[CONF_ICON_TEMPLATE]
+    assert Template(defaults[CONF_ICON_TEMPLATE], hass).async_render() == "mdi:hvac"
+
+
+def test_reference_icon_helper_does_not_merge_incompatible_live_types(hass):
+    hass.states.async_set("fan.air_ventilator", "on")
+    hass.states.async_set("switch.air_ventilator", "on")
+
+    defaults = _reference_entity_defaults(
+        hass, ["fan.air_ventilator", "switch.air_ventilator"]
+    )
+
+    assert defaults[CONF_ICON_TEMPLATE] != (
+        "{{ 'mdi:hvac' if is_state('fan.air_ventilator', 'on') or "
+        "is_state('switch.air_ventilator', 'on') else 'mdi:hvac-off' }}"
     )
 
 

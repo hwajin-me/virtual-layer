@@ -709,11 +709,15 @@
         "description": "Choose whether to prefill the new virtual entity with Jinja templates generated from the selected source entities. You can review and customize all entity details and templates on the next screen.",
         "data": {
           "use_template_helper": "Generate source-based templates",
-          "boiler_temperature_calibration_template": "Boiler temperature calibration"
+          "boiler_temperature_calibration_template": "Base room-to-water formula",
+          "boiler_dynamic_control": "Enable dynamic boiler feedback",
+          "boiler_dynamic_template": "Dynamic water-target formula"
         },
         "data_description": {
           "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates.",
-          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual room-temperature request into the boiler water setpoint. Use temperature as the requested room value. At the target, the default maps 25°C to 40°C water, 27°C to 44°C, 30°C to 47°C, and 33°C to 50°C. While the current virtual room temperature is below the request, it adds 1.5°C of water temperature per 1°C gap, capped at 8°C, reducing the boost on subsequent commands as the room recovers. Tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula. A boiler-reported water target is converted back to the closest room target for display, so a 27°C request mapped to 52°C continues to display as 27°C. Calculation runs only on a set_temperature command; it does not periodically resend a reduced setpoint. current_temperature must represent a real room sensor, not water temperature. The gain 1.5 and cap 8 are tunable starting values, not a model of heating delay or residual heat."
+          "boiler_temperature_calibration_template": "Base conversion only: temperature * 1.5 + 2.5 (25°C room → 40°C water, 27°C → 43°C). This is not the dynamic formula. Its result is base_water_temperature in the feedback formula below. With feedback disabled it runs on temperature commands. Saved custom formulas are preserved.",
+          "boiler_dynamic_control": "Opt-in periodic feedback for one boiler climate source only; boiler + air-conditioner composite sources are not supported. Select room sensors on the next screen and use Celsius virtual units. Boiler current_temperature must measure water. This mode owns temperature writes; power/mode actions remain unchanged.",
+          "boiler_dynamic_template": "Default includes room error, warming rate and residual heat. Variables: temperature (room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (°C/min), heating_elapsed_minutes, heat_accumulation (decaying °C·min), base_water_temperature. Returns Celsius. When enabled, evaluates every 60 seconds; writes at least 120 seconds apart, limited to 2°C per change and boiler limits. Missing inputs pause writes. Tune gains for your system."
         }
       },
       "matter_fan_levels": {
@@ -1844,11 +1848,15 @@
         "description": "Choose whether to use the template helper for this edit. Automatic uses helpers only for fields that were not customized, Keep current does not apply helpers, and Force replaces all helper-capable fields. The next screen keeps every entity, ID, value, and template field editable.",
         "data": {
           "helper_update_mode": "Template update",
-          "boiler_temperature_calibration_template": "Boiler room-to-water calibration"
+          "boiler_temperature_calibration_template": "Base room-to-water formula",
+          "boiler_dynamic_control": "Enable dynamic boiler feedback",
+          "boiler_dynamic_template": "Dynamic water-target formula"
         },
         "data_description": {
           "helper_update_mode": "Automatic preserves each template you edited and regenerates untouched helpers. Keep current means the helper is not used and every template stays unchanged. Force helper replaces generated and custom templates using the selected source entities.",
-          "boiler_temperature_calibration_template": "This is used only for a detected boiler climate. It converts the virtual room request (temperature) to the boiler water setpoint. The suggested recovery curve keeps the 25→40, 27→44, 30→47, and 33→50°C room-to-water targets, adds 1.5°C water per 1°C room gap while recovering, and limits that extra heat to 8°C. An old direct-pass-through default is automatically replaced in this form; any other saved formula is kept as your custom value. A boiler-reported water target is converted back to the closest room target for display, so a 27°C request mapped to 52°C continues to display as 27°C. Calculation runs only on a set_temperature command; it does not periodically resend a reduced setpoint. current_temperature must represent a real room sensor, not water temperature. The gain 1.5 and cap 8 are tunable starting values, not a model of heating delay or residual heat."
+          "boiler_temperature_calibration_template": "Base conversion only: temperature * 1.5 + 2.5 (25°C room → 40°C water, 27°C → 43°C). This is not the dynamic formula. Its result is base_water_temperature in the feedback formula below. With feedback disabled it runs on temperature commands. Saved custom formulas are preserved.",
+          "boiler_dynamic_control": "Opt-in periodic feedback for one boiler climate source only; boiler + air-conditioner composite sources are not supported. Select room sensors on the next screen and use Celsius virtual units. Boiler current_temperature must measure water. This mode owns temperature writes; power/mode actions remain unchanged.",
+          "boiler_dynamic_template": "Default includes room error, warming rate and residual heat. Variables: temperature (room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (°C/min), heating_elapsed_minutes, heat_accumulation (decaying °C·min), base_water_temperature. Returns Celsius. When enabled, evaluates every 60 seconds; writes at least 120 seconds apart, limited to 2°C per change and boiler limits. Missing inputs pause writes. Tune gains for your system."
         }
       },
       "entity_helper": {
@@ -1856,11 +1864,15 @@
         "description": "Choose whether to prefill the new virtual entity with Jinja templates generated from the selected source entities. You can review and customize all entity details and templates on the next screen.",
         "data": {
           "use_template_helper": "Generate source-based templates",
-          "boiler_temperature_calibration_template": "Boiler temperature calibration"
+          "boiler_temperature_calibration_template": "Base room-to-water formula",
+          "boiler_dynamic_control": "Enable dynamic boiler feedback",
+          "boiler_dynamic_template": "Dynamic water-target formula"
         },
         "data_description": {
           "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates.",
-          "boiler_temperature_calibration_template": "Jinja formula that converts the virtual room-temperature request into the boiler water setpoint. Use temperature as the requested room value. At the target, the default maps 25°C to 40°C water, 27°C to 44°C, 30°C to 47°C, and 33°C to 50°C. While the current virtual room temperature is below the request, it adds 1.5°C of water temperature per 1°C gap, capped at 8°C, then removes that boost as the room recovers. Tune it for insulation, weather, and loop design. Wrap the expression in Jinja delimiters. The boiler's own minimum, maximum, and step are applied after the formula."
+          "boiler_temperature_calibration_template": "Base conversion only: temperature * 1.5 + 2.5 (25°C room → 40°C water, 27°C → 43°C). This is not the dynamic formula. Its result is base_water_temperature in the feedback formula below. With feedback disabled it runs on temperature commands. Saved custom formulas are preserved.",
+          "boiler_dynamic_control": "Opt-in periodic feedback for one boiler climate source only; boiler + air-conditioner composite sources are not supported. Select room sensors on the next screen and use Celsius virtual units. Boiler current_temperature must measure water. This mode owns temperature writes; power/mode actions remain unchanged.",
+          "boiler_dynamic_template": "Default includes room error, warming rate and residual heat. Variables: temperature (room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (°C/min), heating_elapsed_minutes, heat_accumulation (decaying °C·min), base_water_temperature. Returns Celsius. When enabled, evaluates every 60 seconds; writes at least 120 seconds apart, limited to 2°C per change and boiler limits. Missing inputs pause writes. Tune gains for your system."
         }
       },
       "matter_fan_levels": {

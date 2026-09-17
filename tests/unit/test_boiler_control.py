@@ -266,6 +266,20 @@ def test_flow_round_trip_keeps_dynamic_formula_and_sensors():
     ]
 
 
+@pytest.mark.parametrize("editing", [False, True])
+@pytest.mark.parametrize("custom", [False, True])
+def test_boiler_helper_step_exposes_new_formula_and_preserves_custom_values(editing, custom):
+    from custom_components.virtual_layer.config_flow import _helper_usage_schema, _helper_update_schema
+    from tests.flow_helpers import suggested_form_values
+
+    schema = _helper_update_schema if editing else _helper_usage_schema
+    stored = {bc.ENABLED: True, bc.FORMULA: "{{ boiler_water_temperature - 1 }}"} if custom else {}
+    defaults = suggested_form_values(schema("{{ temperature * 1.5 + 2.5 }}", stored))
+    assert defaults[bc.FORMULA] == stored.get(bc.FORMULA, bc.DEFAULT_FORMULA)
+    assert defaults[bc.ENABLED] is custom
+    assert bc.FORMULA not in suggested_form_values(schema())
+
+
 async def test_service_failure_is_rate_limited(hass):
     boiler = entity(hass)
     calls = []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import inspect
 import json
@@ -1559,6 +1560,7 @@ def _tracker_creation_defaults(user_input):
 
 def _helper_update_schema(
     calibration_template: str | None = None,
+    boiler_defaults: Mapping[str, Any] | None = None,
 ) -> vol.Schema:
     """Choose how generated templates are handled after source changes."""
     schema = {
@@ -1584,11 +1586,32 @@ def _helper_update_schema(
                 calibration_template,
             )
         ] = TEMPLATE_SELECTOR
+        schema.update(_boiler_feedback_schema(boiler_defaults))
     return _complete_form_schema(vol.Schema(schema))
 
 
+def _boiler_feedback_schema(defaults: Mapping[str, Any] | None = None) -> dict:
+    """Expose feedback alongside its base calibration in every helper step."""
+    defaults = defaults or {}
+    return {
+        vol.Optional(
+            bc.ENABLED, default=defaults.get(bc.ENABLED, False)
+        ): selector.BooleanSelector(),
+        _editable_optional(
+            bc.FORMULA, defaults.get(bc.FORMULA, bc.DEFAULT_FORMULA)
+        ): TEMPLATE_SELECTOR,
+    }
+
+
+def _submitted_boiler_feedback(user_input: Mapping[str, Any]) -> dict:
+    """Only explicit feedback edits override existing values/helper policies."""
+    return {
+        key: user_input[key] for key in (bc.ENABLED, bc.FORMULA) if key in user_input
+    }
+
+
 def _boiler_calibration_form_default(value: Any) -> Any:
-    """Offer the recovery curve when editing an untouched legacy default.
+    """Offer the base room-to-water curve for an untouched legacy default.
 
     A different value is an explicit user calibration and must remain intact.
     """
@@ -1633,6 +1656,7 @@ def _boiler_target_temperature_template(
 
 def _helper_usage_schema(
     calibration_template: str | None = None,
+    boiler_defaults: Mapping[str, Any] | None = None,
 ) -> vol.Schema:
     """Choose helper usage and, for a boiler, its room-to-water formula."""
     schema = {
@@ -1648,6 +1672,7 @@ def _helper_usage_schema(
                 calibration_template,
             )
         ] = TEMPLATE_SELECTOR
+        schema.update(_boiler_feedback_schema(boiler_defaults))
     return _complete_form_schema(vol.Schema(schema))
 
 
@@ -6800,6 +6825,64 @@ def _source_icon(hass, entity_id: str, state) -> str | None:
     )
 
 
+_VENTILATION_NAME_PATTERN = re.compile(
+    r"air[ _-]?(?:vent|ventilator)|ventilat(?:ion|or)|vent\b|"
+    r"hvac|환기|공조",
+    re.IGNORECASE,
+)
+
+
+def _named_icon_helper_template(
+    entity_ids: list[str], states: list, entity_name: str
+) -> tuple[str, str] | None:
+    """Build a stateful icon helper when compatible live sources imply one.
+
+    Source-provided icon attributes are useful, but many integrations do not
+    expose one.  In that case a name such as "Air Ventilator" is a stronger,
+    portable signal.  Only use sources whose state is currently known while
+    choosing the profile: an offline entity must neither select a type nor
+    make an otherwise compatible collection ambiguous.
+    """
+    profiles: list[tuple[str, str, str]] = []
+    for entity_id, state in zip(entity_ids, states, strict=True):
+        if not _source_state_is_known(state):
+            continue
+        domain = entity_id.split(".", 1)[0]
+        source_name = " ".join(
+            (
+                entity_name,
+                entity_id,
+                str(state.attributes.get(ATTR_FRIENDLY_NAME) or ""),
+            )
+        )
+        # A fan or switch can represent ventilation, but its state contract is
+        # not interchangeable with arbitrary entity types.
+        if domain in {"fan", "switch"} and _VENTILATION_NAME_PATTERN.search(source_name):
+            profiles.append((domain, "mdi:hvac", "mdi:hvac-off"))
+
+    live_source_count = sum(_source_state_is_known(state) for state in states)
+    if (
+        not profiles
+        or len(profiles) != live_source_count
+        or len({profile[0] for profile in profiles}) != 1
+    ):
+        return None
+
+    _, active_icon, inactive_icon = profiles[0]
+    active_sources = [
+        entity_id
+        for entity_id, state in zip(entity_ids, states, strict=True)
+        if _source_state_is_known(state)
+    ]
+    condition = " or ".join(
+        f"is_state({entity_id!r}, 'on')" for entity_id in active_sources
+    )
+    return (
+        active_icon,
+        f"{{{{ {active_icon!r} if {condition} else {inactive_icon!r} }}}}",
+    )
+
+
 def _combined_device_name(hass, entity_ids: list[str]) -> str:
     device_names = {
         _device_name_for_source_entity(hass, entity_id) for entity_id in entity_ids
@@ -9618,6 +9701,10 @@ def _reference_entity_defaults(
         # Use the editable static fallback instead of a source icon; a later
         # explicit icon choice must not be masked by this generated helper.
         defaults[CONF_ICON_TEMPLATE] = _literal_template("")
+    elif named_icon_helper := _named_icon_helper_template(
+        entity_ids, states, defaults[CONF_ENTITY_NAME]
+    ):
+        defaults[CONF_ICON], defaults[CONF_ICON_TEMPLATE] = named_icon_helper
     elif boiler_profile is not None:
         climate_entity_id = entity_ids[boiler_profile[0]]
         defaults[CONF_ICON_TEMPLATE] = (
@@ -9636,13 +9723,8 @@ def _reference_entity_defaults(
             "| default('', true) }}"
         )
     elif entity_ids:
-        defaults[CONF_ICON_TEMPLATE] = (
-            "{% set icons = ["
-            + ", ".join(
-                f"state_attr({entity_id!r}, {CONF_ICON!r})" for entity_id in entity_ids
-            )
-            + "] | reject('in', [none, '']) | list %}"
-            "{{ icons[0] if icons else '' }}"
+        defaults[CONF_ICON_TEMPLATE] = _source_metadata_template(
+            entity_ids, CONF_ICON, ""
         )
     if platform in {"sensor", "number"}:
         metadata_states = [state for state in states if _source_metadata_unit(state)]
@@ -10401,6 +10483,44 @@ def _native_template_mapping(value: Any) -> dict[str, str]:
     }
 
 
+def _configured_sensor_unit_fallback(defaults: Mapping) -> str | None:
+    """Return a known persisted sensor unit suitable for a source fallback.
+
+    A source can be unavailable while an edit's automatic helper is rebuilt.
+    In that case the generated metadata helper deliberately renders ``none``.
+    Persisting that as the new helper loses the only durable unit after a
+    reload, even though the existing entity had an explicit unit.  Accept only
+    static Jinja literals here; dynamic user templates must remain untouched.
+    """
+    try:
+        options = _parse_domain_options(defaults.get(CONF_DOMAIN_OPTIONS_JSON))
+    except (AttributeError, InvalidJson):
+        options = {}
+    candidates = [options.get(CONF_UNIT_OF_MEASUREMENT)]
+    template = _native_template_mapping(
+        defaults.get(CONF_NATIVE_VALUE_TEMPLATES)
+    ).get("native_unit_of_measurement")
+    if isinstance(template, str):
+        match = re.fullmatch(r"\s*\{\{\s*(.*?)\s*\}\}\s*", template, re.DOTALL)
+        if match:
+            try:
+                candidates.append(ast.literal_eval(match.group(1)))
+            except (SyntaxError, ValueError):
+                pass
+    for candidate in candidates:
+        unit = aq_options.normalize_unit(candidate)
+        if unit and unit.lower() not in {"none", "null", "unknown", "unavailable"}:
+            return unit
+    return None
+
+
+def _with_sensor_unit_fallback(template: str, fallback: str | None) -> str:
+    """Keep a prior explicit unit when a regenerated source helper lacks one."""
+    if fallback and template.rstrip().endswith("else none }}"):
+        return template.rstrip()[: -len("else none }}")] + "else " + repr(fallback) + " }}"
+    return template
+
+
 def _merge_native_helper_templates(
     current_defaults: Mapping,
     reference_defaults: Mapping,
@@ -10425,12 +10545,19 @@ def _merge_native_helper_templates(
     )
 
     merged = {}
+    sensor_unit_fallback = (
+        _configured_sensor_unit_fallback(current_defaults)
+        if platform == "sensor"
+        else None
+    )
     for property_name in properties:
         current_value = current.get(property_name, "")
         if force_template_helper or current_value == baseline.get(property_name, ""):
             next_value = generated.get(property_name, "")
         else:
             next_value = current_value
+        if property_name == "native_unit_of_measurement" and next_value:
+            next_value = _with_sensor_unit_fallback(next_value, sensor_unit_fallback)
         if next_value:
             merged[property_name] = next_value
     return merged
@@ -11943,6 +12070,7 @@ class VirtualFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, config_entr
             try:
                 _validate_entity_templates(self.hass, {
                     CONF_PLATFORM: "climate",
+                    bc.FORMULA: user_input.get(bc.FORMULA),
                     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE: user_input.get(
                         CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
                     ),
@@ -11952,7 +12080,7 @@ class VirtualFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, config_entr
                     step_id="entity_helper",
                     data_schema=_helper_usage_schema(user_input.get(
                         CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
-                    )),
+                    ), user_input),
                     errors={err.field_name: "invalid_template"},
                 )
             if CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE in self._reference_defaults:
@@ -11969,6 +12097,7 @@ class VirtualFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, config_entr
                         )
                     ),
                 )
+            self._reference_defaults.update(_submitted_boiler_feedback(user_input))
             self._add_use_template_helper = cv.boolean(
                 user_input[CONF_USE_TEMPLATE_HELPER],
             )
@@ -12011,7 +12140,8 @@ class VirtualFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, config_entr
             data_schema=_helper_usage_schema(
                 self._reference_defaults.get(
                     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
-                )
+                ),
+                self._reference_defaults,
             ),
         )
 
@@ -12587,6 +12717,7 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
             try:
                 _validate_entity_templates(self.hass, {
                     CONF_PLATFORM: "climate",
+                    bc.FORMULA: user_input.get(bc.FORMULA),
                     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE: user_input.get(
                         CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
                     ),
@@ -12596,7 +12727,7 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                     step_id="entity_helper",
                     data_schema=_helper_usage_schema(user_input.get(
                         CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
-                    )),
+                    ), user_input),
                     errors={err.field_name: "invalid_template"},
                 )
             if CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE in self._reference_defaults:
@@ -12613,6 +12744,7 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                         )
                     ),
                 )
+            self._reference_defaults.update(_submitted_boiler_feedback(user_input))
             self._add_use_template_helper = cv.boolean(
                 user_input[CONF_USE_TEMPLATE_HELPER],
             )
@@ -12661,7 +12793,8 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
             data_schema=_helper_usage_schema(
                 self._reference_defaults.get(
                     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
-                )
+                ),
+                self._reference_defaults,
             ),
         )
 
@@ -13310,6 +13443,7 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
             try:
                 _validate_entity_templates(self.hass, {
                     CONF_PLATFORM: "climate",
+                    bc.FORMULA: user_input.get(bc.FORMULA),
                     CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE: user_input.get(
                         CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
                     ),
@@ -13319,7 +13453,7 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                     step_id="edit_entity_helper",
                     data_schema=_helper_update_schema(user_input.get(
                         CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
-                    )),
+                    ), user_input),
                     errors={err.field_name: "invalid_template"},
                 )
             try:
@@ -13344,6 +13478,7 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                 self._prepare_edit_entity_defaults(
                     helper_update_mode=user_input[CONF_HELPER_UPDATE_MODE],
                 )
+                self._entity_defaults.update(_submitted_boiler_feedback(user_input))
                 self._edit_fan_source_role_choices = (
                     _fan_source_role_choices(
                         self.hass,
@@ -13427,7 +13562,8 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                     and CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
                     in self._reference_defaults
                 )
-                else None
+                else None,
+                self._edit_current_defaults,
             ),
         )
 
