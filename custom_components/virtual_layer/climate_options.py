@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .const import CONF_ATTRIBUTES
+from .const import CONF_ATTRIBUTES, CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID
 
 CLIMATE_SOURCE_ATTRIBUTE_MAP = {
     "current_humidity": "current_humidity",
@@ -94,6 +94,15 @@ def extract_climate_options(
 def migrate_legacy_climate_attributes(config: Mapping) -> dict[str, Any]:
     """Promote climate options previously copied as virtual attributes."""
     migrated = dict(config)
+    # The original boiler UI stored one sensor as a string.  It now accepts an
+    # ordered sensor list, so normalize the old persisted shape before the
+    # strict climate schema and the edit form see it.
+    room_sensors = migrated.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
+    if isinstance(room_sensors, str):
+        migrated[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] = [room_sensors]
+    elif isinstance(room_sensors, tuple):
+        migrated[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] = list(room_sensors)
+
     attributes = migrated.get(CONF_ATTRIBUTES)
     if not isinstance(attributes, Mapping):
         return migrated

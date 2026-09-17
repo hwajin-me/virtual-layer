@@ -920,7 +920,7 @@ async def test_blended_cfg_loads_boiler_climate_with_persisted_room_sensor(
 
     assert cfg.entities["climate"][0][
         CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID
-    ] == "sensor.boiler_room_temperature"
+    ] == ["sensor.boiler_room_temperature"]
 
 
 @pytest.mark.asyncio

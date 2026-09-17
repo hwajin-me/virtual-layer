@@ -64,6 +64,7 @@ from .cfg import (
     _rename_meta_data,
     make_entity_key,
 )
+from . import boiler_control as bc
 from .climate_options import (
     CLIMATE_CURRENT_MODE_FIELDS,
     CLIMATE_FORM_FIELDS,
@@ -1222,6 +1223,9 @@ def _lowest_light_capability(states: Collection) -> str:
     )
 
 _DOMAIN_OPTION_RESERVED_KEYS = {
+    bc.ENABLED,
+    bc.FORMULA,
+    CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID,
     CONF_AIR_QUALITY_LOGIC,
     ATTR_ENTITY_ID,
     ATTR_ENTITY_KEY,
@@ -3555,6 +3559,8 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
             }
         )
     elif platform == "climate":
+        domain_schema[vol.Optional(bc.ENABLED, default=defaults.get(bc.ENABLED, False))] = selector.BooleanSelector()
+        domain_schema[vol.Optional(bc.FORMULA, default=defaults.get(bc.FORMULA, bc.DEFAULT_FORMULA))] = TEMPLATE_SELECTOR
         domain_schema[
             vol.Required(
                 CONF_CLIMATE_TEMPERATURE_STEP_INPUT,
@@ -3567,16 +3573,16 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
                 mode=selector.SelectSelectorMode.DROPDOWN,
             )
         )
-        room_sensor = _text_default(
+        room_sensors = _stored_entity_ids(
             defaults.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
-        ).strip()
+        )
         room_sensor_marker = (
-            vol.Optional(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID, default=room_sensor)
-            if room_sensor
+            vol.Optional(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID, default=room_sensors)
+            if room_sensors
             else vol.Optional(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
         )
         domain_schema[room_sensor_marker] = selector.EntitySelector(
-            selector.EntitySelectorConfig(domain="sensor"),
+            selector.EntitySelectorConfig(domain="sensor", multiple=True, reorder=True),
         )
     elif platform == "media_player":
         source_entities = [
@@ -4741,19 +4747,32 @@ def _build_entity_config(
             entity[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] = calibration_template
 
     if platform == "climate":
-        room_sensor = _text_default(
-            user_input.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
-        ).strip()
-        if room_sensor:
+        try:
+            entity[bc.ENABLED] = cv.boolean(user_input.get(bc.ENABLED, False))
+            formula = user_input.get(bc.FORMULA, bc.DEFAULT_FORMULA)
+            if not isinstance(formula, str) or not formula.strip():
+                raise ValueError("Dynamic boiler formula is required")
+            entity[bc.FORMULA] = formula
+        except (TypeError, ValueError, TemplateError, vol.Invalid) as err:
+            raise InvalidDomainOptions from err
+        try:
+            room_sensors = _parse_source_entities(
+                user_input.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
+            )
+        except InvalidEntityReference as err:
+            raise InvalidEntityReference(
+                CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID
+            ) from err
+        if room_sensors:
             try:
-                room_sensor = cv.entity_id(room_sensor)
+                room_sensors = [cv.entity_id(sensor) for sensor in room_sensors]
             except vol.Invalid as err:
                 raise InvalidEntityReference(
                     CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID
                 ) from err
-            if not room_sensor.startswith("sensor."):
+            if any(not sensor.startswith("sensor.") for sensor in room_sensors):
                 raise InvalidEntityReference(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
-            entity[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] = room_sensor
+            entity[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] = room_sensors
 
     template_sources = _parse_template_sources(
         user_input.get(CONF_TEMPLATE_SOURCES_JSON),
@@ -4845,14 +4864,41 @@ def _build_entity_config(
                 native_templates["target_temperature_step"] = _literal_template(
                     float(temperature_step)
                 )
-        if room_sensor := entity.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID):
+        room_sensors = entity.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID, [])
+        if room_sensors:
+            room_sensor_values = ", ".join(
+                "states(" + repr(sensor) + ") | float(none)"
+                for sensor in room_sensors
+            )
             native_templates["current_temperature"] = (
-                "{{ states(" + repr(room_sensor) + ") | float(none) }}"
+                "{% set values = ["
+                + room_sensor_values
+                + "] | select('is_number') | map('float') | list %}"
+                "{{ (values | average) if values else none }}"
             )
-            template_sources.setdefault(
-                "boiler_room_temperature",
-                {ATTR_ENTITY_ID: room_sensor, CONF_ATTRIBUTE: "state"},
-            )
+            if entity.get(bc.ENABLED):
+                native_templates["current_temperature"] = (
+                    "{% set ns = namespace(values=[]) %}"
+                    "{% for sensor in " + repr(room_sensors) + " %}"
+                    "{% set value = states(sensor) | float(none) %}"
+                    "{% set unit = state_attr(sensor, 'unit_of_measurement') or '°C' %}"
+                    "{% if is_number(value) and unit in ['°C', '°F', 'K'] %}"
+                    "{% set value = (value - 32) * 5 / 9 if unit == '°F' "
+                    "else value - 273.15 if unit == 'K' else value %}"
+                    "{% if is_number(value) %}{% set ns.values = ns.values + [value] %}{% endif %}"
+                    "{% endif %}{% endfor %}"
+                    "{{ (ns.values | average) if ns.values else none }}"
+                )
+            for name in list(template_sources):
+                if name == "boiler_room_temperature" or name.startswith(
+                    "boiler_room_temperature_"
+                ):
+                    template_sources.pop(name)
+            for index, room_sensor in enumerate(room_sensors, start=1):
+                template_sources[f"boiler_room_temperature_{index}"] = {
+                    ATTR_ENTITY_ID: room_sensor,
+                    CONF_ATTRIBUTE: "state",
+                }
             entity[CONF_TEMPLATE_SOURCES] = template_sources
         if CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE in entity:
             boiler_source = next(
@@ -5393,6 +5439,7 @@ def _validate_entity_templates(hass, entity: Mapping) -> None:
         CONF_AVAILABILITY_TEMPLATE,
         CONF_ICON_TEMPLATE,
         CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
+        bc.FORMULA,
     ):
         _validate(entity.get(field_name), field_name)
 
@@ -10780,13 +10827,16 @@ def _entity_form_defaults(
             repair_legacy_template_data(entity.get(CONF_COMMAND_ACTIONS))
         ),
     }
-    if platform == "climate" and CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE in entity:
-        defaults[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] = (
-            repair_legacy_enum_template(
-                _text_default(entity[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE])
+    if platform == "climate":
+        defaults[bc.ENABLED] = entity.get(bc.ENABLED, False)
+        defaults[bc.FORMULA] = entity.get(bc.FORMULA, bc.DEFAULT_FORMULA)
+        if CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE in entity:
+            defaults[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] = (
+                repair_legacy_enum_template(
+                    _text_default(entity[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE])
+                )
             )
-        )
-        defaults[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] = _text_default(
+        defaults[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] = _stored_entity_ids(
             entity.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
         )
     polygon = entity.get(CONF_POLYGONAL_ZONE)

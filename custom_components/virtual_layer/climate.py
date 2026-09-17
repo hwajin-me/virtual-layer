@@ -6,11 +6,13 @@ This component provides support for a virtual climate entity.
 from __future__ import annotations
 
 import ast
+import asyncio
 import logging
 import math
 import re
 from collections.abc import Callable, Mapping
 from typing import Any
+from datetime import timedelta
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -29,12 +31,19 @@ from homeassistant.components.climate.const import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, PRECISION_TENTHS, UnitOfTemperature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.template import Template
+from homeassistant.helpers.script import Script
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import TemperatureConverter
 
 from . import get_entity_configs
+from . import boiler_control as bc
 from .climate_options import migrate_legacy_climate_attributes
 from .const import *
 from .entity import VirtualEntity, nearest_step_value, number_float, virtual_schema
@@ -198,12 +207,17 @@ def _valid_mode_choice(restored, configured, available_modes):
 BASE_SCHEMA = virtual_schema(
     DEFAULT_CLIMATE_VALUE,
     {
+        vol.Optional(bc.ENABLED, default=False): cv.boolean,
+        vol.Optional(bc.FORMULA, default=bc.DEFAULT_FORMULA): cv.string,
         vol.Optional(CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE): cv.string,
-        # This UI-only setting records the sensor selected for a boiler's room
-        # temperature.  The config flow turns it into ``current_temperature``
-        # and a template source, but retains the ID so an existing entity can
-        # be edited without losing the selection.
-        vol.Optional(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID): cv.entity_id,
+        # This UI-only setting records the sensors selected for a boiler's
+        # room temperature. The config flow turns them into
+        # ``current_temperature`` and template sources, but retains the IDs
+        # so an existing entity can be edited without losing the selection.
+        # ``ensure_list`` also migrates the legacy single-string value.
+        vol.Optional(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID): vol.All(
+            cv.ensure_list, [cv.entity_id]
+        ),
         vol.Optional(CONF_CURRENT_HUMIDITY): number_float,
         vol.Optional(CONF_CURRENT_TEMPERATURE): number_float,
         vol.Optional(CONF_FAN_MODE): cv.string,
@@ -255,6 +269,16 @@ def normalize_domain_options(config):
 
 def validate_domain_options(config) -> None:
     """Validate mode relationships submitted through the config flow."""
+    if config.get(bc.ENABLED):
+        sources = config.get(CONF_SOURCE_ENTITIES, [])
+        if (
+            len([source for source in sources if source.startswith("climate.")]) != 1
+            or not config.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
+            or not config.get(CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE)
+            or config.get(CONF_TEMPERATURE_UNIT) != UnitOfTemperature.CELSIUS
+        ):
+            raise vol.Invalid("Dynamic boiler control requires one boiler, room sensors, calibration and Celsius")
+        cv.template(config[bc.FORMULA])
     native_templates = config.get(CONF_NATIVE_TEMPLATES, {})
     native_fields = (
         {
@@ -420,6 +444,19 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
     def __init__(self, config, old_style: bool):
         super().__init__(config, PLATFORM_DOMAIN, old_style)
 
+        self._boiler_dynamic = config.get(bc.ENABLED, False)
+        self._boiler_history = bc.ThermalHistory()
+        self._boiler_lock = asyncio.Lock()
+        self._boiler_last_attempt = None
+        self._boiler_status = "waiting_for_room_target"
+        self._boiler_script = None
+        self._boiler_stopping = False
+        self._boiler_room_target = None
+        self._boiler_room_sources = ()
+        if self._boiler_dynamic:
+            for name in (CONF_TARGET_TEMPERATURE, "temperature", CONF_TARGET_TEMPERATURE_HIGH, CONF_TARGET_TEMPERATURE_LOW):
+                self._native_templates.pop(name, None)
+
         self._attr_hvac_modes = config.get(CONF_HVAC_MODES)
         self._attr_min_temp = _finite_float(config.get(CONF_MIN_TEMP), 7)
         self._attr_max_temp = _finite_float(config.get(CONF_MAX_TEMP), 35)
@@ -484,10 +521,10 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             and not has_dynamic_native_template(CONF_TARGET_HUMIDITY)
         ):
             features |= ClimateEntityFeature.TARGET_HUMIDITY
-        if target_temperature_high is not None and target_temperature_low is not None:
+        if not self._boiler_dynamic and target_temperature_high is not None and target_temperature_low is not None:
             features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
         if (
-            target_temperature is not None
+            self._boiler_dynamic or target_temperature is not None
             or (
                 "set_temperature" in self._command_actions
                 and target_temperature_high is None
@@ -581,8 +618,200 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         )
         self._refresh_supported_features()
 
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        if self._boiler_dynamic:
+            self._refresh_remove_listeners.append(
+                async_track_time_interval(
+                    self.hass, self._async_boiler_tick, timedelta(seconds=bc.INTERVAL)
+                )
+            )
+
+    async def async_will_remove_from_hass(self):
+        self._boiler_stopping = True
+        if self._boiler_script:
+            await self._boiler_script.async_stop()
+        await super().async_will_remove_from_hass()
+
+    async def _async_run_command_action(self, command, method, args, kwargs):
+        if self._boiler_dynamic and command == "set_temperature":
+            if any(
+                key in kwargs
+                for key in (ATTR_TARGET_TEMPERATURE_HIGH, ATTR_TARGET_TEMPERATURE_LOW)
+            ):
+                raise ValueError("Dynamic boiler control uses a single room target")
+            target = self._boiler_room_target
+            if ATTR_TEMPERATURE in kwargs:
+                target = self._validate_temperature(kwargs[ATTR_TEMPERATURE])
+            if ATTR_HVAC_MODE in kwargs:
+                if _as_hvac_mode(kwargs[ATTR_HVAC_MODE]) not in self.hvac_modes:
+                    raise ValueError("Unsupported HVAC mode")
+                await self.async_set_hvac_mode(kwargs[ATTR_HVAC_MODE])
+            self._boiler_room_target = target
+            # The periodic controller owns water writes; never send the room
+            # request through the old one-shot calibration as well.
+            return True
+        return await super()._async_run_command_action(command, method, args, kwargs)
+
+    async def _async_boiler_tick(self, now):
+        if self._boiler_stopping or self._boiler_lock.locked():
+            return
+        async with self._boiler_lock:
+            try:
+                await self._async_boiler_update(now.timestamp())
+            except (HomeAssistantError, ValueError, TypeError, OverflowError):
+                self._boiler_status = "control_error"
+            if not self._boiler_stopping:
+                self.async_write_ha_state()
+
+    async def _async_boiler_update(self, timestamp):
+        sources = [s for s in self._source_entities if s.startswith("climate.")]
+        if (
+            len(sources) != 1
+            or self._attr_temperature_unit != UnitOfTemperature.CELSIUS
+        ):
+            self._boiler_status = "invalid_configuration"
+            return
+        source = self.hass.states.get(sources[0])
+        usable = source is not None and source.state not in ("unknown", "unavailable")
+        unit = self.hass.config.units.temperature_unit
+
+        def celsius(value, source_unit=unit):
+            value = bc.finite(value)
+            return (
+                None
+                if value is None
+                else bc.finite(TemperatureConverter.convert(
+                    value, source_unit, UnitOfTemperature.CELSIUS
+                ))
+            )
+
+        readings = []
+        room_sources = []
+        for sensor_id in self._config.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID, []):
+            sensor = self.hass.states.get(sensor_id)
+            if sensor is not None:
+                sensor_unit = sensor.attributes.get("unit_of_measurement") or UnitOfTemperature.CELSIUS
+                if sensor_unit not in (
+                    UnitOfTemperature.CELSIUS,
+                    UnitOfTemperature.FAHRENHEIT,
+                    UnitOfTemperature.KELVIN,
+                ):
+                    continue
+                reading = celsius(sensor.state, sensor_unit)
+                if reading is not None:
+                    readings.append(reading)
+                    room_sources.append(sensor_id)
+        if tuple(room_sources) != self._boiler_room_sources:
+            self._boiler_history.samples.clear()
+            self._boiler_room_sources = tuple(room_sources)
+        room = bc.finite(sum(value / len(readings) for value in readings)) if readings else None
+        water = (
+            celsius(source.attributes.get("current_temperature")) if usable else None
+        )
+        heating = usable and source.state == "heat" and self.hvac_mode == HVACMode.HEAT
+        variables = self._boiler_history.observe(timestamp, room, water, heating)
+        if (
+            not heating
+            or room is None
+            or water is None
+            or self._boiler_room_target is None
+            or not self.available
+        ):
+            self._boiler_status = "paused" if not heating else "missing_input"
+            return
+        minimum = celsius(source.attributes.get("min_temp"))
+        maximum = celsius(source.attributes.get("max_temp"))
+        current_target = celsius(source.attributes.get("temperature"))
+        if (
+            minimum is None
+            or maximum is None
+            or minimum > maximum
+            or current_target is None
+        ):
+            self._boiler_status = "missing_limits"
+            return
+        variables.update(
+            {
+                "temperature": self._boiler_room_target,
+                "room_temperature": room,
+                "boiler_water_temperature": water,
+                "this": self.hass.states.get(self.entity_id),
+                "entity_id": self.entity_id,
+                "command_data": {"temperature": self._boiler_room_target},
+            }
+        )
+        base = Template(
+            self._config[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE], self.hass
+        ).async_render(variables)
+        variables["base_water_temperature"] = bc.finite(base)
+        if variables["base_water_temperature"] is None:
+            raise ValueError("Invalid base calibration")
+        target = bc.finite(
+            Template(self._config[bc.FORMULA], self.hass).async_render(variables)
+        )
+        if target is None:
+            raise ValueError("Invalid dynamic calibration")
+        target = max(
+            minimum,
+            min(maximum, current_target + max(-2, min(2, target - current_target))),
+        )
+        raw_step = bc.finite(source.attributes.get("target_temp_step"))
+        step = (
+            raw_step * (5 / 9 if unit == UnitOfTemperature.FAHRENHEIT else 1)
+            if raw_step and raw_step > 0
+            else 0.5
+        )
+        target = nearest_step_value(target, minimum, maximum, step)
+        if abs(target - current_target) > 2 + 1e-9:
+            self._boiler_status = "step_exceeds_change_limit"
+            return
+        if abs(target - current_target) < max(0.5, step) - 1e-9:
+            self._boiler_status = "holding"
+            return
+        if (
+            self._boiler_last_attempt is not None
+            and timestamp - self._boiler_last_attempt < bc.MIN_COMMAND_INTERVAL
+        ):
+            self._boiler_status = "rate_limited"
+            return
+        self._boiler_last_attempt = timestamp
+        self._boiler_script = Script(
+            self.hass,
+            [
+                {
+                    "action": "climate.set_temperature",
+                    "target": {ATTR_ENTITY_ID: sources[0]},
+                    "data": {
+                        ATTR_TEMPERATURE: TemperatureConverter.convert(
+                            target, UnitOfTemperature.CELSIUS, unit
+                        )
+                    },
+                }
+            ],
+            f"{self.entity_id} dynamic boiler",
+            COMPONENT_DOMAIN,
+        )
+        await self._boiler_script.async_run(context=self._context or Context())
+        self._boiler_status = "adjusted"
+
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
+        if self._boiler_dynamic:
+            target = bc.finite(state.attributes.get("boiler_room_target"))
+            self._boiler_room_target = self._bounded_temperature(target)
+            accumulation = bc.finite(state.attributes.get("boiler_heat_accumulation"))
+            timestamp = bc.finite(state.attributes.get("boiler_history_timestamp"))
+            now = dt_util.utcnow().timestamp()
+            if (
+                accumulation is not None
+                and timestamp is not None
+                and 0 <= timestamp <= now
+            ):
+                self._boiler_history.accumulation = max(
+                    0, min(3000, accumulation)
+                ) * math.exp(-(now - timestamp) / 1800)
+            self._boiler_last_attempt = now
         restored_mode = _safe_hvac_mode(
             self._restored_state_value(state, config),
         )
@@ -670,6 +899,8 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         self._refresh_supported_features()
 
     def _apply_native_template_value(self, name: str, value) -> bool:
+        if self._boiler_dynamic and name in {CONF_TARGET_TEMPERATURE, "temperature", CONF_TARGET_TEMPERATURE_HIGH, CONF_TARGET_TEMPERATURE_LOW}:
+            return False
         name = {
             "humidity": CONF_TARGET_HUMIDITY,
             "target_temp_step": CONF_TARGET_TEMPERATURE_STEP,
@@ -732,7 +963,8 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
                 value = _finite_float(value, float("nan"))
                 if not math.isfinite(value):
                     raise ValueError(f"{name} must render a finite number")
-                value = self._bounded_temperature(value)
+                if not (self._boiler_dynamic and name == CONF_CURRENT_TEMPERATURE):
+                    value = self._bounded_temperature(value)
         elif name in {CONF_CURRENT_HUMIDITY, CONF_TARGET_HUMIDITY}:
             if value is None or value == "":
                 value = None
@@ -761,6 +993,10 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:
+        if self._boiler_dynamic:
+            self._attr_target_temperature = self._bounded_temperature(self._boiler_room_target)
+            self._attr_target_temperature_high = None
+            self._attr_target_temperature_low = None
         if self._attr_min_temp > self._attr_max_temp:
             self._attr_min_temp, self._attr_max_temp = (
                 self._attr_max_temp,
@@ -777,11 +1013,15 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             "_attr_target_temperature_high",
             "_attr_target_temperature_low",
         ):
+            if self._boiler_dynamic and attribute == "_attr_current_temperature":
+                continue
             setattr(
                 self,
                 attribute,
                 self._bounded_temperature(getattr(self, attribute, None)),
             )
+        if self._boiler_dynamic:
+            self._boiler_room_target = self._attr_target_temperature
         for attribute in ("_attr_current_humidity", "_attr_target_humidity"):
             setattr(
                 self,
@@ -815,9 +1055,23 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         self._refresh_supported_features()
 
     @property
+    def target_temperature(self):
+        if self._boiler_dynamic:
+            return self._boiler_room_target
+        return self._attr_target_temperature
+
+    @property
     def state_attributes(self):
         data = dict(super().state_attributes or {})
         data.update(self._attr_extra_state_attributes or {})
+        if self._boiler_dynamic:
+            data.update({
+                "boiler_room_target": self._boiler_room_target,
+                "boiler_heat_accumulation": self._boiler_history.accumulation,
+                "boiler_history_timestamp": self._boiler_history.timestamp,
+                "boiler_heating_elapsed_minutes": self._boiler_history.heating_minutes,
+                "boiler_control_status": self._boiler_status,
+            })
         return data
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:

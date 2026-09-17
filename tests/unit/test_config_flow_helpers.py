@@ -3652,19 +3652,65 @@ def test_climate_schema_rejects_unknown_hvac_modes():
 
 
 def test_climate_schema_accepts_persisted_boiler_room_temperature_sensor():
-    """Keep the boiler form's selected sensor valid after options are saved."""
+    """Keep legacy and multiple boiler room sensors valid after saving."""
     from custom_components.virtual_layer.climate import CLIMATE_SCHEMA
 
     config = CLIMATE_SCHEMA(
         {
             CONF_NAME: "Virtual boiler",
-            CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID: "sensor.boiler_room_temperature",
+            CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID: [
+                "sensor.boiler_room_temperature",
+                "sensor.boiler_room_temperature_2",
+            ],
         }
     )
 
-    assert config[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] == (
-        "sensor.boiler_room_temperature"
+    assert config[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] == [
+        "sensor.boiler_room_temperature",
+        "sensor.boiler_room_temperature_2",
+    ]
+
+    legacy = CLIMATE_SCHEMA(
+        {
+            CONF_NAME: "Legacy virtual boiler",
+            CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID: "sensor.legacy_room_temperature",
+        }
     )
+    assert legacy[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] == [
+        "sensor.legacy_room_temperature"
+    ]
+
+
+def test_build_boiler_climate_averages_selected_room_temperature_sensors():
+    """All selected sensors drive the native current-temperature template."""
+    _, entity = _build_entity_config(
+        _entity_input(
+            {
+                CONF_PLATFORM: "climate",
+                CONF_INITIAL_VALUE: "off",
+                CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID: [
+                    "sensor.room_a",
+                    "sensor.room_b",
+                ],
+            }
+        )
+    )
+
+    assert entity[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID] == [
+        "sensor.room_a",
+        "sensor.room_b",
+    ]
+    assert Template(
+        entity[CONF_NATIVE_TEMPLATES]["current_temperature"],
+    ).template == (
+        "{% set values = [states('sensor.room_a') | float(none), "
+        "states('sensor.room_b') | float(none)] | select('is_number') "
+        "| map('float') | list %}{{ (values | average) if values else none }}"
+    )
+    assert set(entity[CONF_TEMPLATE_SOURCES]) >= {
+        "boiler_room_temperature_1",
+        "boiler_room_temperature_2",
+    }
 
 
 @pytest.mark.parametrize(
@@ -4406,11 +4452,16 @@ def test_climate_entity_form_exposes_temperature_step_and_jinja_native_controls(
     assert set(domain_validators) == {
         CONF_CLIMATE_TEMPERATURE_STEP_INPUT,
         CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID,
+        "boiler_dynamic_control",
+        "boiler_dynamic_template",
     }
     assert isinstance(
         domain_validators[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID],
         selector.EntitySelector,
     )
+    assert domain_validators[CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID].config[
+        "multiple"
+    ]
     validators = _section_validators(schema, CONF_NATIVE_VALUE_TEMPLATES)
     assert set(validators) == set(CLIMATE_NATIVE_TEMPLATE_PROPERTIES)
     assert all(

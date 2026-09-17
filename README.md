@@ -27,6 +27,44 @@ and manage them from `Settings > Devices & services > Virtual Layer`.
 - [Translations and Icons](#translations-and-icons)
 - [Testing](#testing)
 
+## Dynamic boiler feedback (opt-in)
+
+Enable **Dynamic boiler control** in the climate domain settings and select
+room-temperature sensors. Use one boiler climate source, Celsius virtual
+temperature units and the existing room-to-water calibration formula. The
+boiler's `current_temperature` must measure heating water. Source temperatures
+in Fahrenheit are converted to Celsius.
+Room sensors may mix Celsius, Fahrenheit and Kelvin; unitless room readings
+are treated as Celsius. The generated dynamic room-display helper uses the
+same conversion as the controller.
+
+Set a room target after enabling. This target is kept separate from the water
+target and restored when persistence is enabled. This mode owns temperature
+writes instead of the configured `set_temperature` action. Power/mode actions
+still apply. It never starts heating by itself: both climates must be in heat
+mode. It evaluates every 60 seconds, attempts writes at least 120 seconds
+apart, ignores differences below 0.5°C and limits each change to 2°C while
+respecting the boiler's limits and step.
+
+The editable formula returns Celsius and receives `temperature` (saved room
+target), `room_temperature` (valid sensor mean), `boiler_water_temperature`,
+`room_temperature_rate` (°C/min over up to ten minutes),
+`heating_elapsed_minutes`, `heat_accumulation`, and `base_water_temperature`
+(the existing calibration result). The other variables are also available to
+the base calibration in dynamic mode.
+
+The default adds room-error recovery and reduces output as the room warms and
+heat accumulates. Accumulation is a proxy in °C·minutes, not measured energy:
+positive water-minus-room temperature integrated during heating with a
+30-minute exponential decay time constant. It decays across restarts; heating
+duration and trends reset after observation gaps. Missing room or water
+readings reset continuous heating duration; room sensor membership
+changes reset the temperature trend. Accumulation is capped at 3000 °C·minutes.
+Missing input or invalid formulas pause writes. Tune the default gains to the
+heating system. This mode does not implement automatic thermostat cut-off or burner/pump control; those
+remain the physical boiler's responsibility. `boiler_control_status` and its
+history attributes expose the controller state.
+
 ## Features
 
 - UI-only config flow and options flow

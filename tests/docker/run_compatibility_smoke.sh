@@ -181,6 +181,36 @@ async def test_sensor_conversion_runtime():
         from homeassistant.helpers.template import Template
         from custom_components.virtual_layer.air_quality_options import LEVELS, generate
 
+        from custom_components.virtual_layer import boiler_control as bc
+        hass.states.async_set("climate.dynamic_source", "heat", {
+            "current_temperature": 45, "temperature": 40,
+            "min_temp": 25, "max_temp": 65, "target_temp_step": 0.5,
+        })
+        hass.states.async_set("sensor.dynamic_room", "20", {"unit_of_measurement": "°C"})
+        dynamic = VirtualClimate(CLIMATE_SCHEMA({
+            "name": "Dynamic boiler", "entity_id": "climate.dynamic_virtual",
+            "initial_value": "heat", "hvac_modes": ["off", "heat"],
+            "source_entities": ["climate.dynamic_source"],
+            "boiler_room_temperature_entity_id": ["sensor.dynamic_room"],
+            "boiler_temperature_calibration_template": "{{ temperature * 1.5 + 2.5 }}",
+            bc.ENABLED: True,
+        }), False)
+        dynamic.hass = hass
+        dynamic._create_state(dynamic._config)
+        dynamic.async_write_ha_state = Mock()
+        dynamic._schedule_state_update = Mock()
+        dynamic_calls = []
+        async def capture_dynamic(call):
+            dynamic_calls.append(call)
+        hass.services.async_register("climate", "set_temperature", capture_dynamic)
+        await dynamic.async_set_temperature(temperature=26)
+        await dynamic._async_boiler_update(1000)
+        await dynamic._async_boiler_update(1060)
+        assert len(dynamic_calls) == 1
+        assert dynamic_calls[0].data["temperature"] == 42
+        assert dynamic.target_temperature == 26
+        print("Dynamic boiler smoke passed: native room target, periodic calibrated script, rate limit")
+
         # UI response serialization happens after the flow manager advances.
         # Custom validators here strand the browser on the previous form.
         FlowManagerResourceView(None)._prepare_result_json({
