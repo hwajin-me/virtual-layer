@@ -1147,6 +1147,27 @@ air-quality calibration standards. Use custom Jinja for other formulas.
 
 ### MatterBridge 3.10.8 / matterbridge-hass 1.5.0
 
+#### Media players in Apple Home
+
+MatterBridge maps `media_player` entities to Matter's Basic Video Player and
+Keypad Input clusters. Apple Home currently shows that direct endpoint as
+**Unsupported**. Use its **Virtual Control Label** fallback: add the selected
+label to the virtual media player in Home Assistant, then re-pair/reload
+MatterBridge and ignore the direct unsupported endpoint in Apple Home. It exposes
+Apple-Home-compatible command switches for power, playback, previous/next,
+mute, and volume up/down. This is command-only; it cannot provide an Apple Home
+Now Playing tile, media browsing, or AirPlay routing.
+
+#### Battery readings in Apple Home
+
+Keep a battery sensor attached to its parent Home Assistant Device; do not
+expose or split it as an individual MatterBridge entity. A standalone Power
+Source has no Apple Home accessory UI and may appear as **Unsupported**.
+Virtual Layer's generated vacuum battery sensors already publish the required
+numeric percentage, `battery` device class, `measurement` state class, `%` unit,
+and parent Device relationship. A direct unsupported media player on the same
+Device can still make the combined Apple Home Device unusable.
+
 Each virtual air-quality entity also generates a categorical
 `sensor.<parent_object_id>_air_quality` on the same Device. Its state follows the
 parent's overall category; concentration readings are not converted to enum

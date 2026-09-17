@@ -2641,6 +2641,9 @@ def test_media_remote_and_siren_templates_refresh_features(hass):
     assert MediaPlayerEntityFeature.SELECT_SOUND_MODE in media.supported_features
     assert MediaPlayerEntityFeature.SHUFFLE_SET in media.supported_features
     assert MediaPlayerEntityFeature.REPEAT_SET in media.supported_features
+    assert MediaPlayerEntityFeature.PREVIOUS_TRACK in media.supported_features
+    assert MediaPlayerEntityFeature.NEXT_TRACK in media.supported_features
+    assert MediaPlayerEntityFeature.VOLUME_STEP in media.supported_features
     assert remote.current_activity == "Music"
     assert RemoteEntityFeature.ACTIVITY in remote.supported_features
     assert siren.available_tones == ["alarm", "chime"]

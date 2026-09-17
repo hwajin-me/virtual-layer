@@ -1058,6 +1058,9 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             | MediaPlayerEntityFeature.STOP
             | MediaPlayerEntityFeature.VOLUME_SET
             | MediaPlayerEntityFeature.VOLUME_MUTE
+            | MediaPlayerEntityFeature.VOLUME_STEP
+            | MediaPlayerEntityFeature.PREVIOUS_TRACK
+            | MediaPlayerEntityFeature.NEXT_TRACK
         )
         if self._attr_source_list:
             features |= MediaPlayerEntityFeature.SELECT_SOURCE
@@ -1147,6 +1150,14 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         self._attr_state = MediaPlayerState.IDLE
         self.async_write_ha_state()
 
+    async def async_media_previous_track(self) -> None:
+        """Request the previous track from a source or virtual player."""
+        self.async_write_ha_state()
+
+    async def async_media_next_track(self) -> None:
+        """Request the next track from a source or virtual player."""
+        self.async_write_ha_state()
+
     async def async_set_volume_level(self, volume: float) -> None:
         if isinstance(volume, bool) or not 0 <= volume <= 1:
             raise ValueError("Media player volume must be between 0 and 1")
@@ -1155,6 +1166,22 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             0,
             1,
             self.volume_step,
+        )
+        self.async_write_ha_state()
+
+    async def async_volume_up(self) -> None:
+        """Raise volume by the advertised step without a nested proxy call."""
+        self._attr_volume_level = min(
+            1.0,
+            self._attr_volume_level + (self.volume_step or 0.05),
+        )
+        self.async_write_ha_state()
+
+    async def async_volume_down(self) -> None:
+        """Lower volume by the advertised step without a nested proxy call."""
+        self._attr_volume_level = max(
+            0.0,
+            self._attr_volume_level - (self.volume_step or 0.05),
         )
         self.async_write_ha_state()
 
@@ -1276,6 +1303,9 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             | MediaPlayerEntityFeature.STOP
             | MediaPlayerEntityFeature.VOLUME_SET
             | MediaPlayerEntityFeature.VOLUME_MUTE
+            | MediaPlayerEntityFeature.VOLUME_STEP
+            | MediaPlayerEntityFeature.PREVIOUS_TRACK
+            | MediaPlayerEntityFeature.NEXT_TRACK
         )
         if self._attr_source_list or "select_source" in self._command_actions:
             features |= MediaPlayerEntityFeature.SELECT_SOURCE

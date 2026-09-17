@@ -283,9 +283,10 @@ VIRTUAL_ENTITY_COMMANDS = {
     "light": frozenset({"turn_off", "turn_on"}),
     "lock": frozenset({"lock", "open", "unlock"}),
     "media_player": frozenset({
-        "media_pause", "media_play", "media_stop", "mute_volume", "select_source",
-        "select_sound_mode", "set_repeat", "set_shuffle", "set_volume_level",
-        "turn_off", "turn_on",
+        "media_next_track", "media_pause", "media_play", "media_previous_track",
+        "media_stop", "mute_volume", "select_source", "select_sound_mode",
+        "set_repeat", "set_shuffle", "set_volume_level", "turn_off", "turn_on",
+        "volume_down", "volume_up",
     }),
     "number": frozenset({"set_native_value"}),
     "remote": frozenset({"send_command", "turn_off", "turn_on"}),

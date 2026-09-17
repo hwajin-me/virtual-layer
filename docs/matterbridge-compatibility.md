@@ -40,6 +40,49 @@ the executable converter requires total_increasing.
 
 ## Configuration guidance and boundaries
 
+### Media players in Apple Home
+
+`matterbridge-hass` maps every Home Assistant `media_player` to Matter's
+Basic Video Player and Keypad Input clusters. Apple Home does not currently
+accept that device type, so it displays the direct virtual media-player
+endpoint as **Unsupported**. This is a controller/device-type limitation in
+Matterbridge, not a malformed Virtual Layer state or a setting that can be
+corrected by changing media metadata.
+
+For Apple Home, use Matterbridge's **Virtual Control Label** fallback. Assign
+the configured label to the virtual media-player entity in Home Assistant. The
+plugin then exposes Apple Home-compatible momentary switches for supported
+commands (power, play/pause/stop, previous/next, mute, and volume up/down).
+Virtual Layer advertises and implements the previous/next and volume-step
+features required by that fallback, and proxies those commands to compatible
+media-player sources. Keep the player eligible while Matterbridge creates the
+labelled controls; then ignore the unsupported direct endpoint in Apple Home.
+
+This fallback supplies command switches, not a Now Playing tile, media
+metadata, queue browsing, or AirPlay routing. Re-pair/reload Matterbridge after
+changing its entity filters or virtual-control label, because endpoint
+composition is cached by Matter controllers.
+
+### Battery readings in Apple Home
+
+A battery percentage is a Power Source cluster, not a standalone Apple Home
+accessory. Matterbridge only attaches it correctly when the `sensor` belongs to
+the same Home Assistant Device as a supported primary entity. Virtual Layer's
+generated vacuum battery sensor has the required `battery` device class,
+`measurement` state class, `%` unit, and parent Device association.
+
+Keep that generated `sensor.<object_id>_battery` with its parent Device in
+Matterbridge. Do **not** select it as an individual entity or put it in
+`splitEntities`: doing so creates a Power Source-only Matter device, which
+Apple Home can report as **Unsupported**. Also keep direct media players out of
+the same Apple Home bridge Device; an unsupported Basic Video Player endpoint
+can make the combined Device unusable even though its battery cluster is valid.
+
+If the battery is still absent after keeping it attached, verify the live Home
+Assistant state has all four values exactly: numeric `state` in 0–100,
+`device_class: battery`, `state_class: measurement`, and
+`unit_of_measurement: %`. Reload/re-pair Matterbridge after correcting metadata.
+
 For a stepped fan, select the Matter three-level profile in the Virtual Layer
 fan flow when Low/Medium/High is the desired controller experience. It exposes
 the canonical `low`, `medium`, and `high` HA preset modes, reflects the active

@@ -405,7 +405,9 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
         "volume_step": 0.05,
         "shuffle": None,
         "repeat": None,
-        "supported_features": 20877,
+        # Include the feature bits Matterbridge's Apple Home fallback consumes:
+        # previous/next and volume steps become labelled virtual switches.
+        "supported_features": 21949,
     },
     "number": {
         "native_min_value": 0,
@@ -8692,6 +8694,8 @@ _SOURCE_COMMAND_FEATURES = {
     ("lock", "open"): LockEntityFeature.OPEN,
     ("media_player", "media_pause"): MediaPlayerEntityFeature.PAUSE,
     ("media_player", "media_play"): MediaPlayerEntityFeature.PLAY,
+    ("media_player", "media_next_track"): MediaPlayerEntityFeature.NEXT_TRACK,
+    ("media_player", "media_previous_track"): MediaPlayerEntityFeature.PREVIOUS_TRACK,
     ("media_player", "media_stop"): MediaPlayerEntityFeature.STOP,
     ("media_player", "mute_volume"): MediaPlayerEntityFeature.VOLUME_MUTE,
     ("media_player", "select_source"): MediaPlayerEntityFeature.SELECT_SOURCE,
@@ -8701,6 +8705,8 @@ _SOURCE_COMMAND_FEATURES = {
     ("media_player", "set_volume_level"): MediaPlayerEntityFeature.VOLUME_SET,
     ("media_player", "turn_off"): MediaPlayerEntityFeature.TURN_OFF,
     ("media_player", "turn_on"): MediaPlayerEntityFeature.TURN_ON,
+    ("media_player", "volume_down"): MediaPlayerEntityFeature.VOLUME_STEP,
+    ("media_player", "volume_up"): MediaPlayerEntityFeature.VOLUME_STEP,
     ("siren", "turn_off"): SirenEntityFeature.TURN_OFF,
     ("siren", "turn_on"): SirenEntityFeature.TURN_ON,
     ("update", "install"): UpdateEntityFeature.INSTALL,
