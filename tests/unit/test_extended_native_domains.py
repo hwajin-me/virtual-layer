@@ -299,6 +299,18 @@ def test_climate_migration_replaces_empty_native_mode_placeholders():
     assert CONF_ATTRIBUTES not in migrated
 
 
+def test_climate_migration_forces_whole_degree_step_after_reload():
+    migrated = migrate_legacy_climate_attributes(
+        {
+            "target_temperature_step": 0.5,
+            "native_templates": {"target_temperature_step": "{{ 0.5 }}"},
+        }
+    )
+
+    assert migrated["target_temperature_step"] == 1
+    assert "native_templates" not in migrated
+
+
 def test_humidifier_source_options_and_legacy_attributes_are_promoted():
     options, consumed = extract_humidifier_options(
         {
@@ -1857,7 +1869,7 @@ def test_climate_and_humidifier_recover_non_finite_configured_ranges():
 
     assert climate.min_temp == 7
     assert climate.max_temp == 35
-    assert climate.target_temperature_step == 0.1
+    assert climate.target_temperature_step == 1
     assert climate._attr_target_humidity_step is None
     assert humidifier.min_humidity == 35
     assert humidifier.max_humidity == 70

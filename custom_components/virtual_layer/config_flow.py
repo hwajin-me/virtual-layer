@@ -105,6 +105,18 @@ from .polygon import parse_geojson_zones
 
 _LOGGER = logging.getLogger(__name__)
 
+# matterbridge-hass maps media players to Basic Video Player/Keypad Input. It
+# does not consume Home Assistant's richer media capabilities.
+MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK = int(
+    MediaPlayerEntityFeature.TURN_ON
+    | MediaPlayerEntityFeature.TURN_OFF
+    | MediaPlayerEntityFeature.PLAY
+    | MediaPlayerEntityFeature.PAUSE
+    | MediaPlayerEntityFeature.STOP
+    | MediaPlayerEntityFeature.PREVIOUS_TRACK
+    | MediaPlayerEntityFeature.NEXT_TRACK
+)
+
 
 class _StrictYamlLoader(yaml.SafeLoader):
     """Safe YAML loader which preserves the form's one-key/one-value contract."""
@@ -264,7 +276,6 @@ CLIMATE_NATIVE_TEMPLATE_PROPERTIES = (
     "target_temperature_low",
     "min_temp",
     "max_temp",
-    "target_temperature_step",
     "temperature_unit",
     "current_humidity",
     "target_humidity",
@@ -328,7 +339,7 @@ DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES = {
         "target_temperature_low": None,
         "min_temp": 7,
         "max_temp": 35,
-        "target_temperature_step": 0.1,
+        "target_temperature_step": 1,
         "temperature_unit": "°C",
         "current_humidity": None,
         "target_humidity": None,
@@ -405,9 +416,7 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
         "volume_step": 0.05,
         "shuffle": None,
         "repeat": None,
-        # Include the feature bits Matterbridge's Apple Home fallback consumes:
-        # previous/next and volume steps become labelled virtual switches.
-        "supported_features": 21949,
+        "supported_features": MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK,
     },
     "number": {
         "native_min_value": 0,
@@ -1212,12 +1221,22 @@ _LIGHT_CAPABILITY_MODES = {
 def _light_source_capability(state) -> str:
     """Classify a source light into its highest usable control profile."""
     raw_modes = state.attributes.get("supported_color_modes", ())
-    modes = {str(mode) for mode in raw_modes} if isinstance(raw_modes, (list, tuple, set)) else set()
-    if modes & {"hs", "xy", "rgb", "rgbw", "rgbww"}:
-        return "extended_color"
-    if "color_temp" in modes:
-        return "color_temperature"
-    if "brightness" in modes or "brightness" in state.attributes:
+    if isinstance(raw_modes, (list, tuple, set)):
+        # Home Assistant's capability declaration is authoritative.  Some
+        # bridges leave a stale ``brightness`` attribute on an on/off light;
+        # inferring dimming from that value would expose an unsupported Matter
+        # level cluster in every newly generated virtual light.
+        modes = {str(mode) for mode in raw_modes}
+        if modes & {"hs", "xy", "rgb", "rgbw", "rgbww"}:
+            return "extended_color"
+        if "color_temp" in modes:
+            return "color_temperature"
+        if "brightness" in modes:
+            return "dimmable"
+        return "on_off"
+    # Older integrations sometimes omit ``supported_color_modes`` entirely.
+    # Retain the legacy brightness inference only for those sources.
+    if "brightness" in state.attributes:
         return "dimmable"
     return "on_off"
 
@@ -1603,6 +1622,10 @@ def _boiler_feedback_schema(defaults: Mapping[str, Any] | None = None) -> dict:
     defaults = defaults or {}
     return {
         vol.Optional(
+            bc.CALIBRATION_ENABLED,
+            default=defaults.get(bc.CALIBRATION_ENABLED, True),
+        ): selector.BooleanSelector(),
+        vol.Optional(
             bc.ENABLED, default=defaults.get(bc.ENABLED, False)
         ): selector.BooleanSelector(),
         _editable_optional(
@@ -1614,7 +1637,9 @@ def _boiler_feedback_schema(defaults: Mapping[str, Any] | None = None) -> dict:
 def _submitted_boiler_feedback(user_input: Mapping[str, Any]) -> dict:
     """Only explicit feedback edits override existing values/helper policies."""
     return {
-        key: user_input[key] for key in (bc.ENABLED, bc.FORMULA) if key in user_input
+        key: user_input[key]
+        for key in (bc.CALIBRATION_ENABLED, bc.ENABLED, bc.FORMULA)
+        if key in user_input
     }
 
 
@@ -3030,8 +3055,8 @@ CALENDAR_EVENT_SOURCE_ATTRIBUTES = frozenset(
 def _options_schema(options: dict[str, Any]) -> vol.Schema:
     actions = [ACTION_ADD_ENTITY]
     if _entity_choices(options):
-        actions.append(ACTION_EDIT_ENTITY)
         actions.append(ACTION_COPY_ENTITY)
+        actions.append(ACTION_EDIT_ENTITY)
     if _entity_choices(options, include_invalid=True):
         actions.append(ACTION_DELETE_ENTITY)
     if _entity_choices(options):
@@ -3221,25 +3246,8 @@ def _literal_template(value: Any) -> str:
 
 
 def _climate_temperature_step_default(defaults: Mapping) -> str:
-    """Return the simple climate-step selection without discarding templates."""
-    template = _native_template_mapping(defaults.get(CONF_NATIVE_VALUE_TEMPLATES)).get(
-        "target_temperature_step", ""
-    )
-    if isinstance(template, str):
-        match = re.fullmatch(r"\s*\{\{\s*(0\.5|1(?:\.0)?)\s*\}\}\s*", template)
-        if match:
-            return "0.5" if match.group(1) == "0.5" else "1"
-
-    value = defaults.get("target_temperature_step")
-    if not isinstance(value, bool):
-        try:
-            if float(value) == 0.5:
-                return "0.5"
-        except (TypeError, ValueError, OverflowError):
-            pass
-    # Do not replace a source-generated or custom Jinja helper simply because
-    # the edit form was submitted without touching this new control.
-    return "source"
+    """Virtual climates always expose whole-degree temperature requests."""
+    return "1"
 
 
 def _matter_air_quality_default(defaults: Mapping) -> str:
@@ -3595,18 +3603,6 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
     elif platform == "climate":
         domain_schema[vol.Optional(bc.ENABLED, default=defaults.get(bc.ENABLED, False))] = selector.BooleanSelector()
         domain_schema[vol.Optional(bc.FORMULA, default=defaults.get(bc.FORMULA, bc.DEFAULT_FORMULA))] = TEMPLATE_SELECTOR
-        domain_schema[
-            vol.Required(
-                CONF_CLIMATE_TEMPERATURE_STEP_INPUT,
-                default=_climate_temperature_step_default(defaults),
-            )
-        ] = selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=["source", "0.5", "1"],
-                translation_key="climate_temperature_step",
-                mode=selector.SelectSelectorMode.DROPDOWN,
-            )
-        )
         room_sensors = _stored_entity_ids(
             defaults.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
         )
@@ -4782,6 +4778,9 @@ def _build_entity_config(
 
     if platform == "climate":
         try:
+            entity[bc.CALIBRATION_ENABLED] = cv.boolean(
+                user_input.get(bc.CALIBRATION_ENABLED, True)
+            )
             entity[bc.ENABLED] = cv.boolean(user_input.get(bc.ENABLED, False))
             formula = user_input.get(bc.FORMULA, bc.DEFAULT_FORMULA)
             if not isinstance(formula, str) or not formula.strip():
@@ -4890,14 +4889,10 @@ def _build_entity_config(
             raise InvalidDomainOptions
         native_templates["native_unit_of_measurement"] = _literal_template(unit)
     if platform == "climate":
-        temperature_step = user_input.get(CONF_CLIMATE_TEMPERATURE_STEP_INPUT)
-        if temperature_step is not None:
-            if temperature_step not in {"source", "0.5", "1"}:
-                raise InvalidDomainOptions
-            if temperature_step != "source":
-                native_templates["target_temperature_step"] = _literal_template(
-                    float(temperature_step)
-                )
+        # A virtual climate always advertises whole-degree targets. Remove the
+        # legacy/source helper on save so Matter cannot rediscover a 0.5°C
+        # capability from persisted configuration.
+        native_templates.pop("target_temperature_step", None)
         room_sensors = entity.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID, [])
         if room_sensors:
             room_sensor_values = ", ".join(
@@ -4999,6 +4994,10 @@ def _build_entity_config(
     domain_options = _parse_domain_options(
         user_input.get(CONF_DOMAIN_OPTIONS_JSON),
     )
+    if platform == "climate":
+        # This was a persisted legacy option. The entity always exposes a
+        # whole-degree step, including to Matter bridges.
+        domain_options.pop("target_temperature_step", None)
     if platform == "light":
         domain_options.pop(CONF_MATTER_LIGHT_TYPE, None)
         matter_light_type = user_input.get(CONF_MATTER_LIGHT_TYPE, "dimmable")
@@ -5164,6 +5163,16 @@ def _build_entity_config(
         domain_options.pop(CONF_MOTION_DETECTION_LOGIC, None)
         entity[CONF_MOTION_HOLD_MINUTES] = motion_hold_minutes
         entity[CONF_MOTION_DETECTION_LOGIC] = detection_logic
+    if platform == "climate":
+        # Boiler controls are dedicated UI fields; stale values embedded in
+        # legacy advanced options must not override the submitted choices.
+        for field_name in (
+            bc.CALIBRATION_ENABLED,
+            bc.ENABLED,
+            bc.FORMULA,
+            CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
+        ):
+            domain_options.pop(field_name, None)
     entity.update(domain_options)
     if platform == "air_quality":
         # Do not label a categorical state as a numeric PM2.5 measurement.
@@ -6979,6 +6988,18 @@ def _native_source_template(
         return _source_metadata_template(
             [entity_id], "unit_of_measurement", _source_metadata_unit(state),
         )
+    if platform == "media_player" and property_name == "supported_features":
+        features = (
+            f"state_attr({entity_id!r}, 'supported_features') | int("
+            f"{MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK})"
+        )
+        return (
+            "{{ ("
+            + features
+            + ") | bitwise_and("
+            + str(MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK)
+            + ") }}"
+        )
     if platform == "air_quality" and property_name == "unit_of_measurement":
         # Overall quality is categorical; never copy a source concentration
         # (or a malformed volume unit) onto the category itself.
@@ -7304,6 +7325,11 @@ def _merged_native_template(
         bitmask = f"({expressions[0]} | int(0))"
         for expression in expressions[1:]:
             bitmask = f"({bitmask} | bitwise_or({expression} | int(0)))"
+        if platform == "media_player" and property_name == "supported_features":
+            bitmask = (
+                f"({bitmask} | bitwise_and("
+                f"{MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK}))"
+            )
         return f"{{{{ {bitmask} }}}}"
     if property_name in NATIVE_TEMPLATE_MINIMUM_PROPERTIES:
         return (
@@ -8805,7 +8831,7 @@ _SOURCE_STEPPED_COMMANDS = {
         "target_temp_step",
         7,
         35,
-        0.1,
+        1,
     ),
     ("humidifier", "set_humidity"): (
         "humidity",
@@ -9568,6 +9594,7 @@ def _reference_entity_defaults(
     target_platform: str | None = None,
     additional_target_platforms: Collection[str] = (),
     boiler_temperature_calibration_template: str | None = None,
+    boiler_temperature_calibration_enabled: bool | None = None,
 ) -> dict[str, Any]:
     entity_ids = _normalize_reference_entity_ids(entity_ids)
     if not entity_ids:
@@ -9609,6 +9636,13 @@ def _reference_entity_defaults(
     )
     boiler_profile = _boiler_source_profile(entity_ids, states)
     boiler_air_conditioner_profile = _boiler_air_conditioner_profile(entity_ids, states)
+    # Preserve the established generated-helper behavior. The form exposes an
+    # explicit opt-out for boilers that already accept room setpoints.
+    boiler_calibration_enabled = (
+        True
+        if boiler_temperature_calibration_enabled is None
+        else bool(boiler_temperature_calibration_enabled)
+    )
     boiler_calibration_template = (
         boiler_temperature_calibration_template
         if boiler_temperature_calibration_template is not None
@@ -9950,6 +9984,7 @@ def _reference_entity_defaults(
             source_command_actions,
         )
     if boiler_profile is not None:
+        defaults[bc.CALIBRATION_ENABLED] = boiler_calibration_enabled
         defaults[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] = (
             boiler_calibration_template
         )
@@ -9960,10 +9995,11 @@ def _reference_entity_defaults(
                 entity_ids[climate_index],
                 states[climate_index],
                 hot_water_switch_id,
-                boiler_calibration_template,
+                boiler_calibration_template if boiler_calibration_enabled else None,
             )
         )
     elif boiler_air_conditioner_profile is not None:
+        defaults[bc.CALIBRATION_ENABLED] = boiler_calibration_enabled
         defaults[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] = (
             boiler_calibration_template
         )
@@ -9977,7 +10013,11 @@ def _reference_entity_defaults(
                 hot_water_switch_id,
                 states[boiler_index],
                 states[air_conditioner_index],
-                boiler_temperature_calibration_template,
+                (
+                    boiler_temperature_calibration_template
+                    if boiler_calibration_enabled
+                    else None
+                ),
             )
         )
         # State and native HVAC mode must be the same safe composite value.
@@ -10168,7 +10208,7 @@ def _reference_entity_defaults(
                 # A boiler's water range must not become the UI's room range.
                 "min_temp": _literal_template(22),
                 "max_temp": _literal_template(40),
-                "target_temperature_step": _literal_template(0.1),
+                "target_temperature_step": _literal_template(1),
             }
         )
     elif boiler_air_conditioner_profile is not None:
@@ -12147,6 +12187,10 @@ class VirtualFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, config_entr
                             CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
                         )
                     ),
+                    boiler_temperature_calibration_enabled=user_input.get(
+                        bc.CALIBRATION_ENABLED,
+                        self._reference_defaults.get(bc.CALIBRATION_ENABLED, True),
+                    ),
                 )
             self._reference_defaults.update(_submitted_boiler_feedback(user_input))
             self._add_use_template_helper = cv.boolean(
@@ -12796,6 +12840,10 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                         else user_input.get(
                             CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
                         )
+                    ),
+                    boiler_temperature_calibration_enabled=user_input.get(
+                        bc.CALIBRATION_ENABLED,
+                        self._reference_defaults.get(bc.CALIBRATION_ENABLED, True),
                     ),
                 )
             self._reference_defaults.update(_submitted_boiler_feedback(user_input))
@@ -13576,6 +13624,10 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                             if submitted_calibration
                             == DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
                             else submitted_calibration
+                        ),
+                        boiler_temperature_calibration_enabled=user_input.get(
+                            bc.CALIBRATION_ENABLED,
+                            self._reference_defaults.get(bc.CALIBRATION_ENABLED, True),
                         ),
                     )
                 self._prepare_edit_entity_defaults(

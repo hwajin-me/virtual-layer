@@ -180,7 +180,6 @@
               "light_response_retries": "소스 새로고침 재시도",
               "light_ignore_unresponsive": "응답 없는 전구 무시",
               "sensor_unit": "센서 단위",
-              "climate_temperature_step": "온도 조절 간격",
               "boiler_dynamic_control": "보일러 동적 난방 보정",
               "boiler_dynamic_template": "동적 난방수 목표온도 수식",
               "boiler_room_temperature_entity_id": "실내 온도 센서",
@@ -204,7 +203,6 @@
               "light_response_retries": "조명 그룹은 소스 기기를 새로고침하고 목표에 도달하지 않은 전구에만 최신 명령을 재전송합니다(0–10회). 새 명령은 이전 재시도를 취소합니다. 단일 소스 조명은 상태만 다시 읽습니다.",
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
               "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
-              "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
               "boiler_dynamic_control": "섭씨를 사용하는 보일러 1개와 실내 센서를 대상으로 켭니다. 설정된 set_temperature 액션 대신 주기적으로 물 목표온도를 전송합니다. 활성화 후 실내 목표온도를 설정하세요. 60초마다 계산하며 최소 120초 간격으로 전송합니다. 보일러 current_temperature는 실제 난방수 온도여야 합니다. 전원 액션은 별도 설정을 따릅니다.",
               "boiler_dynamic_template": "섭씨 물 목표온도를 반환합니다. temperature: 저장된 실내 목표, room_temperature: 실내 센서 평균, boiler_water_temperature: 난방수 온도, room_temperature_rate: 최근 최대 10분의 상승속도(℃/분), heating_elapsed_minutes: 관측된 연속 난방 시간(분), heat_accumulation: 30분 시정수로 감쇠하는 축열 추정값(℃·분), base_water_temperature: 기존 보정식 결과. 기본 계수는 설비에 맞게 조정하세요. 입력 누락 시 전송을 멈추며 보일러 범위와 간격을 적용합니다.",
               "boiler_room_temperature_entity_id": "가상 climate의 현재 실내온도로 사용할 센서를 여러 개 선택합니다. 유효한 숫자 값은 평균하며, 실제 보일러 온수 온도는 attribute로 유지됩니다.",
@@ -710,12 +708,14 @@
         "data": {
           "use_template_helper": "원본 기반 템플릿 자동 생성",
           "boiler_temperature_calibration_template": "기본 실내→온수 변환식",
+          "boiler_temperature_calibration_enabled": "실내→온수 변환식 적용",
           "boiler_dynamic_control": "보일러 동적 보정 사용",
           "boiler_dynamic_template": "동적 온수 목표 수식"
         },
         "data_description": {
           "use_template_helper": "켜면 상태값, 사용 가능 여부, 아이콘, 속성 및 도메인별 고유 속성 템플릿을 자동 생성합니다. 끄면 선택한 원본 엔티티, 현재 상태와 메타데이터만 가져오고 템플릿은 생성하지 않습니다.",
           "boiler_temperature_calibration_template": "기본 변환만 수행합니다: temperature * 1.5 + 2.5 (실내 25°C → 온수 40°C, 27°C → 43°C). 이 식은 동적 보정식이 아닙니다. 결과는 아래 동적 수식의 base_water_temperature로 전달됩니다. 동적 보정 비활성화 시 온도 설정 명령 때 계산합니다. 저장된 사용자 수식은 보존합니다.",
+          "boiler_temperature_calibration_enabled": "보일러가 실내 목표 온도를 그대로 받는 경우 끄세요. 수식은 나중에 다시 사용할 수 있도록 유지합니다. 동적 보정에서는 실내 목표 온도를 기본 난방수 온도로 사용합니다.",
           "boiler_dynamic_control": "보일러 climate 소스 1개에 대한 주기적 보정을 활성화합니다. 보일러+에어컨 복합 소스는 지원하지 않습니다. 다음 화면에서 실내 온도 센서를 선택하고 가상 온도 단위는 섭씨로 설정하세요. 보일러 current_temperature는 온수 온도여야 합니다. 온도 명령은 동적 제어가 담당하고 전원·모드 액션은 유지합니다.",
           "boiler_dynamic_template": "기본식은 실내 온도 차이, 상승률, 잔열을 반영합니다. 변수: temperature(실내 목표), room_temperature(센서 평균), boiler_water_temperature(온수 온도), room_temperature_rate(°C/분), heating_elapsed_minutes(관측 가열 시간), heat_accumulation(감쇠 누적 °C·분), base_water_temperature(기본 변환 결과). 섭씨 온수 목표를 반환합니다. 활성화 시 60초마다 계산하며 명령 간격은 최소 120초, 변경 폭은 최대 2°C이고 보일러 범위도 적용합니다. 입력 누락 시 명령을 중지합니다. 계수는 난방 환경에 맞게 조정하세요."
         }
@@ -1089,12 +1089,12 @@
     "step": {
       "init": {
         "title": "Virtual Layer 구성",
-        "description": "UI에서 가상 장치와 엔티티를 추가, 수정, 삭제하거나 관리합니다.",
+        "description": "UI에서 가상 장치와 엔티티를 추가, 복사, 수정, 삭제하거나 관리합니다.",
         "data": {
           "action": "작업"
         },
         "data_description": {
-          "action": "엔티티 추가, 수정, 일괄 삭제 또는 공유 장치 메타데이터 관리 작업을 선택합니다."
+          "action": "엔티티 추가, 복사, 수정, 삭제 또는 공유 장치 메타데이터 관리 작업을 선택합니다."
         }
       },
       "select_entity": {
@@ -1319,7 +1319,6 @@
               "light_response_retries": "소스 새로고침 재시도",
               "light_ignore_unresponsive": "응답 없는 전구 무시",
               "sensor_unit": "센서 단위",
-              "climate_temperature_step": "온도 조절 간격",
               "boiler_dynamic_control": "보일러 동적 난방 보정",
               "boiler_dynamic_template": "동적 난방수 목표온도 수식",
               "boiler_room_temperature_entity_id": "실내 온도 센서",
@@ -1343,7 +1342,6 @@
               "light_response_retries": "조명 그룹은 소스 기기를 새로고침하고 목표에 도달하지 않은 전구에만 최신 명령을 재전송합니다(0–10회). 새 명령은 이전 재시도를 취소합니다. 단일 소스 조명은 상태만 다시 읽습니다.",
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
               "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
-              "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
               "boiler_dynamic_control": "섭씨를 사용하는 보일러 1개와 실내 센서를 대상으로 켭니다. 설정된 set_temperature 액션 대신 주기적으로 물 목표온도를 전송합니다. 활성화 후 실내 목표온도를 설정하세요. 60초마다 계산하며 최소 120초 간격으로 전송합니다. 보일러 current_temperature는 실제 난방수 온도여야 합니다. 전원 액션은 별도 설정을 따릅니다.",
               "boiler_dynamic_template": "섭씨 물 목표온도를 반환합니다. temperature: 저장된 실내 목표, room_temperature: 실내 센서 평균, boiler_water_temperature: 난방수 온도, room_temperature_rate: 최근 최대 10분의 상승속도(℃/분), heating_elapsed_minutes: 관측된 연속 난방 시간(분), heat_accumulation: 30분 시정수로 감쇠하는 축열 추정값(℃·분), base_water_temperature: 기존 보정식 결과. 기본 계수는 설비에 맞게 조정하세요. 입력 누락 시 전송을 멈추며 보일러 범위와 간격을 적용합니다.",
               "boiler_room_temperature_entity_id": "가상 climate의 현재 실내온도로 사용할 센서를 여러 개 선택합니다. 유효한 숫자 값은 평균하며, 실제 보일러 온수 온도는 attribute로 유지됩니다.",
@@ -1950,8 +1948,8 @@
         }
       },
       "entity": {
-        "title": "가상 엔티티 추가",
-        "description": "가상 엔티티를 만들고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 air_quality.object_id_aqi 등급 엔티티가 자동 생성되며 이름은 이름 Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지됩니다. matterbridge-hass 1.5.0용 sensor.object_id_aqim 호환 엔티티도 자동 생성합니다. 브리지의 Air Quality Regex에 해당 ID를 지정하세요.",
+        "title": "가상 엔티티 설정",
+        "description": "새로 추가하거나 복사한 가상 엔티티를 설정하고 가상 장치에 연결합니다. 고급 필드는 선택 사항입니다. 엔티티 도메인을 바꾼 뒤 한 번 제출하면 해당 도메인의 전용 설정이 표시됩니다. 공기질 측정용 가상 센서는 같은 Device에 air_quality.object_id_aqi 등급 엔티티가 자동 생성되며 이름은 이름 Air Quality입니다. 기존 가상 센서도 다시 로드하면 적용됩니다. 원본은 유지됩니다. matterbridge-hass 1.5.0용 sensor.object_id_aqim 호환 엔티티도 자동 생성합니다. 브리지의 Air Quality Regex에 해당 ID를 지정하세요.",
         "data": {
           "device_name": "장치 이름",
           "entity_name": "엔티티 이름",
@@ -2051,7 +2049,6 @@
               "light_response_retries": "소스 새로고침 재시도",
               "light_ignore_unresponsive": "응답 없는 전구 무시",
               "sensor_unit": "센서 단위",
-              "climate_temperature_step": "온도 조절 간격",
               "boiler_dynamic_control": "보일러 동적 난방 보정",
               "boiler_dynamic_template": "동적 난방수 목표온도 수식",
               "boiler_room_temperature_entity_id": "실내 온도 센서",
@@ -2075,7 +2072,6 @@
               "light_response_retries": "조명 그룹은 소스 기기를 새로고침하고 목표에 도달하지 않은 전구에만 최신 명령을 재전송합니다(0–10회). 새 명령은 이전 재시도를 취소합니다. 단일 소스 조명은 상태만 다시 읽습니다.",
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
               "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
-              "climate_temperature_step": "목표 온도를 0.5°C 또는 1°C 단위로 조절합니다. 온도 제어에서 전송하는 값도 이 간격에 맞춥니다.",
               "boiler_dynamic_control": "섭씨를 사용하는 보일러 1개와 실내 센서를 대상으로 켭니다. 설정된 set_temperature 액션 대신 주기적으로 물 목표온도를 전송합니다. 활성화 후 실내 목표온도를 설정하세요. 60초마다 계산하며 최소 120초 간격으로 전송합니다. 보일러 current_temperature는 실제 난방수 온도여야 합니다. 전원 액션은 별도 설정을 따릅니다.",
               "boiler_dynamic_template": "섭씨 물 목표온도를 반환합니다. temperature: 저장된 실내 목표, room_temperature: 실내 센서 평균, boiler_water_temperature: 난방수 온도, room_temperature_rate: 최근 최대 10분의 상승속도(℃/분), heating_elapsed_minutes: 관측된 연속 난방 시간(분), heat_accumulation: 30분 시정수로 감쇠하는 축열 추정값(℃·분), base_water_temperature: 기존 보정식 결과. 기본 계수는 설비에 맞게 조정하세요. 입력 누락 시 전송을 멈추며 보일러 범위와 간격을 적용합니다.",
               "boiler_room_temperature_entity_id": "가상 climate의 현재 실내온도로 사용할 센서를 여러 개 선택합니다. 유효한 숫자 값은 평균하며, 실제 보일러 온수 온도는 attribute로 유지됩니다.",
@@ -3113,8 +3109,8 @@
     "options_action": {
       "options": {
         "add_entity": "가상 엔티티 추가",
-        "edit_entity": "가상 엔티티 수정",
         "copy_entity": "가상 엔티티 복사",
+        "edit_entity": "가상 엔티티 수정",
         "delete_entity": "가상 엔티티 삭제",
         "regenerate_entity_ids": "전체 가상 엔티티 ID 자동 재생성",
         "manage_devices": "가상 장치 관리",

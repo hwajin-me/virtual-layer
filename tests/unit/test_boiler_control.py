@@ -147,6 +147,29 @@ async def test_room_target_is_stable_and_periodic_water_command_is_bounded(hass)
     assert len(calls) == 2
 
 
+async def test_disabled_room_to_water_formula_sends_the_room_target_directly(hass):
+    """A water boiler can opt out when it already accepts room setpoints."""
+    boiler = entity(
+        hass,
+        **{bc.CALIBRATION_ENABLED: False, bc.FORMULA: "{{ base_water_temperature + 1 }}"},
+    )
+    source(hass, temperature=26)
+    calls = []
+    hass.services.async_register(
+        "climate", "set_temperature", lambda call: calls.append(call)
+    )
+    await boiler.async_set_temperature(temperature=26)
+    await boiler._async_boiler_update(1000)
+    assert calls[0].data["temperature"] == 27
+
+
+def test_climate_temperature_step_is_always_one_degree(hass):
+    boiler = entity(hass, target_temperature_step=0.5)
+    assert boiler.target_temperature_step == 1
+    boiler._apply_native_template_value("target_temperature_step", 0.5)
+    assert boiler.target_temperature_step == 1
+
+
 @pytest.mark.parametrize(
     "fault", ["off", "unavailable", "no_room", "no_water", "no_limits", "no_target"]
 )
@@ -264,6 +287,13 @@ def test_flow_round_trip_keeps_dynamic_formula_and_sensors():
         "sensor.room_a",
         "sensor.room_b",
     ]
+
+
+def test_flow_persists_disabled_room_to_water_calibration():
+    defaults = _entity_form_defaults("Boiler", {**config(), "platform": "climate"})
+    defaults[bc.CALIBRATION_ENABLED] = False
+    _, stored = _build_entity_config(defaults)
+    assert stored[bc.CALIBRATION_ENABLED] is False
 
 
 @pytest.mark.parametrize("editing", [False, True])

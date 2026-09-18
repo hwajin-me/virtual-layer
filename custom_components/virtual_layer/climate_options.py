@@ -94,6 +94,18 @@ def extract_climate_options(
 def migrate_legacy_climate_attributes(config: Mapping) -> dict[str, Any]:
     """Promote climate options previously copied as virtual attributes."""
     migrated = dict(config)
+    # Climate is advertised to Matter as a whole-degree control. Normalize
+    # every old persisted scalar/template form on each setup so a restart or
+    # reload cannot revive a source-derived half-degree capability.
+    migrated["target_temperature_step"] = 1
+    native_templates = migrated.get("native_templates")
+    if isinstance(native_templates, Mapping):
+        migrated_templates = dict(native_templates)
+        migrated_templates.pop("target_temperature_step", None)
+        if migrated_templates:
+            migrated["native_templates"] = migrated_templates
+        else:
+            migrated.pop("native_templates", None)
     # The original boiler UI stored one sensor as a string.  It now accepts an
     # ordered sensor list, so normalize the old persisted shape before the
     # strict climate schema and the edit form see it.

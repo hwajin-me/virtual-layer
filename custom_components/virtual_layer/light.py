@@ -285,7 +285,13 @@ class VirtualLight(VirtualEntity, LightEntity):
 
     @property
     def brightness(self) -> int | None:
-        return self._attr_brightness if self._attr_is_on else None
+        """Return level only when this light actually supports level control."""
+        return (
+            self._attr_brightness
+            if self._attr_is_on
+            and self._attr_supported_color_modes != {ColorMode.ONOFF}
+            else None
+        )
 
     @property
     def color_mode(self) -> ColorMode | None:
@@ -293,27 +299,52 @@ class VirtualLight(VirtualEntity, LightEntity):
 
     @property
     def hs_color(self) -> tuple[float, float] | None:
-        return self._attr_hs_color if self._attr_is_on else None
+        return (
+            self._attr_hs_color
+            if self._attr_is_on and ColorMode.HS in self._attr_supported_color_modes
+            else None
+        )
 
     @property
     def xy_color(self) -> tuple[float, float] | None:
-        return self._attr_xy_color if self._attr_is_on else None
+        return (
+            self._attr_xy_color
+            if self._attr_is_on and ColorMode.XY in self._attr_supported_color_modes
+            else None
+        )
 
     @property
     def rgb_color(self) -> tuple[int, int, int] | None:
-        return self._attr_rgb_color if self._attr_is_on else None
+        return (
+            self._attr_rgb_color
+            if self._attr_is_on and ColorMode.RGB in self._attr_supported_color_modes
+            else None
+        )
 
     @property
     def rgbw_color(self) -> tuple[int, int, int, int] | None:
-        return self._attr_rgbw_color if self._attr_is_on else None
+        return (
+            self._attr_rgbw_color
+            if self._attr_is_on and ColorMode.RGBW in self._attr_supported_color_modes
+            else None
+        )
 
     @property
     def rgbww_color(self) -> tuple[int, int, int, int, int] | None:
-        return self._attr_rgbww_color if self._attr_is_on else None
+        return (
+            self._attr_rgbww_color
+            if self._attr_is_on and ColorMode.RGBWW in self._attr_supported_color_modes
+            else None
+        )
 
     @property
     def color_temp_kelvin(self) -> int | None:
-        return self._attr_color_temp_kelvin if self._attr_is_on else None
+        return (
+            self._attr_color_temp_kelvin
+            if self._attr_is_on
+            and ColorMode.COLOR_TEMP in self._attr_supported_color_modes
+            else None
+        )
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -344,6 +375,7 @@ class VirtualLight(VirtualEntity, LightEntity):
             self._attr_brightness = config.get(CONF_INITIAL_BRIGHTNESS)
         if self._attr_color_mode == ColorMode.UNKNOWN:
             self._attr_color_mode = ColorMode.ONOFF
+        self._reconcile_color_capabilities()
         if self._attr_supported_features & LightEntityFeature.EFFECT:
             self._attr_effect = config.get(CONF_INITIAL_EFFECT)
 
@@ -431,10 +463,31 @@ class VirtualLight(VirtualEntity, LightEntity):
                 if effect in (self._attr_effect_list or [])
                 else config.get(CONF_INITIAL_EFFECT)
             )
+        # A restart may restore a state saved before its source capability was
+        # reduced.  Reconcile before Home Assistant publishes that first state,
+        # so MatterBridge never rediscovers stale colour clusters.
+        self._reconcile_color_capabilities()
 
     def _update_attributes(self):
         """Return the state attributes."""
         super()._update_attributes()
+        # These attributes are integration-owned mirrors of LightEntity
+        # properties.  Remove a value left by an older capability profile
+        # before adding the properties that are valid now; ``dict.update`` on
+        # its own otherwise leaves a former colour value visible indefinitely.
+        for name in (
+            ATTR_BRIGHTNESS,
+            ATTR_COLOR_MODE,
+            ATTR_COLOR_TEMP_KELVIN,
+            ATTR_EFFECT,
+            ATTR_EFFECT_LIST,
+            ATTR_HS_COLOR,
+            ATTR_XY_COLOR,
+            ATTR_RGB_COLOR,
+            ATTR_RGBW_COLOR,
+            ATTR_RGBWW_COLOR,
+        ):
+            self._attr_extra_state_attributes.pop(name, None)
         self._attr_extra_state_attributes.update({
             name: value for name, value in (
                 (ATTR_BRIGHTNESS, self.brightness),
@@ -1003,9 +1056,30 @@ class VirtualLight(VirtualEntity, LightEntity):
                 self._attr_min_color_temp_kelvin,
                 min(self._attr_max_color_temp_kelvin, self._attr_color_temp_kelvin),
             )
+        self._reconcile_color_capabilities()
         self._attr_effect = None
         self._attr_effect_list = None
         self._attr_supported_features = LightEntityFeature(0)
+
+    def _reconcile_color_capabilities(self) -> None:
+        """Discard colour values that the current Matter profile cannot expose."""
+        # Source helpers retain safe fallback values for properties absent on
+        # a source.  Those fallbacks must never advertise a Matter colour
+        # cluster when the effective light is on/off-only (or less capable
+        # than its previous profile).
+        if self._attr_supported_color_modes == {ColorMode.ONOFF}:
+            self._attr_brightness = None
+        supported_color_attributes = {
+            ColorMode.HS: "_attr_hs_color",
+            ColorMode.XY: "_attr_xy_color",
+            ColorMode.RGB: "_attr_rgb_color",
+            ColorMode.RGBW: "_attr_rgbw_color",
+            ColorMode.RGBWW: "_attr_rgbww_color",
+            ColorMode.COLOR_TEMP: "_attr_color_temp_kelvin",
+        }
+        for mode, attribute_name in supported_color_attributes.items():
+            if mode not in self._attr_supported_color_modes:
+                setattr(self, attribute_name, None)
 
     def set_state(self, value) -> None:
         self._attr_is_on = self._template_to_bool(value)

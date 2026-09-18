@@ -30,7 +30,7 @@ from homeassistant.components.climate.const import (
     HVACMode,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_TEMPERATURE, PRECISION_TENTHS, UnitOfTemperature
+from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -209,6 +209,9 @@ BASE_SCHEMA = virtual_schema(
     {
         vol.Optional(bc.ENABLED, default=False): cv.boolean,
         vol.Optional(bc.FORMULA, default=bc.DEFAULT_FORMULA): cv.string,
+        # Missing values are legacy configurations that historically always
+        # applied the room-to-water curve. Preserve that behavior on reload.
+        vol.Optional(bc.CALIBRATION_ENABLED, default=True): cv.boolean,
         vol.Optional(CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE): cv.string,
         # This UI-only setting records the sensors selected for a boiler's
         # room temperature. The config flow turns them into
@@ -250,7 +253,7 @@ BASE_SCHEMA = virtual_schema(
         vol.Optional(CONF_TARGET_TEMPERATURE_HIGH): number_float,
         vol.Optional(CONF_TARGET_TEMPERATURE_LOW): number_float,
         vol.Optional(
-            CONF_TARGET_TEMPERATURE_STEP, default=PRECISION_TENTHS
+            CONF_TARGET_TEMPERATURE_STEP, default=1
         ): number_float,
         vol.Optional(
             CONF_TEMPERATURE_UNIT, default=UnitOfTemperature.CELSIUS
@@ -274,10 +277,13 @@ def validate_domain_options(config) -> None:
         if (
             len([source for source in sources if source.startswith("climate.")]) != 1
             or not config.get(CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID)
-            or not config.get(CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE)
+            or (
+                config.get(bc.CALIBRATION_ENABLED)
+                and not config.get(CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE)
+            )
             or config.get(CONF_TEMPERATURE_UNIT) != UnitOfTemperature.CELSIUS
         ):
-            raise vol.Invalid("Dynamic boiler control requires one boiler, room sensors, calibration and Celsius")
+            raise vol.Invalid("Dynamic boiler control requires one boiler, room sensors, and Celsius")
         cv.template(config[bc.FORMULA])
     native_templates = config.get(CONF_NATIVE_TEMPLATES, {})
     native_fields = (
@@ -472,10 +478,9 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
                 self._attr_max_humidity,
                 self._attr_min_humidity,
             )
-        self._attr_target_temperature_step = _finite_step(
-            config.get(CONF_TARGET_TEMPERATURE_STEP),
-            PRECISION_TENTHS,
-        )
+        # Virtual Layer climate controls intentionally use whole-degree room
+        # targets. This also repairs legacy/source-derived half-degree steps.
+        self._attr_target_temperature_step = 1.0
         self._attr_target_humidity_step = _finite_step(
             config.get(CONF_TARGET_HUMIDITY_STEP),
         )
@@ -741,9 +746,11 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
                 "command_data": {"temperature": self._boiler_room_target},
             }
         )
-        base = Template(
-            self._config[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE], self.hass
-        ).async_render(variables)
+        base = self._boiler_room_target
+        if self._config.get(bc.CALIBRATION_ENABLED, True):
+            base = Template(
+                self._config[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE], self.hass
+            ).async_render(variables)
         variables["base_water_temperature"] = bc.finite(base)
         if variables["base_water_temperature"] is None:
             raise ValueError("Invalid base calibration")
@@ -906,6 +913,9 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             "target_temp_step": CONF_TARGET_TEMPERATURE_STEP,
             "temperature": CONF_TARGET_TEMPERATURE,
         }.get(name, name)
+        if name == CONF_TARGET_TEMPERATURE_STEP:
+            self._attr_target_temperature_step = 1.0
+            return True
         if name == CONF_HVAC_MODES:
             value = _rendered_hvac_modes(value)
             empty_value = value is None or value is False or (
@@ -1127,25 +1137,6 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             raise ValueError(
                 "Temperature must be within the configured minimum and maximum"
             )
-        if math.isclose(
-            self._attr_target_temperature_step,
-            0.5,
-            rel_tol=0,
-            abs_tol=1e-9,
-        ):
-            # Matter climate controls expose half-degree setpoints.  Never
-            # lower a requested setpoint while adapting it to that contract:
-            # a request such as 20.2 °C must become 20.5 °C, not 20.0 °C.
-            step_index = math.ceil(
-                ((temperature - self._attr_min_temp) / 0.5) - 1e-9
-            )
-            return round(
-                min(
-                    self._attr_max_temp,
-                    self._attr_min_temp + (step_index * 0.5),
-                ),
-                12,
-            )
         return nearest_step_value(
             temperature,
             self._attr_min_temp,
@@ -1156,6 +1147,15 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
     def _command_service_data(self, command, method, args, kwargs) -> dict:
         """Use the same Matter setpoint rounding for source actions."""
         data = super()._command_service_data(command, method, args, kwargs)
+        # A composite boiler/air-conditioner action can route a room request
+        # to the boiler, whose valid water-temperature range is intentionally
+        # wider than the currently active air conditioner. Its generated
+        # action declares ``optimistic: false`` so source-side clamping owns
+        # the final value; applying this virtual entity's AC range here would
+        # reject a valid boiler hand-off before that action can run.
+        action_spec = self._command_action_spec(command)
+        if action_spec is not None and not action_spec[1]:
+            return data
         if command == "set_temperature":
             for field_name in (
                 ATTR_TEMPERATURE,

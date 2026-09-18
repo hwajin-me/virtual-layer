@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 ENABLED = "boiler_dynamic_control"
 FORMULA = "boiler_dynamic_template"
+CALIBRATION_ENABLED = "boiler_temperature_calibration_enabled"
 DEFAULT_FORMULA = (
     "{{ base_water_temperature + "
     "([8, [0, (temperature - room_temperature) * 1.5] | max] | min) "

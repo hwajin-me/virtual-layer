@@ -17,6 +17,7 @@ import yaml
 from homeassistant.components.camera import CameraEntityFeature
 from homeassistant.components.climate import ClimateEntityFeature
 from homeassistant.components.climate.const import HVACAction
+from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.components.vacuum import VacuumActivity
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -2237,6 +2238,21 @@ def test_composite_light_uses_the_least_capable_profile(
     }[expected]
 
 
+def test_light_capability_ignores_stale_brightness_when_modes_are_onoff(hass):
+    """A stale level value must not turn an explicitly on/off bulb dimmable."""
+    entity_id = "light.stale_level"
+    hass.states.async_set(
+        entity_id,
+        "on",
+        {"supported_color_modes": ["onoff"], "brightness": 0},
+    )
+
+    defaults = _reference_entity_defaults(hass, [entity_id])
+
+    assert _lowest_light_capability([hass.states.get(entity_id)]) == "on_off"
+    assert defaults[CONF_MATTER_LIGHT_TYPE] == "on_off"
+
+
 def test_native_multi_source_helpers_use_property_semantics(hass):
     def render(property_name, values, platform="sensor"):
         templates = [f"{{{{ {value!r} }}}}" for value in values]
@@ -2861,6 +2877,32 @@ def test_multiple_media_players_with_on_off_snapshots_use_state_helper(hass):
             {"tv": "off", "apple_tv": "on"}
         )
         == "off"
+    )
+
+
+def test_media_player_helpers_only_advertise_matterbridge_commands(hass):
+    """Do not copy HA-only media capabilities into a Matter player helper."""
+    source = "media_player.rich_source"
+    source_features = int(
+        MediaPlayerEntityFeature.TURN_ON
+        | MediaPlayerEntityFeature.PLAY
+        | MediaPlayerEntityFeature.SEEK
+        | MediaPlayerEntityFeature.PLAY_MEDIA
+        | MediaPlayerEntityFeature.SELECT_SOURCE
+        | MediaPlayerEntityFeature.BROWSE_MEDIA
+        | MediaPlayerEntityFeature.GROUPING
+    )
+    hass.states.async_set(source, "playing", {"supported_features": source_features})
+    state = hass.states.get(source)
+    assert state is not None
+
+    template = _native_reference_templates(
+        "media_player", [source], [state]
+    )["supported_features"]
+    rendered = Template(template, hass).async_render(parse_result=True)
+
+    assert rendered == int(
+        MediaPlayerEntityFeature.TURN_ON | MediaPlayerEntityFeature.PLAY
     )
 
 
@@ -4352,6 +4394,7 @@ def test_boiler_temperature_calibration_helper_maps_before_source_clamp(hass):
         hass,
         ["climate.boiler"],
         boiler_temperature_calibration_template=calibration,
+        boiler_temperature_calibration_enabled=True,
     )
 
     assert defaults[CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE] == calibration
@@ -4419,7 +4462,9 @@ def test_default_boiler_temperature_calibration_maps_room_to_water(
         {"current_temperature": room_temperature},
     )
 
-    defaults = _reference_entity_defaults(hass, ["climate.boiler"])
+    defaults = _reference_entity_defaults(
+        hass, ["climate.boiler"], boiler_temperature_calibration_enabled=True
+    )
     actions = _parse_command_actions(defaults[CONF_COMMAND_ACTIONS_JSON], "climate")
     sequence = actions["set_temperature"][0]["choose"][0]["sequence"]
     command_data = Template(sequence[0]["data"], hass).async_render(
@@ -4451,7 +4496,9 @@ def test_default_boiler_temperature_calibration_is_not_room_temperature_dependen
         "climate.virtual_boiler", "heat", {"current_temperature": 22}
     )
 
-    defaults = _reference_entity_defaults(hass, ["climate.boiler"])
+    defaults = _reference_entity_defaults(
+        hass, ["climate.boiler"], boiler_temperature_calibration_enabled=True
+    )
     actions = _parse_command_actions(defaults[CONF_COMMAND_ACTIONS_JSON], "climate")
     sequence = actions["set_temperature"][0]["choose"][0]["sequence"]
     command_data = Template(sequence[0]["data"], hass).async_render(
@@ -4503,7 +4550,6 @@ def test_climate_entity_form_exposes_temperature_step_and_jinja_native_controls(
     outer = {marker.schema: validator for marker, validator in schema.schema.items()}
     domain_validators = _section_validators(schema, CONF_DOMAIN_SETTINGS)
     assert set(domain_validators) == {
-        CONF_CLIMATE_TEMPERATURE_STEP_INPUT,
         CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID,
         "boiler_dynamic_control",
         "boiler_dynamic_template",
@@ -4522,10 +4568,6 @@ def test_climate_entity_form_exposes_temperature_step_and_jinja_native_controls(
     )
 
     submitted = schema({})[CONF_NATIVE_VALUE_TEMPLATES]
-    assert (
-        schema({})[CONF_DOMAIN_SETTINGS][CONF_CLIMATE_TEMPERATURE_STEP_INPUT]
-        == "source"
-    )
     assert submitted["hvac_modes"] == "{{ ['off', 'cool'] }}"
     assert submitted["fan_modes"] == "{{ ['auto', 'turbo'] }}"
     assert submitted["fan_mode"] == "{{ 'auto' }}"
@@ -4556,21 +4598,20 @@ def test_camera_entity_form_exposes_h264_stream_source_as_native_value():
     )
 
 
-@pytest.mark.parametrize(
-    ("temperature_step", "expected_template"),
-    [("0.5", "{{ 0.5 }}"), ("1", "{{ 1.0 }}")],
-)
-def test_climate_temperature_step_selection_updates_native_step_template(
-    temperature_step, expected_template
-):
+def test_climate_entity_form_does_not_offer_fractional_temperature_steps():
     form_values = _entity_schema({CONF_PLATFORM: "climate"})({})
-    form_values[CONF_DOMAIN_SETTINGS][CONF_CLIMATE_TEMPERATURE_STEP_INPUT] = (
-        temperature_step
-    )
+    assert CONF_CLIMATE_TEMPERATURE_STEP_INPUT not in form_values[CONF_DOMAIN_SETTINGS]
 
+
+def test_saving_climate_removes_legacy_matter_half_degree_step():
+    form_values = _entity_schema({CONF_PLATFORM: "climate"})({})
+    form_values[CONF_NATIVE_TEMPLATES_JSON] = {
+        "target_temperature_step": "{{ 0.5 }}",
+    }
+    form_values[CONF_DOMAIN_OPTIONS_JSON] = {"target_temperature_step": 0.5}
     _, entity = _build_entity_config(form_values)
-
-    assert entity[CONF_NATIVE_TEMPLATES]["target_temperature_step"] == expected_template
+    assert "target_temperature_step" not in entity.get(CONF_NATIVE_TEMPLATES, {})
+    assert "target_temperature_step" not in entity
 
 
 def test_build_climate_config_uses_all_native_hvac_fields():
@@ -4628,7 +4669,6 @@ def test_build_climate_config_uses_all_native_hvac_fields():
             "target_temperature_low": 25,
             "target_temperature_high": 20,
         },
-        {"target_temperature_step": 0},
         {"temperature_unit": "rankine"},
         {"hvac_action": "teleporting"},
     ],
@@ -7433,6 +7473,24 @@ def test_options_schema_allows_deleting_but_not_editing_invalid_stored_entity():
         "manage_devices",
         "delete_device",
         "finish",
+    ]
+
+
+def test_options_schema_places_copy_before_edit_for_valid_entities():
+    schema = _options_schema(
+        {
+            ATTR_DEVICES: {
+                "Kitchen": [{CONF_PLATFORM: "sensor", CONF_NAME: "Temperature"}],
+            },
+        }
+    )
+    action_selector = next(iter(schema.schema.values()))
+
+    assert action_selector.config["options"][:4] == [
+        "add_entity",
+        "copy_entity",
+        "edit_entity",
+        "delete_entity",
     ]
 
 

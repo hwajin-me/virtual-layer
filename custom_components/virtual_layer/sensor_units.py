@@ -58,7 +58,6 @@ UNITS_OF_MEASUREMENT = {
     SensorDeviceClass.POWER_FACTOR: PERCENTAGE,
     SensorDeviceClass.REACTIVE_POWER: UnitOfReactivePower.VOLT_AMPERE_REACTIVE,
     SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS: CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    "formaldehyde": CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     SensorDeviceClass.VOLTAGE: UnitOfElectricPotential.VOLT,
     SensorDeviceClass.GAS: UnitOfVolume.CUBIC_METERS,
     SensorDeviceClass.MOISTURE: PERCENTAGE,

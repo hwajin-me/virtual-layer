@@ -180,7 +180,6 @@
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "sensor_unit": "Sensor unit",
-              "climate_temperature_step": "Temperature adjustment step",
               "boiler_dynamic_control": "Dynamic boiler control",
               "boiler_dynamic_template": "Dynamic water-target formula",
               "boiler_room_temperature_entity_id": "Room temperature sensors",
@@ -204,7 +203,6 @@
               "light_response_retries": "For light groups, refresh source devices and resend the latest command only to bulbs that have not reached the target (0–10 retries). A new command cancels old retries. Single-source lights only re-read state.",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
-              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
               "boiler_dynamic_control": "Opt in for one boiler and room sensors in Celsius. Replaces the configured set_temperature action with periodic water-temperature writes. Set a room target after enabling. Calculates every 60s; writes at least 120s apart. Boiler current_temperature must measure heating water. Power actions remain separately configured.",
               "boiler_dynamic_template": "Returns Celsius. Variables: temperature (saved room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (C/min over up to 10min), heating_elapsed_minutes (observed heat duration), heat_accumulation (decaying C-min proxy, 30min time constant), base_water_temperature (existing calibration result). Tune default gains for the system. Missing inputs pause writes. Boiler limits and steps apply.",
               "boiler_room_temperature_entity_id": "Optional sensors combined as the virtual climate's current room temperature. Available numeric readings are averaged; raw boiler-water temperatures remain available as attributes.",
@@ -710,12 +708,14 @@
         "data": {
           "use_template_helper": "Generate source-based templates",
           "boiler_temperature_calibration_template": "Base room-to-water formula",
+          "boiler_temperature_calibration_enabled": "Apply room-to-water formula",
           "boiler_dynamic_control": "Enable dynamic boiler feedback",
           "boiler_dynamic_template": "Dynamic water-target formula"
         },
         "data_description": {
           "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates.",
           "boiler_temperature_calibration_template": "Base conversion only: temperature * 1.5 + 2.5 (25°C room → 40°C water, 27°C → 43°C). This is not the dynamic formula. Its result is base_water_temperature in the feedback formula below. With feedback disabled it runs on temperature commands. Saved custom formulas are preserved.",
+          "boiler_temperature_calibration_enabled": "Turn this off when the boiler accepts the same room target directly. The formula is retained for later use. Dynamic feedback then uses the room target as its base water temperature.",
           "boiler_dynamic_control": "Opt-in periodic feedback for one boiler climate source only; boiler + air-conditioner composite sources are not supported. Select room sensors on the next screen and use Celsius virtual units. Boiler current_temperature must measure water. This mode owns temperature writes; power/mode actions remain unchanged.",
           "boiler_dynamic_template": "Default includes room error, warming rate and residual heat. Variables: temperature (room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (°C/min), heating_elapsed_minutes, heat_accumulation (decaying °C·min), base_water_temperature. Returns Celsius. When enabled, evaluates every 60 seconds; writes at least 120 seconds apart, limited to 2°C per change and boiler limits. Missing inputs pause writes. Tune gains for your system."
         }
@@ -1089,12 +1089,12 @@
     "step": {
       "init": {
         "title": "Configure Virtual Layer",
-        "description": "Add, edit, delete, or manage UI-managed virtual devices and entities.",
+        "description": "Add, copy, edit, delete, or manage UI-managed virtual devices and entities.",
         "data": {
           "action": "Action"
         },
         "data_description": {
-          "action": "Choose whether to add, edit, delete entities, or manage shared device metadata."
+          "action": "Choose whether to add, copy, edit, delete entities, or manage shared device metadata."
         }
       },
       "select_entity": {
@@ -1319,7 +1319,6 @@
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "sensor_unit": "Sensor unit",
-              "climate_temperature_step": "Temperature adjustment step",
               "boiler_dynamic_control": "Dynamic boiler control",
               "boiler_dynamic_template": "Dynamic water-target formula",
               "boiler_room_temperature_entity_id": "Room temperature sensors",
@@ -1343,7 +1342,6 @@
               "light_response_retries": "For light groups, refresh source devices and resend the latest command only to bulbs that have not reached the target (0–10 retries). A new command cancels old retries. Single-source lights only re-read state.",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
-              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
               "boiler_dynamic_control": "Opt in for one boiler and room sensors in Celsius. Replaces the configured set_temperature action with periodic water-temperature writes. Set a room target after enabling. Calculates every 60s; writes at least 120s apart. Boiler current_temperature must measure heating water. Power actions remain separately configured.",
               "boiler_dynamic_template": "Returns Celsius. Variables: temperature (saved room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (C/min over up to 10min), heating_elapsed_minutes (observed heat duration), heat_accumulation (decaying C-min proxy, 30min time constant), base_water_temperature (existing calibration result). Tune default gains for the system. Missing inputs pause writes. Boiler limits and steps apply.",
               "boiler_room_temperature_entity_id": "Optional sensors combined as the virtual climate's current room temperature. Available numeric readings are averaged; raw boiler-water temperatures remain available as attributes.",
@@ -1950,8 +1948,8 @@
         }
       },
       "entity": {
-        "title": "Add Virtual Entity",
-        "description": "Create a virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed air_quality.object_id_aqi entity named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged. A sensor.object_id_aqim compatibility mirror is also generated for matterbridge-hass 1.5.0; match that ID in the bridge's Air Quality Regex.",
+        "title": "Configure Virtual Entity",
+        "description": "Configure the new or copied virtual entity and attach it to a virtual device. Advanced fields are optional. After changing the entity domain, submit once to load its domain-specific controls. Recognized air-quality measurement sensors automatically receive a managed air_quality.object_id_aqi entity named name Air Quality on the same Device. Existing virtual sensors receive it on reload too. Original sensors are unchanged. A sensor.object_id_aqim compatibility mirror is also generated for matterbridge-hass 1.5.0; match that ID in the bridge's Air Quality Regex.",
         "data": {
           "device_name": "Device name",
           "entity_name": "Entity name",
@@ -2051,7 +2049,6 @@
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "sensor_unit": "Sensor unit",
-              "climate_temperature_step": "Temperature adjustment step",
               "boiler_dynamic_control": "Dynamic boiler control",
               "boiler_dynamic_template": "Dynamic water-target formula",
               "boiler_room_temperature_entity_id": "Room temperature sensors",
@@ -2075,7 +2072,6 @@
               "light_response_retries": "For light groups, refresh source devices and resend the latest command only to bulbs that have not reached the target (0–10 retries). A new command cancels old retries. Single-source lights only re-read state.",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
-              "climate_temperature_step": "Choose whether target temperatures change in 0.5°C or 1°C increments. This also aligns values sent by temperature controls.",
               "boiler_dynamic_control": "Opt in for one boiler and room sensors in Celsius. Replaces the configured set_temperature action with periodic water-temperature writes. Set a room target after enabling. Calculates every 60s; writes at least 120s apart. Boiler current_temperature must measure heating water. Power actions remain separately configured.",
               "boiler_dynamic_template": "Returns Celsius. Variables: temperature (saved room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (C/min over up to 10min), heating_elapsed_minutes (observed heat duration), heat_accumulation (decaying C-min proxy, 30min time constant), base_water_temperature (existing calibration result). Tune default gains for the system. Missing inputs pause writes. Boiler limits and steps apply.",
               "boiler_room_temperature_entity_id": "Optional sensors combined as the virtual climate's current room temperature. Available numeric readings are averaged; raw boiler-water temperatures remain available as attributes.",
@@ -3113,8 +3109,8 @@
     "options_action": {
       "options": {
         "add_entity": "Add a virtual entity",
-        "edit_entity": "Edit a virtual entity",
         "copy_entity": "Copy a virtual entity",
+        "edit_entity": "Edit a virtual entity",
         "delete_entity": "Delete virtual entities",
         "regenerate_entity_ids": "Regenerate all virtual entity IDs",
         "manage_devices": "Manage virtual devices",

@@ -753,14 +753,14 @@ async def test_numeric_commands_snap_mismatched_values_to_advertised_steps():
 
     assert fan.percentage == 40
     assert number.native_value == 15
-    assert climate.target_temperature == 16
+    assert climate.target_temperature == 15
     assert climate.target_humidity == 60
     assert humidifier.target_humidity == 50
     assert media.volume_level == 0.4
     assert heater.target_temperature == 45
 
 
-async def test_matter_climate_setpoints_round_up_to_half_degrees():
+async def test_climate_setpoints_round_to_whole_degrees():
     climate = VirtualClimate(
         CLIMATE_SCHEMA(
             _base(
@@ -779,13 +779,13 @@ async def test_matter_climate_setpoints_round_up_to_half_degrees():
 
     await climate.async_set_temperature(temperature=20.2)
 
-    assert climate.target_temperature == 20.5
+    assert climate.target_temperature == 20
     assert climate._command_service_data(
         "set_temperature",
         VirtualClimate.async_set_temperature,
         (),
         {ATTR_TEMPERATURE: 20.2},
-    ) == {ATTR_TEMPERATURE: 20.5}
+    ) == {ATTR_TEMPERATURE: 20}
 
 
 async def test_light_turn_on_rolls_back_all_values_when_validation_fails():
@@ -902,7 +902,7 @@ def test_climate_native_templates_render_lists_enums_and_numbers(hass):
     assert entity.target_temperature_low == 19
     assert entity.min_temp == 10
     assert entity.max_temp == 32
-    assert entity.target_temperature_step == 0.5
+    assert entity.target_temperature_step == 1
     assert entity.temperature_unit == UnitOfTemperature.FAHRENHEIT
     assert entity.current_humidity == 46
     assert entity.target_humidity == 52
@@ -2995,6 +2995,43 @@ def test_light_native_color_modes_can_reduce_matter_contract_to_onoff(hass):
     _render_native_templates(light, hass)
 
     assert light.supported_color_modes == {ColorMode.ONOFF}
+
+
+def test_onoff_light_does_not_publish_generated_color_fallbacks(hass):
+    """An on/off source must not gain Matter colour clusters from fallbacks."""
+    source = "switch.colorless_light"
+    hass.states.async_set(source, "on")
+    light = VirtualLight(
+        LIGHT_SCHEMA(
+            _base(
+                "light.colorless_helper",
+                "on",
+                matter_light_type="on_off",
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "supported_color_modes": "{{ ['onoff'] }}",
+                        "brightness": "{{ state_attr('switch.colorless_light', 'brightness') | default(0, true) }}",
+                        "color_temp_kelvin": "{{ state_attr('switch.colorless_light', 'color_temp_kelvin') | default(4000, true) }}",
+                        "hs_color": "{{ state_attr('switch.colorless_light', 'hs_color') | default([0, 0], true) }}",
+                        "xy_color": "{{ state_attr('switch.colorless_light', 'xy_color') | default([0, 0], true) }}",
+                    }
+                },
+            )
+        ),
+        False,
+    )
+
+    _render_native_templates(light, hass)
+    light._update_attributes()
+
+    assert light.supported_color_modes == {ColorMode.ONOFF}
+    assert light.brightness is None
+    assert light.color_temp_kelvin is None
+    assert light.hs_color is None
+    assert light.xy_color is None
+    assert not {
+        "brightness", "color_temp_kelvin", "hs_color", "xy_color",
+    } & light.extra_state_attributes.keys()
 
 
 @pytest.mark.parametrize(
