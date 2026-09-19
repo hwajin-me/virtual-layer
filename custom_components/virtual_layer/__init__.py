@@ -47,7 +47,11 @@ from .cfg import (
     _delete_meta_data,
 )
 from .const import *
-from .device_metadata import configuration_url_or_none, valid_parent_device
+from .device_metadata import (
+    async_get_virtual_device,
+    configuration_url_or_none,
+    valid_parent_device,
+)
 from .entity import STARTUP_SOURCE_GRACE_ALLOWED, repair_legacy_enum_template
 
 _LOGGER = logging.getLogger(__name__)
@@ -768,8 +772,8 @@ def _async_sync_active_entity_registry_entries(
 
             virtual_device_id = entity.get(ATTR_DEVICE_ID)
             if isinstance(virtual_device_id, str) and virtual_device_id:
-                device_entry = device_registry.async_get_device(
-                    identifiers={(COMPONENT_DOMAIN, virtual_device_id)},
+                device_entry = async_get_virtual_device(
+                    device_registry, virtual_device_id, entry.entry_id
                 )
                 if device_entry is not None:
                     if entity_entry.device_id != device_entry.id:
@@ -1063,8 +1067,8 @@ def _async_setup_device_metadata_guard(hass, entry, devices) -> None:
         virtual_device_id = device.get(ATTR_DEVICE_ID)
         if not isinstance(virtual_device_id, str) or not virtual_device_id:
             continue
-        registry_entry = registry.async_get_device(
-            identifiers={(COMPONENT_DOMAIN, virtual_device_id)},
+        registry_entry = async_get_virtual_device(
+            registry, virtual_device_id, entry.entry_id
         )
         if registry_entry is None:
             continue
@@ -2146,8 +2150,8 @@ def _async_register_state_only_entity(hass, entry, entity) -> str | None:
 
     device_registry = dr.async_get(hass)
     if entity.get(ATTR_DEVICE_ID):
-        device_entry = device_registry.async_get_device(
-            identifiers={(COMPONENT_DOMAIN, entity[ATTR_DEVICE_ID])},
+        device_entry = async_get_virtual_device(
+            device_registry, entity[ATTR_DEVICE_ID], entry.entry_id
         )
         if device_entry is not None:
             device_id = device_entry.id
@@ -2492,8 +2496,8 @@ async def _async_delete_virtual_device_from_registry(
         return
 
     registery = dr.async_get(hass)
-    device_in_registry = registery.async_get_device(
-        identifiers={(COMPONENT_DOMAIN, device_id)},
+    device_in_registry = async_get_virtual_device(
+        registery, device_id, entry.entry_id
     )
     if device_in_registry and entry.entry_id in device_in_registry.config_entries:
         _LOGGER.debug(f"found something to delete! {device_in_registry.id}")

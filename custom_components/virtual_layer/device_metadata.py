@@ -7,12 +7,34 @@ from homeassistant.helpers import device_registry as dr
 from .const import COMPONENT_DOMAIN
 
 
+def async_get_virtual_device(registry, device_id, config_entry_id=None):
+    """Get a Virtual Layer device without assuming identifiers are global.
+
+    Device identifiers became unique per config entry in Home Assistant 2026.8.
+    Keep the legacy fallback while older supported Home Assistant versions lack
+    the scoped lookup API.
+    """
+    identifier = (COMPONENT_DOMAIN, device_id)
+    get_by_identifier = getattr(registry, "async_get_device_by_identifier", None)
+    if get_by_identifier is not None and config_entry_id:
+        return get_by_identifier(identifier, config_entry_id)
+
+    get_devices = getattr(registry, "async_get_devices", None)
+    if get_devices is not None:
+        devices = get_devices(
+            identifiers={identifier}, config_entry_id=config_entry_id
+        )
+        return devices[0] if devices else None
+
+    return registry.async_get_device(identifiers={identifier})
+
+
 def valid_parent_device(hass, parent_id, device_id) -> bool:
     """Require an existing parent whose ancestry does not loop to this Device."""
     if not isinstance(parent_id, str) or not parent_id:
         return False
     registry = dr.async_get(hass)
-    child = registry.async_get_device(identifiers={(COMPONENT_DOMAIN, device_id)})
+    child = async_get_virtual_device(registry, device_id)
     seen = {child.id} if child else set()
     while parent_id:
         if parent_id in seen:
