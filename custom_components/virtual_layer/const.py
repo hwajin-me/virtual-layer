@@ -90,6 +90,10 @@ CONF_ONVIF_PATROL_PAN_MIN = "onvif_patrol_pan_min"
 CONF_ONVIF_PATROL_PAN_MAX = "onvif_patrol_pan_max"
 CONF_ONVIF_PATROL_TILT_MIN = "onvif_patrol_tilt_min"
 CONF_ONVIF_PATROL_TILT_MAX = "onvif_patrol_tilt_max"
+CONF_FRIGATE_RECORDING_SWITCH = "frigate_recording_switch"
+CONF_FRIGATE_MOTION_SWITCH = "frigate_motion_switch"
+CONF_FRIGATE_RECORDING_DURING_PATROL = "frigate_recording_during_patrol"
+CONF_FRIGATE_MOTION_DURING_PATROL = "frigate_motion_during_patrol"
 CONF_PRESENCE_CLASSIFICATION = "presence_classification"
 CONF_POLYGONAL_ZONE = "polygonal_zone"
 CONF_POLYGON_GEOJSON = "geojson"
@@ -359,6 +363,8 @@ VIRTUAL_ENTITY_PROXY_FIXED_DATA = {
     ("water_heater", "turn_away_mode_on"): {"away_mode": True},
 }
 VIRTUAL_ENTITY_NON_SERVICE_COMMANDS = frozenset({
+    ("camera", "start_patrol"),
+    ("camera", "stop_patrol"),
     ("update", "release_notes"),
 })
 

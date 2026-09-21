@@ -3649,7 +3649,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
             vol.Optional(CONF_ONVIF_PATROL_ENABLED, default=defaults.get(CONF_ONVIF_PATROL_ENABLED, False)): selector.BooleanSelector(),
             patrol_target_marker: selector.EntitySelector(selector.EntitySelectorConfig(domain="camera")),
             vol.Optional(CONF_ONVIF_PATROL_MODE, default=defaults.get(CONF_ONVIF_PATROL_MODE, "horizontal")): selector.SelectSelector(selector.SelectSelectorConfig(options=["horizontal", "vertical", "grid"], translation_key="onvif_patrol_mode")),
-            vol.Optional(CONF_ONVIF_PATROL_INTERVAL, default=defaults.get(CONF_ONVIF_PATROL_INTERVAL, 15)): selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=3600, step=1, mode=selector.NumberSelectorMode.BOX)),
+            vol.Optional(CONF_ONVIF_PATROL_INTERVAL, default=defaults.get(CONF_ONVIF_PATROL_INTERVAL, 30)): selector.NumberSelector(selector.NumberSelectorConfig(min=5, max=3600, step=1, mode=selector.NumberSelectorMode.BOX)),
             vol.Optional(CONF_ONVIF_PATROL_SPEED, default=defaults.get(CONF_ONVIF_PATROL_SPEED, 0.5)): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1, step=0.05, mode=selector.NumberSelectorMode.BOX)),
             vol.Optional(CONF_ONVIF_PATROL_PAN_MIN, default=defaults.get(CONF_ONVIF_PATROL_PAN_MIN, 0.1)): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1, step=0.05, mode=selector.NumberSelectorMode.BOX)),
             vol.Optional(CONF_ONVIF_PATROL_PAN_MAX, default=defaults.get(CONF_ONVIF_PATROL_PAN_MAX, 0.1)): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1, step=0.05, mode=selector.NumberSelectorMode.BOX)),

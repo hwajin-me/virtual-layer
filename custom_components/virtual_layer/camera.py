@@ -151,8 +151,8 @@ BASE_SCHEMA = virtual_schema(DEFAULT_CAMERA_VALUE, {
     vol.Optional(CONF_ONVIF_PATROL_MODE, default="horizontal"): vol.In(
         {"horizontal", "vertical", "grid"}
     ),
-    vol.Optional(CONF_ONVIF_PATROL_INTERVAL, default=15): vol.All(
-        vol.Coerce(float), vol.Range(min=1, max=3600)
+    vol.Optional(CONF_ONVIF_PATROL_INTERVAL, default=30): vol.All(
+        vol.Coerce(float), vol.Range(min=5, max=3600)
     ),
     vol.Optional(CONF_ONVIF_PATROL_DISTANCE, default=0.1): vol.All(
         vol.Coerce(float), vol.Range(min=0, max=1)
@@ -172,6 +172,10 @@ BASE_SCHEMA = virtual_schema(DEFAULT_CAMERA_VALUE, {
     vol.Optional(CONF_ONVIF_PATROL_TILT_MAX, default=0.1): vol.All(
         vol.Coerce(float), vol.Range(min=0, max=1)
     ),
+    vol.Optional(CONF_FRIGATE_RECORDING_SWITCH): cv.entity_id,
+    vol.Optional(CONF_FRIGATE_MOTION_SWITCH): cv.entity_id,
+    vol.Optional(CONF_FRIGATE_RECORDING_DURING_PATROL, default="keep"): vol.In({"keep", "on", "off"}),
+    vol.Optional(CONF_FRIGATE_MOTION_DURING_PATROL, default="keep"): vol.In({"keep", "on", "off"}),
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
@@ -236,14 +240,20 @@ class VirtualCamera(VirtualEntity, Camera):
         self._tracked_source_camera: str | None = None
         self._source_camera_remove_listener: Callable[[], None] | None = None
         self._patrol_task: asyncio.Task[None] | None = None
+        self._patrol_lock = asyncio.Lock()
         self._patrol_enabled = config.get(CONF_ONVIF_PATROL_ENABLED, False)
         self._patrol_target = config.get(CONF_ONVIF_PATROL_TARGET)
         self._patrol_mode = config.get(CONF_ONVIF_PATROL_MODE, "horizontal")
-        self._patrol_interval = config.get(CONF_ONVIF_PATROL_INTERVAL, 15)
+        self._patrol_interval = config.get(CONF_ONVIF_PATROL_INTERVAL, 30)
         self._patrol_distance = config.get(CONF_ONVIF_PATROL_DISTANCE, 0.1)
         self._patrol_speed = config.get(CONF_ONVIF_PATROL_SPEED)
         self._patrol_pan = (config.get(CONF_ONVIF_PATROL_PAN_MIN, 0.1), config.get(CONF_ONVIF_PATROL_PAN_MAX, 0.1))
         self._patrol_tilt = (config.get(CONF_ONVIF_PATROL_TILT_MIN, 0.1), config.get(CONF_ONVIF_PATROL_TILT_MAX, 0.1))
+        self._frigate_patrol_switches = (
+            (config.get(CONF_FRIGATE_RECORDING_SWITCH), config.get(CONF_FRIGATE_RECORDING_DURING_PATROL, "keep")),
+            (config.get(CONF_FRIGATE_MOTION_SWITCH), config.get(CONF_FRIGATE_MOTION_DURING_PATROL, "keep")),
+        )
+        self._frigate_previous_switch_states: dict[str, str] = {}
 
         _LOGGER.debug(f"VirtualCamera: {self.name} created")
 
@@ -826,19 +836,31 @@ class VirtualCamera(VirtualEntity, Camera):
         """Start a bounded ONVIF PTZ patrol without replacing this camera's feed."""
         if not self._patrol_target:
             raise HomeAssistantError("Configure an ONVIF PTZ camera before starting patrol")
-        if self._patrol_task is None or self._patrol_task.done():
-            self._patrol_task = self.hass.async_create_task(self._async_patrol_loop())
+        async with self._patrol_lock:
+            if self._patrol_task is None or self._patrol_task.done():
+                try:
+                    await self._async_set_frigate_patrol_switches(restore=False)
+                except Exception:
+                    await self._async_set_frigate_patrol_switches(restore=True)
+                    raise
+                self._patrol_task = self.hass.async_create_background_task(
+                    self._async_patrol_loop(), f"{self.entity_id} ONVIF patrol",
+                    eager_start=False,
+                )
         self.async_write_ha_state()
 
     async def async_stop_patrol(self) -> None:
         """Stop the local patrol scheduler and request ONVIF motion stop."""
-        task, self._patrol_task = self._patrol_task, None
-        if task is None and not self._patrol_target:
-            return
-        if task is not None and task is not asyncio.current_task():
-            task.cancel()
-        if self._patrol_target:
-            await self._async_call_onvif_ptz({ATTR_ENTITY_ID: self._patrol_target, "move_mode": "Stop"})
+        async with self._patrol_lock:
+            task = self._patrol_task
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            try:
+                if task is not None and self._patrol_target:
+                    await self._async_call_onvif_ptz({ATTR_ENTITY_ID: self._patrol_target, "move_mode": "Stop"})
+            finally:
+                await self._async_set_frigate_patrol_switches(restore=True)
         self.async_write_ha_state()
 
     async def _async_patrol_loop(self) -> None:
@@ -860,8 +882,11 @@ class VirtualCamera(VirtualEntity, Camera):
         except Exception as err:  # An unavailable ONVIF integration must not crash the virtual camera.
             _LOGGER.warning("ONVIF patrol for %s stopped: %s", self.entity_id, err)
         finally:
-            self._patrol_task = None
-            self.async_write_ha_state()
+            try:
+                await self._async_set_frigate_patrol_switches(restore=True)
+            finally:
+                self._patrol_task = None
+                self.async_write_ha_state()
 
     async def _async_call_onvif_ptz(self, data: dict) -> None:
         """Prefer the public ONVIF action, with the entity-client fallback."""
@@ -869,6 +894,35 @@ class VirtualCamera(VirtualEntity, Camera):
             await self.hass.services.async_call("onvif", "ptz", data, blocking=True)
         except (HomeAssistantError, vol.Invalid) as err:
             await self._async_direct_onvif_ptz(data, err)
+
+    async def _async_set_frigate_patrol_switches(self, *, restore: bool) -> None:
+        """Use Frigate's own recording/detection switch entities during patrol."""
+        for entity_id, requested_state in self._frigate_patrol_switches:
+            if not entity_id or requested_state == "keep":
+                continue
+            if not entity_id.startswith("switch."):
+                _LOGGER.warning("Ignoring non-switch Frigate patrol target %s", entity_id)
+                continue
+            if restore:
+                requested_state = self._frigate_previous_switch_states.get(entity_id)
+                if requested_state not in {"on", "off"}:
+                    continue
+            else:
+                state = self.hass.states.get(entity_id)
+                if state is None or state.state not in {"on", "off"}:
+                    raise HomeAssistantError(f"Frigate patrol switch {entity_id} is unavailable")
+                self._frigate_previous_switch_states.setdefault(entity_id, state.state)
+            try:
+                await self.hass.services.async_call(
+                    "switch", f"turn_{requested_state}", {ATTR_ENTITY_ID: entity_id}, blocking=True
+                )
+            except Exception:
+                if not restore:
+                    raise
+                _LOGGER.warning("Unable to restore patrol switch %s", entity_id)
+            else:
+                if restore:
+                    self._frigate_previous_switch_states.pop(entity_id, None)
 
     async def _async_direct_onvif_ptz(self, data: dict, service_error: Exception) -> None:
         """Invoke the configured ONVIF camera's native PTZ client as a fallback.
@@ -879,7 +933,8 @@ class VirtualCamera(VirtualEntity, Camera):
         Reusing that client keeps credentials and connections inside the
         existing ONVIF integration rather than duplicating either here.
         """
-        target = self.hass.data.get("camera").get_entity(self._patrol_target)
+        component = self.hass.data.get("camera")
+        target = component.get_entity(self._patrol_target) if component else None
         perform_ptz = getattr(target, "async_perform_ptz", None)
         profile = getattr(target, "profile", None)
         device = getattr(target, "device", None)

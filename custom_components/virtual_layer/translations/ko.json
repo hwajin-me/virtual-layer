@@ -3352,6 +3352,9 @@
         "grid": "격자 (두 축)"
       }
     },
+    "frigate_patrol_state": {
+      "options": {"keep": "현재 상태 유지", "on": "켜기", "off": "끄기"}
+    },
     "matter_air_quality": {
       "options": {
         "source": "소스 또는 동적 템플릿",
@@ -3604,6 +3607,14 @@
           "description": "상태에 적용할 값입니다."
         }
       }
+    },
+    "start_camera_patrol": {
+      "name": "카메라 순찰 시작",
+      "description": "가상 카메라에 설정한 ONVIF PTZ 순찰을 시작합니다."
+    },
+    "stop_camera_patrol": {
+      "name": "카메라 순찰 중지",
+      "description": "ONVIF PTZ 순찰과 카메라 이동을 중지합니다."
     },
     "set_attributes": {
       "name": "속성 설정",

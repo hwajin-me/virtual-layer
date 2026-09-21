@@ -87,6 +87,8 @@ SERVICE_SCHEMA = vol.Schema({
 SERVICE_SET_STATE = "set_state"
 SERVICE_SET_ATTRIBUTES = "set_attributes"
 SERVICE_CLEAR_ATTRIBUTES = "clear_attributes"
+SERVICE_START_CAMERA_PATROL = "start_camera_patrol"
+SERVICE_STOP_CAMERA_PATROL = "stop_camera_patrol"
 
 
 def _finite_service_payload(value, _seen=None, _depth=0):
@@ -152,6 +154,9 @@ SERVICE_SET_ATTRIBUTES_SCHEMA = vol.Schema({
 SERVICE_CLEAR_ATTRIBUTES_SCHEMA = vol.Schema({
     vol.Required(ATTR_ENTITY_ID): cv.comp_entity_ids,
     vol.Optional(ATTR_ATTRIBUTES, default=list): vol.All(cv.ensure_list, [cv.string]),
+})
+SERVICE_CAMERA_PATROL_SCHEMA = vol.Schema({
+    vol.Required(ATTR_ENTITY_ID): cv.comp_entity_ids,
 })
 
 
@@ -2279,6 +2284,21 @@ def _async_register_virtual_services(hass) -> None:
         _LOGGER.debug("%s service called", call.service)
         await async_virtual_clear_attributes_service(hass, call)
 
+    async def async_virtual_camera_patrol(call) -> None:
+        """Start or stop a patrol on explicitly targeted virtual cameras."""
+        await _async_verify_target_entity_control(hass, call)
+        for entity_id in call.data[ATTR_ENTITY_ID]:
+            if not entity_id.startswith("camera."):
+                raise vol.Invalid("Camera patrol targets must be camera entities")
+            _assert_managed_virtual_entity(hass, entity_id)
+            entity = get_entity_from_domain(hass, "camera", entity_id)
+            method = (
+                entity.async_start_patrol
+                if call.service == SERVICE_START_CAMERA_PATROL
+                else entity.async_stop_patrol
+            )
+            await method()
+
     _LOGGER.debug("installing virtual layer handlers")
     hass.data[COMPONENT_SERVICES][COMPONENT_DOMAIN] = "installed"
     hass.services.async_register(
@@ -2304,6 +2324,18 @@ def _async_register_virtual_services(hass) -> None:
         SERVICE_CLEAR_ATTRIBUTES,
         async_virtual_service_clear_attributes,
         schema=SERVICE_CLEAR_ATTRIBUTES_SCHEMA,
+    )
+    hass.services.async_register(
+        COMPONENT_DOMAIN,
+        SERVICE_START_CAMERA_PATROL,
+        async_virtual_camera_patrol,
+        schema=SERVICE_CAMERA_PATROL_SCHEMA,
+    )
+    hass.services.async_register(
+        COMPONENT_DOMAIN,
+        SERVICE_STOP_CAMERA_PATROL,
+        async_virtual_camera_patrol,
+        schema=SERVICE_CAMERA_PATROL_SCHEMA,
     )
 
 

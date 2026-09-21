@@ -3352,6 +3352,9 @@
         "grid": "Grid (both axes)"
       }
     },
+    "frigate_patrol_state": {
+      "options": {"keep": "Keep current state", "on": "Turn on", "off": "Turn off"}
+    },
     "matter_air_quality": {
       "options": {
         "source": "Source or dynamic template",
@@ -3604,6 +3607,14 @@
           "description": "Value to set state to."
         }
       }
+    },
+    "start_camera_patrol": {
+      "name": "Start camera patrol",
+      "description": "Start the configured ONVIF PTZ patrol for a virtual camera."
+    },
+    "stop_camera_patrol": {
+      "name": "Stop camera patrol",
+      "description": "Stop the configured ONVIF PTZ patrol and stop camera movement."
     },
     "set_attributes": {
       "name": "Set Attributes",

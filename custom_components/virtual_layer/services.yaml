@@ -114,6 +114,22 @@ set_state:
       selector:
         text:
 
+start_camera_patrol:
+  name: Start camera patrol
+  description: Start the configured ONVIF PTZ patrol for a virtual camera.
+  target:
+    entity:
+      integration: virtual_layer
+      domain: camera
+
+stop_camera_patrol:
+  name: Stop camera patrol
+  description: Stop the configured ONVIF PTZ patrol and stop camera movement.
+  target:
+    entity:
+      integration: virtual_layer
+      domain: camera
+
 set_attributes:
   name: Set Attributes
   description: Set extra state attributes on a virtual entity.
