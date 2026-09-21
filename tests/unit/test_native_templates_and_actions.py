@@ -3034,6 +3034,49 @@ def test_onoff_light_does_not_publish_generated_color_fallbacks(hass):
     } & light.extra_state_attributes.keys()
 
 
+async def test_onoff_light_republishes_sanitized_state_after_reload(hass):
+    """Reload must not let RestoreState re-advertise obsolete colour values."""
+    light = VirtualLight(
+        LIGHT_SCHEMA(
+            _base(
+                "light.reload_colorless",
+                "on",
+                matter_light_type="on_off",
+                persistent=True,
+                **{
+                    CONF_NATIVE_TEMPLATES: {
+                        "supported_color_modes": "{{ ['onoff'] }}",
+                        "brightness": "{{ 0 }}",
+                        "color_temp_kelvin": "{{ 4000 }}",
+                        "hs_color": "{{ [0, 0] }}",
+                    }
+                },
+            )
+        ),
+        False,
+    )
+    light.hass = hass
+    light.async_get_last_state = AsyncMock(return_value=SimpleNamespace(
+        state="on",
+        attributes={
+            "color_mode": "onoff",
+            "brightness": 0,
+            "color_temp_kelvin": 4000,
+            "hs_color": [0, 0],
+        },
+    ))
+    light.async_write_ha_state = Mock()
+    light._schedule_state_update = Mock()
+
+    await light.async_added_to_hass()
+
+    assert light.async_write_ha_state.call_count == 1
+    assert light.supported_color_modes == {ColorMode.ONOFF}
+    assert not {
+        "brightness", "color_temp_kelvin", "hs_color",
+    } & light.extra_state_attributes.keys()
+
+
 @pytest.mark.parametrize(
     ("mode", "service_key", "service_value", "expected"),
     [

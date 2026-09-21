@@ -283,6 +283,17 @@ class VirtualLight(VirtualEntity, LightEntity):
                 self._matter_color_modes.add(ColorMode.ONOFF)
         self._attr_supported_color_modes = set(self._matter_color_modes)
 
+    async def async_added_to_hass(self) -> None:
+        """Publish a capability-sanitized state after every setup or reload."""
+        await super().async_added_to_hass()
+        # ``VirtualEntity`` restores state and then starts source templates.
+        # Publish one final normalized snapshot after both steps complete so a
+        # bridge reconnecting during a config-entry reload cannot cache old
+        # brightness or colour attributes from RestoreState.
+        self._reconcile_color_capabilities()
+        self._update_attributes()
+        self.async_write_ha_state()
+
     @property
     def brightness(self) -> int | None:
         """Return level only when this light actually supports level control."""
