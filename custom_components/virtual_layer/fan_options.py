@@ -27,6 +27,27 @@ def _preset_key(mode: str) -> str:
     return re.sub(r"[\s_-]+", " ", mode.strip().lower())
 
 
+def normalize_preset_modes(modes) -> list[str]:
+    """Return distinct, command-safe preset names in their advertised order.
+
+    Source integrations occasionally include leading/trailing whitespace, and
+    older Virtual Layer records can contain the same mode more than once after
+    two fan sources were combined.  Home Assistant displays every entry in the
+    list, so normalize those presentation duplicates without translating or
+    otherwise changing the vendor command value.
+    """
+    if not isinstance(modes, (list, tuple)):
+        return []
+    result: list[str] = []
+    for mode in modes:
+        if not isinstance(mode, str):
+            continue
+        mode = mode.strip()
+        if mode and mode not in result:
+            result.append(mode)
+    return result
+
+
 def manual_preset_mode(modes, current=None):
     """Find an advertised manual preset without changing its spelling."""
     if not isinstance(modes, (list, tuple)):
@@ -83,7 +104,7 @@ def extract_fan_options(attributes: Mapping) -> tuple[dict[str, Any], set[str]]:
 
     preset_modes = attributes.get("preset_modes")
     if isinstance(preset_modes, (list, tuple)):
-        options[FAN_MODE_LIST_FIELD] = list(preset_modes)
+        options[FAN_MODE_LIST_FIELD] = normalize_preset_modes(preset_modes)
     if attributes.get("preset_mode") is not None:
         options["preset_mode"] = attributes["preset_mode"]
     if attributes.get("percentage") is not None:
@@ -124,6 +145,13 @@ def extract_fan_options(attributes: Mapping) -> tuple[dict[str, Any], set[str]]:
 def migrate_legacy_fan_attributes(config: Mapping) -> dict[str, Any]:
     """Promote fan options previously copied as virtual attributes."""
     migrated = dict(config)
+    # This also repairs persisted configurations created before native fan
+    # templates owned preset lists.  Keep the first spelling because it is the
+    # value that command actions must send back to the source integration.
+    if isinstance(migrated.get(FAN_MODE_LIST_FIELD), (list, tuple)):
+        migrated[FAN_MODE_LIST_FIELD] = normalize_preset_modes(
+            migrated[FAN_MODE_LIST_FIELD]
+        )
     attributes = migrated.get(CONF_ATTRIBUTES)
     if not isinstance(attributes, Mapping):
         return migrated

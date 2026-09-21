@@ -1472,6 +1472,100 @@ async def test_config_flow_create_modify_runtime():
             await hass.async_block_till_done()
             assert hass.states.get("air_quality.docker_co_alarm_aqi").state == expected
             assert hass.states.get("air_quality.docker_co_alarm_aqi").attributes["air_quality_stale"] is (value == "unavailable")
+        # Water measurements must publish native HA units across reloads.
+        water_samples = [
+            ("ph", "ph", None, 7.2),
+            ("ec", "conductivity", "uS/cm", 500),
+            ("tds", None, "ppm", 250),
+            ("turbidity", None, "NTU", 1.5),
+            ("oxygen", None, "mg/L", 8),
+            ("orp", "voltage", "mV", -200),
+        ]
+        options = copy.deepcopy(dict(entry.options))
+        for name, device_class, unit, value in water_samples:
+            record = {"platform": "sensor", "name": f"Docker Water {name}",
+                      "entity_id": f"sensor.docker_water_{name}",
+                      "initial_value": value, "state_class": "measurement"}
+            if device_class:
+                record["class"] = device_class
+            if unit:
+                record["unit_of_measurement"] = unit
+            next(iter(options["devices"].values())).append(record)
+        hass.config_entries.async_update_entry(entry, options=options)
+        await hass.async_block_till_done()
+        for name, device_class, unit, value in water_samples:
+            state = hass.states.get(f"sensor.docker_water_{name}")
+            assert float(state.state) == value
+            assert state.attributes.get("device_class") == device_class
+            assert state.attributes.get("unit_of_measurement") == ("μS/cm" if name == "ec" else unit)
+            assert state.attributes["state_class"] == "measurement"
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert float(hass.states.get("sensor.docker_water_ec").state) == 500
+        from custom_components.virtual_layer.config_flow import _apply_sensor_conversion_defaults, _sensor_conversion_choices
+        from homeassistant.helpers.template import Template
+        ec_sources = ["sensor.docker_ec_input_a", "sensor.docker_ec_input_b"]
+        hass.states.async_set(ec_sources[0], "500", {"device_class": "conductivity", "unit_of_measurement": "uS/cm"})
+        hass.states.async_set(ec_sources[1], "1.5", {"device_class": "conductivity", "unit_of_measurement": "mS/cm"})
+        ec_defaults = _apply_sensor_conversion_defaults(hass, {}, _sensor_conversion_choices(ec_sources, hass)["state"])
+        ec_template = Template(ec_defaults["value_template"], hass)
+        assert ec_template.async_render() == 1000
+        hass.states.async_set(ec_sources[1], "0.001", {"device_class": "conductivity", "unit_of_measurement": "S/cm"})
+        assert ec_template.async_render() == 750
+        print("Water quality Docker passed: pH, EC aliases, TDS, turbidity, oxygen, ORP and reload")
+        # Exercise device mirroring through the same options flow as the UI.
+        from homeassistant.helpers import device_registry as dr
+        source_device = dr.async_get(hass).async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={("docker_source", "appliance")},
+            name="Docker appliance", manufacturer="Samsung", model="Oven",
+        )
+        mirror_samples = {
+            "number": ("180", {"min": 30, "max": 250, "step": 5, "unit_of_measurement": "°C"}),
+            "select": ("bake", {"options": ["bake", "grill"]}),
+            "button": ("unknown", {}),
+            "binary_sensor": ("on", {"device_class": "motion"}),
+        }
+        for domain, (state, attrs) in mirror_samples.items():
+            source = registry.async_get_or_create(
+                domain, "docker_source", domain, suggested_object_id="docker_appliance",
+                config_entry=entry, device_id=source_device.id,
+            )
+            hass.states.async_set(source.entity_id, state, attrs)
+        manager = hass.config_entries.options
+        result = await manager.async_init(entry.entry_id, data={"action": "copy_device"})
+        result = await manager.async_configure(result["flow_id"], {"source_device": source_device.id})
+        result = await manager.async_configure(result["flow_id"], {
+            "device_name": "Docker mirrored appliance",
+            "source_entities": [f"{domain}.docker_appliance" for domain in mirror_samples],
+        })
+        assert result["step_id"] == "copy_device_review", result
+        assert "number.docker_appliance_virtual" in result["description_placeholders"]["entities"]
+        result = await manager.async_configure(result["flow_id"], {})
+        assert result["type"] == FlowResultType.CREATE_ENTRY, result
+        await hass.async_block_till_done()
+        assert float(hass.states.get("number.docker_appliance_virtual").state) == 180
+        assert hass.states.get("number.docker_appliance_virtual").attributes["max"] == 250
+        assert hass.states.get("select.docker_appliance_virtual").attributes["options"] == ["bake", "grill"]
+        assert hass.states.get("button.docker_appliance_virtual").state != "unavailable"
+        hass.states.async_set("binary_sensor.docker_appliance", "off", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        assert hass.states.get("binary_sensor.docker_appliance_virtual").state == "off"
+        mirrored_device = registry.async_get("number.docker_appliance_virtual").device_id
+        assert mirrored_device != source_device.id
+        assert all(registry.async_get(f"{domain}.docker_appliance_virtual").device_id == mirrored_device
+                   for domain in mirror_samples)
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert registry.async_get("number.docker_appliance_virtual").device_id == mirrored_device
+        mirrored_key = next(key for key, entities in entry.options["devices"].items()
+                            if any(entity.get("entity_id") == "number.docker_appliance_virtual" for entity in entities))
+        result = await manager.async_init(entry.entry_id, data={"action": "delete_device"})
+        result = await manager.async_configure(result["flow_id"], {"managed_device_name": mirrored_key})
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        await hass.async_block_till_done()
+        assert hass.states.get("number.docker_appliance_virtual") is None
+        assert hass.states.get("number.docker_appliance") is not None
+        print("Device-copy Docker passed: review, native properties, unknown button, direct motion, grouping, reload and deletion")
         # Meter platform setup and services must work in the real HA container.
         options = copy.deepcopy(dict(entry.options))
         hass.states.async_set("sensor.docker_energy_source", "100", {"unit_of_measurement": "kWh", "device_class": "energy"})

@@ -31,7 +31,10 @@
       "dawarich_no_points": "측정 시각이 포함된 유효한 위치가 없습니다.",
       "dawarich_member_not_found": "일치하는 가족 구성원이 없습니다. 정확한 이메일 또는 사용자 ID와 위치 공유를 확인하세요.",
       "dawarich_ambiguous_member": "둘 이상의 가족 구성원이 일치합니다. 고유한 이메일 또는 사용자 ID를 입력하세요.",
-      "invalid_local_presence": "Wi-Fi 소스 또는 올바른 BLE 주소를 선택하세요. SSID 센서는 SSID 목록이 필요합니다. 스캐너 ID, 부재 시간, RSSI를 확인하세요."
+      "invalid_local_presence": "Wi-Fi 소스 또는 올바른 BLE 주소를 선택하세요. SSID 센서는 SSID 목록이 필요합니다. 스캐너 ID, 부재 시간, RSSI를 확인하세요.",
+      "no_device_entities": "사용 가능한 엔티티가 없습니다. 기기와 선택 목록을 확인하세요.",
+      "device_copy_failed": "{failed_source} 엔티티를 생성할 수 없습니다. 해당 항목을 제외하거나 원본 설정을 수정하세요. 저장된 변경 사항은 없습니다.",
+      "device_sources_changed": "원본 기기·엔티티 또는 생성할 ID가 변경되었습니다. 선택 목록을 확인하고 다시 검토하세요. 저장된 변경 사항은 없습니다."
     },
     "step": {
       "user": {
@@ -39,11 +42,13 @@
         "description": "UI에서 관리할 가상 장치와 엔티티 모음을 만듭니다. 지금 엔티티를 추가하거나 나중에 구성 메뉴에서 추가할 수 있습니다.",
         "data": {
           "group_name": "장치",
-          "add_first_entity": "지금 엔티티 추가"
+          "add_first_entity": "지금 엔티티 추가",
+          "source_device": "원본 기기 (선택)"
         },
         "data_description": {
           "group_name": "장치 메타데이터와 엔티티 ID는 이 장치 모음에 속합니다.",
-          "add_first_entity": "장치를 만든 뒤 바로 소스 선택과 엔티티 설정 단계로 이동합니다."
+          "add_first_entity": "장치를 만든 뒤 바로 소스 선택과 엔티티 설정 단계로 이동합니다.",
+          "source_device": "선택하면 엔티티 일괄 생성으로 이동합니다. Device 이름이 비어 있으면 원본 이름을 제안합니다."
         }
       },
       "reconfigure": {
@@ -560,7 +565,7 @@
               "native_min": "최소 문자 수에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
               "native_min_value": "최소 값에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
               "native_step": "값 단계에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
-              "native_unit_of_measurement": "측정 단위에 사용할 값을 반환하는 Jinja 템플릿입니다.",
+              "native_unit_of_measurement": "측정 단위에 사용할 값을 반환하는 Jinja 템플릿입니다. pH(device class ph)는 none을, 전기전도도(conductivity)는 μS/cm, mS/cm 또는 S/cm를 반환하세요. TDS·탁도·용존산소는 device class를 비우고 원본 단위(ppm, NTU, mg/L 등)를 사용하세요. state class는 measurement로 설정합니다. 단위 변경은 값을 환산하지 않으며, 보정값과 EC→TDS 계수는 측정 장비의 기준을 사용해야 합니다.",
               "native_value": "네이티브 값에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "operation_list": "운전 모드 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "options": "옵션 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
@@ -1123,6 +1128,38 @@
         "data_description": {
           "dawarich_connection": "서버와 API 키만 복사합니다. Tracker 설정은 원본 연결과 독립적으로 저장됩니다."
         }
+      },
+      "copy_device": {
+        "title": "기기에서 가상 Device 만들기",
+        "description": "지원되는 활성 엔티티를 선택하여 새 가상 Device에 함께 만듭니다. 상태와 제어는 원본 엔티티에 연결됩니다.",
+        "data": {
+          "source_device": "원본 기기"
+        },
+        "data_description": {
+          "source_device": "가상 엔티티로 연결할 기존 기기를 선택하세요."
+        }
+      },
+      "copy_device_entities": {
+        "title": "기기에서 가상 Device 만들기",
+        "description": "지원되는 활성 엔티티 중 Home Assistant에 상태가 등록된 항목을 선택하세요. 다음 화면에서 생성할 ID를 검토합니다. 변경 사항은 최종 생성 전까지 저장되지 않습니다.\n\n{failed_source}",
+        "data": {
+          "device_name": "새 Device 이름",
+          "source_entities": "생성할 엔티티"
+        },
+        "data_description": {
+          "device_name": "별도 ID를 가진 새 가상 Device의 이름입니다.",
+          "source_entities": "각 항목을 원래 도메인의 가상 엔티티로 만듭니다. 불필요한 항목은 제외하세요."
+        }
+      },
+      "copy_device_review": {
+        "title": "가상 Device 생성 검토",
+        "description": "**{device_name}** Device에 {entity_count}개 엔티티를 만듭니다. 원본 상태·속성·제어를 연결하며 원본 기기는 변경하지 않습니다. 제조사·모델·소프트웨어/하드웨어 버전은 복사하고 별도 Device ID를 생성합니다.\n\n{entities}",
+        "data": {
+          "action": "다음 동작"
+        },
+        "data_description": {
+          "action": "생성하거나 이름·엔티티 선택을 수정하거나 다른 원본 기기를 선택하세요."
+        }
       }
     }
   },
@@ -1162,7 +1199,10 @@
       "dawarich_no_points": "측정 시각이 포함된 유효한 위치가 없습니다.",
       "dawarich_member_not_found": "일치하는 가족 구성원이 없습니다. 정확한 이메일 또는 사용자 ID와 위치 공유를 확인하세요.",
       "dawarich_ambiguous_member": "둘 이상의 가족 구성원이 일치합니다. 고유한 이메일 또는 사용자 ID를 입력하세요.",
-      "invalid_local_presence": "Wi-Fi 소스 또는 올바른 BLE 주소를 선택하세요. SSID 센서는 SSID 목록이 필요합니다. 스캐너 ID, 부재 시간, RSSI를 확인하세요."
+      "invalid_local_presence": "Wi-Fi 소스 또는 올바른 BLE 주소를 선택하세요. SSID 센서는 SSID 목록이 필요합니다. 스캐너 ID, 부재 시간, RSSI를 확인하세요.",
+      "no_device_entities": "사용 가능한 엔티티가 없습니다. 기기와 선택 목록을 확인하세요.",
+      "device_copy_failed": "{failed_source} 엔티티를 생성할 수 없습니다. 해당 항목을 제외하거나 원본 설정을 수정하세요. 저장된 변경 사항은 없습니다.",
+      "device_sources_changed": "원본 기기·엔티티 또는 생성할 ID가 변경되었습니다. 선택 목록을 확인하고 다시 검토하세요. 저장된 변경 사항은 없습니다."
     },
     "step": {
       "init": {
@@ -1777,7 +1817,7 @@
               "native_min": "최소 문자 수에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
               "native_min_value": "최소 값에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
               "native_step": "값 단계에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
-              "native_unit_of_measurement": "측정 단위에 사용할 값을 반환하는 Jinja 템플릿입니다.",
+              "native_unit_of_measurement": "측정 단위에 사용할 값을 반환하는 Jinja 템플릿입니다. pH(device class ph)는 none을, 전기전도도(conductivity)는 μS/cm, mS/cm 또는 S/cm를 반환하세요. TDS·탁도·용존산소는 device class를 비우고 원본 단위(ppm, NTU, mg/L 등)를 사용하세요. state class는 measurement로 설정합니다. 단위 변경은 값을 환산하지 않으며, 보정값과 EC→TDS 계수는 측정 장비의 기준을 사용해야 합니다.",
               "native_value": "네이티브 값에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "operation_list": "운전 모드 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "options": "옵션 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
@@ -2581,7 +2621,7 @@
               "native_min": "최소 문자 수에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
               "native_min_value": "최소 값에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
               "native_step": "값 단계에 사용할 숫자을 반환하는 Jinja 템플릿입니다.",
-              "native_unit_of_measurement": "측정 단위에 사용할 값을 반환하는 Jinja 템플릿입니다.",
+              "native_unit_of_measurement": "측정 단위에 사용할 값을 반환하는 Jinja 템플릿입니다. pH(device class ph)는 none을, 전기전도도(conductivity)는 μS/cm, mS/cm 또는 S/cm를 반환하세요. TDS·탁도·용존산소는 device class를 비우고 원본 단위(ppm, NTU, mg/L 등)를 사용하세요. state class는 measurement로 설정합니다. 단위 변경은 값을 환산하지 않으며, 보정값과 EC→TDS 계수는 측정 장비의 기준을 사용해야 합니다.",
               "native_value": "네이티브 값에 사용할 값을 반환하는 Jinja 템플릿입니다.",
               "operation_list": "운전 모드 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
               "options": "옵션 목록에 사용할 목록을 반환하는 Jinja 템플릿입니다.",
@@ -3258,11 +3298,48 @@
         "data_description": {
           "dawarich_connection": "서버와 API 키만 복사합니다. Tracker 설정은 원본 연결과 독립적으로 저장됩니다."
         }
+      },
+      "copy_device": {
+        "title": "기기에서 가상 Device 만들기",
+        "description": "지원되는 활성 엔티티를 선택하여 새 가상 Device에 함께 만듭니다. 상태와 제어는 원본 엔티티에 연결됩니다.",
+        "data": {
+          "source_device": "원본 기기"
+        },
+        "data_description": {
+          "source_device": "가상 엔티티로 연결할 기존 기기를 선택하세요."
+        }
+      },
+      "copy_device_entities": {
+        "title": "기기에서 가상 Device 만들기",
+        "description": "지원되는 활성 엔티티 중 Home Assistant에 상태가 등록된 항목을 선택하세요. 다음 화면에서 생성할 ID를 검토합니다. 변경 사항은 최종 생성 전까지 저장되지 않습니다.\n\n{failed_source}",
+        "data": {
+          "device_name": "새 Device 이름",
+          "source_entities": "생성할 엔티티"
+        },
+        "data_description": {
+          "device_name": "별도 ID를 가진 새 가상 Device의 이름입니다.",
+          "source_entities": "각 항목을 원래 도메인의 가상 엔티티로 만듭니다. 불필요한 항목은 제외하세요."
+        }
+      },
+      "copy_device_review": {
+        "title": "가상 Device 생성 검토",
+        "description": "**{device_name}** Device에 {entity_count}개 엔티티를 만듭니다. 원본 상태·속성·제어를 연결하며 원본 기기는 변경하지 않습니다. 제조사·모델·소프트웨어/하드웨어 버전은 복사하고 별도 Device ID를 생성합니다.\n\n{entities}",
+        "data": {
+          "action": "다음 동작"
+        },
+        "data_description": {
+          "action": "생성하거나 이름·엔티티 선택을 수정하거나 다른 원본 기기를 선택하세요."
+        }
       }
     }
   },
   "selector": {
-    "patrol_recording_scope": {"options": {"patrol": "순찰 전체", "movement": "이동 중에만"}},
+    "patrol_recording_scope": {
+      "options": {
+        "patrol": "순찰 전체",
+        "movement": "이동 중에만"
+      }
+    },
     "entity_type": {
       "options": {
         "ai_task": "AI 작업",
@@ -3346,7 +3423,8 @@
         "regenerate_entity_ids": "전체 가상 엔티티 ID 자동 재생성",
         "manage_devices": "가상 장치 관리",
         "delete_device": "가상 장치 삭제",
-        "finish": "완료"
+        "finish": "완료",
+        "copy_device": "기기에서 가상 Device 만들기"
       }
     },
     "polygon_strategy": {
@@ -3408,7 +3486,11 @@
       }
     },
     "frigate_patrol_state": {
-      "options": {"keep": "현재 상태 유지", "on": "켜기", "off": "끄기"}
+      "options": {
+        "keep": "현재 상태 유지",
+        "on": "켜기",
+        "off": "끄기"
+      }
     },
     "matter_air_quality": {
       "options": {
@@ -3563,6 +3645,13 @@
     "dawarich_connection": {
       "options": {
         "manual": "직접 입력"
+      }
+    },
+    "copy_device_review_action": {
+      "options": {
+        "create": "검토한 Device와 엔티티 생성",
+        "edit": "이름·엔티티 선택 수정",
+        "change_device": "다른 원본 기기 선택"
       }
     }
   },
@@ -3757,7 +3846,61 @@
               "straight_wind": "직풍",
               "Natural Wind": "자연풍",
               "natural_wind": "자연풍",
-              "Smart": "스마트"
+              "Smart": "스마트",
+              "on": "켜짐",
+              "On": "켜짐",
+              "ON": "켜짐",
+              "off": "꺼짐",
+              "Off": "꺼짐",
+              "OFF": "꺼짐",
+              "auto": "자동",
+              "AUTO": "자동",
+              "manual": "수동",
+              "Manual": "수동",
+              "MANUAL": "수동",
+              "Manual Preset": "수동",
+              "manual_preset": "수동",
+              "low": "약",
+              "Low": "약",
+              "LOW": "약",
+              "medium": "중",
+              "Medium": "중",
+              "MEDIUM": "중",
+              "high": "강",
+              "High": "강",
+              "HIGH": "강",
+              "silent": "무음",
+              "Silent": "무음",
+              "SILENT": "무음",
+              "normal": "일반",
+              "Normal": "일반",
+              "NORMAL": "일반",
+              "sleep": "수면",
+              "SLEEP": "수면",
+              "none": "없음",
+              "NONE": "없음",
+              "eco": "절전",
+              "Eco": "절전",
+              "ECO": "절전",
+              "boost": "부스트",
+              "Boost": "부스트",
+              "BOOST": "부스트",
+              "comfort": "쾌적",
+              "Comfort": "쾌적",
+              "COMFORT": "쾌적",
+              "away": "외출",
+              "Away": "외출",
+              "AWAY": "외출",
+              "home": "재실",
+              "Home": "재실",
+              "HOME": "재실",
+              "baby": "아기",
+              "Baby": "아기",
+              "BABY": "아기",
+              "activity": "활동",
+              "Activity": "활동",
+              "ACTIVITY": "활동",
+              "SMART": "스마트"
             }
           },
           "fan_mode": {
@@ -3775,7 +3918,109 @@
               "Straight Wind": "직풍",
               "straight_wind": "직풍",
               "Natural Wind": "자연풍",
-              "natural_wind": "자연풍"
+              "natural_wind": "자연풍",
+              "on": "켜짐",
+              "On": "켜짐",
+              "ON": "켜짐",
+              "off": "꺼짐",
+              "Off": "꺼짐",
+              "OFF": "꺼짐",
+              "auto": "자동",
+              "AUTO": "자동",
+              "manual": "수동",
+              "Manual": "수동",
+              "MANUAL": "수동",
+              "Manual Preset": "수동",
+              "manual_preset": "수동",
+              "low": "약",
+              "Low": "약",
+              "LOW": "약",
+              "medium": "중",
+              "Medium": "중",
+              "MEDIUM": "중",
+              "high": "강",
+              "High": "강",
+              "HIGH": "강",
+              "silent": "무음",
+              "Silent": "무음",
+              "SILENT": "무음",
+              "normal": "일반",
+              "Normal": "일반",
+              "NORMAL": "일반",
+              "sleep": "수면",
+              "Sleep": "수면",
+              "SLEEP": "수면",
+              "none": "없음",
+              "None": "없음",
+              "NONE": "없음",
+              "eco": "절전",
+              "Eco": "절전",
+              "ECO": "절전",
+              "boost": "부스트",
+              "Boost": "부스트",
+              "BOOST": "부스트",
+              "comfort": "쾌적",
+              "Comfort": "쾌적",
+              "COMFORT": "쾌적",
+              "away": "외출",
+              "Away": "외출",
+              "AWAY": "외출",
+              "home": "재실",
+              "Home": "재실",
+              "HOME": "재실",
+              "baby": "아기",
+              "Baby": "아기",
+              "BABY": "아기",
+              "activity": "활동",
+              "Activity": "활동",
+              "ACTIVITY": "활동",
+              "smart": "스마트",
+              "Smart": "스마트",
+              "SMART": "스마트"
+            }
+          },
+          "swing_mode": {
+            "state": {
+              "on": "켜짐",
+              "On": "켜짐",
+              "ON": "켜짐",
+              "off": "꺼짐",
+              "Off": "꺼짐",
+              "OFF": "꺼짐",
+              "auto": "자동",
+              "Auto": "자동",
+              "AUTO": "자동",
+              "vertical": "상하",
+              "Vertical": "상하",
+              "VERTICAL": "상하",
+              "horizontal": "좌우",
+              "Horizontal": "좌우",
+              "HORIZONTAL": "좌우",
+              "both": "상하 및 좌우",
+              "Both": "상하 및 좌우",
+              "BOTH": "상하 및 좌우"
+            }
+          },
+          "swing_horizontal_mode": {
+            "state": {
+              "on": "켜짐",
+              "On": "켜짐",
+              "ON": "켜짐",
+              "off": "꺼짐",
+              "Off": "꺼짐",
+              "OFF": "꺼짐",
+              "auto": "자동",
+              "Auto": "자동",
+              "AUTO": "자동",
+              "vertical": "상하",
+              "Vertical": "상하",
+              "VERTICAL": "상하",
+              "horizontal": "좌우",
+              "Horizontal": "좌우",
+              "HORIZONTAL": "좌우",
+              "both": "상하 및 좌우",
+              "Both": "상하 및 좌우",
+              "BOTH": "상하 및 좌우"
             }
           }
         }
@@ -3815,7 +4060,62 @@
               "straight_wind": "직풍",
               "Natural Wind": "자연풍",
               "natural_wind": "자연풍",
-              "Smart": "스마트"
+              "Smart": "스마트",
+              "on": "켜짐",
+              "On": "켜짐",
+              "ON": "켜짐",
+              "off": "꺼짐",
+              "Off": "꺼짐",
+              "OFF": "꺼짐",
+              "auto": "자동",
+              "AUTO": "자동",
+              "manual": "수동",
+              "Manual": "수동",
+              "MANUAL": "수동",
+              "Manual Preset": "수동",
+              "manual_preset": "수동",
+              "low": "약",
+              "Low": "약",
+              "LOW": "약",
+              "medium": "중",
+              "Medium": "중",
+              "MEDIUM": "중",
+              "high": "강",
+              "High": "강",
+              "HIGH": "강",
+              "silent": "무음",
+              "Silent": "무음",
+              "SILENT": "무음",
+              "normal": "일반",
+              "Normal": "일반",
+              "NORMAL": "일반",
+              "sleep": "수면",
+              "SLEEP": "수면",
+              "none": "없음",
+              "NONE": "없음",
+              "eco": "절전",
+              "Eco": "절전",
+              "ECO": "절전",
+              "boost": "부스트",
+              "Boost": "부스트",
+              "BOOST": "부스트",
+              "comfort": "쾌적",
+              "Comfort": "쾌적",
+              "COMFORT": "쾌적",
+              "away": "외출",
+              "Away": "외출",
+              "AWAY": "외출",
+              "home": "재실",
+              "Home": "재실",
+              "HOME": "재실",
+              "baby": "아기",
+              "Baby": "아기",
+              "BABY": "아기",
+              "activity": "활동",
+              "Activity": "활동",
+              "ACTIVITY": "활동",
+              "smart": "스마트",
+              "SMART": "스마트"
             }
           }
         }
@@ -3851,7 +4151,62 @@
               "straight_wind": "직풍",
               "Natural Wind": "자연풍",
               "natural_wind": "자연풍",
-              "Smart": "스마트"
+              "Smart": "스마트",
+              "on": "켜짐",
+              "On": "켜짐",
+              "ON": "켜짐",
+              "off": "꺼짐",
+              "Off": "꺼짐",
+              "OFF": "꺼짐",
+              "auto": "자동",
+              "AUTO": "자동",
+              "manual": "수동",
+              "Manual": "수동",
+              "MANUAL": "수동",
+              "Manual Preset": "수동",
+              "manual_preset": "수동",
+              "low": "약",
+              "Low": "약",
+              "LOW": "약",
+              "medium": "중",
+              "Medium": "중",
+              "MEDIUM": "중",
+              "high": "강",
+              "High": "강",
+              "HIGH": "강",
+              "silent": "무음",
+              "Silent": "무음",
+              "SILENT": "무음",
+              "normal": "일반",
+              "Normal": "일반",
+              "NORMAL": "일반",
+              "sleep": "수면",
+              "SLEEP": "수면",
+              "none": "없음",
+              "NONE": "없음",
+              "eco": "절전",
+              "Eco": "절전",
+              "ECO": "절전",
+              "boost": "부스트",
+              "Boost": "부스트",
+              "BOOST": "부스트",
+              "comfort": "쾌적",
+              "Comfort": "쾌적",
+              "COMFORT": "쾌적",
+              "away": "외출",
+              "Away": "외출",
+              "AWAY": "외출",
+              "home": "재실",
+              "Home": "재실",
+              "HOME": "재실",
+              "baby": "아기",
+              "Baby": "아기",
+              "BABY": "아기",
+              "activity": "활동",
+              "Activity": "활동",
+              "ACTIVITY": "활동",
+              "smart": "스마트",
+              "SMART": "스마트"
             }
           }
         }

@@ -31,7 +31,10 @@
       "dawarich_no_points": "No valid location with a measurement timestamp was returned.",
       "dawarich_member_not_found": "No matching family member was returned. Check their exact email or user ID and location sharing.",
       "dawarich_ambiguous_member": "More than one family member matched. Use a unique email or user ID.",
-      "invalid_local_presence": "Select Wi-Fi sources or valid BLE addresses. SSID sensors require an SSID list; check scanner IDs, timeout and RSSI."
+      "invalid_local_presence": "Select Wi-Fi sources or valid BLE addresses. SSID sensors require an SSID list; check scanner IDs, timeout and RSSI.",
+      "no_device_entities": "No eligible entities. Check the device and selected entities.",
+      "device_copy_failed": "Could not prepare {failed_source}. Deselect this entity or correct its source configuration. Nothing was saved.",
+      "device_sources_changed": "A source device/entity or target ID changed. Check the selection and review again. Nothing was saved."
     },
     "step": {
       "user": {
@@ -39,11 +42,13 @@
         "description": "Create a UI-managed virtual device and entity set. You can add an entity now or later from Configure.",
         "data": {
           "group_name": "Device",
-          "add_first_entity": "Add an entity now"
+          "add_first_entity": "Add an entity now",
+          "source_device": "Source device (optional)"
         },
         "data_description": {
           "group_name": "Device metadata and entity IDs are scoped to this device set.",
-          "add_first_entity": "Continue directly to source selection and entity settings after creating the device."
+          "add_first_entity": "Continue directly to source selection and entity settings after creating the device.",
+          "source_device": "Select to create entities in bulk. Leave Device blank to use a suggested source name."
         }
       },
       "reconfigure": {
@@ -560,7 +565,7 @@
               "native_min": "Jinja template for native min. Return a number compatible with Home Assistant.",
               "native_min_value": "Jinja template for native min value. Return a number compatible with Home Assistant.",
               "native_step": "Jinja template for native step. Return a number compatible with Home Assistant.",
-              "native_unit_of_measurement": "Jinja template for native unit of measurement. Return a value compatible with Home Assistant.",
+              "native_unit_of_measurement": "Jinja template for native unit of measurement. For pH (device class ph), return none. For conductivity use μS/cm, mS/cm, or S/cm. For TDS, turbidity, or dissolved oxygen leave device class empty and use the source unit (for example ppm, NTU, or mg/L). Use measurement state class. Changing a unit does not convert values; calibration and EC-to-TDS factors must come from your instrument.",
               "native_value": "Jinja template for native value. Return a value compatible with Home Assistant.",
               "operation_list": "Jinja template for operation list. Return a list compatible with Home Assistant.",
               "options": "Jinja template for options. Return a list compatible with Home Assistant.",
@@ -1123,6 +1128,38 @@
         "data_description": {
           "dawarich_connection": "Only server and API key are copied; your saved tracker settings remain independent."
         }
+      },
+      "copy_device": {
+        "title": "Create virtual Device from a device",
+        "description": "Select enabled, supported entities to create together on a new virtual Device. States and controls stay linked to their sources.",
+        "data": {
+          "source_device": "Source device"
+        },
+        "data_description": {
+          "source_device": "Choose an existing device to mirror with virtual entities."
+        }
+      },
+      "copy_device_entities": {
+        "title": "Create virtual Device from a device",
+        "description": "Select enabled, supported entities with a registered Home Assistant state. Review generated IDs on the next screen. Nothing is saved until the final creation step.\n\n{failed_source}",
+        "data": {
+          "device_name": "New Device name",
+          "source_entities": "Entities to create"
+        },
+        "data_description": {
+          "device_name": "Name of the new virtual Device with its own identity.",
+          "source_entities": "Each selection becomes a virtual entity in its original domain. Deselect unwanted entities."
+        }
+      },
+      "copy_device_review": {
+        "title": "Review virtual Device creation",
+        "description": "Create {entity_count} entities on **{device_name}**, linked to source states, properties and controls. The original device is unchanged. Manufacturer, model and software/hardware versions are copied to a new Device identity.\n\n{entities}",
+        "data": {
+          "action": "Next action"
+        },
+        "data_description": {
+          "action": "Create the reviewed batch, edit the name/selection, or choose another source device."
+        }
       }
     }
   },
@@ -1162,7 +1199,10 @@
       "dawarich_no_points": "No valid location with a measurement timestamp was returned.",
       "dawarich_member_not_found": "No matching family member was returned. Check their exact email or user ID and location sharing.",
       "dawarich_ambiguous_member": "More than one family member matched. Use a unique email or user ID.",
-      "invalid_local_presence": "Select Wi-Fi sources or valid BLE addresses. SSID sensors require an SSID list; check scanner IDs, timeout and RSSI."
+      "invalid_local_presence": "Select Wi-Fi sources or valid BLE addresses. SSID sensors require an SSID list; check scanner IDs, timeout and RSSI.",
+      "no_device_entities": "No eligible entities. Check the device and selected entities.",
+      "device_copy_failed": "Could not prepare {failed_source}. Deselect this entity or correct its source configuration. Nothing was saved.",
+      "device_sources_changed": "A source device/entity or target ID changed. Check the selection and review again. Nothing was saved."
     },
     "step": {
       "init": {
@@ -1777,7 +1817,7 @@
               "native_min": "Jinja template for native min. Return a number compatible with Home Assistant.",
               "native_min_value": "Jinja template for native min value. Return a number compatible with Home Assistant.",
               "native_step": "Jinja template for native step. Return a number compatible with Home Assistant.",
-              "native_unit_of_measurement": "Jinja template for native unit of measurement. Return a value compatible with Home Assistant.",
+              "native_unit_of_measurement": "Jinja template for native unit of measurement. For pH (device class ph), return none. For conductivity use μS/cm, mS/cm, or S/cm. For TDS, turbidity, or dissolved oxygen leave device class empty and use the source unit (for example ppm, NTU, or mg/L). Use measurement state class. Changing a unit does not convert values; calibration and EC-to-TDS factors must come from your instrument.",
               "native_value": "Jinja template for native value. Return a value compatible with Home Assistant.",
               "operation_list": "Jinja template for operation list. Return a list compatible with Home Assistant.",
               "options": "Jinja template for options. Return a list compatible with Home Assistant.",
@@ -2581,7 +2621,7 @@
               "native_min": "Jinja template for native min. Return a number compatible with Home Assistant.",
               "native_min_value": "Jinja template for native min value. Return a number compatible with Home Assistant.",
               "native_step": "Jinja template for native step. Return a number compatible with Home Assistant.",
-              "native_unit_of_measurement": "Jinja template for native unit of measurement. Return a value compatible with Home Assistant.",
+              "native_unit_of_measurement": "Jinja template for native unit of measurement. For pH (device class ph), return none. For conductivity use μS/cm, mS/cm, or S/cm. For TDS, turbidity, or dissolved oxygen leave device class empty and use the source unit (for example ppm, NTU, or mg/L). Use measurement state class. Changing a unit does not convert values; calibration and EC-to-TDS factors must come from your instrument.",
               "native_value": "Jinja template for native value. Return a value compatible with Home Assistant.",
               "operation_list": "Jinja template for operation list. Return a list compatible with Home Assistant.",
               "options": "Jinja template for options. Return a list compatible with Home Assistant.",
@@ -3258,11 +3298,48 @@
         "data_description": {
           "dawarich_connection": "Only server and API key are copied; your saved tracker settings remain independent."
         }
+      },
+      "copy_device": {
+        "title": "Create virtual Device from a device",
+        "description": "Select enabled, supported entities to create together on a new virtual Device. States and controls stay linked to their sources.",
+        "data": {
+          "source_device": "Source device"
+        },
+        "data_description": {
+          "source_device": "Choose an existing device to mirror with virtual entities."
+        }
+      },
+      "copy_device_entities": {
+        "title": "Create virtual Device from a device",
+        "description": "Select enabled, supported entities with a registered Home Assistant state. Review generated IDs on the next screen. Nothing is saved until the final creation step.\n\n{failed_source}",
+        "data": {
+          "device_name": "New Device name",
+          "source_entities": "Entities to create"
+        },
+        "data_description": {
+          "device_name": "Name of the new virtual Device with its own identity.",
+          "source_entities": "Each selection becomes a virtual entity in its original domain. Deselect unwanted entities."
+        }
+      },
+      "copy_device_review": {
+        "title": "Review virtual Device creation",
+        "description": "Create {entity_count} entities on **{device_name}**, linked to source states, properties and controls. The original device is unchanged. Manufacturer, model and software/hardware versions are copied to a new Device identity.\n\n{entities}",
+        "data": {
+          "action": "Next action"
+        },
+        "data_description": {
+          "action": "Create the reviewed batch, edit the name/selection, or choose another source device."
+        }
       }
     }
   },
   "selector": {
-    "patrol_recording_scope": {"options": {"patrol": "Entire patrol", "movement": "During movement only"}},
+    "patrol_recording_scope": {
+      "options": {
+        "patrol": "Entire patrol",
+        "movement": "During movement only"
+      }
+    },
     "entity_type": {
       "options": {
         "ai_task": "AI task",
@@ -3346,7 +3423,8 @@
         "regenerate_entity_ids": "Regenerate all virtual entity IDs",
         "manage_devices": "Manage virtual devices",
         "delete_device": "Delete a virtual device",
-        "finish": "Done"
+        "finish": "Done",
+        "copy_device": "Create virtual Device from a device"
       }
     },
     "polygon_strategy": {
@@ -3408,7 +3486,11 @@
       }
     },
     "frigate_patrol_state": {
-      "options": {"keep": "Keep current state", "on": "Turn on", "off": "Turn off"}
+      "options": {
+        "keep": "Keep current state",
+        "on": "Turn on",
+        "off": "Turn off"
+      }
     },
     "matter_air_quality": {
       "options": {
@@ -3563,6 +3645,13 @@
     "dawarich_connection": {
       "options": {
         "manual": "Enter manually"
+      }
+    },
+    "copy_device_review_action": {
+      "options": {
+        "create": "Create reviewed Device and entities",
+        "edit": "Edit name and entity selection",
+        "change_device": "Choose another source device"
       }
     }
   },
@@ -3757,7 +3846,61 @@
               "straight_wind": "Straight wind",
               "Natural Wind": "Natural wind",
               "natural_wind": "Natural wind",
-              "Smart": "Smart"
+              "Smart": "Smart",
+              "on": "On",
+              "On": "On",
+              "ON": "On",
+              "off": "Off",
+              "Off": "Off",
+              "OFF": "Off",
+              "auto": "Auto",
+              "AUTO": "Auto",
+              "manual": "Manual",
+              "Manual": "Manual",
+              "MANUAL": "Manual",
+              "Manual Preset": "Manual",
+              "manual_preset": "Manual",
+              "low": "Low",
+              "Low": "Low",
+              "LOW": "Low",
+              "medium": "Medium",
+              "Medium": "Medium",
+              "MEDIUM": "Medium",
+              "high": "High",
+              "High": "High",
+              "HIGH": "High",
+              "silent": "Silent",
+              "Silent": "Silent",
+              "SILENT": "Silent",
+              "normal": "Normal",
+              "Normal": "Normal",
+              "NORMAL": "Normal",
+              "sleep": "Sleep",
+              "SLEEP": "Sleep",
+              "none": "None",
+              "NONE": "None",
+              "eco": "Eco",
+              "Eco": "Eco",
+              "ECO": "Eco",
+              "boost": "Boost",
+              "Boost": "Boost",
+              "BOOST": "Boost",
+              "comfort": "Comfort",
+              "Comfort": "Comfort",
+              "COMFORT": "Comfort",
+              "away": "Away",
+              "Away": "Away",
+              "AWAY": "Away",
+              "home": "Home",
+              "Home": "Home",
+              "HOME": "Home",
+              "baby": "Baby",
+              "Baby": "Baby",
+              "BABY": "Baby",
+              "activity": "Activity",
+              "Activity": "Activity",
+              "ACTIVITY": "Activity",
+              "SMART": "Smart"
             }
           },
           "fan_mode": {
@@ -3775,7 +3918,109 @@
               "Straight Wind": "Straight wind",
               "straight_wind": "Straight wind",
               "Natural Wind": "Natural wind",
-              "natural_wind": "Natural wind"
+              "natural_wind": "Natural wind",
+              "on": "On",
+              "On": "On",
+              "ON": "On",
+              "off": "Off",
+              "Off": "Off",
+              "OFF": "Off",
+              "auto": "Auto",
+              "AUTO": "Auto",
+              "manual": "Manual",
+              "Manual": "Manual",
+              "MANUAL": "Manual",
+              "Manual Preset": "Manual",
+              "manual_preset": "Manual",
+              "low": "Low",
+              "Low": "Low",
+              "LOW": "Low",
+              "medium": "Medium",
+              "Medium": "Medium",
+              "MEDIUM": "Medium",
+              "high": "High",
+              "High": "High",
+              "HIGH": "High",
+              "silent": "Silent",
+              "Silent": "Silent",
+              "SILENT": "Silent",
+              "normal": "Normal",
+              "Normal": "Normal",
+              "NORMAL": "Normal",
+              "sleep": "Sleep",
+              "Sleep": "Sleep",
+              "SLEEP": "Sleep",
+              "none": "None",
+              "None": "None",
+              "NONE": "None",
+              "eco": "Eco",
+              "Eco": "Eco",
+              "ECO": "Eco",
+              "boost": "Boost",
+              "Boost": "Boost",
+              "BOOST": "Boost",
+              "comfort": "Comfort",
+              "Comfort": "Comfort",
+              "COMFORT": "Comfort",
+              "away": "Away",
+              "Away": "Away",
+              "AWAY": "Away",
+              "home": "Home",
+              "Home": "Home",
+              "HOME": "Home",
+              "baby": "Baby",
+              "Baby": "Baby",
+              "BABY": "Baby",
+              "activity": "Activity",
+              "Activity": "Activity",
+              "ACTIVITY": "Activity",
+              "smart": "Smart",
+              "Smart": "Smart",
+              "SMART": "Smart"
+            }
+          },
+          "swing_mode": {
+            "state": {
+              "on": "On",
+              "On": "On",
+              "ON": "On",
+              "off": "Off",
+              "Off": "Off",
+              "OFF": "Off",
+              "auto": "Auto",
+              "Auto": "Auto",
+              "AUTO": "Auto",
+              "vertical": "Vertical",
+              "Vertical": "Vertical",
+              "VERTICAL": "Vertical",
+              "horizontal": "Horizontal",
+              "Horizontal": "Horizontal",
+              "HORIZONTAL": "Horizontal",
+              "both": "Both",
+              "Both": "Both",
+              "BOTH": "Both"
+            }
+          },
+          "swing_horizontal_mode": {
+            "state": {
+              "on": "On",
+              "On": "On",
+              "ON": "On",
+              "off": "Off",
+              "Off": "Off",
+              "OFF": "Off",
+              "auto": "Auto",
+              "Auto": "Auto",
+              "AUTO": "Auto",
+              "vertical": "Vertical",
+              "Vertical": "Vertical",
+              "VERTICAL": "Vertical",
+              "horizontal": "Horizontal",
+              "Horizontal": "Horizontal",
+              "HORIZONTAL": "Horizontal",
+              "both": "Both",
+              "Both": "Both",
+              "BOTH": "Both"
             }
           }
         }
@@ -3815,7 +4060,62 @@
               "straight_wind": "Straight wind",
               "Natural Wind": "Natural wind",
               "natural_wind": "Natural wind",
-              "Smart": "Smart"
+              "Smart": "Smart",
+              "on": "On",
+              "On": "On",
+              "ON": "On",
+              "off": "Off",
+              "Off": "Off",
+              "OFF": "Off",
+              "auto": "Auto",
+              "AUTO": "Auto",
+              "manual": "Manual",
+              "Manual": "Manual",
+              "MANUAL": "Manual",
+              "Manual Preset": "Manual",
+              "manual_preset": "Manual",
+              "low": "Low",
+              "Low": "Low",
+              "LOW": "Low",
+              "medium": "Medium",
+              "Medium": "Medium",
+              "MEDIUM": "Medium",
+              "high": "High",
+              "High": "High",
+              "HIGH": "High",
+              "silent": "Silent",
+              "Silent": "Silent",
+              "SILENT": "Silent",
+              "normal": "Normal",
+              "Normal": "Normal",
+              "NORMAL": "Normal",
+              "sleep": "Sleep",
+              "SLEEP": "Sleep",
+              "none": "None",
+              "NONE": "None",
+              "eco": "Eco",
+              "Eco": "Eco",
+              "ECO": "Eco",
+              "boost": "Boost",
+              "Boost": "Boost",
+              "BOOST": "Boost",
+              "comfort": "Comfort",
+              "Comfort": "Comfort",
+              "COMFORT": "Comfort",
+              "away": "Away",
+              "Away": "Away",
+              "AWAY": "Away",
+              "home": "Home",
+              "Home": "Home",
+              "HOME": "Home",
+              "baby": "Baby",
+              "Baby": "Baby",
+              "BABY": "Baby",
+              "activity": "Activity",
+              "Activity": "Activity",
+              "ACTIVITY": "Activity",
+              "smart": "Smart",
+              "SMART": "Smart"
             }
           }
         }
@@ -3851,7 +4151,62 @@
               "straight_wind": "Straight wind",
               "Natural Wind": "Natural wind",
               "natural_wind": "Natural wind",
-              "Smart": "Smart"
+              "Smart": "Smart",
+              "on": "On",
+              "On": "On",
+              "ON": "On",
+              "off": "Off",
+              "Off": "Off",
+              "OFF": "Off",
+              "auto": "Auto",
+              "AUTO": "Auto",
+              "manual": "Manual",
+              "Manual": "Manual",
+              "MANUAL": "Manual",
+              "Manual Preset": "Manual",
+              "manual_preset": "Manual",
+              "low": "Low",
+              "Low": "Low",
+              "LOW": "Low",
+              "medium": "Medium",
+              "Medium": "Medium",
+              "MEDIUM": "Medium",
+              "high": "High",
+              "High": "High",
+              "HIGH": "High",
+              "silent": "Silent",
+              "Silent": "Silent",
+              "SILENT": "Silent",
+              "normal": "Normal",
+              "Normal": "Normal",
+              "NORMAL": "Normal",
+              "sleep": "Sleep",
+              "SLEEP": "Sleep",
+              "none": "None",
+              "NONE": "None",
+              "eco": "Eco",
+              "Eco": "Eco",
+              "ECO": "Eco",
+              "boost": "Boost",
+              "Boost": "Boost",
+              "BOOST": "Boost",
+              "comfort": "Comfort",
+              "Comfort": "Comfort",
+              "COMFORT": "Comfort",
+              "away": "Away",
+              "Away": "Away",
+              "AWAY": "Away",
+              "home": "Home",
+              "Home": "Home",
+              "HOME": "Home",
+              "baby": "Baby",
+              "Baby": "Baby",
+              "BABY": "Baby",
+              "activity": "Activity",
+              "Activity": "Activity",
+              "ACTIVITY": "Activity",
+              "smart": "Smart",
+              "SMART": "Smart"
             }
           }
         }

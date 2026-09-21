@@ -3410,6 +3410,26 @@ async def test_home_assistant_loads_korean_config_translations(hass):
     )
 
 
+@pytest.mark.parametrize("language, on, off", [("en", "On", "Off"), ("ko", "켜짐", "꺼짐")])
+async def test_home_assistant_loads_virtual_mode_translations(hass, language, on, off):
+    """Serve mode labels through HA's entity translation API used by the UI."""
+    translations = await async_get_translations(
+        hass, language, "entity", {COMPONENT_DOMAIN}
+    )
+    for domain, attribute in (
+        ("humidifier", "mode"), ("fan", "preset_mode"),
+        ("climate", "preset_mode"), ("climate", "fan_mode"),
+        ("climate", "swing_mode"), ("climate", "swing_horizontal_mode"),
+    ):
+        prefix = (
+            f"component.virtual_layer.entity.{domain}.virtual."
+            f"state_attributes.{attribute}.state."
+        )
+        for value, label in (("on", on), ("off", off)):
+            for source_value in (value, value.title(), value.upper()):
+                assert translations[prefix + source_value] == label
+
+
 async def test_config_import_is_rejected(hass):
     result = await hass.config_entries.flow.async_init(
         COMPONENT_DOMAIN,

@@ -1304,6 +1304,11 @@ class VirtualEntity(RestoreEntity):
                 and entity_id != self.entity_id
             )
         )
+        source_entities = [
+            entity_id
+            for entity_id in source_entities
+            if self._source_supports_proxy_command(command, entity_id)
+        ]
         service_domain = domain
         cross_domain_power_proxy = False
         if (
@@ -1357,6 +1362,15 @@ class VirtualEntity(RestoreEntity):
                 self.entity_id,
             )
             raise
+
+    def _source_supports_proxy_command(self, command: str, entity_id: str) -> bool:
+        """Return whether a source may receive a proxied native command.
+
+        Domains with feature-gated services override this to prevent an older
+        source integration from rejecting a command advertised by the virtual
+        entity.
+        """
+        return True
 
     def _hook_template_variables(self, hook, event):
         trigger = str(hook.get("trigger", "state")).lower()

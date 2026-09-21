@@ -206,6 +206,27 @@ def test_virtual_entities_preserve_translated_source_mode_names():
     assert all(fan_states[f"Sleep {level}"] == "수면" for level in range(1, 4))
 
 
+@pytest.mark.parametrize(
+    ("domain", "attribute"),
+    [("climate", "preset_mode"), ("climate", "fan_mode"),
+     ("fan", "preset_mode"), ("humidifier", "mode"),
+     ("climate", "swing_mode"), ("climate", "swing_horizontal_mode")],
+)
+def test_power_and_auto_labels_cover_source_casing(domain, attribute):
+    """Source mode values are case-sensitive; localize without rewriting them."""
+    for language, expected in (
+        ("en", {"on": "On", "off": "Off", "auto": "Auto"}),
+        ("ko", {"on": "켜짐", "off": "꺼짐", "auto": "자동"}),
+    ):
+        catalog = json.loads((TRANSLATIONS / f"{language}.json").read_text())
+        states = catalog["entity"][domain]["virtual"]["state_attributes"][
+            attribute
+        ]["state"]
+        for value, label in expected.items():
+            for source_value in (value, value.title(), value.upper()):
+                assert states[source_value] == label
+
+
 def test_native_template_sections_are_translated_for_add_and_edit():
     for translation_file in (TRANSLATIONS / "en.json", TRANSLATIONS / "ko.json"):
         catalog = json.loads(translation_file.read_text(encoding="utf-8"))

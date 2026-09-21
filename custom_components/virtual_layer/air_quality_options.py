@@ -32,6 +32,11 @@ def voc_factors(unit):
 # concentrations into ppm. Preserve SI prefix case (mg is not Mg).
 UNIT_ALIASES = {unit: unit for unit in (*UNITS, "", "AQI")}
 _UNIT_SPELLINGS = {
+    "μS/cm": ("uS/cm", "µS/cm", "µS / cm", "uS / cm", "μS / cm", "microsiemens/cm", "microsiemens per centimeter"),
+    "mS/cm": ("mS / cm", "millisiemens/cm", "millisiemens per centimeter"),
+    "S/cm": ("S / cm", "siemens/cm", "siemens per centimeter"),
+    "mg/L": ("mg/l", "mg / L", "mg / l", "milligrams per liter", "milligrams per litre"),
+    "NTU": ("ntu",),
     "°C": ("℃", "° C", "degC", "deg C", "celsius", "Celsius", "celcius", "Celcius"),
     "°F": ("℉", "° F", "degF", "deg F", "fahrenheit", "Fahrenheit", "farenheit"),
     "%": ("％", "percent", "percentage"),

@@ -281,6 +281,31 @@ After setup, use `Configure` on the Virtual Layer integration entry to:
 - delete a virtual device and all of its entities
 - finish without changes
 
+Choose **Create virtual Device from a device** to mirror an existing appliance
+such as a Samsung oven or washer in one operation. Select the source device,
+review its entities, and enter the new Device name. A final review lists every
+source and proposed virtual entity ID before anything is saved, with actions
+to revise the selection or choose another device. Initial setup also offers
+an optional source-device selector. Each selected entity retains its domain
+and receives source-linked state, native-property, and command helpers. Device
+copies use direct single-source helpers: an unpressed button remains usable,
+motion clears immediately with its source, and heating-only climates keep their
+source temperature range without automatic boiler conversion. These semantics
+are retained by the automatic, keep-current, and force-helper edit policies
+while the entity remains a single-source mirror in the same domain.
+Only supported, enabled entities with a current HA state are offered; Virtual
+Layer entities are excluded. The new Device has its own stable ID and copies
+the manufacturer/model and software/hardware versions. Entity IDs are generated without collisions. You can
+edit each resulting entity afterward. New source entities are not automatically
+added later. A validation failure identifies the failing source and saves none
+of the selected entities. Source membership/identity and ID availability are
+checked again at final creation; concurrent changes to other configuration are
+preserved. Disabled, unsupported, unregistered-state, and Virtual Layer entities
+are not copied. Unknown/unavailable states do not prevent preparation when the
+source has a registered state. Missing/unavailable sources disable the mirror;
+unknown values also disable stateful mirrors, while an unpressed button or an
+event without a timestamp remains available.
+
 Adding, editing, or deleting an entity applies only the changed configuration
 and its affected companion entities. Other virtual entities retain their live
 state and source subscriptions without an integration reload.
@@ -490,6 +515,56 @@ and their normal unknown/unavailable handling resumes. Source retries do not
 extend this deadline, and editing entities does not start a new recovery window.
 
 ## Composite Entities
+
+### Water-quality sensors
+
+Create one Device containing a separate `sensor` for each water measurement.
+In the native Jinja fields, set `state_class` to `{{ 'measurement' }}` and use:
+
+| Measurement | Device class template | Native unit template |
+| --- | --- | --- |
+| pH | `{{ 'ph' }}` | `{{ none }}` |
+| Conductivity (EC) | `{{ 'conductivity' }}` | `{{ 'μS/cm' }}` (or `mS/cm`, `S/cm`) |
+| Water temperature | `{{ 'temperature' }}` | `{{ '°C' }}` |
+| TDS | `{{ none }}` | Source unit, commonly `{{ 'ppm' }}` |
+| Turbidity | `{{ none }}` | `{{ 'NTU' }}` |
+| Dissolved oxygen | `{{ none }}` | `{{ 'mg/L' }}` |
+| ORP | `{{ 'voltage' }}` | `{{ 'mV' }}` |
+
+The unit dropdown includes `mg/L` and `NTU`; custom units remain available
+through the template. EC spelling aliases such as `uS/cm` and `µS/cm` normalize
+to Home Assistant's `μS/cm`. A manually configured conductivity sensor defaults
+to `μS/cm`; always explicitly match the instrument's unit. Selecting a unit does
+not rescale readings. The multi-source conversion flow converts compatible EC
+units before aggregation, for example 500 μS/cm and 1.5 mS/cm average to
+1000 μS/cm when the first source uses μS/cm. EC conversion follows live source
+units and excludes negative readings, missing/unsupported units, and sources
+whose device class no longer matches. The existing high-outlier filter still
+applies to averages. Combine only the same measurement
+from comparable sources. An arithmetic pH average is a sensor-reading average,
+not a prediction of the pH of mixed liquids.
+
+Invalid numeric values become unknown. Negative conductivity and incompatible
+pH/EC units also become unknown; pH is not artificially limited to 0–14.
+These checks do not infer whether the water is safe. TDS/EC conversion,
+temperature compensation, calibration, and application-specific limits require
+the instrument's documented parameters. No automatic conversion between ppm
+and mg/L, or between EC and TDS, is assumed.
+
+For an instrument specifying TDS = EC × 0.5, with EC already in μS/cm, the
+sensor value template can be configured as follows. Replace the source and
+factor with the instrument's actual settings; do not apply compensation twice.
+
+```jinja
+{% set ec = states('sensor.water_ec') %}
+{{ (ec | float * 0.5) if is_number(ec) and (ec | float) >= 0 else none }}
+```
+
+For a documented linear temperature coefficient, the EC-at-25°C calculation
+is `EC25 = EC / (1 + alpha * (temperature - 25))`. Use the coefficient in
+fraction/°C, check both inputs with `is_number`, and require a positive
+denominator. Keep an unconfigured or unavailable calculation unknown instead
+of substituting a zero reading.
 
 Source-unit matching uses an explicit spelling-alias dictionary shared by
 sensor conversion and air-quality helpers. For example, `µg / m^3`, `ug/m3`,
@@ -1368,6 +1443,13 @@ Clear the icon template to use the static icon instead.
 Virtual Layer includes integration icons, brand assets, and Home Assistant UI
 translations.
 
+Climate, fan, and humidifier mode labels include common power, automatic,
+manual, speed, and preset values in English and Korean. Climate swing labels
+also cover power and direction values. Lowercase, title-case, and uppercase
+source values (such as `off`, `Off`, and `OFF`) retain their original command
+values while displaying translated labels. Unrecognized custom mode names
+remain as supplied by the source.
+
 Current translation files:
 
 - English: `custom_components/virtual_layer/translations/en.json`
@@ -1432,6 +1514,12 @@ Create a **sensor** on your virtual Device, choose one cumulative usage sensor
 (for electricity, an energy sensor in kWh, not an instantaneous W sensor), and
 enable the utility-meter options. Configure the same fields when editing it.
 The generated `<entity_id>_cost` monetary sensor belongs to the same Device.
+
+The meter settings expand when editing an enabled meter. Validation errors
+identify the affected input, and blank/unknown initial readings become zero
+when enabling this mode. Disabling a meter retains its schedule and billing
+settings for later editing, even if they need repair before re-enabling; it
+clears the old one-time correction so re-enabling cannot replay that correction.
 
 - Cycles: every 15 minutes, hourly, daily, weekly, monthly, bimonthly, quarterly, yearly, no reset,
   anchored N-day repetition, or a five-field cron expression.

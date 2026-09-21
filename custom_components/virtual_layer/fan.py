@@ -33,7 +33,11 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import get_entity_configs
 from .const import *
 from .entity import VirtualEntity, nonnegative_int, virtual_schema
-from .fan_options import manual_preset_mode, migrate_legacy_fan_attributes
+from .fan_options import (
+    manual_preset_mode,
+    migrate_legacy_fan_attributes,
+    normalize_preset_modes,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -374,9 +378,7 @@ class VirtualFan(VirtualEntity, FanEntity):
         if name == "preset_modes":
             if not isinstance(value, (list, tuple)):
                 raise ValueError("preset_modes must render a list")
-            value = [str(item).strip() for item in value if str(item).strip()]
-            if len(set(value)) != len(value):
-                raise ValueError("preset_modes contains duplicate values")
+            value = normalize_preset_modes(value)
         elif name == "preset_mode":
             value = None if value is None else str(value).strip() or None
         elif name == "percentage":

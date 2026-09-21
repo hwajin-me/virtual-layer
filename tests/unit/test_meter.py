@@ -88,6 +88,40 @@ def test_flat_cost():
     assert meter.cost(settings(rate="0.1"), "0.3") == Decimal("0.03")
 
 
+@pytest.mark.parametrize("cycle,after,expected", [
+    ("hourly", "2026-11-01T05:30:00Z", "2026-11-01T06:00:00Z"),
+    ("quarter-hourly", "2026-11-01T05:50:00Z", "2026-11-01T06:00:00Z"),
+    ("hourly", "2026-03-08T06:30:00Z", "2026-03-08T07:00:00Z"),
+])
+def test_subday_dst_boundaries(cycle, after, expected):
+    original = dt_util.get_default_time_zone()
+    dt_util.set_default_time_zone(dt_util.get_time_zone("America/New_York"))
+    try:
+        result = meter.next_reset(settings(cycle=cycle), dt_util.parse_datetime(after))
+        assert dt_util.as_utc(result) == dt_util.parse_datetime(expected)
+    finally:
+        dt_util.set_default_time_zone(original)
+
+
+@pytest.mark.parametrize("values,field", [
+    ({"tariff_entity": "sensor.bad"}, "tariff_entity"),
+    ({"tariff_entity": "bad id"}, "tariff_entity"),
+    ({"tariff_entity": []}, "tariff_entity"),
+    ({"tariff": []}, "tariff"),
+    ({"tariff_entity": "select.tariff", "tariff": " "}, "tariff"),
+    ({"days": "nan"}, "days"),
+    ({"tiers": [{"up_to": 100, "rate": "nan"}]}, "tiers"),
+])
+def test_invalid_option_field_paths(values, field):
+    with pytest.raises(vol.Invalid) as error:
+        settings(**values)
+    assert error.value.path == [meter.PREFIX + field]
+
+
+def test_tariff_and_currency_normalization():
+    assert settings(currency="krw", tariff_entity="select.tariff", tariff="peak")["currency"] == "KRW"
+
+
 @pytest.mark.parametrize("cycle,keys", [
     ("none", {"cycle", "timezone"}),
     ("cron", {"cycle", "cron", "timezone"}),

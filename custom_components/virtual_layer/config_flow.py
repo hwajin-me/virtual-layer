@@ -23,6 +23,7 @@ import voluptuous as vol
 import yaml
 from homeassistant import config_entries, exceptions
 from homeassistant.components.camera import CameraEntityFeature
+from homeassistant.components.alarm_control_panel import AlarmControlPanelEntityFeature
 from homeassistant.components.climate import ClimateEntityFeature
 from homeassistant.components.cover import CoverEntityFeature
 from homeassistant.components.fan import FanEntityFeature
@@ -1125,6 +1126,9 @@ _ATTRIBUTE_HELPER_METADATA_NAMES = (
 
 ACTION_ADD_ENTITY = "add_entity"
 ACTION_COPY_ENTITY = "copy_entity"
+ACTION_COPY_DEVICE = "copy_device"
+CONF_SOURCE_DEVICE = "source_device"
+CONF_SOURCE_DEVICE_COPY = "source_device_copy"
 ACTION_DELETE_ENTITY = "delete_entity"
 ACTION_DELETE_DEVICE = "delete_device"
 ACTION_EDIT_ENTITY = "edit_entity"
@@ -2807,8 +2811,21 @@ def _apply_sensor_conversion_defaults(
             f"and state_attr({source_id!r}, 'device_class') in {[None, '', *aq_options.VOC_QUANTITIES]!r} else none)"
             for source_id, raw in zip(entity_ids, raw_expressions, strict=True)
         ]
+    elif device_class == "conductivity":
+        converter = SENSOR_UNIT_CONVERTERS.get("conductivity")
+        factors = {
+            str(unit): converter.convert(1.0, unit, fallback_unit)
+            for unit in sorted(converter.VALID_UNITS)
+        } if converter and fallback_unit in converter.VALID_UNITS else {}
+        expressions = [
+            f"((({raw} | float) * {factors!r}.get({aq_options.source_unit_expression(repr(source_id))}, 0)) | round(12) "
+            f"if is_number({raw}) and ({raw} | float) >= 0 "
+            f"and {aq_options.source_unit_expression(repr(source_id))} in {list(factors)!r} "
+            f"and state_attr({source_id!r}, 'device_class') == 'conductivity' else none)"
+            for source_id, raw in zip(entity_ids, raw_expressions, strict=True)
+        ]
     availability_expressions = raw_expressions
-    if device_class in aq_options.VOC_QUANTITIES:
+    if device_class in (*aq_options.VOC_QUANTITIES, "conductivity"):
         availability_expressions = expressions
     elif conversion == "brightness_percent":
         availability_expressions = [f"({expression})" for expression in expressions]
@@ -3069,7 +3086,7 @@ CALENDAR_EVENT_SOURCE_ATTRIBUTES = frozenset(
 
 
 def _options_schema(options: dict[str, Any]) -> vol.Schema:
-    actions = [ACTION_ADD_ENTITY]
+    actions = [ACTION_ADD_ENTITY, ACTION_COPY_DEVICE]
     if _entity_choices(options):
         actions.append(ACTION_COPY_ENTITY)
         actions.append(ACTION_EDIT_ENTITY)
@@ -3100,11 +3117,15 @@ def _options_schema(options: dict[str, Any]) -> vol.Schema:
 def _setup_schema(
     defaults: dict[str, Any], include_entity_toggle: bool = True
 ) -> vol.Schema:
+    # The source-device path can derive a name. Reconfigure and the manual
+    # setup path still require one (the latter validates after submission).
+    name_marker = vol.Optional if include_entity_toggle else vol.Required
     schema = {
-        vol.Required(ATTR_GROUP_NAME, default=defaults.get(ATTR_GROUP_NAME, "")): str,
+        name_marker(ATTR_GROUP_NAME, default=defaults.get(ATTR_GROUP_NAME, "")): str,
     }
     if include_entity_toggle:
         schema[vol.Optional(CONF_ADD_FIRST_ENTITY, default=False)] = cv.boolean
+        schema[vol.Optional(CONF_SOURCE_DEVICE)] = selector.DeviceSelector()
     return _complete_form_schema(vol.Schema(schema))
 
 
@@ -3148,7 +3169,7 @@ def _motion_hold_schema(defaults: Mapping) -> vol.Schema:
 
 def _is_automatic_motion_helper(defaults: Mapping) -> bool:
     """Return whether defaults contain the generated composite-motion helper."""
-    if defaults.get(CONF_PLATFORM) != "binary_sensor":
+    if defaults.get(CONF_PLATFORM) != "binary_sensor" or defaults.get(CONF_SOURCE_DEVICE_COPY):
         return False
     return bool(_stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT)))
 
@@ -3691,7 +3712,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
     if platform == "sensor":
         units = sorted({aq_options.normalize_unit(str(unit))
                         for values in DEVICE_CLASS_UNITS.values() for unit in values
-                        if unit})
+                        if unit} | {"mg/L", "NTU"})
         domain_schema[vol.Optional("sensor_unit", default=defaults.get("sensor_unit", "template"))] = selector.SelectSelector(
             selector.SelectSelectorConfig(options=["template", *units],
                 translation_key="sensor_unit", mode=selector.SelectSelectorMode.DROPDOWN)
@@ -3714,7 +3735,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
             elif key == "tiers":
                 control = selector.ObjectSelector()
             elif isinstance(default, int):
-                control = selector.NumberSelector(selector.NumberSelectorConfig(min=1 if key == "days" else 0, max=36600 if key == "days" else 40319 if key == "offset" else 1e12, mode=selector.NumberSelectorMode.BOX, step="any"))
+                control = selector.NumberSelector(selector.NumberSelectorConfig(min=1 if key == "days" else 0, max=36600 if key == "days" else 40319 if key == "offset" else 1e12, mode=selector.NumberSelectorMode.BOX, step=1 if key in {"days", "offset"} else "any"))
             elif key in {"start", "tariff_entity"}:
                 if not defaults.get(field):
                     marker = vol.Optional(field)
@@ -3787,7 +3808,7 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
     if domain_schema:
         schema[vol.Optional(CONF_DOMAIN_SETTINGS, default=dict)] = section(
             vol.Schema(domain_schema),
-            {"collapsed": platform not in {"climate", "light", "media_player"}},
+            {"collapsed": platform not in {"climate", "light", "media_player"} and not defaults.get("utility_meter_enabled", False)},
         )
     native_template_properties = DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ())
     if native_template_properties:
@@ -4855,7 +4876,7 @@ def _build_entity_config(
             raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
         cycle = user_input.get("utility_meter_cycle", "monthly")
         if cycle not in meter.CYCLES:
-            raise InvalidDomainOptions
+            raise InvalidFieldValue("utility_meter_cycle", "invalid_domain_options")
         entity["utility_meter_enabled"] = True
         entity["utility_meter_cycle"] = cycle
 
@@ -5294,25 +5315,50 @@ def _build_entity_config(
     entity.update(domain_options)
     if platform == "sensor":
         try:
-            settings = meter.options(user_input)
+            enabled = cv.boolean(user_input.get("utility_meter_enabled", False))
+            # Disabled/broken meters must remain editable. Preserve their
+            # settings for re-enabling, but validate only active meter options.
+            settings = meter.options(user_input) if enabled else {
+                key: user_input.get(meter.PREFIX + key, default)
+                for key, default in meter.DEFAULTS.items()
+            }
+            settings["enabled"] = enabled
             for key in settings:
                 entity.pop(meter.PREFIX + key, None)
+            if enabled or any(value != meter.DEFAULTS[key] for key, value in settings.items()):
+                entity.update({meter.PREFIX + key: value for key, value in settings.items()})
             if settings["enabled"]:
-                for key, value in settings.items():
-                    entity[meter.PREFIX + key] = value
-                meter.number(initial_value)
+                # Ordinary sensors start as unknown; enabling a meter must
+                # provide a numeric zero without requiring an unrelated field.
+                if initial_value in (None, "", "unknown", "unavailable"):
+                    initial_value = "0"
+                    entity[CONF_INITIAL_VALUE] = initial_value
+                try:
+                    initial_number = meter.number(initial_value)
+                    if initial_number < 0 and not settings["net_consumption"]:
+                        raise vol.Invalid("Negative consumption requires net mode")
+                except vol.Invalid as err:
+                    raise InvalidFieldValue(CONF_INITIAL_VALUE, "invalid_domain_options") from err
                 if settings["tariff_entity"]:
                     cv.entity_id(settings["tariff_entity"])
                     if settings["tariff_entity"] == entity_id or not settings["tariff"]:
                         raise vol.Invalid("Select a tariff name and a different selector")
                 correction = user_input.get("utility_meter_current_value", "")
                 if correction != "":
-                    value = meter.number(correction)
+                    try:
+                        value = meter.number(correction)
+                    except vol.Invalid as err:
+                        raise InvalidFieldValue("utility_meter_current_value", "invalid_domain_options") from err
                     if value < 0 and not settings["net_consumption"]:
-                        raise vol.Invalid("Negative consumption requires net mode")
+                        raise InvalidFieldValue("utility_meter_current_value", "invalid_domain_options")
                     entity["utility_meter_correction"] = str(value)
                     entity["utility_meter_correction_id"] = uuid.uuid4().hex
+            else:
+                entity.pop("utility_meter_correction", None)
+                entity.pop("utility_meter_correction_id", None)
         except (ValueError, TypeError, vol.Invalid) as err:
+            if isinstance(err, vol.Invalid) and err.path:
+                raise InvalidFieldValue(str(err.path[0]), "invalid_domain_options") from err
             raise InvalidDomainOptions from err
     if platform == "air_quality":
         # Do not label a categorical state as a numeric PM2.5 measurement.
@@ -7603,12 +7649,24 @@ def _merged_native_template(
         result = "ns.values"
         if property_name == "hvac_modes" and fallback_values:
             result += " if ns.values else " + repr(_plain_options(fallback_values))
+        # Fan preset names are source command values.  Do not translate or
+        # case-fold them, but discard whitespace-only and presentation-only
+        # duplicates while combining multiple physical fans.
+        item_expression = "value | trim" if (
+            platform == "fan" and property_name == "preset_modes"
+        ) else "value"
+        item_condition = (
+            "value is string and (value | trim) and (value | trim) not in ns.values"
+            if platform == "fan" and property_name == "preset_modes"
+            else "value not in ns.values"
+        )
         return (
             "{% set ns = namespace(values=[]) %}"
             "{% for items in ["
             + ", ".join(expressions)
             + "] %}{% if items is list %}{% for value in items %}"
-            "{% if value not in ns.values %}{% set ns.values = ns.values + [value] %}"
+            + "{% if " + item_condition + " %}{% set ns.values = ns.values + ["
+            + item_expression + "] %}"
             "{% endif %}{% endfor %}{% endif %}{% endfor %}{{ " + result + " }}"
         )
     if property_name in NATIVE_TEMPLATE_MAPPING_PROPERTIES or all(
@@ -8932,6 +8990,12 @@ def _boiler_command_actions(
 
 
 _SOURCE_COMMAND_FEATURES = {
+    ("alarm_control_panel", "alarm_arm_home"): AlarmControlPanelEntityFeature.ARM_HOME,
+    ("alarm_control_panel", "alarm_arm_away"): AlarmControlPanelEntityFeature.ARM_AWAY,
+    ("alarm_control_panel", "alarm_arm_night"): AlarmControlPanelEntityFeature.ARM_NIGHT,
+    ("alarm_control_panel", "alarm_arm_vacation"): AlarmControlPanelEntityFeature.ARM_VACATION,
+    ("alarm_control_panel", "alarm_arm_custom_bypass"): AlarmControlPanelEntityFeature.ARM_CUSTOM_BYPASS,
+    ("alarm_control_panel", "alarm_trigger"): AlarmControlPanelEntityFeature.TRIGGER,
     ("camera", "turn_off"): CameraEntityFeature.ON_OFF,
     ("camera", "turn_on"): CameraEntityFeature.ON_OFF,
     ("climate", "set_fan_mode"): ClimateEntityFeature.FAN_MODE,
@@ -9798,6 +9862,8 @@ def _reference_entity_defaults(
     additional_target_platforms: Collection[str] = (),
     boiler_temperature_calibration_template: str | None = None,
     boiler_temperature_calibration_enabled: bool | None = None,
+    *,
+    mirror_source: bool = False,
 ) -> dict[str, Any]:
     entity_ids = _normalize_reference_entity_ids(entity_ids)
     if not entity_ids:
@@ -9807,6 +9873,11 @@ def _reference_entity_defaults(
 
     states = _reference_states(hass, entity_ids)
     source_domains = [entity_id.split(".", 1)[0] for entity_id in entity_ids]
+    mirror_source = (
+        mirror_source and len(entity_ids) == 1
+        and source_domains[0] in VIRTUAL_ENTITY_DOMAINS
+        and target_platform in (None, source_domains[0])
+    )
     all_boolean = all(
         _source_state_is_boolean(entity_id, state)
         for entity_id, state in zip(entity_ids, states, strict=True)
@@ -9837,7 +9908,7 @@ def _reference_entity_defaults(
         _source_is_presence_distance(entity_id, state)
         for entity_id, state in zip(entity_ids, states, strict=True)
     )
-    boiler_profile = _boiler_source_profile(entity_ids, states)
+    boiler_profile = None if mirror_source else _boiler_source_profile(entity_ids, states)
     boiler_air_conditioner_profile = _boiler_air_conditioner_profile(entity_ids, states)
     # Preserve the established generated-helper behavior. The form exposes an
     # explicit opt-out for boilers that already accept room setpoints.
@@ -9854,10 +9925,12 @@ def _reference_entity_defaults(
     fan_number_profile = _xiaomi_fan_number_profile(entity_ids, states)
     humidifier_component_profile = _humidifier_component_profile(entity_ids)
     presence_or_motion_class = (
-        _presence_or_motion_device_class(entity_ids, states) if all_boolean else None
+        _presence_or_motion_device_class(entity_ids, states)
+        if all_boolean and not mirror_source else None
     )
     safety_boolean_sources = (
-        _safety_boolean_sources(entity_ids, states) if all_boolean else False
+        _safety_boolean_sources(entity_ids, states)
+        if all_boolean and not mirror_source else False
     )
     if boiler_profile is not None or boiler_air_conditioner_profile is not None:
         platform = "climate"
@@ -10509,7 +10582,7 @@ def _reference_entity_defaults(
             _literal_template(_LIGHT_CAPABILITY_MODES[capability])
         )
 
-    if platform == "sensor" and states and all(
+    if not mirror_source and platform == "sensor" and states and all(
         aq_options.infer_quantity(state) in aq_options.VOC_QUANTITIES for state in states
     ):
         profile = _sensor_unit_conversion_transforms(
@@ -10525,6 +10598,15 @@ def _reference_entity_defaults(
             )
             if source_name is not None:
                 defaults[CONF_ENTITY_NAME] = source_name
+    if mirror_source:
+        defaults[CONF_SOURCE_DEVICE_COPY] = True
+        # An unpressed button/event has no timestamp yet. Other domains keep
+        # the existing unknown-source guard, avoiding fabricated off/zero data.
+        unavailable_states = ["unavailable"] if platform in {"button", "event"} else ["unknown", "unavailable"]
+        defaults[CONF_AVAILABILITY_TEMPLATE] = (
+            f"{{{{ states[{entity_ids[0]!r}] is not none "
+            f"and states({entity_ids[0]!r}) not in {unavailable_states!r} }}}}"
+        )
     return defaults
 
 
@@ -10540,6 +10622,11 @@ def _reference_edit_defaults(
         return current_defaults
 
     merged = dict(current_defaults)
+    if reference_defaults:
+        if reference_defaults.get(CONF_SOURCE_DEVICE_COPY):
+            merged[CONF_SOURCE_DEVICE_COPY] = True
+        else:
+            merged.pop(CONF_SOURCE_DEVICE_COPY, None)
     # The source selector is authoritative even when the helper/template was
     # customized. Otherwise changing the selector silently keeps subscriptions
     # to entities that the user explicitly removed.
@@ -10666,6 +10753,7 @@ def _refresh_add_reference_defaults(
                 submitted_sources,
                 submitted_platform,
                 (submitted_platform,),
+                mirror_source=reference_defaults.get(CONF_SOURCE_DEVICE_COPY) is True,
             )
         else:
             refreshed_reference_defaults = _reference_entity_defaults(
@@ -10956,13 +11044,16 @@ def _canonical_auto_helper_value(field: str, value: Any) -> Any:
 
 def _auto_helper_profile(defaults: dict[str, Any]) -> dict[str, Any]:
     """Create a stable record of the generated helper fields."""
-    return {
+    profile = {
         field: _canonical_auto_helper_value(
             field,
             defaults.get(field, _auto_helper_field_default(field)),
         )
         for field in _AUTO_HELPER_PROFILE_FIELDS
     }
+    if defaults.get(CONF_SOURCE_DEVICE_COPY) is True:
+        profile[CONF_SOURCE_DEVICE_COPY] = True
+    return profile
 
 
 def _auto_helper_templates_match(
@@ -11120,7 +11211,10 @@ def _existing_auto_helper_profile(
             continue
         checked_source_lists.add(source_key)
         try:
-            reference_defaults = _reference_entity_defaults(hass, source_entities)
+            reference_defaults = _reference_entity_defaults(
+                hass, source_entities,
+                mirror_source=bool((primary_profile or {}).get(CONF_SOURCE_DEVICE_COPY)),
+            )
         except InvalidEntityReference:
             continue
         candidates = [
@@ -11449,6 +11543,9 @@ def _entity_form_defaults(
     defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
     if platform == "sensor" and CONF_AIR_QUALITY_LOGIC in entity:
         defaults[CONF_AIR_QUALITY_LOGIC] = _mapping_or_empty(entity[CONF_AIR_QUALITY_LOGIC])
+    profile = entity.get(CONF_AUTO_HELPER)
+    if isinstance(profile, Mapping) and profile.get(CONF_SOURCE_DEVICE_COPY) is True:
+        defaults[CONF_SOURCE_DEVICE_COPY] = True
     return defaults
 
 
@@ -12115,8 +12212,211 @@ class _AirQualityLogicFlow:
         return await self._aq_logic_step(user_input)
 
 
+class _CopyDeviceFlow:
+    """Create independent virtual entities from one registry device atomically."""
+
+    def _copy_device_sources(self, device_id):
+        return sorted(
+            entry.entity_id
+            for entry in er.async_entries_for_device(er.async_get(self.hass), device_id)
+            if not entry.disabled_by
+            and entry.platform != COMPONENT_DOMAIN
+            and entry.domain in VIRTUAL_ENTITY_DOMAINS
+            and self.hass.states.get(entry.entity_id) is not None
+        )
+
+    async def async_step_copy_device(self, user_input=None):
+        errors = {}
+        self._copy_device_pending = None
+        if user_input is not None:
+            if CONF_DEVICE_NAME in user_input:
+                self._copy_device_name = user_input[CONF_DEVICE_NAME]
+            device = dr.async_get(self.hass).async_get(user_input.get(CONF_SOURCE_DEVICE, ""))
+            if device and self._copy_device_sources(device.id):
+                self._copy_source_device = device.id
+                self._copy_device_name = getattr(self, "_copy_device_name", None) or (
+                    f"{device.name_by_user or device.name or 'Device'} Virtual"
+                )
+                return await self.async_step_copy_device_entities()
+            errors[CONF_SOURCE_DEVICE] = "no_device_entities"
+        return self.async_show_form(
+            step_id="copy_device",
+            data_schema=vol.Schema({
+                vol.Required(CONF_SOURCE_DEVICE, description={
+                    "suggested_value": (user_input or {}).get(CONF_SOURCE_DEVICE),
+                }): selector.DeviceSelector(),
+            }),
+            errors=errors,
+        )
+
+    def _copy_source_identity(self, source):
+        """Detect removal/replacement/moving of a selected registry entry."""
+        entry = er.async_get(self.hass).async_get(source)
+        return (entry.id, entry.unique_id, entry.platform, entry.device_id) if entry else None
+
+    def _copy_device_form(self, defaults, errors=None, failed_source=""):
+        sources = self._copy_device_sources(self._copy_source_device)
+        self._copy_device_name = defaults.get(CONF_DEVICE_NAME, "")
+        if not sources:
+            self._copy_device_pending = None
+            return self.async_show_form(
+                step_id="copy_device",
+                data_schema=vol.Schema({vol.Required(CONF_SOURCE_DEVICE): selector.DeviceSelector()}),
+                errors={"base": "device_sources_changed"},
+            )
+        # Retain stale selections so the user can see and remove them. The
+        # live membership check on submit remains authoritative.
+        selected = _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES))
+        return self.async_show_form(
+            step_id="copy_device_entities",
+            data_schema=vol.Schema({
+                vol.Required(CONF_DEVICE_NAME, default=defaults.get(CONF_DEVICE_NAME, "")): str,
+                vol.Required(CONF_SOURCE_ENTITIES, default=selected):
+                    selector.EntitySelector(selector.EntitySelectorConfig(
+                        include_entities=list(dict.fromkeys([*sources, *selected])), multiple=True,
+                    )),
+            }), errors=errors or {},
+            description_placeholders={"failed_source": failed_source},
+        )
+
+    async def async_step_copy_device_entities(self, user_input=None):
+        self._copy_device_pending = None
+        device = dr.async_get(self.hass).async_get(getattr(self, "_copy_source_device", ""))
+        if device is None:
+            return await self.async_step_copy_device()
+        sources = self._copy_device_sources(device.id)
+        errors = {}
+        failed_source = ""
+        if user_input is not None:
+            selected = _stored_entity_ids(user_input.get(CONF_SOURCE_ENTITIES))
+            name = _text_default(user_input.get(CONF_DEVICE_NAME)).strip()
+            if not name:
+                errors[CONF_DEVICE_NAME] = "required"
+            elif not selected or not set(selected).issubset(sources):
+                errors[CONF_SOURCE_ENTITIES] = "no_device_entities"
+            else:
+                try:
+                    is_options = isinstance(self, config_entries.OptionsFlow)
+                    if not is_options:
+                        await self.validate_input({ATTR_GROUP_NAME: name})
+                    metadata = _build_device_config({
+                        CONF_DEVICE_NAME: name,
+                        CONF_DEVICE_MANUFACTURER: device.manufacturer,
+                        CONF_DEVICE_MODEL: device.model,
+                        CONF_DEVICE_SW_VERSION: device.sw_version,
+                        CONF_DEVICE_HW_VERSION: device.hw_version,
+                    }, name, self.hass)
+                    reserved = {entry.entity_id for entry in er.async_get(self.hass).entities.values()}
+                    reserved.update(state.entity_id for state in self.hass.states.async_all())
+                    reserved.update(
+                        entity_id
+                        for entry in self.hass.config_entries.async_entries(COMPONENT_DOMAIN)
+                        for entity in _iter_option_entities(entry.options)
+                        if (entity_id := _virtual_entity_id(entity))
+                    )
+                    identities = {source: self._copy_source_identity(source) for source in selected}
+                    entities = []
+                    for source in selected:
+                        failed_source = source
+                        defaults = _reference_entity_defaults(
+                            self.hass, [source], target_platform=source.split('.', 1)[0],
+                            mirror_source=True,
+                        )
+                        defaults[CONF_DEVICE_NAME] = name
+                        defaults.setdefault(CONF_INITIAL_AVAILABILITY, True)
+                        defaults.setdefault(CONF_PERSISTENT, True)
+                        defaults = _complete_domain_form_defaults(defaults)
+                        defaults[ATTR_ENTITY_ID] = _regenerated_entity_id(
+                            defaults[CONF_PLATFORM], source.split('.', 1)[1] + '_virtual', reserved,
+                        )
+                        reserved.add(defaults[ATTR_ENTITY_ID])
+                        _, entity = await _async_build_entity_config(self.hass, defaults)
+                        _set_auto_helper_profile(entity, defaults, defaults)
+                        entities.append(entity)
+                    self._copy_device_pending = {
+                        "input": {CONF_DEVICE_NAME: name, CONF_SOURCE_ENTITIES: selected},
+                        "metadata": metadata, "entities": entities, "identities": identities,
+                    }
+                    return await self.async_step_copy_device_review()
+                except GroupNameAlreadyUsed:
+                    errors[CONF_DEVICE_NAME] = "group_name_used"
+                except MissingGroupName:
+                    errors[CONF_DEVICE_NAME] = "required"
+                except (InvalidDomainOptions, InvalidTemplate, InvalidJson,
+                        InvalidEntityReference, InvalidEntityId, EntityIdAlreadyUsed,
+                        InvalidFieldValue, MissingEntityName, KeyError,
+                        ValueError, TypeError, OverflowError, RecursionError, vol.Invalid):
+                    errors["base"] = "device_copy_failed"
+        defaults = user_input or {CONF_DEVICE_NAME: self._copy_device_name, CONF_SOURCE_ENTITIES: sources}
+        return self._copy_device_form(defaults, errors, failed_source)
+
+    async def async_step_copy_device_review(self, user_input=None):
+        """Commit precisely the reviewed batch against the latest options."""
+        pending = getattr(self, "_copy_device_pending", None)
+        if not pending:
+            return await self.async_step_copy_device()
+        defaults = pending["input"]
+        sources = defaults[CONF_SOURCE_ENTITIES]
+        if (dr.async_get(self.hass).async_get(self._copy_source_device) is None
+                or not set(sources).issubset(self._copy_device_sources(self._copy_source_device))
+                or any(self._copy_source_identity(source) != pending["identities"][source]
+                       for source in sources)):
+            self._copy_device_pending = None
+            return self._copy_device_form(defaults, {"base": "device_sources_changed"})
+        if user_input is not None:
+            if user_input.get(CONF_ACTION) == "edit":
+                return self._copy_device_form(defaults)
+            if user_input.get(CONF_ACTION) == "change_device":
+                return await self.async_step_copy_device()
+            is_options = isinstance(self, config_entries.OptionsFlow)
+            try:
+                if not is_options:
+                    await self.validate_input({ATTR_GROUP_NAME: defaults[CONF_DEVICE_NAME]})
+                # No await between final validation and commit. Never reuse an
+                # options snapshot taken before asynchronous template building.
+                for entity in pending["entities"]:
+                    _validate_virtual_entity_id_available(self.hass, entity)
+                    _validate_virtual_dependency_cycle(self.hass, entity)
+                options = _plain_options(self.config_entry.options) if is_options else {}
+                for entity in pending["entities"]:
+                    options = _append_ui_entity(
+                        options, defaults[CONF_DEVICE_NAME], entity, pending["metadata"],
+                    )
+            except GroupNameAlreadyUsed:
+                self._copy_device_pending = None
+                return self._copy_device_form(defaults, {CONF_DEVICE_NAME: "group_name_used"})
+            except (EntityIdAlreadyUsed, InvalidEntityReference):
+                self._copy_device_pending = None
+                return self._copy_device_form(defaults, {"base": "device_sources_changed"})
+            self._copy_device_pending = None
+            if is_options:
+                return self.async_create_entry(data=options)
+            return self.async_create_entry(
+                title=defaults[CONF_DEVICE_NAME],
+                data={ATTR_GROUP_NAME: defaults[CONF_DEVICE_NAME]}, options=options,
+            )
+        summary = "\n".join(
+            f"- `{source}` → `{entity[ATTR_ENTITY_ID]}`"
+            for source, entity in zip(sources, pending["entities"], strict=True)
+        )
+        return self.async_show_form(
+            step_id="copy_device_review", data_schema=vol.Schema({
+                vol.Required(CONF_ACTION, default="create"): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=["create", "edit", "change_device"],
+                        translation_key="copy_device_review_action",
+                    ),
+                ),
+            }),
+            description_placeholders={
+                "device_name": defaults[CONF_DEVICE_NAME],
+                "entity_count": str(len(sources)), "entities": summary,
+            },
+        )
+
+
 @_log_unhandled_flow_errors
-class VirtualFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
+class VirtualFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogicFlow, config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
     """Virtual Layer config flow."""
 
     VERSION = 1
@@ -12170,6 +12470,11 @@ class VirtualFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, config_entr
 
         errors = _flow_errors(self, "user")
         if user_input is not None:
+            if user_input.get(CONF_SOURCE_DEVICE):
+                return await self.async_step_copy_device({
+                    CONF_SOURCE_DEVICE: user_input[CONF_SOURCE_DEVICE],
+                    CONF_DEVICE_NAME: user_input.get(ATTR_GROUP_NAME),
+                })
             try:
                 info = await self.validate_input(user_input)
                 self._pending_title = info["title"]
@@ -12718,7 +13023,7 @@ class VirtualFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, config_entr
 
 
 @_log_unhandled_flow_errors
-class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, config_entries.OptionsFlow):
+class VirtualOptionsFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogicFlow, config_entries.OptionsFlow):
     """Virtual Layer options flow."""
 
     def __init__(self) -> None:
@@ -12759,6 +13064,8 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
     async def async_step_init(self, user_input=None):
         errors = _flow_errors(self, "init")
         if user_input is not None:
+            if user_input[CONF_ACTION] == ACTION_COPY_DEVICE:
+                return await self.async_step_copy_device()
             if user_input[CONF_ACTION] == ACTION_FINISH:
                 return self.async_create_entry(
                     data=_plain_options(self.config_entry.options)
@@ -13511,6 +13818,15 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
             errors=errors,
         )
 
+    def _edit_reference_defaults(self, *args, **kwargs):
+        """Retain direct-device helper semantics through every edit policy."""
+        profile = (self._edit_entity_snapshot or {}).get(CONF_AUTO_HELPER)
+        return _reference_entity_defaults(
+            self.hass, *args,
+            mirror_source=isinstance(profile, Mapping) and profile.get(CONF_SOURCE_DEVICE_COPY) is True,
+            **kwargs,
+        )
+
     async def async_step_edit_entity_source(self, user_input=None):
         """Choose an existing entity to prefill an edited virtual entity."""
         errors = _flow_errors(self, "edit_entity_source")
@@ -13542,8 +13858,7 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                 selected_sources = _normalize_reference_entity_ids(
                     user_input.get(CONF_REFERENCE_ENTITY_ID),
                 )
-                self._reference_defaults = _reference_entity_defaults(
-                    self.hass,
+                self._reference_defaults = self._edit_reference_defaults(
                     selected_sources,
                 )
                 self._edit_current_defaults = current_defaults
@@ -13639,8 +13954,7 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
             if original_platform in ("sensor", "number") and target_platform == "air_quality":
                 return await self._async_add_air_quality_from_measurement()
             try:
-                self._reference_defaults = _reference_entity_defaults(
-                    self.hass,
+                self._reference_defaults = self._edit_reference_defaults(
                     self._edit_source_entities,
                     target_platform,
                     (current_platform,),
@@ -13840,8 +14154,7 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                     submitted_calibration = user_input.get(
                         CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
                     )
-                    self._reference_defaults = _reference_entity_defaults(
-                        self.hass,
+                    self._reference_defaults = self._edit_reference_defaults(
                         self._edit_source_entities,
                         self._reference_defaults.get(CONF_PLATFORM),
                         boiler_temperature_calibration_template=(
@@ -14171,16 +14484,14 @@ class VirtualOptionsFlowHandler(_TrackerSettingsFlow, _AirQualityLogicFlow, conf
                     )
                     inferred_reference_defaults: dict[str, Any] = {}
                     try:
-                        inferred_reference_defaults = _reference_entity_defaults(
-                            self.hass,
+                        inferred_reference_defaults = self._edit_reference_defaults(
                             submitted_sources,
                         )
                         if (
                             len(submitted_sources) == 1
                             and target_platform in VIRTUAL_ENTITY_DOMAINS
                         ):
-                            self._reference_defaults = _reference_entity_defaults(
-                                self.hass,
+                            self._reference_defaults = self._edit_reference_defaults(
                                 submitted_sources,
                                 target_platform,
                                 (target_platform,),

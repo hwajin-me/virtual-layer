@@ -15,9 +15,14 @@ from custom_components.virtual_layer.config_flow import (
     _apply_matter_fan_percentage_helper, _apply_matter_fan_level_helper,
     _fan_reported_percentage_prefix, _fan_source_role_defaults,
     _xiaomi_fan_availability_template,
+    _native_reference_templates,
 )
 from custom_components.virtual_layer.fan import FAN_SCHEMA, VirtualFan
 from custom_components.virtual_layer.fan_options import manual_preset_mode
+from custom_components.virtual_layer.fan_options import (
+    migrate_legacy_fan_attributes,
+    normalize_preset_modes,
+)
 from custom_components.virtual_layer.humidifier import HUMIDIFIER_SCHEMA, VirtualHumidifier
 
 
@@ -179,6 +184,24 @@ def test_manual_selection_preserves_current_then_uses_stable_priority(hass, curr
     hass.states.async_set("fan.aliases", "on", {"preset_modes": modes, "preset_mode": current})
     assert manual_preset_mode(modes, current) == expected
     assert Template(_fan_manual_preset_prefix("fan.aliases") + "{{ manual }}", hass).async_render() == expected
+
+
+def test_preset_mode_normalization_repairs_legacy_presentation_duplicates(hass):
+    """Keep source command spellings while removing duplicate UI choices."""
+    modes = ["직풍", " 자연풍 ", "스마트", "직풍", "자연풍", "수면"]
+    expected = ["직풍", "자연풍", "스마트", "수면"]
+
+    assert normalize_preset_modes(modes) == expected
+    assert migrate_legacy_fan_attributes({"modes": modes})["modes"] == expected
+    sources = ["fan.first", "fan.second"]
+    hass.states.async_set(sources[0], "on", {"preset_modes": modes[:3]})
+    hass.states.async_set(sources[1], "on", {"preset_modes": modes[3:]})
+    templates = _native_reference_templates(
+        "fan", sources, [hass.states.get(source) for source in sources]
+    )
+    assert Template(templates["preset_modes"], hass).async_render(
+        parse_result=True
+    ) == expected
 
 
 @pytest.mark.parametrize("step", [0, -1, "nan", "inf"])

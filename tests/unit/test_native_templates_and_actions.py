@@ -10,6 +10,7 @@ import pytest
 import voluptuous as vol
 from unittest.mock import patch
 from homeassistant.components.camera import CameraEntityFeature
+from homeassistant.components.alarm_control_panel import AlarmControlPanelEntityFeature
 from homeassistant.components.climate import ClimateEntityFeature, HVACMode
 from homeassistant.components.climate.const import HVACAction
 from homeassistant.components.cover import CoverEntityFeature
@@ -282,6 +283,10 @@ def test_light_response_delay_defers_source_events_and_replaces_timer():
         assert not light._response_pending
 
 from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
+from custom_components.virtual_layer.alarm_control_panel import (
+    ENTITY_SCHEMA as ALARM_CONTROL_PANEL_SCHEMA,
+    VirtualAlarmControlPanel,
+)
 from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClimate
 from custom_components.virtual_layer.const import (
     ATTR_UNIQUE_ID,
@@ -349,6 +354,37 @@ def _base(entity_id: str, initial_value: str, **extra):
         CONF_INITIAL_VALUE: initial_value,
         **extra,
     }
+
+
+async def test_alarm_custom_bypass_skips_an_unsupported_alarmo_source(hass):
+    """Unsupported Alarmo arm modes must never receive a proxied service call."""
+    source = "alarm_control_panel.alarmo"
+    hass.states.async_set(source, "disarmed", {"supported_features": 0})
+    entity = VirtualAlarmControlPanel(
+        ALARM_CONTROL_PANEL_SCHEMA(
+            _base(
+                "alarm_control_panel.virtual_alarm",
+                "disarmed",
+                code_arm_required=False,
+                source_entities=[source],
+            )
+        ),
+        False,
+    )
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    calls = []
+
+    async def capture(call):
+        calls.append(call)
+
+    hass.services.async_register("alarm_control_panel", "alarm_arm_custom_bypass", capture)
+
+    await entity.async_alarm_arm_custom_bypass()
+
+    assert calls == []
+    assert entity._attr_state == "armed_custom_bypass"
 
 
 def test_command_contracts_match_wrapped_platform_methods():

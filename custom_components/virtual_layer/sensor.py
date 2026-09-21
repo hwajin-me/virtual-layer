@@ -13,6 +13,7 @@ import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.components.sensor import (
     DEVICE_CLASS_STATE_CLASSES,
+    DEVICE_CLASS_UNITS,
     NON_NUMERIC_DEVICE_CLASSES,
     SensorDeviceClass,
     SensorEntity,
@@ -290,6 +291,8 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         )
         if not isinstance(self._attr_native_unit_of_measurement, (str, type(None))):
             self._attr_native_unit_of_measurement = None
+        if self._attr_device_class == SensorDeviceClass.CONDUCTIVITY:
+            self._attr_native_unit_of_measurement = normalize_unit(self._attr_native_unit_of_measurement) or None
         self._last_valid_unit = normalize_unit(self._attr_native_unit_of_measurement) or None
         if (
             not self._attr_native_unit_of_measurement
@@ -298,10 +301,11 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             self._attr_native_unit_of_measurement = UNITS_OF_MEASUREMENT[
                 self._attr_device_class
             ]
-        # Particulate sensors must retain their default on the first missing
+        # These numeric sensors retain their default on the first missing
         # source-unit render, before any valid source metadata has arrived.
         if self._attr_device_class in {
             SensorDeviceClass.PM1, SensorDeviceClass.PM25, SensorDeviceClass.PM10, "pm4",
+            SensorDeviceClass.CONDUCTIVITY,
         }:
             self._last_valid_unit = normalize_unit(self._attr_native_unit_of_measurement) or None
         # Keep this alias for old callers while SensorEntity uses the native unit.
@@ -439,6 +443,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             self._attr_available = self._meter_settings["always_available"]
             if self._meter_settings["periodically_resetting"]:
                 self._utility_meter_last_source = None
+            self._update_attributes()
             self._schedule_state_update()
             return
         previous = self._utility_meter_last_source
@@ -567,6 +572,13 @@ class VirtualSensor(VirtualEntity, SensorEntity):
     def _coerce_native_value(self, value):
         if value is None:
             return None
+        if self._attr_device_class in {SensorDeviceClass.PH, SensorDeviceClass.CONDUCTIVITY}:
+            if self._attr_native_unit_of_measurement not in DEVICE_CLASS_UNITS[self._attr_device_class]:
+                raise ValueError("Water measurement has an incompatible unit")
+            # Conductivity cannot be negative. Do not clamp pH to 0..14:
+            # concentrated solutions can legitimately fall outside that range.
+            if self._attr_device_class == SensorDeviceClass.CONDUCTIVITY and float(value) < 0:
+                raise ValueError("Conductivity must be non-negative")
         if isinstance(value, bool):
             raise ValueError("Sensor value must not be a boolean")
         if str(value).lower() in {"unknown", "unavailable", "none"}:

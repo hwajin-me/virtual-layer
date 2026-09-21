@@ -13,6 +13,7 @@ import voluptuous as vol
 
 from custom_components.virtual_layer.const import COMPONENT_DOMAIN
 from custom_components.virtual_layer.config_flow import _entity_form_defaults, _build_entity_config
+from custom_components.virtual_layer.config_flow import InvalidFieldValue
 
 
 async def setup_meter(hass, **options):
@@ -335,3 +336,89 @@ async def test_edit_interval_within_same_cycle(hass, cycle, old, new):
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
         assert Decimal(hass.states.get("sensor.billing").state) == 40
+
+
+@pytest.mark.parametrize("field,value", [
+    ("utility_meter_cycle", "invalid"), ("utility_meter_days", 0),
+    ("utility_meter_start", "invalid"), ("utility_meter_currency", "wrong"),
+    ("utility_meter_rate", "nan"), ("utility_meter_tiers", [{}]),
+    ("utility_meter_tariff_entity", "sensor.energy"),
+    ("utility_meter_current_value", "nan"), ("utility_meter_current_value", -1),
+])
+def test_invalid_meter_settings_identify_the_visible_field(field, value):
+    defaults = _entity_form_defaults("Billing", {
+        "platform": "sensor", "name": "Billing", "entity_id": "sensor.billing",
+        "initial_value": "0", "source_entities": ["sensor.physical_energy"],
+        "utility_meter_enabled": True,
+    })
+    defaults[field] = value
+    with pytest.raises(InvalidFieldValue) as error:
+        _build_entity_config(defaults)
+    assert error.value.field_name == field
+
+
+def test_disable_broken_meter_preserves_settings_and_removes_old_correction():
+    defaults = _entity_form_defaults("Billing", {
+        "platform": "sensor", "name": "Billing", "entity_id": "sensor.billing",
+        "initial_value": "0", "source_entities": ["sensor.physical_energy"],
+        "utility_meter_enabled": True, "utility_meter_cycle": "days",
+        "utility_meter_start": "", "utility_meter_days": 17,
+        "utility_meter_correction": "42", "utility_meter_correction_id": "old",
+    })
+    defaults["utility_meter_enabled"] = False
+    _, saved = _build_entity_config(defaults)
+    assert saved["utility_meter_enabled"] is False
+    assert saved["utility_meter_days"] == 17
+    assert "utility_meter_correction_id" not in saved
+    defaults = _entity_form_defaults("Billing", saved)
+    defaults["utility_meter_enabled"] = True
+    defaults["utility_meter_start"] = "2026-01-01T00:00:00"
+    _, saved = _build_entity_config(defaults)
+    assert saved["utility_meter_enabled"] is True
+    assert saved["utility_meter_days"] == 17
+
+
+async def test_outage_baseline_is_persisted_before_recovery(hass):
+    entry = await setup_meter(hass, utility_meter_periodically_resetting=True)
+    hass.states.async_set("sensor.physical_energy", "unavailable")
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.billing").attributes["last_valid_state"] is None
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    hass.states.async_set("sensor.physical_energy", "120")
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert Decimal(hass.states.get("sensor.billing").state) == 0
+
+
+async def test_real_edit_flow_keeps_inputs_and_reports_meter_field(hass):
+    import json
+    from custom_components.virtual_layer import config_flow as flow
+    from tests.flow_helpers import suggested_form_values
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={"group_name": "ui"},
+                            options={"devices": {"Room": [{"platform": "sensor", "name": "Selected", "entity_key": "selected"}]}})
+    entry.add_to_hass(hass)
+    manager = hass.config_entries.options
+    result = await manager.async_init(entry.entry_id, data={flow.CONF_ACTION: flow.ACTION_EDIT_ENTITY})
+    result = await manager.async_configure(result["flow_id"], {flow.CONF_ENTITY_KEY: json.dumps(["key", "selected"], separators=(",", ":"))})
+    result = await manager.async_configure(result["flow_id"], {flow.CONF_REFERENCE_ENTITY_ID: []})
+    defaults = flow._flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+    submitted = {**defaults, flow.CONF_SOURCE_ENTITIES_TEXT: "sensor.physical_energy",
+                 "utility_meter_enabled": True, "utility_meter_cycle": "cron",
+                 "utility_meter_cron": "bad cron", "utility_meter_rate": 123}
+    result = await manager.async_configure(result["flow_id"], submitted)
+    assert result["type"] == "form"
+    assert result["errors"]["utility_meter_cron"] == "invalid_domain_options"
+    reopened = flow._flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+    assert reopened["utility_meter_rate"] == 123
+    assert reopened["utility_meter_cron"] == "bad cron"
+    result = await manager.async_configure(result["flow_id"], {**reopened, "utility_meter_cron": "0 0 * * *"})
+    assert not result.get("errors")
+    if result.get("step_id") == "edit_entity_helper":
+        result = await manager.async_configure(result["flow_id"], {flow.CONF_HELPER_UPDATE_MODE: flow.HELPER_UPDATE_KEEP})
+        values = flow._flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+        assert values["utility_meter_rate"] == 123
+        result = await manager.async_configure(result["flow_id"], values)
+    assert result["type"] == "create_entry"
+    saved = entry.options["devices"]["Room"][0]
+    assert saved["initial_value"] == "0"
+    assert saved["utility_meter_cron"] == "0 0 * * *"

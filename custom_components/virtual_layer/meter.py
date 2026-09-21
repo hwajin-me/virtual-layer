@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 
 from cronsim import CronSim, CronSimError
 from homeassistant.util import dt as dt_util
+from homeassistant.helpers import config_validation as cv
 import voluptuous as vol
 
 PREFIX = "utility_meter_"
@@ -37,42 +38,64 @@ def number(value):
 def options(config):
     """Validate the UI/storage contract without discarding unknown fields."""
     result = {key: config.get(PREFIX + key, default) for key, default in DEFAULTS.items()}
+    def invalid(key, message):
+        return vol.Invalid(message, path=[PREFIX + key])
+
+    def field_number(key, value):
+        try:
+            return number(value)
+        except vol.Invalid as err:
+            raise invalid(key, str(err)) from err
+
     for key in ("enabled", "delta_values", "net_consumption", "periodically_resetting", "always_available"):
         if not isinstance(result[key], bool):
-            raise vol.Invalid(key + " must be a boolean")
+            raise invalid(key, key + " must be a boolean")
     if result["cycle"] not in CYCLES:
-        raise vol.Invalid("Invalid meter cycle")
+        raise invalid("cycle", "Invalid meter cycle")
     for key, minimum, maximum in (("days", 1, 36600), ("offset", 0, 40319)):
-        value = number(result[key])
+        value = field_number(key, result[key])
         if value != int(value) or not minimum <= value <= maximum:
-            raise vol.Invalid("Invalid " + key)
+            raise invalid(key, "Invalid " + key)
         result[key] = int(value)
     start = result["start"]
     if not isinstance(start, str) or (start and dt_util.parse_datetime(start) is None):
-        raise vol.Invalid("Start must be an ISO date/time")
+        raise invalid("start", "Start must be an ISO date/time")
     if result["cycle"] == "days" and not start:
-        raise vol.Invalid("An N-day cycle needs a start date/time")
+        raise invalid("start", "An N-day cycle needs a start date/time")
     if result["cycle"] == "cron":
         try:
             next(CronSim(result["cron"], dt_util.now()))
         except (CronSimError, ValueError, TypeError, AttributeError, StopIteration) as err:
-            raise vol.Invalid("Invalid or impossible cron schedule") from err
+            raise invalid("cron", "Invalid or impossible cron schedule") from err
     for key in ("rate", "base_charge"):
-        if number(result[key]) < 0:
-            raise vol.Invalid(key + " cannot be negative")
+        if field_number(key, result[key]) < 0:
+            raise invalid(key, key + " cannot be negative")
     currency = result["currency"]
     if not isinstance(currency, str) or len(currency) != 3 or not currency.isalpha() or not currency.isascii():
-        raise vol.Invalid("Currency must be a three-letter code")
+        raise invalid("currency", "Currency must be a three-letter code")
+    result["currency"] = currency.upper()
+    for key in ("tariff_entity", "tariff"):
+        if not isinstance(result[key], str):
+            raise invalid(key, "Expected text")
+    if result["tariff_entity"]:
+        try:
+            selector = cv.entity_id(result["tariff_entity"])
+            if selector.split(".", 1)[0] not in ("select", "input_select"):
+                raise ValueError("Expected a select or input_select entity")
+        except (vol.Invalid, ValueError) as err:
+            raise invalid("tariff_entity", str(err)) from err
+        if not result["tariff"].strip():
+            raise invalid("tariff", "Tariff name is required")
     tiers = result["tiers"]
     if not isinstance(tiers, list) or len(tiers) > 100:
-        raise vol.Invalid("Expected at most 100 billing tiers")
+        raise invalid("tiers", "Expected at most 100 billing tiers")
     previous = Decimal(0)
     for tier in tiers:
         if not isinstance(tier, dict) or set(tier) != {"up_to", "rate"}:
-            raise vol.Invalid("Each tier needs up_to and rate")
-        limit = number(tier["up_to"])
-        if limit <= previous or number(tier["rate"]) < 0:
-            raise vol.Invalid("Tier bounds must increase and rates must be non-negative")
+            raise invalid("tiers", "Each tier needs up_to and rate")
+        limit = field_number("tiers", tier["up_to"])
+        if limit <= previous or field_number("tiers", tier["rate"]) < 0:
+            raise invalid("tiers", "Tier bounds must increase and rates must be non-negative")
         previous = limit
     return result
 
@@ -123,8 +146,15 @@ def next_reset(settings, after):
     else:
         anchor = dt_util.as_local(anchor)
     anchor += timedelta(minutes=settings["offset"])
-    if cycle in ("quarter-hourly", "hourly", "daily", "weekly", "days"):
-        step = timedelta(minutes=15 if cycle == "quarter-hourly" else 60) if cycle in ("quarter-hourly", "hourly") else timedelta(days={
+    if cycle in ("quarter-hourly", "hourly"):
+        # Fixed sub-day intervals must include the repeated hour at DST fall
+        # back. Wall-clock subtraction would silently skip that reset.
+        step = timedelta(minutes=15 if cycle == "quarter-hourly" else 60)
+        origin = dt_util.as_utc(anchor)
+        count = max(0, (dt_util.as_utc(after) - origin) // step + 1)
+        return dt_util.as_local(origin + count * step)
+    if cycle in ("daily", "weekly", "days"):
+        step = timedelta(days={
             "daily": 1, "weekly": 7, "days": settings["days"],
         }[cycle])
         count = max(0, (local - anchor) // step)

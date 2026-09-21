@@ -61,6 +61,30 @@ class VirtualAlarmControlPanel(GenericVirtualEntity, AlarmControlPanelEntity):
         self._attr_state = state
         self.async_write_ha_state()
 
+    def _source_supports_proxy_command(self, command: str, entity_id: str) -> bool:
+        """Do not send unsupported arm modes to a source alarm integration.
+
+        Alarmo versions which do not advertise ``ARM_CUSTOM_BYPASS`` reject
+        the service call at Home Assistant's entity-service layer.  A virtual
+        panel can still use a configured action for that command (or retain
+        its local optimistic state), but its source must not receive a call it
+        declares unsupported.
+        """
+        feature = self._COMMAND_FEATURES.get(command)
+        if feature is None:
+            return True
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            # Preserve legacy proxy behaviour until a source publishes state.
+            return True
+        raw_features = state.attributes.get("supported_features", 0)
+        if isinstance(raw_features, bool):
+            return False
+        try:
+            return bool(int(raw_features) & int(feature))
+        except (TypeError, ValueError, OverflowError):
+            return False
+
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         """Disarm the virtual panel after running its configured action."""
         await self._async_set_alarm_state("disarmed")

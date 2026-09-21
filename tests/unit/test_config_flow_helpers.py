@@ -15,6 +15,7 @@ from tests.flow_helpers import suggested_form_values
 import voluptuous as vol
 import yaml
 from homeassistant.components.camera import CameraEntityFeature
+from homeassistant.components.alarm_control_panel import AlarmControlPanelEntityFeature
 from homeassistant.components.climate import ClimateEntityFeature
 from homeassistant.components.climate.const import HVACAction
 from homeassistant.components.media_player import MediaPlayerEntityFeature
@@ -1469,6 +1470,23 @@ def test_source_command_helpers_cover_every_proxiable_domain_command(hass, platf
             command,
         )
         assert sequence[0]["action"] == f"{platform}.{service}"
+
+
+def test_alarmo_source_helpers_omit_unadvertised_custom_bypass(hass):
+    """Do not generate an Alarmo action Core will reject by feature bit."""
+    entity_id = "alarm_control_panel.alarmo"
+    hass.states.async_set(
+        entity_id,
+        "disarmed",
+        {"supported_features": int(AlarmControlPanelEntityFeature.ARM_AWAY)},
+    )
+    state = hass.states.get(entity_id)
+    assert state is not None
+
+    actions = _source_command_actions("alarm_control_panel", [entity_id], [state])
+
+    assert set(actions) == {"alarm_arm_away", "alarm_disarm"}
+    assert "alarm_arm_custom_bypass" not in actions
 
 
 @pytest.mark.parametrize("platform", sorted(VIRTUAL_ENTITY_COMMANDS))
@@ -7549,6 +7567,7 @@ def test_options_schema_allows_deleting_but_not_editing_invalid_stored_entity():
     assert action_selector.config["translation_key"] == "options_action"
     assert action_selector.config["options"] == [
         "add_entity",
+        "copy_device",
         "delete_entity",
         "manage_devices",
         "delete_device",
@@ -7566,8 +7585,9 @@ def test_options_schema_places_copy_before_edit_for_valid_entities():
     )
     action_selector = next(iter(schema.schema.values()))
 
-    assert action_selector.config["options"][:4] == [
+    assert action_selector.config["options"][:5] == [
         "add_entity",
+        "copy_device",
         "copy_entity",
         "edit_entity",
         "delete_entity",
