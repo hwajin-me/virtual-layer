@@ -2,7 +2,9 @@
   "domain": "virtual_layer",
   "name": "Virtual Device and Entity Layer",
   "after_dependencies": [
-    "bluetooth"
+    "bluetooth",
+    "mqtt",
+    "onvif"
   ],
   "codeowners": [
     "@twrecked",
@@ -16,5 +18,5 @@
     "aiofiles",
     "cronsim==2.7"
   ],
-  "version": "1.0.134"
+  "version": "1.0.135"
 }

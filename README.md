@@ -15,6 +15,30 @@ and manage them from `Settings > Devices & services > Virtual Layer`.
 
 ## Contents
 
+Cameras with an ONVIF patrol target automatically create
+`switch.<camera_object_id>_patrol` on the same Device. Turn this switch on or off
+from dashboards or automations to start or stop patrol. Its state follows the
+camera's running patrol, including service calls and failures; it does not restore
+a stale on state after restart. The camera's configured automatic-start setting
+still applies. Removing the camera or its ONVIF patrol target removes the generated
+control when the entry reloads.
+
+Patrol captures the initial ONVIF pan/tilt position when the camera supports
+`GetStatus` and requests an `AbsoluteMove` back on stop (including patrol errors).
+Zoom is unchanged. Unsupported position queries or return moves are logged;
+relative patrol remains available on those cameras. Return commands do not
+guarantee physical arrival before recording resumes.
+
+In camera Domain settings, select a Frigate recording switch **or** enter an
+MQTT base topic such as `frigate/front/recordings`, then set Recording during
+patrol to Off. MQTT uses Home Assistant's configured broker, subscribes to
+`<base>/state`, and publishes non-retained commands to `<base>/set`. It requires
+a known ON/OFF state and confirmation before starting movement. Stop restores
+the previous recording state after requesting return to the initial position.
+Keep leaves recording untouched; On temporarily enables it. Switch and MQTT
+controls are mutually exclusive. A failed restore is logged and retained for
+another stop attempt; abrupt power loss cannot restore the previous state.
+
 - [Features](#features)
 - [Installation](#installation)
 - [UI Configuration](#ui-configuration)

@@ -63,7 +63,10 @@ async def async_setup_entry(
 
     entities = []
     for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN):
-        entity = SWITCH_SCHEMA(entity)
+        entity = SWITCH_SCHEMA({
+            key: value for key, value in entity.items()
+            if key != "_virtual_layer_generated_name_suffix"
+        })
         entities.append(VirtualSwitch(entity, False))
     async_add_entities(entities)
 

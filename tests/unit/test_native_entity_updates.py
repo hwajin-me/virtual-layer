@@ -208,7 +208,9 @@ def test_virtual_camera_builds_bounded_onvif_patrol_moves():
 
     assert list(camera._patrol_moves()) == [
         ("LEFT", None, 0.2),
+        ("RIGHT", None, 0.2),
         ("RIGHT", None, 0.6),
+        ("LEFT", None, 0.6),
     ]
 
 

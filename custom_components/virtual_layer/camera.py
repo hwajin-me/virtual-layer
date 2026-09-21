@@ -43,6 +43,7 @@ from webrtc_models import RTCIceCandidateInit
 
 from . import get_entity_configs
 from .const import *
+from .patrol_recording import PatrolRecording
 from .entity import (
     MAX_LOCAL_MEDIA_BYTES,
     VirtualEntity,
@@ -173,6 +174,7 @@ BASE_SCHEMA = virtual_schema(DEFAULT_CAMERA_VALUE, {
         vol.Coerce(float), vol.Range(min=0, max=1)
     ),
     vol.Optional(CONF_FRIGATE_RECORDING_SWITCH): cv.entity_id,
+    vol.Optional(CONF_FRIGATE_MQTT_RECORDINGS_TOPIC): cv.string,
     vol.Optional(CONF_FRIGATE_MOTION_SWITCH): cv.entity_id,
     vol.Optional(CONF_FRIGATE_RECORDING_DURING_PATROL, default="keep"): vol.In({"keep", "on", "off"}),
     vol.Optional(CONF_FRIGATE_MOTION_DURING_PATROL, default="keep"): vol.In({"keep", "on", "off"}),
@@ -241,6 +243,7 @@ class VirtualCamera(VirtualEntity, Camera):
         self._source_camera_remove_listener: Callable[[], None] | None = None
         self._patrol_task: asyncio.Task[None] | None = None
         self._patrol_lock = asyncio.Lock()
+        self._patrol_origin = None
         self._patrol_enabled = config.get(CONF_ONVIF_PATROL_ENABLED, False)
         self._patrol_target = config.get(CONF_ONVIF_PATROL_TARGET)
         self._patrol_mode = config.get(CONF_ONVIF_PATROL_MODE, "horizontal")
@@ -254,6 +257,9 @@ class VirtualCamera(VirtualEntity, Camera):
             (config.get(CONF_FRIGATE_MOTION_SWITCH), config.get(CONF_FRIGATE_MOTION_DURING_PATROL, "keep")),
         )
         self._frigate_previous_switch_states: dict[str, str] = {}
+        self._mqtt_recording_topic = config.get(CONF_FRIGATE_MQTT_RECORDINGS_TOPIC)
+        self._mqtt_recording = None
+        self._recording_policy = config.get(CONF_FRIGATE_RECORDING_DURING_PATROL, "keep")
 
         _LOGGER.debug(f"VirtualCamera: {self.name} created")
 
@@ -306,6 +312,9 @@ class VirtualCamera(VirtualEntity, Camera):
         data = dict(super().state_attributes or {})
         data.update(self._attr_extra_state_attributes or {})
         data[CONF_IS_ON] = self._attr_is_on
+        data["patrol_running"] = (
+            self._patrol_task is not None and not self._patrol_task.done()
+        )
         return data
 
     @property
@@ -836,8 +845,11 @@ class VirtualCamera(VirtualEntity, Camera):
         """Start a bounded ONVIF PTZ patrol without replacing this camera's feed."""
         if not self._patrol_target:
             raise HomeAssistantError("Configure an ONVIF PTZ camera before starting patrol")
+        if not self._patrol_moves():
+            raise HomeAssistantError("Configure a positive patrol movement range")
         async with self._patrol_lock:
             if self._patrol_task is None or self._patrol_task.done():
+                await self._async_capture_patrol_origin()
                 try:
                     await self._async_set_frigate_patrol_switches(restore=False)
                 except Exception:
@@ -856,15 +868,18 @@ class VirtualCamera(VirtualEntity, Camera):
             if task is not None and task is not asyncio.current_task():
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+                self._patrol_task = None
             try:
                 if task is not None and self._patrol_target:
                     await self._async_call_onvif_ptz({ATTR_ENTITY_ID: self._patrol_target, "move_mode": "Stop"})
             finally:
+                await self._async_return_patrol_origin()
                 await self._async_set_frigate_patrol_switches(restore=True)
-        self.async_write_ha_state()
+                self.async_write_ha_state()
 
     async def _async_patrol_loop(self) -> None:
         """Alternate relative ONVIF movements inside the configured patrol axes."""
+        cancelled = False
         try:
             while True:
                 for pan, tilt, distance in self._patrol_moves():
@@ -878,15 +893,56 @@ class VirtualCamera(VirtualEntity, Camera):
                     await self._async_call_onvif_ptz(data)
                     await asyncio.sleep(self._patrol_interval)
         except asyncio.CancelledError:
+            cancelled = True
             raise
         except Exception as err:  # An unavailable ONVIF integration must not crash the virtual camera.
             _LOGGER.warning("ONVIF patrol for %s stopped: %s", self.entity_id, err)
         finally:
             try:
-                await self._async_set_frigate_patrol_switches(restore=True)
+                if not cancelled:
+                    await self._async_return_patrol_origin()
+                    await self._async_set_frigate_patrol_switches(restore=True)
             finally:
                 self._patrol_task = None
                 self.async_write_ha_state()
+
+    async def _async_capture_patrol_origin(self) -> None:
+        """Snapshot coordinates using the existing ONVIF integration client."""
+        self._patrol_origin = None
+        component = self.hass.data.get("camera")
+        target = component.get_entity(self._patrol_target) if component else None
+        device = getattr(getattr(target, "device", None), "device", None)
+        token = getattr(getattr(target, "profile", None), "token", None)
+        if device is None or token is None:
+            return
+        try:
+            async with asyncio.timeout(10):
+                service = await device.create_ptz_service()
+                status = await service.GetStatus({"ProfileToken": token})
+                pan_tilt = status.Position.PanTilt
+                x, y = float(pan_tilt.x), float(pan_tilt.y)
+                if not all(math.isfinite(value) for value in (x, y)):
+                    raise ValueError("Invalid PTZ coordinates")
+                position = {"x": x, "y": y}
+                if getattr(pan_tilt, "space", None):
+                    position["space"] = pan_tilt.space
+                self._patrol_origin = (service, token, position)
+        except Exception:
+            _LOGGER.warning("Cannot read patrol start position for %s; return unavailable", self.entity_id)
+
+    async def _async_return_patrol_origin(self) -> None:
+        """Return pan/tilt without changing zoom; isolate unsupported devices."""
+        origin, self._patrol_origin = self._patrol_origin, None
+        if origin is None:
+            return
+        service, token, position = origin
+        try:
+            async with asyncio.timeout(10):
+                await service.AbsoluteMove({
+                    "ProfileToken": token, "Position": {"PanTilt": position},
+                })
+        except Exception:
+            _LOGGER.warning("Unable to return %s to patrol start position", self.entity_id)
 
     async def _async_call_onvif_ptz(self, data: dict) -> None:
         """Prefer the public ONVIF action, with the entity-client fallback."""
@@ -897,6 +953,16 @@ class VirtualCamera(VirtualEntity, Camera):
 
     async def _async_set_frigate_patrol_switches(self, *, restore: bool) -> None:
         """Use Frigate's own recording/detection switch entities during patrol."""
+        if self._mqtt_recording_topic and self._recording_policy != "keep":
+            if self._mqtt_recording is None:
+                self._mqtt_recording = PatrolRecording(self.hass, self._mqtt_recording_topic)
+            if restore:
+                try:
+                    await self._mqtt_recording.restore()
+                except Exception:
+                    _LOGGER.warning("Unable to restore Frigate MQTT recordings for %s", self.entity_id)
+            else:
+                await self._mqtt_recording.apply(self._recording_policy)
         for entity_id, requested_state in self._frigate_patrol_switches:
             if not entity_id or requested_state == "keep":
                 continue
@@ -948,13 +1014,29 @@ class VirtualCamera(VirtualEntity, Camera):
         )
 
     def _patrol_moves(self):
-        horizontal = (("LEFT", self._patrol_pan[0]), ("RIGHT", self._patrol_pan[1]))
-        vertical = (("DOWN", self._patrol_tilt[0]), ("UP", self._patrol_tilt[1]))
+        """Return to the starting offset every cycle, including asymmetric ranges.
+
+        ONVIF's public service has one distance for both axes. Move axes
+        separately so a large pan range cannot override a smaller tilt range.
+        Relative movement remains dependent on the device's positioning accuracy.
+        """
+        def axis(negative, positive, bounds, tilt=False):
+            moves = []
+            for direction, distance in (
+                (negative, bounds[0]), (positive, bounds[0]),
+                (positive, bounds[1]), (negative, bounds[1]),
+            ):
+                if distance > 0:
+                    moves.append((None, direction, distance) if tilt else (direction, None, distance))
+            return moves
+
+        horizontal = axis("LEFT", "RIGHT", self._patrol_pan)
+        vertical = axis("DOWN", "UP", self._patrol_tilt, tilt=True)
         if self._patrol_mode == "horizontal":
-            return ((direction, None, distance) for direction, distance in horizontal)
+            return horizontal
         if self._patrol_mode == "vertical":
-            return ((None, direction, distance) for direction, distance in vertical)
-        return ((pan[0], tilt[0], max(pan[1], tilt[1])) for tilt in vertical for pan in horizontal)
+            return vertical
+        return horizontal + vertical
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         backing_fields = {
@@ -1052,3 +1134,13 @@ def validate_domain_options(config) -> None:
     """Require a target when a stored camera enables ONVIF patrol."""
     if config.get(CONF_ONVIF_PATROL_ENABLED) and not config.get(CONF_ONVIF_PATROL_TARGET):
         raise vol.Invalid("ONVIF patrol needs an ONVIF camera target")
+    topic = config.get(CONF_FRIGATE_MQTT_RECORDINGS_TOPIC)
+    if topic:
+        if any(char in topic for char in ("+", "#", "\x00")) or not topic.endswith("/recordings"):
+            raise vol.Invalid("Use a concrete Frigate camera topic ending in /recordings")
+        if config.get(CONF_FRIGATE_RECORDING_SWITCH):
+            raise vol.Invalid("Choose either a recording switch or MQTT topic")
+    if config.get(CONF_FRIGATE_RECORDING_DURING_PATROL, "keep") != "keep" and not (
+        topic or config.get(CONF_FRIGATE_RECORDING_SWITCH)
+    ):
+        raise vol.Invalid("Recording control requires a switch or MQTT topic")

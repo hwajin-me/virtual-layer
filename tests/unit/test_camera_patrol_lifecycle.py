@@ -1,6 +1,7 @@
 """Patrol must not proxy camera-only commands or strand recording disabled."""
 import asyncio
 from unittest.mock import AsyncMock, Mock
+from types import SimpleNamespace
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError
@@ -66,3 +67,47 @@ async def test_unknown_recording_state_prevents_movement(hass):
     with pytest.raises(HomeAssistantError):
         await entity.async_start_patrol()
     assert entity._patrol_task is None
+
+
+@pytest.mark.parametrize("mode", ["horizontal", "vertical", "grid"])
+async def test_asymmetric_patrol_has_zero_net_displacement(hass, mode):
+    entity = camera(hass)
+    entity._patrol_mode = mode
+    entity._patrol_pan = (0.2, 0.7)
+    entity._patrol_tilt = (0.1, 0.3)
+    moves = entity._patrol_moves()
+    assert sum(distance * (1 if pan == "RIGHT" else -1) for pan, tilt, distance in moves if pan) == pytest.approx(0)
+    assert sum(distance * (1 if tilt == "UP" else -1) for pan, tilt, distance in moves if tilt) == pytest.approx(0)
+    assert all(not (pan and tilt) for pan, tilt, distance in moves)
+    assert all(distance <= (0.7 if pan else 0.3) for pan, tilt, distance in moves)
+
+
+async def test_zero_range_rejected_before_disabling_recording(hass):
+    entity = camera(hass)
+    entity._patrol_pan = (0, 0)
+    entity._async_set_frigate_patrol_switches = AsyncMock()
+    with pytest.raises(HomeAssistantError):
+        await entity.async_start_patrol()
+    entity._async_set_frigate_patrol_switches.assert_not_called()
+
+
+async def test_patrol_captures_and_returns_exact_coordinates(hass):
+    entity = camera(hass)
+    service = SimpleNamespace(
+        GetStatus=AsyncMock(return_value=SimpleNamespace(Position=SimpleNamespace(
+            PanTilt=SimpleNamespace(x=-0.25, y=0.4, space="urn:test:space"),
+        ))), AbsoluteMove=AsyncMock(),
+    )
+    target = SimpleNamespace(
+        profile=SimpleNamespace(token="profile1"),
+        device=SimpleNamespace(device=SimpleNamespace(create_ptz_service=AsyncMock(return_value=service))),
+    )
+    hass.data["camera"] = SimpleNamespace(get_entity=lambda _: target)
+    await entity._async_capture_patrol_origin()
+    await entity._async_return_patrol_origin()
+    service.AbsoluteMove.assert_awaited_once_with({
+        "ProfileToken": "profile1",
+        "Position": {"PanTilt": {"x": -0.25, "y": 0.4, "space": "urn:test:space"}},
+    })
+    await entity._async_return_patrol_origin()
+    assert service.AbsoluteMove.await_count == 1

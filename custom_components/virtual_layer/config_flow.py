@@ -3640,6 +3640,12 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
         )
     elif platform == "camera":
         patrol_target = defaults.get(CONF_ONVIF_PATROL_TARGET)
+        recording_switch = defaults.get(CONF_FRIGATE_RECORDING_SWITCH)
+        domain_schema[vol.Optional(CONF_FRIGATE_RECORDING_SWITCH, **(
+            {"default": recording_switch} if recording_switch else {}
+        ))] = selector.EntitySelector(selector.EntitySelectorConfig(domain="switch", integration="frigate"))
+        domain_schema[vol.Optional(CONF_FRIGATE_MQTT_RECORDINGS_TOPIC, default=defaults.get(CONF_FRIGATE_MQTT_RECORDINGS_TOPIC, ""))] = selector.TextSelector()
+        domain_schema[vol.Optional(CONF_FRIGATE_RECORDING_DURING_PATROL, default=defaults.get(CONF_FRIGATE_RECORDING_DURING_PATROL, "keep"))] = selector.SelectSelector(selector.SelectSelectorConfig(options=["keep", "on", "off"], translation_key="frigate_patrol_state"))
         patrol_target_marker = (
             vol.Optional(CONF_ONVIF_PATROL_TARGET, default=patrol_target)
             if patrol_target
@@ -5165,17 +5171,13 @@ def _build_entity_config(
             elif value is not None:
                 domain_options[field_name] = value
     elif platform == "camera":
-        patrol_fields = (
-            CONF_ONVIF_PATROL_ENABLED, CONF_ONVIF_PATROL_TARGET,
-            CONF_ONVIF_PATROL_MODE, CONF_ONVIF_PATROL_INTERVAL,
-            CONF_ONVIF_PATROL_SPEED, CONF_ONVIF_PATROL_PAN_MIN,
-            CONF_ONVIF_PATROL_PAN_MAX, CONF_ONVIF_PATROL_TILT_MIN,
-            CONF_ONVIF_PATROL_TILT_MAX,
-        )
+        patrol_fields = CAMERA_PATROL_FORM_FIELDS
         for field_name in patrol_fields:
             domain_options.pop(field_name, None)
             if field_name in user_input:
                 value = user_input[field_name]
+                if field_name in {CONF_FRIGATE_RECORDING_SWITCH, CONF_FRIGATE_MQTT_RECORDINGS_TOPIC} and not value:
+                    continue
                 if field_name == CONF_ONVIF_PATROL_TARGET:
                     value = str(value or "").strip()
                     if value:
@@ -5186,7 +5188,7 @@ def _build_entity_config(
                         if not value.startswith("camera."):
                             raise InvalidEntityReference(field_name)
                     else:
-                        value = None
+                        continue
                 domain_options[field_name] = value
 
     # The hold time is deliberately a dedicated UI-only control rather than a
@@ -11284,6 +11286,10 @@ def _entity_form_defaults(
         for key, value in entity.items()
         if key not in _DOMAIN_OPTION_RESERVED_KEYS
     }
+    if platform == "camera":
+        for field in CAMERA_PATROL_FORM_FIELDS:
+            if field in domain_options:
+                defaults[field] = domain_options.pop(field)
     if platform == "sensor":
         for key, default in meter.DEFAULTS.items():
             field = meter.PREFIX + key

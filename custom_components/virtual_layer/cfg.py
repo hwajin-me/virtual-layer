@@ -1062,6 +1062,45 @@ class BlendedCfg:
         unique_id = entity[ATTR_UNIQUE_ID]
         device_id = entity[ATTR_DEVICE_ID]
         object_id = entity_id.split(".", 1)[1]
+        if platform == "camera" and entity.get(CONF_ONVIF_PATROL_TARGET):
+            patrol_uid = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}patrol"
+            self.entities.setdefault("switch", []).append({
+                **_entity_device_info({
+                    key: entity[key] for key in (
+                        ATTR_DEVICE_ID, CONF_MANUFACTURER, CONF_MODEL,
+                        CONF_SW_VERSION, CONF_HW_VERSION, CONF_SERIAL_NUMBER,
+                        CONF_CONFIGURATION_URL, CONF_SUGGESTED_AREA, CONF_VIA_DEVICE_ID,
+                    ) if key in entity
+                }),
+                CONF_NAME: f"{entity[CONF_NAME]} - Patrol",
+                ATTR_ENTITY_ID: self._reserve_entity_id(
+                    "switch", f"switch.{object_id}_patrol", patrol_uid,
+                ),
+                ATTR_UNIQUE_ID: patrol_uid,
+                ATTR_DEVICE_ID: device_id,
+                CONF_INITIAL_VALUE: "off",
+                CONF_INITIAL_AVAILABILITY: True,
+                CONF_PERSISTENT: False,
+                CONF_ICON: "mdi:cctv",
+                CONF_SOURCE_ENTITIES: [entity_id],
+                CONF_VALUE_TEMPLATE: (
+                    "{{ state_attr(" + repr(entity_id) + ", 'patrol_running') == true }}"
+                ),
+                CONF_AVAILABILITY_TEMPLATE: (
+                    "{{ states(" + repr(entity_id) + ") not in ['unknown', 'unavailable'] }}"
+                ),
+                CONF_COMMAND_ACTIONS: {
+                    command: {
+                        "optimistic": False,
+                        "sequence": [{
+                            "action": f"virtual_layer.{service}_camera_patrol",
+                            "target": {ATTR_ENTITY_ID: entity_id},
+                        }],
+                    }
+                    for command, service in (("turn_on", "start"), ("turn_off", "stop"))
+                },
+                CONF_ATTRIBUTES: {"virtual_entity_id": entity_id},
+            })
         source_entities = _diagnostic_source_entities(entity)
         configuration = _diagnostic_configuration(entity, platform)
         diagnostics = [(
