@@ -3375,7 +3375,7 @@ def test_native_literal_templates_normalize_home_assistant_enums(
     assert Template(template, hass).async_render(parse_result=True) == expected
 
 
-def test_climate_source_helper_serializes_enum_snapshot_fallback(hass):
+def test_climate_source_helper_does_not_restore_stale_enum_activity(hass):
     hass.states.async_set(
         "climate.boiler",
         "heat",
@@ -3390,7 +3390,7 @@ def test_climate_source_helper_serializes_enum_snapshot_fallback(hass):
 
     assert "<HVACAction" not in template
     hass.states.async_set("climate.boiler", "heat", {"hvac_action": None})
-    assert Template(template, hass).async_render(parse_result=True) == "heating"
+    assert Template(template, hass).async_render(parse_result=True) is None
 
 
 def test_native_template_parser_repairs_legacy_enum_repr(hass):

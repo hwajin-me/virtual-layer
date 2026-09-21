@@ -135,6 +135,32 @@ async def main():
             await hass.data[DATA_COMPONENT].async_remove_entity(group.entity_id)
             assert group._response_refresh_cancel is None
             assert group._group_refresh_task is None or group._group_refresh_task.done()
+
+            single = VirtualLight(LIGHT_SCHEMA({
+                "name": "Slow single", "entity_id": "light.slow_single",
+                "initial_value": "off", "matter_light_type": "color_temperature",
+                "source_entities": [fast.entity_id], "persistent": False,
+                "light_response_delay": 1, "light_response_retries": 1,
+                "native_templates": {
+                    "is_on": "{{ is_state(" + repr(fast.entity_id) + ", 'on') }}",
+                },
+            }), False)
+            await hass.data[DATA_COMPONENT].async_add_entities([single])
+            await fast.async_turn_off()
+            fast.calls.clear()
+            fast.responded.clear()
+            fast.drop_remaining = 1
+            await single.async_turn_on(brightness=190)
+            assert single.is_on and single.brightness == 190
+            async with asyncio.timeout(8):
+                await fast.responded.wait()
+            await asyncio.sleep(1.2)
+            assert len(fast.calls) == 2 and single.is_on
+            await fast.async_turn_off()
+            await hass.async_block_till_done()
+            assert not single.is_on
+            await hass.data[DATA_COMPONENT].async_remove_entity(single.entity_id)
+            assert single._response_refresh_cancel is None
         finally:
             await hass.async_stop()
             logging.getLogger().removeHandler(errors)
@@ -143,6 +169,7 @@ async def main():
             "home_assistant": HA_VERSION, "matrix": results,
             "delayed_bulb_retry": "passed", "healthy_bulb_not_resent": "passed",
             "timer_cleanup": "passed", "error_logs": errors.errors,
+            "single_bulb_retry_and_external_change": "passed",
             "source_devices": "simulated LightEntity instances",
         }, indent=2))
 

@@ -21,6 +21,7 @@ from homeassistant.components.humidifier import (
 )
 from homeassistant.components.light import ATTR_FLASH, ColorMode, LightEntityFeature
 from homeassistant.components.media_player import (
+    MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
     RepeatMode,
@@ -138,8 +139,9 @@ async def test_light_group_opposite_command_cycle_does_not_deadlock(hass):
 
 
 @pytest.mark.asyncio
-async def test_light_group_new_command_cancels_inflight_refresh(hass):
-    sources = ["light.first", "light.second"]
+@pytest.mark.parametrize("source_count", [1, 2])
+async def test_light_group_new_command_cancels_inflight_refresh(hass, source_count):
+    sources = ["light.first", "light.second"][:source_count]
     for source in sources:
         hass.states.async_set(source, "off")
     entity = VirtualLight(LIGHT_SCHEMA(_base(
@@ -170,7 +172,7 @@ async def test_light_group_new_command_cancels_inflight_refresh(hass):
         await asyncio.wait_for(entity.async_turn_off(), 1)
         await asyncio.gather(task, return_exceptions=True)
         assert task.cancelled()
-        assert calls.await_count == 2
+        assert calls.await_count == source_count
         assert all(call.args[0].service == "turn_off" for call in calls.await_args_list)
         assert not entity.is_on
 
@@ -1078,6 +1080,50 @@ def test_humidifier_initial_and_restored_reading_ignores_target_range(humidity):
     }), config)
     assert entity.current_humidity == 100 - humidity
     assert entity.target_humidity == 60
+
+
+@pytest.mark.parametrize("humidity", [0, 15, 61, 90, 100])
+def test_climate_initial_restored_and_templated_reading_ignores_target_range(
+    hass, humidity
+):
+    """Climate must report a real measurement, not a clamped setpoint."""
+    config = CLIMATE_SCHEMA(
+        _base(
+            "climate.measured",
+            "off",
+            hvac_modes=["off", "dry"],
+            current_humidity=humidity,
+            min_humidity=30,
+            max_humidity=80,
+            target_humidity=50,
+            native_templates={
+                "current_humidity": "{{ states('sensor.measured_humidity') | float(none) }}",
+                "min_humidity": "{{ 35 }}",
+                "max_humidity": "{{ 70 }}",
+            },
+        )
+    )
+    entity = VirtualClimate(config, False)
+    entity.hass = hass
+    entity._create_state(config)
+    assert entity.current_humidity == humidity
+    assert entity.target_humidity == 50
+
+    entity._restore_state(
+        State("climate.measured", "off", {"current_humidity": 100 - humidity}),
+        config,
+    )
+    assert entity.current_humidity == 100 - humidity
+
+    entity.async_schedule_update_ha_state = Mock()
+    hass.states.async_set("sensor.measured_humidity", str(humidity))
+    entity._apply_templates()
+    assert entity.current_humidity == humidity
+    assert entity.min_humidity == 35
+    assert entity.max_humidity == 70
+    hass.states.async_set("sensor.measured_humidity", "unavailable")
+    entity._apply_templates()
+    assert entity.current_humidity is None
 
 
 @pytest.mark.parametrize("humidity", [0, 15, 61, 90, 100])
@@ -2650,6 +2696,41 @@ def test_media_remote_and_siren_templates_refresh_features(hass):
     assert SirenEntityFeature.TONES in siren.supported_features
     assert SirenEntityFeature.VOLUME_SET not in siren.supported_features
     assert SirenEntityFeature.DURATION not in siren.supported_features
+
+
+@pytest.mark.asyncio
+async def test_media_player_proxies_artwork_from_an_apple_tv_style_source(hass):
+    """Artwork remains available when a source only exposes an image endpoint."""
+
+    class AppleTvStylePlayer(MediaPlayerEntity):
+        async def async_get_media_image(self):
+            return b"apple-tv-artwork", "image/jpeg"
+
+    source_id = "media_player.apple_tv"
+    source = AppleTvStylePlayer()
+    source.entity_id = source_id
+    hass.states.async_set(source_id, "playing", {"media_title": "A show"})
+    hass.data["media_player"] = SimpleNamespace(
+        get_entity=lambda entity_id: source if entity_id == source_id else None,
+    )
+
+    media = VirtualMediaPlayer(
+        GENERIC_ENTITY_SCHEMA(
+            _base(
+                "media_player.virtual_tv",
+                "playing",
+                source_entities=[source_id],
+            )
+        ),
+        False,
+    )
+    media.hass = hass
+    media.entity_id = "media_player.virtual_tv"
+
+    assert media.media_image_url is None
+    assert media.media_image_hash is not None
+    assert media.media_image_local is not None
+    assert await media.async_get_media_image() == (b"apple-tv-artwork", "image/jpeg")
 
 
 async def test_media_player_sound_shuffle_and_repeat_services_update_native_values(

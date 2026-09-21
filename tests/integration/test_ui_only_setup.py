@@ -6312,15 +6312,16 @@ async def test_options_flow_composes_humidifier_from_mixed_source_domains(hass):
 
 
 @pytest.mark.parametrize("humidity", [0, 25, 90, 100])
-async def test_options_flow_edits_humidifier_reading_outside_target_range(hass, humidity):
+@pytest.mark.parametrize("platform", ["climate", "humidifier"])
+async def test_options_flow_edits_humidity_reading_outside_target_range(hass, humidity, platform):
     """Unchanged measured humidity must not prevent saving an existing entity."""
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN,
         data={ATTR_GROUP_NAME: "ui"},
         options={ATTR_DEVICES: {"Bedroom": [{
-            CONF_PLATFORM: "humidifier",
+            CONF_PLATFORM: platform,
             CONF_NAME: "Bedroom Humidifier",
-            ATTR_ENTITY_ID: "humidifier.virtual_bedroom",
+            ATTR_ENTITY_ID: f"{platform}.virtual_bedroom",
             CONF_INITIAL_VALUE: "off",
             CONF_INITIAL_AVAILABILITY: True,
             CONF_PERSISTENT: True,
@@ -6345,7 +6346,7 @@ async def test_options_flow_edits_humidifier_reading_outside_target_range(hass, 
     saved = _first_stored_entity(result)
     assert saved["current_humidity"] == humidity
     assert saved["target_humidity"] == 50
-    assert saved[ATTR_ENTITY_ID] == "humidifier.virtual_bedroom"
+    assert saved[ATTR_ENTITY_ID] == f"{platform}.virtual_bedroom"
     assert saved[CONF_NATIVE_TEMPLATES] == defaults[CONF_NATIVE_VALUE_TEMPLATES]
 
 

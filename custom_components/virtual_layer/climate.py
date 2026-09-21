@@ -379,11 +379,25 @@ def validate_domain_options(config) -> None:
             and not min_temp <= float(config[field_name]) <= max_temp
         ):
             raise vol.Invalid(f"{field_name} must be within the temperature range")
+    # A current humidity is an observation, not a setpoint.  Keep the full
+    # physical percentage range visible even when the appliance only accepts a
+    # narrower target range (for example, a dehumidifier limited to 35–70%).
+    # Otherwise the virtual entity masks the very low/high readings that an
+    # automation needs in order to decide whether to humidify or dehumidify.
     for field_name in (CONF_CURRENT_HUMIDITY, CONF_TARGET_HUMIDITY):
+        lower, upper = (
+            (0, 100)
+            if field_name == CONF_CURRENT_HUMIDITY
+            else (min_humidity, max_humidity)
+        )
         if (
             field_name in config
-            and not is_dynamic(field_name, CONF_MIN_HUMIDITY, CONF_MAX_HUMIDITY)
-            and not min_humidity <= float(config[field_name]) <= max_humidity
+            and not is_dynamic(field_name)
+            and (
+                field_name == CONF_CURRENT_HUMIDITY
+                or not is_dynamic(CONF_MIN_HUMIDITY, CONF_MAX_HUMIDITY)
+            )
+            and not lower <= float(config[field_name]) <= upper
         ):
             raise vol.Invalid(f"{field_name} must be within the humidity range")
     low = config.get(CONF_TARGET_TEMPERATURE_LOW)
@@ -602,7 +616,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             config.get(CONF_TARGET_TEMPERATURE_LOW)
         )
         self._attr_current_humidity = self._bounded_humidity(
-            config.get(CONF_CURRENT_HUMIDITY),
+            config.get(CONF_CURRENT_HUMIDITY), measured=True
         )
         self._attr_target_humidity = self._bounded_humidity(
             config.get(CONF_TARGET_HUMIDITY),
@@ -873,6 +887,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
                 CONF_CURRENT_HUMIDITY,
                 config.get(CONF_CURRENT_HUMIDITY),
             ),
+            measured=True,
         )
         self._attr_target_humidity = self._bounded_humidity(
             state.attributes.get(
@@ -982,7 +997,9 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
                 value = _finite_float(value, float("nan"))
                 if not math.isfinite(value):
                     raise ValueError(f"{name} must render a finite number")
-                value = self._bounded_humidity(value)
+                value = self._bounded_humidity(
+                    value, measured=name == CONF_CURRENT_HUMIDITY
+                )
         elif name in {
             CONF_MIN_TEMP,
             CONF_MAX_TEMP,
@@ -1032,12 +1049,12 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             )
         if self._boiler_dynamic:
             self._boiler_room_target = self._attr_target_temperature
-        for attribute in ("_attr_current_humidity", "_attr_target_humidity"):
-            setattr(
-                self,
-                attribute,
-                self._bounded_humidity(getattr(self, attribute, None)),
-            )
+        self._attr_current_humidity = self._bounded_humidity(
+            self._attr_current_humidity, measured=True
+        )
+        self._attr_target_humidity = self._bounded_humidity(
+            self._attr_target_humidity
+        )
         if (
             self._attr_target_temperature_low is not None
             and self._attr_target_temperature_high is not None
@@ -1113,7 +1130,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             return None
         return max(self._attr_min_temp, min(self._attr_max_temp, temperature))
 
-    def _bounded_humidity(self, humidity):
+    def _bounded_humidity(self, humidity, *, measured=False):
         if humidity is None or isinstance(humidity, bool):
             return None
         try:
@@ -1122,7 +1139,12 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             return None
         if not math.isfinite(humidity):
             return None
-        return max(self._attr_min_humidity, min(self._attr_max_humidity, humidity))
+        minimum, maximum = (
+            (0, 100)
+            if measured
+            else (self._attr_min_humidity, self._attr_max_humidity)
+        )
+        return max(minimum, min(maximum, humidity))
 
     def _validate_temperature(self, temperature) -> float:
         if isinstance(temperature, bool):
@@ -1147,6 +1169,8 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
     def _command_service_data(self, command, method, args, kwargs) -> dict:
         """Use the same Matter setpoint rounding for source actions."""
         data = super()._command_service_data(command, method, args, kwargs)
+        if command == "set_humidity" and "humidity" in data:
+            data["humidity"] = self._validate_humidity(data["humidity"])
         # A composite boiler/air-conditioner action can route a room request
         # to the boiler, whose valid water-temperature range is intentionally
         # wider than the currently active air conditioner. Its generated

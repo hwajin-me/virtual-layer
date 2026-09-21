@@ -628,7 +628,8 @@ class VirtualLight(VirtualEntity, LightEntity):
     def _command_action_spec(self, command):
         spec = super()._command_action_spec(command)
         sources = self._group_sources()
-        if len(sources) < 2 or command not in {"turn_on", "turn_off"}:
+        if (not sources or command not in {"turn_on", "turn_off"}
+                or len(sources) == 1 and self._response_delay <= 0):
             return spec
         # Upgrade only the exact stock pass-through action. Independently
         # configured scripts (including optimistic:false) remain authoritative.
@@ -681,7 +682,19 @@ class VirtualLight(VirtualEntity, LightEntity):
                     setattr(self, name, value)
 
     async def _async_run_command_action(self, command, method, args, kwargs):
-        if len(self._group_sources()) < 2 or command not in {"turn_on", "turn_off"}:
+        sources = self._group_sources()
+        if (not sources or command not in {"turn_on", "turn_off"}
+                or len(sources) == 1 and (
+                    self._response_delay <= 0 or not self._has_stock_group_action(command)
+                )):
+            if (len(sources) == 1 and command in {"turn_on", "turn_off"}
+                    and self._group_target is not None):
+                self._validate_command_action(command, args, kwargs)
+                self._group_revision += 1
+                self._cancel_group_refresh()
+                self._group_target = None
+                self._group_authoritative = False
+                self._response_pending = False
             # A single-source light previously only started its reconciliation
             # window after forwarding the command.  A state event emitted by a
             # slow bulb while that action was running could therefore render
@@ -871,6 +884,11 @@ class VirtualLight(VirtualEntity, LightEntity):
                 finally:
                     self._group_retry_sources = None
             self._response_pending = False
+            # Single bulbs resume following their source after acknowledgement
+            # or the bounded retry window. Group targets retain their existing
+            # authoritative semantics even when individual members disagree.
+            if len(self._group_sources()) == 1 and (not pending or not retries):
+                self._group_authoritative = False
             self._apply_templates()
             if pending and retries and revision == self._group_revision:
                 self._schedule_group_refresh(revision, retries - 1)

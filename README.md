@@ -181,9 +181,23 @@ history attributes expose the controller state.
   not full RGB colour reproduction. Matter cluster/unit conversion remains
   the responsibility of the installed bridge plugin.
 - Korean and English UI translations
+- Single-source lights with the default forwarding action also use the configured
+  response delay and bounded retries. The requested state appears immediately
+  while a slow bulb responds; transition duration is included before checking.
+  Only mismatched bulbs receive retries, and a new command cancels older retries.
+  After acknowledgement or retry exhaustion, the virtual light follows its
+  source again. A zero response delay disables this behavior; custom actions
+  retain their existing semantics.
 - Humidifier target humidity defaults to 5% steps. Edit the humidity adjustment
   step Jinja input in the entity's native settings (for example `{{ 10 }}`).
   An advertised source step or an existing custom value remains authoritative.
+- Climate and humidifier measured humidity is independent of target limits.
+  Generated native-source humidity helpers ignore unavailable and invalid
+  readings, average valid readings, and return unknown when none remain.
+  Missing activity attributes also stay unknown instead of reusing a snapshot.
+  Saved templates are retained until helper regeneration in the edit flow;
+  review custom templates before choosing Force helper. Humidity commands send
+  the same rounded target to actions that the virtual entity displays.
 - Fans and air purifiers retain reported speed percentages in automatic presets.
   When a fan and a separate `number`/`input_number` are selected as sources,
   the selected number supplies speed in **every mode**, including Auto/Sleep
@@ -1191,6 +1205,20 @@ editable on reopening, including repeated or reversed categories. For example,
 `a=0, b=1.1, c=-2` applies a linear correction, while `a=0.01, b=1, c=0`
 applies a quadratic correction. These are mathematical examples, not recommended
 air-quality calibration standards. Use custom Jinja for other formulas.
+
+### Live media-player information
+
+Media-player helpers read playback state, title, app, volume, duration, position,
+and the position timestamp dynamically, even when the sources were off during
+creation. Playing, paused, and buffering sources take priority over other
+sources; positions and volumes are not averaged. Missing playback measurements
+are cleared instead of retaining a previous session's values.
+
+After updating and restarting Home Assistant, edit existing media players and
+regenerate their helpers to replace previously saved empty or averaging
+templates. Automatic mode preserves custom fields; force-helper mode replaces
+custom templates too. Keep-current mode intentionally retains old templates.
+Only information reported by the source can be displayed.
 
 ### MatterBridge 3.10.8 / matterbridge-hass 1.5.0
 

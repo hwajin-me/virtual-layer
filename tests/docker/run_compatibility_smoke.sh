@@ -916,6 +916,22 @@ async def test_config_flow_create_modify_runtime():
             humidifier._apply_native_template_value("target_humidity_step", 10)
             assert humidifier._validate_humidity(53) == 50
         print("Humidifier smoke passed: measured humidity independent of target range")
+        from custom_components.virtual_layer.climate import validate_domain_options as validate_climate
+        for reading in (0, 25, 90, 100):
+            config = CLIMATE_SCHEMA({
+                "name": "Climate measured humidity", "initial_value": "off",
+                "current_humidity": reading, "target_humidity": 50,
+                "min_humidity": 30, "max_humidity": 80,
+            })
+            validate_climate(config)
+            entity = VirtualClimate(config, False)
+            entity._create_state(config)
+            assert entity.current_humidity == reading
+            entity._apply_native_template_value("current_humidity", 100 - reading)
+            entity._native_templates_applied()
+            assert entity.current_humidity == 100 - reading
+            assert entity.target_humidity == 50
+        print("Climate humidity smoke passed: measurements, validation, template updates")
         from custom_components.virtual_layer.config_flow import (
             _fan_manual_preset_prefix, _xiaomi_fan_percentage_template,
             _xiaomi_fan_number_value_template, _fan_manual_preset_actions,

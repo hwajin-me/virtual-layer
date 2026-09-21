@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -111,32 +111,50 @@ def normalize_domain_options(config):
 
 def validate_domain_options(config) -> None:
     """Validate humidifier ranges, modes, and initial values."""
+    native_templates = config.get(CONF_NATIVE_TEMPLATES, {})
+    native_fields = (
+        {
+            name for name, template in native_templates.items()
+            if isinstance(template, str) and template.strip()
+        }
+        if isinstance(native_templates, Mapping)
+        else set()
+    )
+
+    def is_dynamic(*fields: str) -> bool:
+        """Ignore static fallback relationships superseded by native Jinja."""
+        return any(field in native_fields for field in fields)
+
     if str(config.get(CONF_INITIAL_VALUE, "off")).lower() not in {"on", "off"}:
         raise vol.Invalid("initial_value must be on or off")
     action = config.get(CONF_ACTION)
-    if action is not None and _as_action(action) is None:
+    if not is_dynamic(CONF_ACTION) and action is not None and _as_action(action) is None:
         raise vol.Invalid("action is invalid")
     modes = config.get(CONF_MODES, [])
-    if any(not str(mode).strip() for mode in modes):
+    if not is_dynamic("available_modes") and any(not str(mode).strip() for mode in modes):
         raise vol.Invalid("modes cannot contain empty values")
-    if len(set(modes)) != len(modes):
+    if not is_dynamic("available_modes") and len(set(modes)) != len(modes):
         raise vol.Invalid("modes cannot contain duplicate values")
     mode = config.get(CONF_MODE)
-    if mode is not None and mode not in modes:
+    if not is_dynamic(CONF_MODE, "available_modes") and mode is not None and mode not in modes:
         raise vol.Invalid("mode must be included in modes")
 
     minimum = _finite_float(config.get(CONF_MIN_HUMIDITY), float("nan"))
     maximum = _finite_float(config.get(CONF_MAX_HUMIDITY), float("nan"))
-    if not math.isfinite(minimum) or not math.isfinite(maximum) or minimum > maximum:
+    if not is_dynamic(CONF_MIN_HUMIDITY, CONF_MAX_HUMIDITY) and (
+        not math.isfinite(minimum) or not math.isfinite(maximum) or minimum > maximum
+    ):
         raise vol.Invalid("humidity range is invalid")
     for field_name in (CONF_CURRENT_HUMIDITY, CONF_TARGET_HUMIDITY):
-        if field_name not in config:
+        if field_name not in config or is_dynamic(field_name):
+            continue
+        if field_name == CONF_TARGET_HUMIDITY and is_dynamic(CONF_MIN_HUMIDITY, CONF_MAX_HUMIDITY):
             continue
         value = _finite_float(config[field_name], float("nan"))
         lower, upper = (0, 100) if field_name == CONF_CURRENT_HUMIDITY else (minimum, maximum)
         if not math.isfinite(value) or not lower <= value <= upper:
             raise vol.Invalid(f"{field_name} must be within the humidity range")
-    if CONF_TARGET_HUMIDITY_STEP in config:
+    if CONF_TARGET_HUMIDITY_STEP in config and not is_dynamic(CONF_TARGET_HUMIDITY_STEP):
         step = _finite_float(config[CONF_TARGET_HUMIDITY_STEP], 0)
         if step <= 0:
             raise vol.Invalid("target_humidity_step must be positive")
@@ -316,8 +334,9 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         elif name == CONF_MODE:
             value = str(value).strip()
         elif name == CONF_ACTION:
+            rendered_value = value
             value = _as_action(value)
-            if value is None:
+            if value is None and rendered_value not in (None, ""):
                 raise ValueError("Invalid humidifier action")
         elif name == "device_class":
             value = _as_device_class(value)
@@ -438,7 +457,9 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
         self._attr_is_on = self._template_to_bool(value)
         if not self._attr_is_on:
             self._attr_action = HumidifierAction.OFF
-        elif self._attr_action in {None, HumidifierAction.OFF}:
+        elif "action" not in self._native_templates and self._attr_action in {
+            None, HumidifierAction.OFF,
+        }:
             self._attr_action = (
                 HumidifierAction.DRYING
                 if self._attr_device_class == HumidifierDeviceClass.DEHUMIDIFIER

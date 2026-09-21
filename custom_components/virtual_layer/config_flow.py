@@ -376,6 +376,10 @@ DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES = {
 DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
     **DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES,
     "calendar": {"event": None},
+    "humidifier": {
+        **DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES["humidifier"],
+        "action": None,
+    },
     "camera": {"frame_interval": 1, "supported_features": 1},
     "climate": {
         **DOMAIN_NATIVE_TEMPLATE_DEFAULT_VALUES["climate"],
@@ -415,7 +419,10 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
     "lock": {"support_open": True, "is_locked": True},
     "media_player": {
         "media_state": "idle",
-        "volume_level": 0.5,
+        "volume_level": None,
+        "media_duration": None,
+        "media_position": None,
+        "media_track": None,
         "volume_step": 0.05,
         "shuffle": None,
         "repeat": None,
@@ -1387,7 +1394,12 @@ def _media_player_priority_template(property_name: str, entity_ids: list[str]) -
     )
     is_state = property_name in {"media_state", *NATIVE_TEMPLATE_STATE_PROPERTIES}
     candidate = "states(entity_id)" if is_state else f"state_attr(entity_id, {attribute_name!r})"
-    inactive_values = "['unknown', 'unavailable', '', 'off', 'idle']" if is_state else "['unknown', 'unavailable', '']"
+    if is_state:
+        candidate = (
+            "(states(entity_id) if states(entity_id) in "
+            "['on', 'off', 'idle', 'playing', 'paused', 'buffering', 'standby'] else none)"
+        )
+    inactive_values = "['unknown', 'unavailable', '']"
     fallback = repr(_plain_options(_native_source_helper_default("media_player", property_name)))
     # Apple TV often remains ``on`` while a TV input is being watched.  Only
     # a player with an actual playback session wins the first pass; a second
@@ -1402,7 +1414,8 @@ def _media_player_priority_template(property_name: str, entity_ids: list[str]) -
         f"{{% for entity_id in {entity_ids!r} %}}"
         f"{{% set candidate = {candidate} %}}"
         "{% if ns.value is none and states(entity_id) not in "
-        "['off', 'idle', 'unknown', 'unavailable'] and candidate is not none "
+        + ("['unknown', 'unavailable']" if is_state else "['off', 'idle', 'unknown', 'unavailable']")
+        + " and candidate is not none "
         f"and candidate not in {inactive_values} %}}"
         "{% set ns.value = candidate %}{% endif %}{% endfor %}"
         f"{{{{ ns.value if ns.value is not none else {fallback} }}}}"
@@ -7115,6 +7128,24 @@ def _native_source_template(
     attributes = state.attributes
     source_platform = entity_id.split(".", 1)[0]
     platform = platform or source_platform
+    if platform == "media_player" and property_name not in {
+        "supported_features", "source_list", "sound_mode_list", "group_members",
+    }:
+        return _media_player_priority_template(property_name, [entity_id])
+    if platform in {"climate", "humidifier"} and property_name in {
+        "current_humidity", "hvac_action" if platform == "climate" else "action",
+    }:
+        # Measurements and activity are live telemetry. A creation-time
+        # snapshot must not survive missing attributes or a disconnected source.
+        value = f"state_attr({entity_id!r}, {property_name!r})"
+        available = f"states({entity_id!r}) not in ['unknown', 'unavailable']"
+        if property_name == "current_humidity":
+            return (
+                "{{ (" + value + " | float) if " + available
+                + " and " + value + " is not boolean and is_number(" + value
+                + ") and 0 <= (" + value + " | float) <= 100 else none }}"
+            )
+        return "{{ " + value + " if " + available + " else none }}"
     if property_name == "native_unit_of_measurement":
         return _source_metadata_template(
             [entity_id], "unit_of_measurement", _source_metadata_unit(state),
@@ -7319,6 +7350,16 @@ def _native_reference_templates(
         return {}
     templates = {}
     for property_name in DOMAIN_NATIVE_TEMPLATE_PROPERTIES.get(platform, ()):
+        if platform == "media_player" and property_name not in {
+            "supported_features", "source_list", "sound_mode_list", "group_members",
+        }:
+            # Session data may first appear long after creation. Always read
+            # live sources, preferring a playing/paused/buffering player. Do
+            # not average positions/volumes or freeze missing fields to literals.
+            templates[property_name] = _media_player_priority_template(
+                property_name, entity_ids,
+            )
+            continue
         if property_name == "native_unit_of_measurement":
             fallback = next((unit for state in states if (unit := _source_metadata_unit(state))), None)
             templates[property_name] = _source_metadata_template(
@@ -7418,7 +7459,10 @@ def _native_reference_templates(
             values,
         )
         fallback = _native_source_helper_default(platform, property_name)
-        if any(source_has_values):
+        if any(source_has_values) or (
+            platform in {"climate", "humidifier"}
+            and property_name in {"current_humidity", "hvac_action", "action"}
+        ):
             templates[property_name] = merged_template
         else:
             templates[property_name] = _literal_template(fallback)

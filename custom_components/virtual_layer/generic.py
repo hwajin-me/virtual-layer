@@ -1094,6 +1094,58 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         super()._create_state(config)
         self._attr_state = self._parse_media_state(config.get(CONF_INITIAL_VALUE))
 
+    def _media_image_sources(self):
+        """Return source players in playback order for image proxying.
+
+        A number of integrations, including Apple TV, expose their artwork
+        only through their entity's media-image endpoint.  Their state does
+        not contain a reusable ``media_image_url`` (and copying
+        ``entity_picture`` would persist a rotating access token).  Keep the
+        source endpoint private and let this entity's own proxy serve it.
+        """
+        component = self.hass.data.get("media_player")
+        get_entity = getattr(component, "get_entity", None)
+        if not callable(get_entity):
+            return []
+
+        active = []
+        inactive = []
+        for entity_id in self._source_entities:
+            if entity_id == self.entity_id:
+                continue
+            source = get_entity(entity_id)
+            if not isinstance(source, MediaPlayerEntity):
+                continue
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in {"off", "idle", "unknown", "unavailable"}:
+                continue
+            if state.state in {"playing", "paused", "buffering"}:
+                active.append((entity_id, source, state))
+            else:
+                inactive.append((entity_id, source, state))
+        return active + inactive
+
+    @property
+    def media_image_hash(self) -> str | None:
+        """Give locally proxied source artwork a stable, non-secret cache key."""
+        if image_hash := super().media_image_hash:
+            return image_hash
+        sources = self._media_image_sources()
+        if not sources:
+            return None
+        entity_id, _source, state = sources[0]
+        return f"{entity_id}:{state.last_updated.isoformat()}"
+
+    async def async_get_media_image(self) -> tuple[bytes | None, str | None]:
+        """Serve artwork from a source player without exposing its tokenized URL."""
+        if self.media_image_url is not None:
+            return await super().async_get_media_image()
+        for _entity_id, source, _state in self._media_image_sources():
+            image, content_type = await source.async_get_media_image()
+            if image is not None:
+                return image, content_type
+        return None, None
+
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
         self._attr_state = self._parse_media_state(
@@ -1173,7 +1225,7 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         """Raise volume by the advertised step without a nested proxy call."""
         self._attr_volume_level = min(
             1.0,
-            self._attr_volume_level + (self.volume_step or 0.05),
+            (self._attr_volume_level or 0.0) + (self.volume_step or 0.05),
         )
         self.async_write_ha_state()
 
@@ -1181,7 +1233,7 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         """Lower volume by the advertised step without a nested proxy call."""
         self._attr_volume_level = max(
             0.0,
-            self._attr_volume_level - (self.volume_step or 0.05),
+            (self._attr_volume_level or 0.0) - (self.volume_step or 0.05),
         )
         self.async_write_ha_state()
 
@@ -1222,6 +1274,8 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             changed = self._configured_supported_features != value
             self._configured_supported_features = value
             return changed
+        if name in {"media_duration", "media_position", "media_track", "volume_level"} and value is None:
+            return super()._apply_native_template_value(name, None)
         if name in {"source_list", "sound_mode_list", "group_members"}:
             value = _template_string_list(value, name)
         elif name == "source":

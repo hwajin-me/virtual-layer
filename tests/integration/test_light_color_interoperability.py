@@ -1,6 +1,6 @@
 """Run mixed RGB/CCT groups through the real HA light service conversions."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from homeassistant.components.light import ColorMode, LightEntity
@@ -114,3 +114,57 @@ async def test_single_source_ignores_stale_off_event_while_turning_on(hass):
     await hass.async_block_till_done()
 
     assert light.is_on
+
+
+@pytest.mark.parametrize("responds", [False, True])
+@pytest.mark.parametrize("custom_off", [False, True])
+async def test_single_slow_bulb_retries_then_resumes_source_state(hass, responds, custom_off):
+    """Lost commands retry within a bounded window, without target flicker."""
+    assert await async_setup_component(hass, "light", {})
+    component = hass.data[DATA_COMPONENT]
+
+    class DelayedBulb(RecordingBulb):
+        async def async_turn_on(self, **kwargs):
+            self.calls.append(kwargs)
+            if responds and len(self.calls) > 1:
+                self._attr_is_on = True
+                self._attr_brightness = kwargs["brightness"]
+                self.async_write_ha_state()
+
+    bulb = DelayedBulb("Retry bulb", ColorMode.BRIGHTNESS)
+    await component.async_add_entities([bulb])
+    light = VirtualLight(LIGHT_SCHEMA({
+        "name": "Retry light", "entity_id": "light.retry_virtual",
+        "initial_value": "off", "matter_light_type": "dimmable",
+        "source_entities": [bulb.entity_id], "persistent": False,
+        "command_actions": {"turn_off": {"sequence": [], "optimistic": False}} if custom_off else {},
+        "native_templates": {
+            "is_on": "{{ is_state(" + repr(bulb.entity_id) + ", 'on') }}",
+        },
+    }), False)
+    await component.async_add_entities([light])
+    with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()) as later, patch(
+        "custom_components.virtual_layer.light.async_update_entity", new_callable=AsyncMock
+    ):
+        await light.async_turn_on(brightness=180, transition=5)
+        assert light.is_on and light.brightness == 180
+        assert later.call_args.args[1] == 7
+        if custom_off:
+            revision = light._group_revision
+            await light.async_turn_off()
+            assert not light.is_on
+            await light._async_refresh_group(revision, 1)
+            assert len(bulb.calls) == 1
+            assert light._response_refresh_cancel is None
+            return
+        await light._async_refresh_group(light._group_revision, 1)
+        await hass.async_block_till_done()
+        assert light.is_on  # Stale off reports cannot overwrite the request.
+        assert len(bulb.calls) == 2
+        await light._async_refresh_group(light._group_revision, 0)
+        assert light.is_on == responds
+        assert len(bulb.calls) == 2
+        bulb._attr_is_on = False
+        bulb.async_write_ha_state()
+        await hass.async_block_till_done()
+        assert not light.is_on
