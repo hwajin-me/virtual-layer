@@ -93,6 +93,8 @@ CONF_ONVIF_PATROL_TILT_MAX = "onvif_patrol_tilt_max"
 CONF_FRIGATE_RECORDING_SWITCH = "frigate_recording_switch"
 CONF_FRIGATE_MQTT_RECORDINGS_TOPIC = "frigate_mqtt_recordings_topic"
 CAMERA_PATROL_FORM_FIELDS = (
+    "patrol_auto_cycle", "patrol_on_seconds", "patrol_off_seconds",
+    "patrol_recording_scope", "patrol_settle_seconds",
     CONF_ONVIF_PATROL_ENABLED, CONF_ONVIF_PATROL_TARGET,
     CONF_ONVIF_PATROL_MODE, CONF_ONVIF_PATROL_INTERVAL,
     CONF_ONVIF_PATROL_SPEED, CONF_ONVIF_PATROL_PAN_MIN,

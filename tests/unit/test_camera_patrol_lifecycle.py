@@ -1,6 +1,7 @@
 """Patrol must not proxy camera-only commands or strand recording disabled."""
 import asyncio
 from unittest.mock import AsyncMock, Mock
+from unittest.mock import patch, call
 from types import SimpleNamespace
 
 import pytest
@@ -111,3 +112,45 @@ async def test_patrol_captures_and_returns_exact_coordinates(hass):
     })
     await entity._async_return_patrol_origin()
     assert service.AbsoluteMove.await_count == 1
+
+
+async def test_automatic_cycle_runs_on_and_off_periods(hass):
+    entity = camera(hass)
+    entity._patrol_on_seconds = 60
+    entity._patrol_off_seconds = 600
+    entity._async_start_patrol = AsyncMock()
+    entity._async_stop_patrol = AsyncMock()
+    with patch("custom_components.virtual_layer.camera.asyncio.sleep", AsyncMock(side_effect=[None, asyncio.CancelledError])) as sleep:
+        with pytest.raises(asyncio.CancelledError):
+            await entity._async_patrol_schedule()
+    assert sleep.await_args_list == [call(60), call(600)]
+    entity._async_start_patrol.assert_awaited_once()
+    entity._async_stop_patrol.assert_awaited_once()
+
+
+async def test_manual_stop_cancels_future_automatic_starts(hass):
+    entity = camera(hass)
+    entity._patrol_schedule_task = asyncio.create_task(asyncio.Event().wait())
+    task = entity._patrol_schedule_task
+    await entity.async_stop_patrol()
+    assert task.cancelled()
+    assert entity._patrol_schedule_task is None
+
+
+async def test_movement_recording_is_restored_before_quiet_interval(hass):
+    entity = camera(hass)
+    entity._patrol_recording_scope = "movement"
+    events = []
+    async def recording(*, restore):
+        events.append("restore" if restore else "disable")
+    async def move(data):
+        events.append("move")
+    async def settle():
+        events.append("settle_stop")
+    entity._async_set_frigate_patrol_switches = recording
+    entity._async_call_onvif_ptz = move
+    entity._async_settle_patrol_move = settle
+    with patch("custom_components.virtual_layer.camera.asyncio.sleep", AsyncMock(side_effect=asyncio.CancelledError)):
+        with pytest.raises(asyncio.CancelledError):
+            await entity._async_patrol_loop()
+    assert events == ["disable", "move", "settle_stop", "restore"]

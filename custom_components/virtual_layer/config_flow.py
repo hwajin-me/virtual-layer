@@ -3640,6 +3640,18 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
         )
     elif platform == "camera":
         patrol_target = defaults.get(CONF_ONVIF_PATROL_TARGET)
+        domain_schema[vol.Optional("patrol_auto_cycle", default=defaults.get("patrol_auto_cycle", False))] = selector.BooleanSelector()
+        for field, default, minimum, maximum in (
+            ("patrol_on_seconds", 300, 5, 86400),
+            ("patrol_off_seconds", 1800, 5, 86400),
+            ("patrol_settle_seconds", 5, 1, 120),
+        ):
+            domain_schema[vol.Optional(field, default=defaults.get(field, default))] = selector.NumberSelector(
+                selector.NumberSelectorConfig(min=minimum, max=maximum, step=1, mode=selector.NumberSelectorMode.BOX)
+            )
+        domain_schema[vol.Optional("patrol_recording_scope", default=defaults.get("patrol_recording_scope", "patrol"))] = selector.SelectSelector(
+            selector.SelectSelectorConfig(options=["patrol", "movement"], translation_key="patrol_recording_scope")
+        )
         recording_switch = defaults.get(CONF_FRIGATE_RECORDING_SWITCH)
         domain_schema[vol.Optional(CONF_FRIGATE_RECORDING_SWITCH, **(
             {"default": recording_switch} if recording_switch else {}

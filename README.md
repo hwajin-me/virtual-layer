@@ -39,6 +39,19 @@ Keep leaves recording untouched; On temporarily enables it. Switch and MQTT
 controls are mutually exclusive. A failed restore is logged and retained for
 another stop attempt; abrupt power loss cannot restore the previous state.
 
+Enable Automatic patrol cycle to repeat a patrol session followed by a quiet
+period (defaults: 300 seconds on, 1800 seconds off). Manual switch or patrol
+service control suspends this cycle until the integration reloads. Automatic
+cycles take priority over the existing start-on-load option and are cancelled
+when the camera unloads.
+
+Recording control period can be Entire patrol (the existing behavior) or During
+movement only. With recording policy Off, movement-only control disables
+recording before each move, waits the configurable settling time (default five
+seconds), sends ONVIF Stop, and restores the previous state during the interval
+between movements. This also applies to the return move. Settling is a timed
+estimate, not physical position feedback; increase it for slower movements.
+
 - [Features](#features)
 - [Installation](#installation)
 - [UI Configuration](#ui-configuration)

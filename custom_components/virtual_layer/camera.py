@@ -139,6 +139,11 @@ def _image_as_jpeg(payload: bytes) -> bytes:
 
 
 BASE_SCHEMA = virtual_schema(DEFAULT_CAMERA_VALUE, {
+    vol.Optional("patrol_auto_cycle", default=False): cv.boolean,
+    vol.Optional("patrol_on_seconds", default=300): vol.All(vol.Coerce(float), vol.Range(min=5, max=86400)),
+    vol.Optional("patrol_off_seconds", default=1800): vol.All(vol.Coerce(float), vol.Range(min=5, max=86400)),
+    vol.Optional("patrol_recording_scope", default="patrol"): vol.In({"patrol", "movement"}),
+    vol.Optional("patrol_settle_seconds", default=5): vol.All(vol.Coerce(float), vol.Range(min=1, max=120)),
     vol.Optional(CONF_BRAND): cv.string,
     vol.Optional(CONF_IMAGE_PATH): cv.string,
     vol.Optional(CONF_IS_RECORDING, default=False): cv.boolean,
@@ -243,6 +248,12 @@ class VirtualCamera(VirtualEntity, Camera):
         self._source_camera_remove_listener: Callable[[], None] | None = None
         self._patrol_task: asyncio.Task[None] | None = None
         self._patrol_lock = asyncio.Lock()
+        self._patrol_schedule_task = None
+        self._patrol_auto_cycle = config.get("patrol_auto_cycle", False)
+        self._patrol_on_seconds = config.get("patrol_on_seconds", 300)
+        self._patrol_off_seconds = config.get("patrol_off_seconds", 1800)
+        self._patrol_recording_scope = config.get("patrol_recording_scope", "patrol")
+        self._patrol_settle_seconds = config.get("patrol_settle_seconds", 5)
         self._patrol_origin = None
         self._patrol_enabled = config.get(CONF_ONVIF_PATROL_ENABLED, False)
         self._patrol_target = config.get(CONF_ONVIF_PATROL_TARGET)
@@ -685,7 +696,12 @@ class VirtualCamera(VirtualEntity, Camera):
         """Track source replacement and capability changes."""
         await super().async_added_to_hass()
         self._sync_source_camera_listener()
-        if self._patrol_enabled:
+        if self._patrol_auto_cycle:
+            self._patrol_schedule_task = self.hass.async_create_background_task(
+                self._async_patrol_schedule(), f"{self.entity_id} patrol schedule",
+                eager_start=False,
+            )
+        elif self._patrol_enabled:
             await self.async_start_patrol()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -842,6 +858,11 @@ class VirtualCamera(VirtualEntity, Camera):
         self.async_write_ha_state()
 
     async def async_start_patrol(self) -> None:
+        """Manual control overrides the automatic cycle until reload."""
+        await self._async_cancel_patrol_schedule()
+        await self._async_start_patrol()
+
+    async def _async_start_patrol(self) -> None:
         """Start a bounded ONVIF PTZ patrol without replacing this camera's feed."""
         if not self._patrol_target:
             raise HomeAssistantError("Configure an ONVIF PTZ camera before starting patrol")
@@ -851,8 +872,9 @@ class VirtualCamera(VirtualEntity, Camera):
             if self._patrol_task is None or self._patrol_task.done():
                 await self._async_capture_patrol_origin()
                 try:
-                    await self._async_set_frigate_patrol_switches(restore=False)
-                except Exception:
+                    if self._patrol_recording_scope == "patrol":
+                        await self._async_set_frigate_patrol_switches(restore=False)
+                except (Exception, asyncio.CancelledError):
                     await self._async_set_frigate_patrol_switches(restore=True)
                     raise
                 self._patrol_task = self.hass.async_create_background_task(
@@ -862,6 +884,32 @@ class VirtualCamera(VirtualEntity, Camera):
         self.async_write_ha_state()
 
     async def async_stop_patrol(self) -> None:
+        """Stop manually and suspend future scheduled starts until reload."""
+        await self._async_cancel_patrol_schedule()
+        await self._async_stop_patrol()
+
+    async def _async_cancel_patrol_schedule(self) -> None:
+        task, self._patrol_schedule_task = self._patrol_schedule_task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _async_patrol_schedule(self) -> None:
+        """Run bounded patrol sessions separated by a quiet interval."""
+        try:
+            while True:
+                await self._async_start_patrol()
+                await asyncio.sleep(self._patrol_on_seconds)
+                await self._async_stop_patrol()
+                await asyncio.sleep(self._patrol_off_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _LOGGER.warning("Automatic patrol cycle stopped for %s", self.entity_id)
+        finally:
+            self._patrol_schedule_task = None
+
+    async def _async_stop_patrol(self) -> None:
         """Stop the local patrol scheduler and request ONVIF motion stop."""
         async with self._patrol_lock:
             task = self._patrol_task
@@ -890,7 +938,12 @@ class VirtualCamera(VirtualEntity, Camera):
                         data["tilt"] = tilt
                     if self._patrol_speed is not None:
                         data["speed"] = self._patrol_speed
+                    if self._patrol_recording_scope == "movement":
+                        await self._async_set_frigate_patrol_switches(restore=False)
                     await self._async_call_onvif_ptz(data)
+                    if self._patrol_recording_scope == "movement":
+                        await self._async_settle_patrol_move()
+                        await self._async_set_frigate_patrol_switches(restore=True)
                     await asyncio.sleep(self._patrol_interval)
         except asyncio.CancelledError:
             cancelled = True
@@ -905,6 +958,13 @@ class VirtualCamera(VirtualEntity, Camera):
             finally:
                 self._patrol_task = None
                 self.async_write_ha_state()
+
+    async def _async_settle_patrol_move(self) -> None:
+        """Allow movement to finish, then explicitly stop before restoring recording."""
+        await asyncio.sleep(self._patrol_settle_seconds)
+        await self._async_call_onvif_ptz({
+            ATTR_ENTITY_ID: self._patrol_target, "move_mode": "Stop",
+        })
 
     async def _async_capture_patrol_origin(self) -> None:
         """Snapshot coordinates using the existing ONVIF integration client."""
@@ -937,10 +997,14 @@ class VirtualCamera(VirtualEntity, Camera):
             return
         service, token, position = origin
         try:
+            if self._patrol_recording_scope == "movement":
+                await self._async_set_frigate_patrol_switches(restore=False)
             async with asyncio.timeout(10):
                 await service.AbsoluteMove({
                     "ProfileToken": token, "Position": {"PanTilt": position},
                 })
+            if self._patrol_recording_scope == "movement":
+                await self._async_settle_patrol_move()
         except Exception:
             _LOGGER.warning("Unable to return %s to patrol start position", self.entity_id)
 
@@ -1134,6 +1198,11 @@ def validate_domain_options(config) -> None:
     """Require a target when a stored camera enables ONVIF patrol."""
     if config.get(CONF_ONVIF_PATROL_ENABLED) and not config.get(CONF_ONVIF_PATROL_TARGET):
         raise vol.Invalid("ONVIF patrol needs an ONVIF camera target")
+    if config.get("patrol_auto_cycle") and not config.get(CONF_ONVIF_PATROL_TARGET):
+        raise vol.Invalid("Automatic patrol needs an ONVIF camera target")
+    for field in ("patrol_on_seconds", "patrol_off_seconds", "patrol_settle_seconds"):
+        if field in config and not math.isfinite(config[field]):
+            raise vol.Invalid("Patrol durations must be finite")
     topic = config.get(CONF_FRIGATE_MQTT_RECORDINGS_TOPIC)
     if topic:
         if any(char in topic for char in ("+", "#", "\x00")) or not topic.endswith("/recordings"):
