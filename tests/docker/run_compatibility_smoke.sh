@@ -167,10 +167,10 @@ for property_name, value in {
     for missing in (None, "None", "", "unknown", "unavailable"):
         assert not light._apply_native_template_value(property_name, missing)
         assert getattr(light, property_name) == previous
-assert sensor.CONCENTRATION_PARTS_PER_MILLION == (
+assert sensor.UNITS_OF_MEASUREMENT["carbon_dioxide"] == (
     number.CONCENTRATION_PARTS_PER_MILLION
 )
-assert sensor.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER == (
+assert sensor.UNITS_OF_MEASUREMENT["pm25"] == (
     number.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
 )
 
@@ -1456,6 +1456,47 @@ async def test_config_flow_create_modify_runtime():
             await hass.async_block_till_done()
             assert hass.states.get("air_quality.docker_co_alarm_aqi").state == expected
             assert hass.states.get("air_quality.docker_co_alarm_aqi").attributes["air_quality_stale"] is (value == "unavailable")
+        # Meter platform setup and services must work in the real HA container.
+        options = copy.deepcopy(dict(entry.options))
+        hass.states.async_set("sensor.docker_energy_source", "100", {"unit_of_measurement": "kWh", "device_class": "energy"})
+        next(iter(options["devices"].values())).append({
+            "platform": "sensor", "name": "Docker Meter", "entity_id": "sensor.docker_meter",
+            "initial_value": "0", "persistent": True,
+            "source_entities": ["sensor.docker_energy_source"],
+            "utility_meter_enabled": True, "utility_meter_cycle": "monthly",
+            "utility_meter_start": "2026-01-15T00:00:00", "utility_meter_rate": 100,
+        })
+        hass.config_entries.async_update_entry(entry, options=options)
+        await hass.async_block_till_done()
+        hass.states.async_set("sensor.docker_energy_source", "102", {"unit_of_measurement": "kWh", "device_class": "energy"})
+        await hass.async_block_till_done()
+        await hass.async_block_till_done()
+        assert float(hass.states.get("sensor.docker_meter").state) == 2
+        assert float(hass.states.get("sensor.docker_meter_cost").state) == 200
+        for action, payload, expected in [("adjust_utility_meter", {"amount": 3}, 5), ("calibrate_utility_meter", {"value": 42}, 42), ("reset_utility_meter", {}, 0)]:
+            await hass.services.async_call("virtual_layer", action, {"entity_id": "sensor.docker_meter", **payload}, blocking=True)
+            await hass.async_block_till_done()
+            assert float(hass.states.get("sensor.docker_meter").state) == expected
+            if action == "calibrate_utility_meter":
+                options = copy.deepcopy(dict(entry.options))
+                for entities in options["devices"].values():
+                    for configured in entities:
+                        if configured.get("entity_id") == "sensor.docker_meter":
+                            configured.update(utility_meter_cycle="hourly", utility_meter_rate=200,
+                                              utility_meter_correction="57", utility_meter_correction_id="docker-edit")
+                hass.config_entries.async_update_entry(entry, options=options)
+                await hass.async_block_till_done()
+                assert float(hass.states.get("sensor.docker_meter").state) == 57
+                assert await hass.config_entries.async_reload(entry.entry_id)
+                await hass.async_block_till_done()
+                assert float(hass.states.get("sensor.docker_meter").state) == 57
+                hass.states.async_set("sensor.docker_energy_source", "104", {"unit_of_measurement": "kWh", "device_class": "energy"})
+                await hass.async_block_till_done()
+                await hass.async_block_till_done()
+                assert float(hass.states.get("sensor.docker_meter").state) == 59
+                assert float(hass.states.get("sensor.docker_meter_cost").state) == 11800
+        assert registry.async_get("sensor.docker_meter").device_id == registry.async_get("sensor.docker_meter_cost").device_id
+        print("Utility Meter Docker passed: anchored monthly setup, usage, cost, adjustment, calibration, reset and Device grouping")
     finally:
         await hass.async_stop()
 

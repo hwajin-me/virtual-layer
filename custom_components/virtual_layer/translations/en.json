@@ -180,13 +180,30 @@
               "light_response_retries": "Source refresh retries",
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "sensor_unit": "Sensor unit",
+              "utility_meter_enabled": "Utility Meter mode",
+              "utility_meter_cycle": "Reset cycle",
               "boiler_dynamic_control": "Dynamic boiler control",
               "boiler_dynamic_template": "Dynamic water-target formula",
               "boiler_room_temperature_entity_id": "Room temperature sensors",
               "media_player_source_priority": "Media source priority",
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
-              "configure_air_quality_sources": "Configure air quality per source"
+              "configure_air_quality_sources": "Configure air quality per source",
+              "utility_meter_start": "Start date/time",
+              "utility_meter_days": "Repeat every N days",
+              "utility_meter_offset": "Offset (minutes)",
+              "utility_meter_cron": "Cron schedule",
+              "utility_meter_delta_values": "Source reports increments",
+              "utility_meter_net_consumption": "Allow net consumption",
+              "utility_meter_periodically_resetting": "Source periodically resets",
+              "utility_meter_always_available": "Keep total available",
+              "utility_meter_tariff_entity": "Tariff selector entity",
+              "utility_meter_tariff": "Collecting tariff",
+              "utility_meter_rate": "Unit price",
+              "utility_meter_base_charge": "Period base charge",
+              "utility_meter_currency": "Currency",
+              "utility_meter_tiers": "Progressive tiers",
+              "utility_meter_current_value": "Correct current-period total"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -203,13 +220,30 @@
               "light_response_retries": "For light groups, refresh source devices and resend the latest command only to bulbs that have not reached the target (0–10 retries). A new command cancels old retries. Single-source lights only re-read state.",
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
+              "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
+              "utility_meter_cycle": "Changing the cycle or dates retains the running total and schedules future resets from the edit onward. Use the reset action to start at zero.",
               "boiler_dynamic_control": "Opt in for one boiler and room sensors in Celsius. Replaces the configured set_temperature action with periodic water-temperature writes. Set a room target after enabling. Calculates every 60s; writes at least 120s apart. Boiler current_temperature must measure heating water. Power actions remain separately configured.",
               "boiler_dynamic_template": "Returns Celsius. Variables: temperature (saved room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (C/min over up to 10min), heating_elapsed_minutes (observed heat duration), heat_accumulation (decaying C-min proxy, 30min time constant), base_water_temperature (existing calibration result). Tune default gains for the system. Missing inputs pause writes. Boiler limits and steps apply.",
               "boiler_room_temperature_entity_id": "Optional sensors combined as the virtual climate's current room temperature. Available numeric readings are averaged; raw boiler-water temperatures remain available as attributes.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
-              "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration."
+              "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration.",
+              "utility_meter_start": "ISO date/time, e.g. 2026-01-15T00:00:00. Local HA time unless an offset is supplied. Day 31 clamps to month end.",
+              "utility_meter_days": "Calendar days from the start date; used for the N-day cycle.",
+              "utility_meter_offset": "Shift the calendar anchor by 0–40319 minutes. Ignored for cron.",
+              "utility_meter_cron": "Five-field cron in Home Assistant local time; used only for cron cycle.",
+              "utility_meter_delta_values": "Add each new source event as consumption rather than subtracting cumulative readings.",
+              "utility_meter_net_consumption": "Allow negative deltas for import/export meters; publishes total statistics.",
+              "utility_meter_periodically_resetting": "Discard the baseline across invalid source states. Disable for a lifetime counter to bridge outages.",
+              "utility_meter_always_available": "Retain the accumulated total when the source is unavailable.",
+              "utility_meter_tariff_entity": "Optional select/input_select entity; create one meter per tariff on this Device.",
+              "utility_meter_tariff": "Collect only while the tariff selector matches this exact option. Automations can switch the selector by time.",
+              "utility_meter_rate": "Price per source unit, also above the final tier. Editing prices recalculates the entire current-period estimate, not historical price segments.",
+              "utility_meter_base_charge": "Fixed charge per period. For multiple tariff meters, charge the base on one meter only.",
+              "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
+              "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
+              "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline."
             }
           },
           "native_value_templates": {
@@ -1320,12 +1354,29 @@
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "sensor_unit": "Sensor unit",
               "boiler_dynamic_control": "Dynamic boiler control",
+              "utility_meter_enabled": "Utility Meter mode",
+              "utility_meter_cycle": "Reset cycle",
               "boiler_dynamic_template": "Dynamic water-target formula",
               "boiler_room_temperature_entity_id": "Room temperature sensors",
               "media_player_source_priority": "Media source priority",
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
-              "configure_air_quality_sources": "Configure air quality per source"
+              "configure_air_quality_sources": "Configure air quality per source",
+              "utility_meter_start": "Start date/time",
+              "utility_meter_days": "Repeat every N days",
+              "utility_meter_offset": "Offset (minutes)",
+              "utility_meter_cron": "Cron schedule",
+              "utility_meter_delta_values": "Source reports increments",
+              "utility_meter_net_consumption": "Allow net consumption",
+              "utility_meter_periodically_resetting": "Source periodically resets",
+              "utility_meter_always_available": "Keep total available",
+              "utility_meter_tariff_entity": "Tariff selector entity",
+              "utility_meter_tariff": "Collecting tariff",
+              "utility_meter_rate": "Unit price",
+              "utility_meter_base_charge": "Period base charge",
+              "utility_meter_currency": "Currency",
+              "utility_meter_tiers": "Progressive tiers",
+              "utility_meter_current_value": "Correct current-period total"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -1343,12 +1394,29 @@
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
               "boiler_dynamic_control": "Opt in for one boiler and room sensors in Celsius. Replaces the configured set_temperature action with periodic water-temperature writes. Set a room target after enabling. Calculates every 60s; writes at least 120s apart. Boiler current_temperature must measure heating water. Power actions remain separately configured.",
+              "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
+              "utility_meter_cycle": "Changing the cycle or dates retains the running total and schedules future resets from the edit onward. Use the reset action to start at zero.",
               "boiler_dynamic_template": "Returns Celsius. Variables: temperature (saved room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (C/min over up to 10min), heating_elapsed_minutes (observed heat duration), heat_accumulation (decaying C-min proxy, 30min time constant), base_water_temperature (existing calibration result). Tune default gains for the system. Missing inputs pause writes. Boiler limits and steps apply.",
               "boiler_room_temperature_entity_id": "Optional sensors combined as the virtual climate's current room temperature. Available numeric readings are averaged; raw boiler-water temperatures remain available as attributes.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
-              "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration."
+              "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration.",
+              "utility_meter_start": "ISO date/time, e.g. 2026-01-15T00:00:00. Local HA time unless an offset is supplied. Day 31 clamps to month end.",
+              "utility_meter_days": "Calendar days from the start date; used for the N-day cycle.",
+              "utility_meter_offset": "Shift the calendar anchor by 0–40319 minutes. Ignored for cron.",
+              "utility_meter_cron": "Five-field cron in Home Assistant local time; used only for cron cycle.",
+              "utility_meter_delta_values": "Add each new source event as consumption rather than subtracting cumulative readings.",
+              "utility_meter_net_consumption": "Allow negative deltas for import/export meters; publishes total statistics.",
+              "utility_meter_periodically_resetting": "Discard the baseline across invalid source states. Disable for a lifetime counter to bridge outages.",
+              "utility_meter_always_available": "Retain the accumulated total when the source is unavailable.",
+              "utility_meter_tariff_entity": "Optional select/input_select entity; create one meter per tariff on this Device.",
+              "utility_meter_tariff": "Collect only while the tariff selector matches this exact option. Automations can switch the selector by time.",
+              "utility_meter_rate": "Price per source unit, also above the final tier. Editing prices recalculates the entire current-period estimate, not historical price segments.",
+              "utility_meter_base_charge": "Fixed charge per period. For multiple tariff meters, charge the base on one meter only.",
+              "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
+              "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
+              "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline."
             }
           },
           "native_value_templates": {
@@ -2051,11 +2119,28 @@
               "sensor_unit": "Sensor unit",
               "boiler_dynamic_control": "Dynamic boiler control",
               "boiler_dynamic_template": "Dynamic water-target formula",
+              "utility_meter_enabled": "Utility Meter mode",
+              "utility_meter_cycle": "Reset cycle",
               "boiler_room_temperature_entity_id": "Room temperature sensors",
               "media_player_source_priority": "Media source priority",
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
-              "configure_air_quality_sources": "Configure air quality per source"
+              "configure_air_quality_sources": "Configure air quality per source",
+              "utility_meter_start": "Start date/time",
+              "utility_meter_days": "Repeat every N days",
+              "utility_meter_offset": "Offset (minutes)",
+              "utility_meter_cron": "Cron schedule",
+              "utility_meter_delta_values": "Source reports increments",
+              "utility_meter_net_consumption": "Allow net consumption",
+              "utility_meter_periodically_resetting": "Source periodically resets",
+              "utility_meter_always_available": "Keep total available",
+              "utility_meter_tariff_entity": "Tariff selector entity",
+              "utility_meter_tariff": "Collecting tariff",
+              "utility_meter_rate": "Unit price",
+              "utility_meter_base_charge": "Period base charge",
+              "utility_meter_currency": "Currency",
+              "utility_meter_tiers": "Progressive tiers",
+              "utility_meter_current_value": "Correct current-period total"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -2074,11 +2159,28 @@
               "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
               "boiler_dynamic_control": "Opt in for one boiler and room sensors in Celsius. Replaces the configured set_temperature action with periodic water-temperature writes. Set a room target after enabling. Calculates every 60s; writes at least 120s apart. Boiler current_temperature must measure heating water. Power actions remain separately configured.",
               "boiler_dynamic_template": "Returns Celsius. Variables: temperature (saved room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (C/min over up to 10min), heating_elapsed_minutes (observed heat duration), heat_accumulation (decaying C-min proxy, 30min time constant), base_water_temperature (existing calibration result). Tune default gains for the system. Missing inputs pause writes. Boiler limits and steps apply.",
+              "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
+              "utility_meter_cycle": "Changing the cycle or dates retains the running total and schedules future resets from the edit onward. Use the reset action to start at zero.",
               "boiler_room_temperature_entity_id": "Optional sensors combined as the virtual climate's current room temperature. Available numeric readings are averaged; raw boiler-water temperatures remain available as attributes.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
-              "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration."
+              "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration.",
+              "utility_meter_start": "ISO date/time, e.g. 2026-01-15T00:00:00. Local HA time unless an offset is supplied. Day 31 clamps to month end.",
+              "utility_meter_days": "Calendar days from the start date; used for the N-day cycle.",
+              "utility_meter_offset": "Shift the calendar anchor by 0–40319 minutes. Ignored for cron.",
+              "utility_meter_cron": "Five-field cron in Home Assistant local time; used only for cron cycle.",
+              "utility_meter_delta_values": "Add each new source event as consumption rather than subtracting cumulative readings.",
+              "utility_meter_net_consumption": "Allow negative deltas for import/export meters; publishes total statistics.",
+              "utility_meter_periodically_resetting": "Discard the baseline across invalid source states. Disable for a lifetime counter to bridge outages.",
+              "utility_meter_always_available": "Retain the accumulated total when the source is unavailable.",
+              "utility_meter_tariff_entity": "Optional select/input_select entity; create one meter per tariff on this Device.",
+              "utility_meter_tariff": "Collect only while the tariff selector matches this exact option. Automations can switch the selector by time.",
+              "utility_meter_rate": "Price per source unit, also above the final tier. Editing prices recalculates the entire current-period estimate, not historical price segments.",
+              "utility_meter_base_charge": "Fixed charge per period. For multiple tariff meters, charge the base on one meter only.",
+              "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
+              "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
+              "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline."
             }
           },
           "native_value_templates": {
@@ -3146,6 +3248,21 @@
         "template": "Keep unit template"
       }
     },
+    "utility_meter_cycle": {
+      "options": {
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "monthly": "Monthly",
+        "quarterly": "Quarterly",
+        "yearly": "Yearly",
+        "none": "No automatic reset",
+        "hourly": "Hourly",
+        "bimonthly": "Every two months",
+        "days": "Every N days",
+        "cron": "Cron schedule",
+        "quarter-hourly": "Every 15 minutes"
+      }
+    },
     "matter_light_type": {
       "options": {
         "on_off": "On/Off Light",
@@ -3354,6 +3471,34 @@
           "description": "Value to set state to."
         }
       }
+    },
+    "adjust_utility_meter": {
+      "name": "Adjust Utility Meter",
+      "description": "Add consumption that the source meter missed to a virtual Utility Meter sensor. The amount is added to the current period; it does not change the physical source meter.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity Id",
+          "description": "Virtual Utility Meter sensor to adjust."
+        },
+        "amount": {
+          "name": "Missing consumption",
+          "description": "A non-negative amount in the same unit as the utility meter, for example kWh."
+        }
+      }
+    },
+    "calibrate_utility_meter": {
+      "name": "Calibrate Utility Meter",
+      "description": "Set the current-period total of a virtual Utility Meter sensor to an audited value.",
+      "fields": {
+        "value": {
+          "name": "Current-period value",
+          "description": "A finite non-negative value in the meter unit."
+        }
+      }
+    },
+    "reset_utility_meter": {
+      "name": "Reset Utility Meter",
+      "description": "Close the current period and reset a virtual Utility Meter sensor to zero."
     },
     "set_available": {
       "name": "Set Availability",

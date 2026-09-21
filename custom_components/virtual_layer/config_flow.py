@@ -58,6 +58,7 @@ from homeassistant.util import slugify
 from .binary_options import detection_minutes
 from . import air_quality_options as aq_options
 from . import unit_history
+from . import meter
 from .dawarich import DawarichClient, DawarichError, normalize_config as normalize_dawarich_config
 from .local_presence import DEFAULTS as LOCAL_PRESENCE_DEFAULTS, normalize as normalize_local_presence
 from .cfg import (
@@ -3643,6 +3644,33 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
             selector.SelectSelectorConfig(options=["template", *units],
                 translation_key="sensor_unit", mode=selector.SelectSelectorMode.DROPDOWN)
         )
+        domain_schema[vol.Optional("utility_meter_enabled", default=defaults.get("utility_meter_enabled", False))] = selector.BooleanSelector()
+        domain_schema[vol.Optional("utility_meter_cycle", default=defaults.get("utility_meter_cycle", "monthly"))] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(meter.CYCLES),
+                translation_key="utility_meter_cycle",
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
+        for key, default in meter.DEFAULTS.items():
+            if key in {"enabled", "cycle"}:
+                continue
+            field = meter.PREFIX + key
+            marker = vol.Optional(field, default=defaults.get(field, default))
+            if isinstance(default, bool):
+                control = selector.BooleanSelector()
+            elif key == "tiers":
+                control = selector.ObjectSelector()
+            elif isinstance(default, int):
+                control = selector.NumberSelector(selector.NumberSelectorConfig(min=1 if key == "days" else 0, max=36600 if key == "days" else 40319 if key == "offset" else 1e12, mode=selector.NumberSelectorMode.BOX, step="any"))
+            elif key in {"start", "tariff_entity"}:
+                if not defaults.get(field):
+                    marker = vol.Optional(field)
+                control = selector.DateTimeSelector() if key == "start" else selector.EntitySelector(selector.EntitySelectorConfig(domain=["select", "input_select"]))
+            else:
+                control = selector.TextSelector()
+            domain_schema[marker] = control
+        domain_schema[vol.Optional("utility_meter_current_value", default="")] = selector.TextSelector()
     if platform == "device_tracker":
         person = defaults.get(CONF_DAWARICH_PERSON_INPUT, "")
         selected_person = person if isinstance(person, list) else ([person] if person else [])
@@ -4588,6 +4616,9 @@ def _entity_dependency_sources(entity: Mapping) -> dict[str, str]:
     camera_source = entity.get(CAMERA_SOURCE_ENTITY_OPTION)
     if isinstance(camera_source, str):
         sources[camera_source] = CONF_DOMAIN_OPTIONS_JSON
+    tariff_source = entity.get("utility_meter_tariff_entity")
+    if isinstance(tariff_source, str) and tariff_source:
+        sources[tariff_source] = CONF_DOMAIN_OPTIONS_JSON
     for hook in entity.get(CONF_EVENT_HOOKS, []):
         if not isinstance(hook, Mapping) or hook.get("trigger") != "state":
             continue
@@ -4760,6 +4791,15 @@ def _build_entity_config(
     )
     if source_entities:
         entity[CONF_SOURCE_ENTITIES] = source_entities
+
+    if platform == "sensor" and cv.boolean(user_input.get("utility_meter_enabled", False)):
+        if len(source_entities) != 1 or not source_entities[0].startswith("sensor."):
+            raise InvalidEntityReference(CONF_SOURCE_ENTITIES_TEXT)
+        cycle = user_input.get("utility_meter_cycle", "monthly")
+        if cycle not in meter.CYCLES:
+            raise InvalidDomainOptions
+        entity["utility_meter_enabled"] = True
+        entity["utility_meter_cycle"] = cycle
 
     if (
         platform == "climate"
@@ -5174,6 +5214,28 @@ def _build_entity_config(
         ):
             domain_options.pop(field_name, None)
     entity.update(domain_options)
+    if platform == "sensor":
+        try:
+            settings = meter.options(user_input)
+            for key in settings:
+                entity.pop(meter.PREFIX + key, None)
+            if settings["enabled"]:
+                for key, value in settings.items():
+                    entity[meter.PREFIX + key] = value
+                meter.number(initial_value)
+                if settings["tariff_entity"]:
+                    cv.entity_id(settings["tariff_entity"])
+                    if settings["tariff_entity"] == entity_id or not settings["tariff"]:
+                        raise vol.Invalid("Select a tariff name and a different selector")
+                correction = user_input.get("utility_meter_current_value", "")
+                if correction != "":
+                    value = meter.number(correction)
+                    if value < 0 and not settings["net_consumption"]:
+                        raise vol.Invalid("Negative consumption requires net mode")
+                    entity["utility_meter_correction"] = str(value)
+                    entity["utility_meter_correction_id"] = uuid.uuid4().hex
+        except (ValueError, TypeError, vol.Invalid) as err:
+            raise InvalidDomainOptions from err
     if platform == "air_quality":
         # Do not label a categorical state as a numeric PM2.5 measurement.
         for key in ("device_class", "state_class", "unit_of_measurement", "class"):
@@ -9720,7 +9782,9 @@ def _reference_entity_defaults(
         CONF_SOURCE_ENTITIES_TEXT: "\n".join(entity_ids),
         CONF_AVAILABILITY_TEMPLATE: (
             "{{ "
-            + (" or " if platform == "air_quality" else " and ").join(
+            # A virtual entity remains usable while at least one source is
+            # responding. Per-source debug entities retain individual errors.
+            + " or ".join(
                 f"states({entity_id!r}) not in ['unknown', 'unavailable']"
                 for entity_id in entity_ids
             )
@@ -11160,6 +11224,10 @@ def _entity_form_defaults(
         for key, value in entity.items()
         if key not in _DOMAIN_OPTION_RESERVED_KEYS
     }
+    if platform == "sensor":
+        for key, default in meter.DEFAULTS.items():
+            field = meter.PREFIX + key
+            defaults[field] = domain_options.pop(field, default)
     if platform == "climate":
         defaults[CONF_CLIMATE_TEMPERATURE_STEP_INPUT] = (
             _climate_temperature_step_default(defaults)

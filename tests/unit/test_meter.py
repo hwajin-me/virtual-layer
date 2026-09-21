@@ -1,0 +1,106 @@
+"""Calendar boundaries and billing contracts, including invalid user inputs."""
+from datetime import datetime, timezone
+from decimal import Decimal
+
+import pytest
+import voluptuous as vol
+from homeassistant.util import dt as dt_util
+
+from custom_components.virtual_layer import meter
+
+
+def settings(**values):
+    return meter.options({meter.PREFIX + key: value for key, value in values.items()})
+
+
+@pytest.mark.parametrize("value", [True, None, {}, [], "nan", "Infinity", "1e19", "abc"])
+def test_bad_numbers(value):
+    with pytest.raises(vol.Invalid):
+        meter.number(value)
+
+
+@pytest.mark.parametrize("values", [
+    {"enabled": "false"}, {"cycle": "bad"}, {"days": 0}, {"days": 1.5},
+    {"offset": 40320}, {"start": 1}, {"start": "bad"}, {"cycle": "days"},
+    {"cycle": "cron", "cron": "bad"}, {"cycle": "cron", "cron": "0 0 31 2 *"},
+    {"rate": -1}, {"base_charge": -1}, {"currency": 123}, {"currency": "K"},
+    {"currency": "123"}, {"currency": "한글원"}, {"tiers": {}},
+    {"tiers": [{}] * 101}, {"tiers": [1]}, {"tiers": [{"up_to": 1}]},
+    {"tiers": [{"up_to": 0, "rate": 1}]}, {"tiers": [{"up_to": 1, "rate": -1}]},
+])
+def test_invalid_options(values):
+    with pytest.raises(vol.Invalid):
+        settings(**values)
+
+
+@pytest.mark.parametrize("cycle,expected", [
+    ("none", None), ("hourly", "2026-01-10T13:00:00+00:00"),
+    ("quarter-hourly", "2026-01-10T12:15:00+00:00"),
+    ("daily", "2026-01-11T00:00:00+00:00"),
+    ("weekly", "2026-01-12T00:00:00+00:00"),
+    ("monthly", "2026-02-01T00:00:00+00:00"),
+    ("bimonthly", "2026-03-01T00:00:00+00:00"),
+    ("quarterly", "2026-04-01T00:00:00+00:00"),
+    ("yearly", "2027-01-01T00:00:00+00:00"),
+    ("cron", "2026-02-01T00:00:00+00:00"),
+])
+def test_cycles(cycle, expected):
+    dt_util.set_default_time_zone(timezone.utc)
+    actual = meter.next_reset(settings(cycle=cycle), datetime(2026, 1, 10, 12, tzinfo=timezone.utc))
+    assert (actual.isoformat() if actual else None) == expected
+
+
+@pytest.mark.parametrize("start,cycle,after,expected", [
+    ("2026-01-31T00:00:00", "monthly", "2026-01-31", "2026-02-28"),
+    ("2026-01-31T00:00:00", "monthly", "2026-02-28", "2026-03-31"),
+    ("2024-02-29T00:00:00+00:00", "yearly", "2027-03-01", "2028-02-29"),
+    ("2026-01-15T00:00:00", "days", "2026-01-15", "2026-02-14"),
+    ("2026-01-15T00:00:00", "days", "2026-01-01", "2026-01-15"),
+    ("2026-01-15T00:00:00", "monthly", "2025-01-01", "2026-01-15"),
+])
+def test_anchored_schedules(start, cycle, after, expected):
+    dt_util.set_default_time_zone(timezone.utc)
+    now = datetime.fromisoformat(after).replace(tzinfo=timezone.utc)
+    assert meter.next_reset(settings(start=start, cycle=cycle), now).date().isoformat() == expected
+
+
+def test_offset_and_dst():
+    dt_util.set_default_time_zone(dt_util.get_time_zone("America/New_York"))
+    try:
+        config = settings(cycle="days", days=1, start="2026-03-07T02:30:00", offset=0)
+        result = meter.next_reset(config, dt_util.parse_datetime("2026-03-07T08:00:00Z"))
+        assert result.isoformat() == "2026-03-08T03:30:00-04:00"
+        result = meter.next_reset(config, result)
+        assert result.isoformat() == "2026-03-09T02:30:00-04:00"
+    finally:
+        dt_util.set_default_time_zone(timezone.utc)
+    result = meter.next_reset(settings(offset=60), dt_util.parse_datetime("2026-02-01T00:00:00Z"))
+    assert result.hour == 1
+
+
+@pytest.mark.parametrize("usage,expected", [(0, 10), (50, 110), (100, 210), (150, 360), (200, 510), (250, 710), (-1, 10)])
+def test_progressive_cost(usage, expected):
+    config = settings(rate=4, base_charge=10, tiers=[{"up_to": 100, "rate": 2}, {"up_to": 200, "rate": 3}])
+    assert meter.cost(config, usage) == Decimal(expected)
+
+
+def test_flat_cost():
+    assert meter.cost(settings(rate="0.1"), "0.3") == Decimal("0.03")
+
+
+@pytest.mark.parametrize("cycle,keys", [
+    ("none", {"cycle", "timezone"}),
+    ("cron", {"cycle", "cron", "timezone"}),
+    ("monthly", {"cycle", "start", "offset", "timezone"}),
+    ("days", {"cycle", "start", "offset", "days", "timezone"}),
+])
+def test_schedule_profile_ignores_irrelevant_options(cycle, keys):
+    config = settings(cycle=cycle, start="2026-01-01T00:00:00")
+    profile = meter.schedule_profile(config)
+    assert set(profile) == keys
+    assert meter.schedule_profile({**config, "rate": 900}) == profile
+
+
+@pytest.mark.parametrize("start,expected", [("", True), ("2025-01-01T00:00:00", True), ("2027-01-01T00:00:00Z", False)])
+def test_collection_start_gate(start, expected):
+    assert meter.collection_started(settings(start=start), dt_util.parse_datetime("2026-01-01T00:00:00Z")) is expected

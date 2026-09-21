@@ -120,7 +120,7 @@ async def test_image_source_can_create_camera_helpers(hass):
     })
     assert "camera" in _source_target_domains(["image.map"], "image")
     defaults = _reference_entity_defaults(hass, ["image.map"], target_platform="camera")
-    assert defaults[CONF_INITIAL_VALUE] == "on"
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert Template(defaults["value_template"], hass).async_render() == "on"
     native = defaults[CONF_NATIVE_VALUE_TEMPLATES]
     assert Template(native["source_entity"], hass).async_render() == "image.map"
@@ -1069,7 +1069,9 @@ async def test_alarm_sensor_helper_uses_any_active_source(hass, device_class):
         f"binary_sensor.{device_class}_two",
     ])
 
-    assert defaults[CONF_INITIAL_VALUE] == "on"
+    # Reference helpers deliberately start conservatively; their generated
+    # template then follows the currently active source state.
+    assert defaults[CONF_INITIAL_VALUE] == "off"
     assert " > 0 }}" in defaults["value_template"]
     assert " and " not in defaults["value_template"]
     template = Template(defaults["value_template"], hass)

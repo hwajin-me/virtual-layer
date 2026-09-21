@@ -180,13 +180,30 @@
               "light_response_retries": "소스 새로고침 재시도",
               "light_ignore_unresponsive": "응답 없는 전구 무시",
               "sensor_unit": "센서 단위",
+              "utility_meter_enabled": "유틸리티 미터 모드",
+              "utility_meter_cycle": "초기화 주기",
               "boiler_dynamic_control": "보일러 동적 난방 보정",
               "boiler_dynamic_template": "동적 난방수 목표온도 수식",
               "boiler_room_temperature_entity_id": "실내 온도 센서",
               "media_player_source_priority": "미디어 소스 우선순위",
               "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
               "air_quality_per_source": "소스별 1:1 공기질 센서 생성",
-              "configure_air_quality_sources": "원본별 공기질 세부 설정"
+              "configure_air_quality_sources": "원본별 공기질 세부 설정",
+              "utility_meter_start": "시작 날짜·시간",
+              "utility_meter_days": "N일마다 반복",
+              "utility_meter_offset": "시작 오프셋(분)",
+              "utility_meter_cron": "Cron 일정",
+              "utility_meter_delta_values": "소스가 증분 보고",
+              "utility_meter_net_consumption": "순사용량 허용",
+              "utility_meter_periodically_resetting": "소스 주기적 초기화",
+              "utility_meter_always_available": "누적값 가용 유지",
+              "utility_meter_tariff_entity": "요율 선택 엔티티",
+              "utility_meter_tariff": "집계 요율",
+              "utility_meter_rate": "단위 단가",
+              "utility_meter_base_charge": "기간 기본요금",
+              "utility_meter_currency": "통화",
+              "utility_meter_tiers": "누진 구간",
+              "utility_meter_current_value": "현재 기간 사용량 보정"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -203,13 +220,30 @@
               "light_response_retries": "조명 그룹은 소스 기기를 새로고침하고 목표에 도달하지 않은 전구에만 최신 명령을 재전송합니다(0–10회). 새 명령은 이전 재시도를 취소합니다. 단일 소스 조명은 상태만 다시 읽습니다.",
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
               "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
+              "utility_meter_enabled": "하나의 소스 센서를 유틸리티 미터처럼 누적합니다. 기간별 합계를 만들고 소스 증가분을 반영하며, 소스 자체의 초기화는 무시합니다.",
+              "utility_meter_cycle": "주기나 날짜를 바꾸면 현재 합계를 유지하고 변경 시점 이후의 초기화 일정부터 적용합니다. 0부터 시작하려면 초기화 Action을 실행하세요.",
               "boiler_dynamic_control": "섭씨를 사용하는 보일러 1개와 실내 센서를 대상으로 켭니다. 설정된 set_temperature 액션 대신 주기적으로 물 목표온도를 전송합니다. 활성화 후 실내 목표온도를 설정하세요. 60초마다 계산하며 최소 120초 간격으로 전송합니다. 보일러 current_temperature는 실제 난방수 온도여야 합니다. 전원 액션은 별도 설정을 따릅니다.",
               "boiler_dynamic_template": "섭씨 물 목표온도를 반환합니다. temperature: 저장된 실내 목표, room_temperature: 실내 센서 평균, boiler_water_temperature: 난방수 온도, room_temperature_rate: 최근 최대 10분의 상승속도(℃/분), heating_elapsed_minutes: 관측된 연속 난방 시간(분), heat_accumulation: 30분 시정수로 감쇠하는 축열 추정값(℃·분), base_water_temperature: 기존 보정식 결과. 기본 계수는 설비에 맞게 조정하세요. 입력 누락 시 전송을 멈추며 보일러 범위와 간격을 적용합니다.",
               "boiler_room_temperature_entity_id": "가상 climate의 현재 실내온도로 사용할 센서를 여러 개 선택합니다. 유효한 숫자 값은 평균하며, 실제 보일러 온수 온도는 attribute로 유지됩니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
               "configure_air_quality_rules": "PM1.0·PM2.5·PM4·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·N₂O·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 순간값 표시용이며 공식 건강 기준이나 노출시간 평가가 아닙니다. good은 안전을 보증하지 않습니다. PM4는 PM2.5 구간을 차용한 표시용 참고값, N₂O는 직업 노출 기준과 무관한 자체 표시 구간을 사용합니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
               "air_quality_per_source": "종합 공기질과 원본 센서를 유지하면서 이 Device에 각 소스만 판정하는 등급 센서를 추가합니다. 각 센서의 자동 프로필을 사용하며 미지원 측정값은 unknown입니다. Matterbridge Air Quality Regex와 endpoint 그룹 설정은 별도로 필요합니다.",
-              "configure_air_quality_sources": "원본 센서는 유지됩니다. 합산 측정값 또는 각 원본별로 단위·속성·5개 역치·6개 등급·수식을 설정합니다. 서로 다른 오염물질은 평균하지 않고 최악 등급을 사용합니다."
+              "configure_air_quality_sources": "원본 센서는 유지됩니다. 합산 측정값 또는 각 원본별로 단위·속성·5개 역치·6개 등급·수식을 설정합니다. 서로 다른 오염물질은 평균하지 않고 최악 등급을 사용합니다.",
+              "utility_meter_start": "예: 2026-01-15T00:00:00. 시간대가 없으면 HA 현지 시간입니다. 31일은 짧은 달의 말일에 맞춥니다.",
+              "utility_meter_days": "시작일로부터 반복할 달력 일수입니다. N일 주기에 사용합니다.",
+              "utility_meter_offset": "달력 기준 시점을 0~40319분 이동합니다. cron에는 적용하지 않습니다.",
+              "utility_meter_cron": "HA 현지 시간 기준 5필드 cron입니다. cron 주기에만 적용합니다.",
+              "utility_meter_delta_values": "누적값의 차이 대신 새 소스 이벤트의 값을 사용량에 더합니다.",
+              "utility_meter_net_consumption": "수입·수출 계량기의 음수 증분을 허용하며 total 통계를 게시합니다.",
+              "utility_meter_periodically_resetting": "소스 오류 구간의 기준값을 폐기합니다. 평생 누적 미터는 끄면 단절 전후 차이를 반영합니다.",
+              "utility_meter_always_available": "소스가 사용 불가여도 누적 합계를 표시합니다.",
+              "utility_meter_tariff_entity": "선택적 select/input_select 엔티티입니다. 요율마다 이 Device에 미터를 하나씩 만드세요.",
+              "utility_meter_tariff": "선택기의 옵션과 이 값이 일치할 때만 집계합니다. 자동화에서 시간대별로 선택기를 전환할 수 있습니다.",
+              "utility_meter_rate": "소스 단위당 가격이며 마지막 누진 구간 초과분에도 적용합니다. 단가 변경 시 현재 기간 전체 예상요금을 다시 계산하며 과거 단가 구간을 분리하지 않습니다.",
+              "utility_meter_base_charge": "기간당 고정 요금입니다. 요율별 미터가 여러 개면 하나에만 기본요금을 설정하세요.",
+              "utility_meter_currency": "KRW, USD 등 세 글자 통화 코드입니다.",
+              "utility_meter_tiers": "누적 상한 up_to와 단가 rate 객체의 목록입니다. 상한은 오름차순이며 비우면 단일단가를 사용합니다.",
+              "utility_meter_current_value": "검침한 현재 기간 절대 합계를 저장 시 한 번 적용하고 소스 기준값도 갱신합니다. 일정만 바꾸고 합계를 유지하려면 비우세요. 소스 단절 시 복구 후 첫 측정값을 기준으로 삼습니다."
             }
           },
           "native_value_templates": {
@@ -1320,12 +1354,29 @@
               "light_ignore_unresponsive": "응답 없는 전구 무시",
               "sensor_unit": "센서 단위",
               "boiler_dynamic_control": "보일러 동적 난방 보정",
+              "utility_meter_enabled": "유틸리티 미터 모드",
+              "utility_meter_cycle": "초기화 주기",
               "boiler_dynamic_template": "동적 난방수 목표온도 수식",
               "boiler_room_temperature_entity_id": "실내 온도 센서",
               "media_player_source_priority": "미디어 소스 우선순위",
               "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
               "air_quality_per_source": "소스별 1:1 공기질 센서 생성",
-              "configure_air_quality_sources": "원본별 공기질 세부 설정"
+              "configure_air_quality_sources": "원본별 공기질 세부 설정",
+              "utility_meter_start": "시작 날짜·시간",
+              "utility_meter_days": "N일마다 반복",
+              "utility_meter_offset": "시작 오프셋(분)",
+              "utility_meter_cron": "Cron 일정",
+              "utility_meter_delta_values": "소스가 증분 보고",
+              "utility_meter_net_consumption": "순사용량 허용",
+              "utility_meter_periodically_resetting": "소스 주기적 초기화",
+              "utility_meter_always_available": "누적값 가용 유지",
+              "utility_meter_tariff_entity": "요율 선택 엔티티",
+              "utility_meter_tariff": "집계 요율",
+              "utility_meter_rate": "단위 단가",
+              "utility_meter_base_charge": "기간 기본요금",
+              "utility_meter_currency": "통화",
+              "utility_meter_tiers": "누진 구간",
+              "utility_meter_current_value": "현재 기간 사용량 보정"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -1343,12 +1394,29 @@
               "light_ignore_unresponsive": "선택한 전구 하나가 unavailable이어도 응답한 전구를 사용하고 통합 조명을 사용 가능 상태로 유지합니다.",
               "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
               "boiler_dynamic_control": "섭씨를 사용하는 보일러 1개와 실내 센서를 대상으로 켭니다. 설정된 set_temperature 액션 대신 주기적으로 물 목표온도를 전송합니다. 활성화 후 실내 목표온도를 설정하세요. 60초마다 계산하며 최소 120초 간격으로 전송합니다. 보일러 current_temperature는 실제 난방수 온도여야 합니다. 전원 액션은 별도 설정을 따릅니다.",
+              "utility_meter_enabled": "하나의 소스 센서를 유틸리티 미터처럼 누적합니다. 기간별 합계를 만들고 소스 증가분을 반영하며, 소스 자체의 초기화는 무시합니다.",
+              "utility_meter_cycle": "주기나 날짜를 바꾸면 현재 합계를 유지하고 변경 시점 이후의 초기화 일정부터 적용합니다. 0부터 시작하려면 초기화 Action을 실행하세요.",
               "boiler_dynamic_template": "섭씨 물 목표온도를 반환합니다. temperature: 저장된 실내 목표, room_temperature: 실내 센서 평균, boiler_water_temperature: 난방수 온도, room_temperature_rate: 최근 최대 10분의 상승속도(℃/분), heating_elapsed_minutes: 관측된 연속 난방 시간(분), heat_accumulation: 30분 시정수로 감쇠하는 축열 추정값(℃·분), base_water_temperature: 기존 보정식 결과. 기본 계수는 설비에 맞게 조정하세요. 입력 누락 시 전송을 멈추며 보일러 범위와 간격을 적용합니다.",
               "boiler_room_temperature_entity_id": "가상 climate의 현재 실내온도로 사용할 센서를 여러 개 선택합니다. 유효한 숫자 값은 평균하며, 실제 보일러 온수 온도는 attribute로 유지됩니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
               "configure_air_quality_rules": "PM1.0·PM2.5·PM4·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·N₂O·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 순간값 표시용이며 공식 건강 기준이나 노출시간 평가가 아닙니다. good은 안전을 보증하지 않습니다. PM4는 PM2.5 구간을 차용한 표시용 참고값, N₂O는 직업 노출 기준과 무관한 자체 표시 구간을 사용합니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
               "air_quality_per_source": "종합 공기질과 원본 센서를 유지하면서 이 Device에 각 소스만 판정하는 등급 센서를 추가합니다. 각 센서의 자동 프로필을 사용하며 미지원 측정값은 unknown입니다. Matterbridge Air Quality Regex와 endpoint 그룹 설정은 별도로 필요합니다.",
-              "configure_air_quality_sources": "원본 센서는 유지됩니다. 합산 측정값 또는 각 원본별로 단위·속성·5개 역치·6개 등급·수식을 설정합니다. 서로 다른 오염물질은 평균하지 않고 최악 등급을 사용합니다."
+              "configure_air_quality_sources": "원본 센서는 유지됩니다. 합산 측정값 또는 각 원본별로 단위·속성·5개 역치·6개 등급·수식을 설정합니다. 서로 다른 오염물질은 평균하지 않고 최악 등급을 사용합니다.",
+              "utility_meter_start": "예: 2026-01-15T00:00:00. 시간대가 없으면 HA 현지 시간입니다. 31일은 짧은 달의 말일에 맞춥니다.",
+              "utility_meter_days": "시작일로부터 반복할 달력 일수입니다. N일 주기에 사용합니다.",
+              "utility_meter_offset": "달력 기준 시점을 0~40319분 이동합니다. cron에는 적용하지 않습니다.",
+              "utility_meter_cron": "HA 현지 시간 기준 5필드 cron입니다. cron 주기에만 적용합니다.",
+              "utility_meter_delta_values": "누적값의 차이 대신 새 소스 이벤트의 값을 사용량에 더합니다.",
+              "utility_meter_net_consumption": "수입·수출 계량기의 음수 증분을 허용하며 total 통계를 게시합니다.",
+              "utility_meter_periodically_resetting": "소스 오류 구간의 기준값을 폐기합니다. 평생 누적 미터는 끄면 단절 전후 차이를 반영합니다.",
+              "utility_meter_always_available": "소스가 사용 불가여도 누적 합계를 표시합니다.",
+              "utility_meter_tariff_entity": "선택적 select/input_select 엔티티입니다. 요율마다 이 Device에 미터를 하나씩 만드세요.",
+              "utility_meter_tariff": "선택기의 옵션과 이 값이 일치할 때만 집계합니다. 자동화에서 시간대별로 선택기를 전환할 수 있습니다.",
+              "utility_meter_rate": "소스 단위당 가격이며 마지막 누진 구간 초과분에도 적용합니다. 단가 변경 시 현재 기간 전체 예상요금을 다시 계산하며 과거 단가 구간을 분리하지 않습니다.",
+              "utility_meter_base_charge": "기간당 고정 요금입니다. 요율별 미터가 여러 개면 하나에만 기본요금을 설정하세요.",
+              "utility_meter_currency": "KRW, USD 등 세 글자 통화 코드입니다.",
+              "utility_meter_tiers": "누적 상한 up_to와 단가 rate 객체의 목록입니다. 상한은 오름차순이며 비우면 단일단가를 사용합니다.",
+              "utility_meter_current_value": "검침한 현재 기간 절대 합계를 저장 시 한 번 적용하고 소스 기준값도 갱신합니다. 일정만 바꾸고 합계를 유지하려면 비우세요. 소스 단절 시 복구 후 첫 측정값을 기준으로 삼습니다."
             }
           },
           "native_value_templates": {
@@ -2051,11 +2119,28 @@
               "sensor_unit": "센서 단위",
               "boiler_dynamic_control": "보일러 동적 난방 보정",
               "boiler_dynamic_template": "동적 난방수 목표온도 수식",
+              "utility_meter_enabled": "유틸리티 미터 모드",
+              "utility_meter_cycle": "초기화 주기",
               "boiler_room_temperature_entity_id": "실내 온도 센서",
               "media_player_source_priority": "미디어 소스 우선순위",
               "configure_air_quality_rules": "공기질 판정 기준 직접 설정",
               "air_quality_per_source": "소스별 1:1 공기질 센서 생성",
-              "configure_air_quality_sources": "원본별 공기질 세부 설정"
+              "configure_air_quality_sources": "원본별 공기질 세부 설정",
+              "utility_meter_start": "시작 날짜·시간",
+              "utility_meter_days": "N일마다 반복",
+              "utility_meter_offset": "시작 오프셋(분)",
+              "utility_meter_cron": "Cron 일정",
+              "utility_meter_delta_values": "소스가 증분 보고",
+              "utility_meter_net_consumption": "순사용량 허용",
+              "utility_meter_periodically_resetting": "소스 주기적 초기화",
+              "utility_meter_always_available": "누적값 가용 유지",
+              "utility_meter_tariff_entity": "요율 선택 엔티티",
+              "utility_meter_tariff": "집계 요율",
+              "utility_meter_rate": "단위 단가",
+              "utility_meter_base_charge": "기간 기본요금",
+              "utility_meter_currency": "통화",
+              "utility_meter_tiers": "누진 구간",
+              "utility_meter_current_value": "현재 기간 사용량 보정"
             },
             "data_description": {
               "polygon_geojson_json": "이름이 지정된 Polygon 또는 MultiPolygon Feature를 포함하는 선택 GeoJSON FeatureCollection입니다. device_tracker에서만 사용합니다.",
@@ -2074,11 +2159,28 @@
               "sensor_unit": "정규화된 Home Assistant 단위를 선택하면 단위 템플릿을 대체합니다. 템플릿 유지는 동적·사용자 단위를 보존합니다. 측정 숫자를 환산하지 않습니다.",
               "boiler_dynamic_control": "섭씨를 사용하는 보일러 1개와 실내 센서를 대상으로 켭니다. 설정된 set_temperature 액션 대신 주기적으로 물 목표온도를 전송합니다. 활성화 후 실내 목표온도를 설정하세요. 60초마다 계산하며 최소 120초 간격으로 전송합니다. 보일러 current_temperature는 실제 난방수 온도여야 합니다. 전원 액션은 별도 설정을 따릅니다.",
               "boiler_dynamic_template": "섭씨 물 목표온도를 반환합니다. temperature: 저장된 실내 목표, room_temperature: 실내 센서 평균, boiler_water_temperature: 난방수 온도, room_temperature_rate: 최근 최대 10분의 상승속도(℃/분), heating_elapsed_minutes: 관측된 연속 난방 시간(분), heat_accumulation: 30분 시정수로 감쇠하는 축열 추정값(℃·분), base_water_temperature: 기존 보정식 결과. 기본 계수는 설비에 맞게 조정하세요. 입력 누락 시 전송을 멈추며 보일러 범위와 간격을 적용합니다.",
+              "utility_meter_enabled": "하나의 소스 센서를 유틸리티 미터처럼 누적합니다. 기간별 합계를 만들고 소스 증가분을 반영하며, 소스 자체의 초기화는 무시합니다.",
+              "utility_meter_cycle": "주기나 날짜를 바꾸면 현재 합계를 유지하고 변경 시점 이후의 초기화 일정부터 적용합니다. 0부터 시작하려면 초기화 Action을 실행하세요.",
               "boiler_room_temperature_entity_id": "가상 climate의 현재 실내온도로 사용할 센서를 여러 개 선택합니다. 유효한 숫자 값은 평균하며, 실제 보일러 온수 온도는 attribute로 유지됩니다.",
               "media_player_source_priority": "결합 미디어 플레이어의 선택 사항인 폴백 순서입니다. 소스를 드래그해 우선순위를 정하세요. 재생·일시정지·버퍼링 중인 소스를 먼저 사용하고, 꺼짐·유휴·사용 불가 또는 유효한 값이 없으면 다음 소스를 사용합니다. 이 공통 순서는 표준 미디어 플레이어 속성 전체에 적용됩니다.",
               "configure_air_quality_rules": "PM1.0·PM2.5·PM4·PM10·라돈·포름알데히드·CO₂·CO·NO₂·오존·SO₂·NO·N₂O·벤젠·암모니아·황화수소·TVOC/eTVOC(질량/ppm·ppb) 측정값을 개별 기본 프로필로 판정하고 유효한 등급 중 가장 나쁜 등급을 사용합니다. 원본 등급과 AQI도 지원합니다. 지원하지 않는 항목·단위는 unknown입니다. 기본 구간은 순간값 표시용이며 공식 건강 기준이나 노출시간 평가가 아닙니다. good은 안전을 보증하지 않습니다. PM4는 PM2.5 구간을 차용한 표시용 참고값, N₂O는 직업 노출 기준과 무관한 자체 표시 구간을 사용합니다. 생성된 템플릿에서 적용 역치를 확인·수정하거나 체크하여 직접 판정 기준을 설정하세요. 원본 sensor는 변경하지 않습니다.",
               "air_quality_per_source": "종합 공기질과 원본 센서를 유지하면서 이 Device에 각 소스만 판정하는 등급 센서를 추가합니다. 각 센서의 자동 프로필을 사용하며 미지원 측정값은 unknown입니다. Matterbridge Air Quality Regex와 endpoint 그룹 설정은 별도로 필요합니다.",
-              "configure_air_quality_sources": "원본 센서는 유지됩니다. 합산 측정값 또는 각 원본별로 단위·속성·5개 역치·6개 등급·수식을 설정합니다. 서로 다른 오염물질은 평균하지 않고 최악 등급을 사용합니다."
+              "configure_air_quality_sources": "원본 센서는 유지됩니다. 합산 측정값 또는 각 원본별로 단위·속성·5개 역치·6개 등급·수식을 설정합니다. 서로 다른 오염물질은 평균하지 않고 최악 등급을 사용합니다.",
+              "utility_meter_start": "예: 2026-01-15T00:00:00. 시간대가 없으면 HA 현지 시간입니다. 31일은 짧은 달의 말일에 맞춥니다.",
+              "utility_meter_days": "시작일로부터 반복할 달력 일수입니다. N일 주기에 사용합니다.",
+              "utility_meter_offset": "달력 기준 시점을 0~40319분 이동합니다. cron에는 적용하지 않습니다.",
+              "utility_meter_cron": "HA 현지 시간 기준 5필드 cron입니다. cron 주기에만 적용합니다.",
+              "utility_meter_delta_values": "누적값의 차이 대신 새 소스 이벤트의 값을 사용량에 더합니다.",
+              "utility_meter_net_consumption": "수입·수출 계량기의 음수 증분을 허용하며 total 통계를 게시합니다.",
+              "utility_meter_periodically_resetting": "소스 오류 구간의 기준값을 폐기합니다. 평생 누적 미터는 끄면 단절 전후 차이를 반영합니다.",
+              "utility_meter_always_available": "소스가 사용 불가여도 누적 합계를 표시합니다.",
+              "utility_meter_tariff_entity": "선택적 select/input_select 엔티티입니다. 요율마다 이 Device에 미터를 하나씩 만드세요.",
+              "utility_meter_tariff": "선택기의 옵션과 이 값이 일치할 때만 집계합니다. 자동화에서 시간대별로 선택기를 전환할 수 있습니다.",
+              "utility_meter_rate": "소스 단위당 가격이며 마지막 누진 구간 초과분에도 적용합니다. 단가 변경 시 현재 기간 전체 예상요금을 다시 계산하며 과거 단가 구간을 분리하지 않습니다.",
+              "utility_meter_base_charge": "기간당 고정 요금입니다. 요율별 미터가 여러 개면 하나에만 기본요금을 설정하세요.",
+              "utility_meter_currency": "KRW, USD 등 세 글자 통화 코드입니다.",
+              "utility_meter_tiers": "누적 상한 up_to와 단가 rate 객체의 목록입니다. 상한은 오름차순이며 비우면 단일단가를 사용합니다.",
+              "utility_meter_current_value": "검침한 현재 기간 절대 합계를 저장 시 한 번 적용하고 소스 기준값도 갱신합니다. 일정만 바꾸고 합계를 유지하려면 비우세요. 소스 단절 시 복구 후 첫 측정값을 기준으로 삼습니다."
             }
           },
           "native_value_templates": {
@@ -3146,6 +3248,21 @@
         "template": "단위 템플릿 유지"
       }
     },
+    "utility_meter_cycle": {
+      "options": {
+        "daily": "매일",
+        "weekly": "매주",
+        "monthly": "매월",
+        "quarterly": "분기별",
+        "yearly": "매년",
+        "none": "자동 초기화 없음",
+        "hourly": "매시간",
+        "bimonthly": "두 달마다",
+        "days": "N일마다",
+        "cron": "Cron 일정",
+        "quarter-hourly": "15분마다"
+      }
+    },
     "matter_light_type": {
       "options": {
         "on_off": "켜기/끄기 조명",
@@ -3354,6 +3471,34 @@
           "description": "상태에 적용할 값입니다."
         }
       }
+    },
+    "adjust_utility_meter": {
+      "name": "유틸리티 미터 보정",
+      "description": "소스 미터가 놓친 사용량을 현재 가상 유틸리티 미터 기간에 더합니다.",
+      "fields": {
+        "entity_id": {
+          "name": "엔티티 ID",
+          "description": "보정할 가상 유틸리티 미터 센서입니다."
+        },
+        "amount": {
+          "name": "누락 사용량",
+          "description": "미터 단위의 0 이상 사용량입니다."
+        }
+      }
+    },
+    "calibrate_utility_meter": {
+      "name": "유틸리티 미터 보정값 설정",
+      "description": "가상 유틸리티 미터의 현재 기간 합계를 검증된 값으로 설정합니다.",
+      "fields": {
+        "value": {
+          "name": "현재 기간 값",
+          "description": "미터 단위의 유한한 0 이상 값입니다."
+        }
+      }
+    },
+    "reset_utility_meter": {
+      "name": "유틸리티 미터 초기화",
+      "description": "현재 기간을 마감하고 가상 유틸리티 미터를 0으로 초기화합니다."
     },
     "set_available": {
       "name": "사용 가능 여부 설정",

@@ -678,6 +678,32 @@ def _normalize_common_entity_config(entity, device_name, index):
                 valid_source_entities.append(source_entity_id)
         entity[CONF_SOURCE_ENTITIES] = valid_source_entities
 
+        # Releases before the partial-source availability contract generated
+        # an all-sources (``and``) helper. Upgrade only a helper whose saved
+        # auto-helper profile proves it was generated; an explicitly authored
+        # availability template remains authoritative.
+        if len(valid_source_entities) > 1:
+            legacy_template = "{{ " + " and ".join(
+                f"states({source!r}) not in ['unknown', 'unavailable']"
+                for source in valid_source_entities
+            ) + " }}"
+            current_template = entity.get(CONF_AVAILABILITY_TEMPLATE)
+            auto_helper = entity.get(CONF_AUTO_HELPER)
+            if (
+                current_template == legacy_template
+                and isinstance(auto_helper, Mapping)
+                and auto_helper.get(CONF_AVAILABILITY_TEMPLATE) == legacy_template
+            ):
+                available_template = "{{ " + " or ".join(
+                    f"states({source!r}) not in ['unknown', 'unavailable']"
+                    for source in valid_source_entities
+                ) + " }}"
+                entity[CONF_AVAILABILITY_TEMPLATE] = available_template
+                entity[CONF_AUTO_HELPER] = {
+                    **auto_helper,
+                    CONF_AVAILABILITY_TEMPLATE: available_template,
+                }
+
     for key in (
         CONF_VALUE_TEMPLATE,
         CONF_AVAILABILITY_TEMPLATE,
@@ -1075,6 +1101,21 @@ class BlendedCfg:
         )
 
         sensor_entities = self._entities.setdefault("sensor", [])
+        if platform == "sensor" and entity.get("utility_meter_enabled"):
+            cost_uid = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}cost"
+            cost_id = self._reserve_entity_id("sensor", f"{entity_id}_cost", cost_uid)
+            sensor_entities.append({
+                CONF_NAME: f"{entity[CONF_NAME]} Cost",
+                ATTR_ENTITY_ID: cost_id, ATTR_UNIQUE_ID: cost_uid,
+                ATTR_DEVICE_ID: device_id,
+                CONF_INITIAL_VALUE: "0", CONF_INITIAL_AVAILABILITY: True,
+                CONF_PERSISTENT: False, CONF_CLASS: "monetary",
+                "state_class": "total",
+                CONF_UNIT_OF_MEASUREMENT: entity.get("utility_meter_currency", "KRW").upper(),
+                CONF_SOURCE_ENTITIES: [entity_id],
+                CONF_VALUE_TEMPLATE: "{{ state_attr(" + repr(entity_id) + ", 'cost') | float(none) }}",
+                CONF_NATIVE_TEMPLATES: {"last_reset": "{{ state_attr(" + repr(entity_id) + ", 'last_reset') }}"},
+            })
         if platform in ("sensor", "binary_sensor"):
             # Build from configuration, not startup ordering or a restored state.
             # Existing UI entries receive the same companion on their next load.

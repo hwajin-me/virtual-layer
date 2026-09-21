@@ -29,6 +29,7 @@ from custom_components.virtual_layer.const import (
     CONF_ATTRIBUTE_TEMPLATES,
     CONF_ATTRIBUTES,
     CONF_AVAILABILITY_TEMPLATE,
+    CONF_AUTO_HELPER,
     CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID,
     CONF_COMMAND_ACTIONS,
     CONF_EVENT_HOOKS,
@@ -100,6 +101,31 @@ def test_stored_invalid_icon_is_ignored(value):
         {CONF_PLATFORM: "sensor", "icon": value}, "Device", 0,
     )
     assert "icon" not in entity
+
+
+def test_stored_generated_availability_allows_partial_source_recovery():
+    sources = ["sensor.office_temperature", "sensor.hall_temperature"]
+    legacy_template = (
+        "{{ states('sensor.office_temperature') not in ['unknown', 'unavailable'] "
+        "and states('sensor.hall_temperature') not in ['unknown', 'unavailable'] }}"
+    )
+
+    entity = _normalize_common_entity_config(
+        {
+            CONF_PLATFORM: "sensor",
+            CONF_SOURCE_ENTITIES: sources,
+            CONF_AVAILABILITY_TEMPLATE: legacy_template,
+            CONF_AUTO_HELPER: {CONF_AVAILABILITY_TEMPLATE: legacy_template},
+        },
+        "Device",
+        0,
+    )
+
+    assert " or " in entity[CONF_AVAILABILITY_TEMPLATE]
+    assert " and " not in entity[CONF_AVAILABILITY_TEMPLATE]
+    assert entity[CONF_AUTO_HELPER][CONF_AVAILABILITY_TEMPLATE] == (
+        entity[CONF_AVAILABILITY_TEMPLATE]
+    )
 
 
 def test_make_entity_id_uses_the_domain_prefix_for_prefixed_names():

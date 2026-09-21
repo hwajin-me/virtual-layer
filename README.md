@@ -1319,6 +1319,58 @@ Stop the container:
 docker compose -f tests/docker/docker-compose.yml down
 ```
 
+### Virtual utility meters
+
+Create a **sensor** on your virtual Device, choose one cumulative usage sensor
+(for electricity, an energy sensor in kWh, not an instantaneous W sensor), and
+enable the utility-meter options. Configure the same fields when editing it.
+The generated `<entity_id>_cost` monetary sensor belongs to the same Device.
+
+- Cycles: every 15 minutes, hourly, daily, weekly, monthly, bimonthly, quarterly, yearly, no reset,
+  anchored N-day repetition, or a five-field cron expression.
+- The optional start date/time anchors calendar cycles; N-day cycles require it.
+  Local calendar days follow Home Assistant's timezone, including DST. Month-end
+  anchors clamp in shorter months without drifting in subsequent months.
+- Configure incremental readings, signed net consumption, source reset handling,
+  and availability during source outages. A decreasing cumulative source reading
+  rebases the source without subtracting usage unless net consumption is enabled.
+- To track tariffs, create one meter per tariff using the same source and an
+  existing `select`/`input_select` entity; each meter collects only while its
+  configured tariff is selected. Switching tariffs rebases the reading.
+- Billing supports a base charge, a unit rate, and ascending progressive tiers
+  (`up_to` and `rate`). The unit rate applies above the final tier. This is a
+  configurable estimate, not a jurisdiction-specific tax or utility-bill engine.
+
+**Current usage correction** replaces the current period's total when saved and
+is applied once, not again on every reload. In automation actions, use
+`virtual_layer.adjust_utility_meter` (`amount`, non-negative) to add missing usage,
+`virtual_layer.calibrate_utility_meter` (`value`) to replace the total, or
+`virtual_layer.reset_utility_meter` to finish the current period and start at zero.
+All three accept `entity_id`; calibration permits negative totals only for net
+consumption. Corrections do not modify the physical source reading.
+
+Changing a cycle, start date, offset, N-day interval, cron expression, or HA
+timezone keeps the running total and applies the new schedule from the change
+onward. It does not retroactively reset past periods. The new schedule baseline
+survives reloads; `last_reset` continues to describe the actual last reset.
+Use the reset action explicitly if the change should also start a zero total.
+Editing prices recalculates the current period's estimate using the new prices;
+it does not split the period into historical price segments.
+
+Absolute calibration also rebases the source. If the source is unavailable,
+the first recovered reading establishes a new baseline, avoiding counting an
+already-corrected outage gap twice. Consumption between calibration and that
+first recovered reading cannot be reconstructed; correct it afterward if needed.
+An additive adjustment does not rebase the source.
+Corrections affect the current entity value and subsequent collection; they do
+not rewrite previously recorded Home Assistant history or long-term statistics.
+
+Persistent meters restore totals and source baselines. When a cycle boundary was
+missed during downtime, the current period starts fresh; the integration cannot
+reconstruct which period unobserved consumption belonged to. Use an audited
+current-usage correction for missing Zigbee readings rather than expecting it to
+recover measurements the device never reported.
+
 The Docker environment intentionally does not include any Virtual Layer YAML.
 It mounts the local custom integration into Home Assistant and verifies the same
 UI-only path users will use.

@@ -5305,13 +5305,16 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
     assert actual_entities == [
         {
             CONF_PLATFORM: "light",
-            "matter_light_type": "dimmable",
+            # Home Assistant exposes an empty supported_color_modes value for
+            # this synthetic state; do not infer dimming from a stale
+            # brightness attribute when capability metadata is present.
+            "matter_light_type": "on_off",
             "light_response_delay": 2,
             "light_response_retries": 2,
             "light_ignore_unresponsive": True,
             CONF_NAME: "Kitchen Lamp",
             ATTR_ENTITY_ID: "light.virtual_kitchen_lamp",
-            CONF_INITIAL_VALUE: "on",
+            CONF_INITIAL_VALUE: "off",
             CONF_INITIAL_AVAILABILITY: True,
             CONF_PERSISTENT: True,
             CONF_ICON_TEMPLATE: (
@@ -6419,7 +6422,7 @@ async def test_options_flow_can_edit_all_climate_modes(hass):
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     entity = _first_stored_entity(result)
-    assert entity[CONF_INITIAL_VALUE] == "off"
+    assert entity[CONF_INITIAL_VALUE] == "heat"
     saved_templates = entity[CONF_NATIVE_TEMPLATES]
     assert saved_templates["hvac_modes"] == "{{ ['off', 'heat', 'cool'] }}"
     assert saved_templates["fan_modes"] == "{{ ['auto', 'quiet'] }}"

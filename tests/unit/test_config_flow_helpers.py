@@ -5153,6 +5153,9 @@ def test_mixed_humidifier_components_offer_type_and_generate_helpers(hass):
     availability = Template(defaults[CONF_AVAILABILITY_TEMPLATE], hass)
     assert availability.async_render(parse_result=True) is True
     hass.states.async_set(entity_ids[3], "unavailable")
+    assert availability.async_render(parse_result=True) is True
+    for entity_id in entity_ids[:-1]:
+        hass.states.async_set(entity_id, "unavailable")
     assert availability.async_render(parse_result=True) is False
     assert _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON]) == {
         "set_humidity": [
@@ -5636,6 +5639,23 @@ def test_reference_entity_defaults_combines_number_sources_with_average_template
     assert (
         f"set threshold = {NUMERIC_OUTLIER_THRESHOLD}" in defaults[CONF_VALUE_TEMPLATE]
     )
+
+
+def test_reference_entity_availability_stays_true_while_any_source_responds(hass):
+    source_entities = ["sensor.study_temperature", "sensor.living_temperature"]
+    hass.states.async_set(source_entities[0], "21")
+    hass.states.async_set(source_entities[1], "unavailable")
+
+    defaults = _reference_entity_defaults(hass, source_entities)
+    availability = Template(defaults[CONF_AVAILABILITY_TEMPLATE], hass)
+
+    assert availability.async_render(parse_result=True) is True
+
+    hass.states.async_set(source_entities[0], "unavailable")
+    assert availability.async_render(parse_result=True) is False
+
+    hass.states.async_set(source_entities[1], "22")
+    assert availability.async_render(parse_result=True) is True
 
 
 def test_legacy_numeric_helper_is_upgraded_to_the_spike_safe_template(hass):

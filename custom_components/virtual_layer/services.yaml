@@ -40,6 +40,50 @@ set:
       selector:
         text:
 
+adjust_utility_meter:
+  name: Adjust Utility Meter
+  description: Add consumption that the source meter missed to a virtual Utility Meter sensor. The amount is added to the current period; it does not change the physical source meter.
+  target:
+    entity:
+      integration: virtual_layer
+      domain: sensor
+  fields:
+    amount:
+      name: Missing consumption
+      description: A non-negative amount in the same unit as the utility meter, for example kWh.
+      required: true
+      example: 1.25
+      selector:
+        number:
+          min: 0
+          mode: box
+
+calibrate_utility_meter:
+  name: Calibrate Utility Meter
+  description: Set the current-period total of a virtual Utility Meter sensor to an audited value.
+  target:
+    entity:
+      integration: virtual_layer
+      domain: sensor
+  fields:
+    value:
+      name: Current-period value
+      description: A finite non-negative value in the meter unit.
+      required: true
+      example: 42.5
+      selector:
+        number:
+          min: 0
+          mode: box
+
+reset_utility_meter:
+  name: Reset Utility Meter
+  description: Close the current period and reset a virtual Utility Meter sensor to zero.
+  target:
+    entity:
+      integration: virtual_layer
+      domain: sensor
+
 set_available:
   name: Set Availability
   description: Set availability of an entity.

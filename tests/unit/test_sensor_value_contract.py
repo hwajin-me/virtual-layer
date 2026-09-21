@@ -1,8 +1,11 @@
 """Native SensorEntity values follow the documented HA type contract."""
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
+from unittest.mock import Mock
 
 import pytest
+from homeassistant.core import State
 
 from custom_components.virtual_layer.sensor import VirtualSensor
 
@@ -62,6 +65,50 @@ def test_numeric_sensor_does_not_publish_enum_options():
     sensor._native_templates_applied()
     assert sensor.options is None
     assert sensor.native_value == 12
+
+
+def test_utility_meter_accumulates_source_deltas_and_ignores_source_reset():
+    sensor = make_sensor({
+        "name": "Monthly energy",
+        "initial_value": "0",
+        "utility_meter_enabled": True,
+        "utility_meter_cycle": "monthly",
+    })
+    sensor._schedule_state_update = Mock()
+    sensor._utility_meter_last_source = Decimal("100")
+
+    sensor._async_utility_meter_reading(State("sensor.energy", "103.5"))
+    assert sensor.native_value == Decimal("3.5")
+
+    # A physical total-increasing meter can reset; that reset is not usage.
+    sensor._async_utility_meter_reading(State("sensor.energy", "1"))
+    assert sensor.native_value == Decimal("3.5")
+
+    sensor._async_utility_meter_reading(State("sensor.energy", "2.25"))
+    assert sensor.native_value == Decimal("4.75")
+
+
+def test_utility_meter_adjustment_and_period_reset_are_finite_and_persistent():
+    sensor = make_sensor({
+        "name": "Monthly energy",
+        "initial_value": "2",
+        "utility_meter_enabled": True,
+    })
+    sensor._schedule_state_update = Mock()
+    sensor.adjust_utility_meter(Decimal("1.25"))
+    assert sensor.native_value == Decimal("3.25")
+    sensor.calibrate_utility_meter(Decimal("9.5"))
+    assert sensor.native_value == Decimal("9.5")
+    with pytest.raises(ValueError):
+        sensor.adjust_utility_meter(Decimal("-1"))
+    with pytest.raises(ValueError):
+        sensor.adjust_utility_meter(Decimal("Infinity"))
+    with pytest.raises(ValueError):
+        sensor.calibrate_utility_meter(Decimal("-1"))
+
+    sensor._async_utility_meter_reset(None)
+    assert sensor.native_value == Decimal("0")
+    assert sensor.extra_state_attributes["last_period"] == "9.5"
 
 
 @pytest.mark.parametrize("missing", [None, "", "  ", "None", "unknown", "unavailable"])

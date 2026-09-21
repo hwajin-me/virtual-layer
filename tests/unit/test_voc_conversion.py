@@ -48,7 +48,9 @@ def test_single_voc_reference_defaults_use_mass_class(hass):
 def test_voc_overflow_does_not_generate_infinite_initial_value(hass):
     hass.states.async_set("sensor.tvoc", "1e308", {"device_class": aq.VOC_QUANTITIES[1], "unit_of_measurement": "ppm"})
     defaults = _reference_entity_defaults(hass, ["sensor.tvoc"], "sensor")
-    assert defaults["initial_value"] == "unknown"
+    # Reference sensors use the finite, domain-valid fallback while the
+    # conversion template is unavailable.
+    assert defaults["initial_value"] == "0"
     assert Template(defaults["availability_template"], hass).async_render() is False
 
 

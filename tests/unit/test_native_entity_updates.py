@@ -21,10 +21,13 @@ from custom_components.virtual_layer.camera import CAMERA_SCHEMA, VirtualCamera
 from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClimate
 from custom_components.virtual_layer.const import (
     ATTR_UNIQUE_ID,
+    CONF_AVAILABILITY_TEMPLATE,
     CONF_COMMAND_ACTIONS,
     CONF_INITIAL_VALUE,
     CONF_NAME,
     CONF_PERSISTENT,
+    CONF_SOURCE_ENTITIES,
+    CONF_VALUE_TEMPLATE,
 )
 from custom_components.virtual_layer.cover import COVER_SCHEMA, VirtualCover
 from custom_components.virtual_layer.fan import FAN_SCHEMA, VirtualFan
@@ -75,6 +78,41 @@ async def test_state_updates_use_thread_safe_scheduler_outside_event_loop(hass):
     await hass.async_add_executor_job(entity._schedule_state_update)
     entity.async_schedule_update_ha_state.assert_not_called()
     entity.schedule_update_ha_state.assert_called_once_with(force_refresh=False)
+
+
+def test_availability_recovers_when_any_multi_source_member_recovers(hass):
+    source_entities = ["sensor.office_temperature", "sensor.hall_temperature"]
+    config = SENSOR_SCHEMA(
+        {
+            CONF_NAME: "Combined Temperature",
+            ATTR_ENTITY_ID: "sensor.combined_temperature",
+            ATTR_UNIQUE_ID: "combined-temperature",
+            CONF_INITIAL_VALUE: "0",
+            CONF_SOURCE_ENTITIES: source_entities,
+            CONF_VALUE_TEMPLATE: "{{ states('sensor.office_temperature') }}",
+            CONF_AVAILABILITY_TEMPLATE: (
+                "{{ states('sensor.office_temperature') not in ['unknown', 'unavailable'] "
+                "or states('sensor.hall_temperature') not in ['unknown', 'unavailable'] }}"
+            ),
+        }
+    )
+    entity = VirtualSensor(config, False)
+    entity.hass = hass
+    entity.async_schedule_update_ha_state = Mock()
+    entity._create_state(config)
+
+    hass.states.async_set(source_entities[0], "unavailable")
+    hass.states.async_set(source_entities[1], "21")
+    entity._apply_templates()
+    assert entity.available is True
+
+    hass.states.async_set(source_entities[1], "unavailable")
+    entity._apply_templates()
+    assert entity.available is False
+
+    hass.states.async_set(source_entities[0], "20")
+    entity._apply_templates()
+    assert entity.available is True
 
 
 def test_virtual_entity_debug_logs_do_not_expose_configuration_or_state(caplog):
