@@ -116,6 +116,45 @@ def test_detailed_request_and_visit_options_are_normalized():
         api.normalize_config({**CONFIG, "request_timeout": 61})
 
 
+def test_quality_policy_is_bounded_and_legacy_safe():
+    config = api.normalize_config({**CONFIG, "max_age_seconds": 300, "max_accuracy": 25})
+    assert config["max_age_seconds"] == 300
+    assert config["max_accuracy"] == 25
+    # Existing trackers preserve their prior unfiltered behaviour until saved.
+    assert api.normalize_config(CONFIG)["max_age_seconds"] is None
+    with pytest.raises(vol.Invalid):
+        api.normalize_config({**CONFIG, "max_accuracy": 0})
+
+
+def test_movement_analysis_compensates_for_accuracy_and_classifies_motion():
+    stationary = [
+        api.valid_point(point(0, latitude=37.50001, accuracy=20)),
+        api.valid_point(point(60, latitude=37.5, accuracy=20)),
+    ]
+    assert api.movement_analysis(stationary)["state"] == "stationary"
+
+    moving = [
+        api.valid_point(point(0, latitude=37.51, accuracy=5, activity="automotive")),
+        api.valid_point(point(60, latitude=37.5, accuracy=5)),
+    ]
+    analysis = api.movement_analysis(moving)
+    assert analysis["state"] == "driving"
+    assert analysis["raw_activity"] == "automotive"
+    assert analysis["distance_m"] > 1000
+
+
+async def test_quality_policy_skips_bad_fix_and_keeps_next_recent_fix():
+    result = await api.DawarichClient(
+        Session(Response([
+            point(1, latitude=37.6, accuracy=500),
+            point(2, latitude=37.5, accuracy=10),
+        ])),
+        {**CONFIG, "max_age_seconds": 300, "max_accuracy": 50},
+    ).async_fetch(include_visit=False)
+    assert result.point["latitude"] == 37.5
+    assert result.history == [result.point]
+
+
 async def test_points_filter_sort_bound_history_and_follow_last_visit_page():
     recent = point(2, speed=4, raw_data={"api_key": "secret"})
     previous = point(10)

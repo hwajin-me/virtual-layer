@@ -25,6 +25,10 @@ from custom_components.virtual_layer.const import (
     CONF_COMMAND_ACTIONS,
     CONF_INITIAL_VALUE,
     CONF_NAME,
+    CONF_ONVIF_PATROL_MODE,
+    CONF_ONVIF_PATROL_PAN_MAX,
+    CONF_ONVIF_PATROL_PAN_MIN,
+    CONF_ONVIF_PATROL_TARGET,
     CONF_PERSISTENT,
     CONF_SOURCE_ENTITIES,
     CONF_VALUE_TEMPLATE,
@@ -187,6 +191,25 @@ async def test_native_commands_write_the_new_state(entity, command):
     await command(entity)
 
     entity.async_write_ha_state.assert_called_once()
+
+
+def test_virtual_camera_builds_bounded_onvif_patrol_moves():
+    """Each configured direction keeps its own relative ONVIF distance."""
+    camera = VirtualCamera(
+        _config(CAMERA_SCHEMA, "camera.ptz_patrol", "on")
+        | {
+            CONF_ONVIF_PATROL_TARGET: "camera.onvif_ptz",
+            CONF_ONVIF_PATROL_MODE: "horizontal",
+            CONF_ONVIF_PATROL_PAN_MIN: 0.2,
+            CONF_ONVIF_PATROL_PAN_MAX: 0.6,
+        },
+        False,
+    )
+
+    assert list(camera._patrol_moves()) == [
+        ("LEFT", None, 0.2),
+        ("RIGHT", None, 0.6),
+    ]
 
 
 async def test_humidifier_defaults_to_35_70_range_and_five_percent_steps():

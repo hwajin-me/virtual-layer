@@ -121,6 +121,7 @@ ATTR_DAWARICH_POINT_TIME = "dawarich_point_time"
 ATTR_DAWARICH_STALE = "dawarich_stale"
 ATTR_DAWARICH_VISIT_ERROR = "dawarich_visit_error"
 ATTR_DAWARICH_SOURCE_ID = "dawarich_source_id"
+ATTR_DAWARICH_ACTIVITY = "dawarich_activity"
 DAWARICH_SOURCE = "dawarich"
 ATTR_LOCATION_PRESENCE_SOURCES = "location_presence_sources"
 ATTR_LOCATION_CLASSIFICATION = "location_classification"
@@ -864,6 +865,7 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
                 ATTR_DAWARICH_VISIT: snapshot.visit,
                 ATTR_DAWARICH_ERROR: None,
                 ATTR_DAWARICH_VISIT_ERROR: snapshot.visit_error,
+                ATTR_DAWARICH_ACTIVITY: snapshot.analysis or {},
                 ATTR_DAWARICH_STALE: now - measured > timedelta(
                     seconds=self._location_policy()[CONF_LOCATION_HELPER_PRIORITY_WINDOW_SECONDS]
                 ),

@@ -146,6 +146,32 @@ BASE_SCHEMA = virtual_schema(DEFAULT_CAMERA_VALUE, {
     vol.Optional(CONF_MOTION_DETECTION, default=False): cv.boolean,
     vol.Optional(CONF_SOURCE_ENTITY): _camera_entity_id,
     vol.Optional(CONF_STREAM_SOURCE): cv.string,
+    vol.Optional(CONF_ONVIF_PATROL_ENABLED, default=False): cv.boolean,
+    vol.Optional(CONF_ONVIF_PATROL_TARGET): _camera_entity_id,
+    vol.Optional(CONF_ONVIF_PATROL_MODE, default="horizontal"): vol.In(
+        {"horizontal", "vertical", "grid"}
+    ),
+    vol.Optional(CONF_ONVIF_PATROL_INTERVAL, default=15): vol.All(
+        vol.Coerce(float), vol.Range(min=1, max=3600)
+    ),
+    vol.Optional(CONF_ONVIF_PATROL_DISTANCE, default=0.1): vol.All(
+        vol.Coerce(float), vol.Range(min=0, max=1)
+    ),
+    vol.Optional(CONF_ONVIF_PATROL_SPEED): vol.All(
+        vol.Coerce(float), vol.Range(min=0, max=1)
+    ),
+    vol.Optional(CONF_ONVIF_PATROL_PAN_MIN, default=0.1): vol.All(
+        vol.Coerce(float), vol.Range(min=0, max=1)
+    ),
+    vol.Optional(CONF_ONVIF_PATROL_PAN_MAX, default=0.1): vol.All(
+        vol.Coerce(float), vol.Range(min=0, max=1)
+    ),
+    vol.Optional(CONF_ONVIF_PATROL_TILT_MIN, default=0.1): vol.All(
+        vol.Coerce(float), vol.Range(min=0, max=1)
+    ),
+    vol.Optional(CONF_ONVIF_PATROL_TILT_MAX, default=0.1): vol.All(
+        vol.Coerce(float), vol.Range(min=0, max=1)
+    ),
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
@@ -209,6 +235,15 @@ class VirtualCamera(VirtualEntity, Camera):
         self._media_removed = False
         self._tracked_source_camera: str | None = None
         self._source_camera_remove_listener: Callable[[], None] | None = None
+        self._patrol_task: asyncio.Task[None] | None = None
+        self._patrol_enabled = config.get(CONF_ONVIF_PATROL_ENABLED, False)
+        self._patrol_target = config.get(CONF_ONVIF_PATROL_TARGET)
+        self._patrol_mode = config.get(CONF_ONVIF_PATROL_MODE, "horizontal")
+        self._patrol_interval = config.get(CONF_ONVIF_PATROL_INTERVAL, 15)
+        self._patrol_distance = config.get(CONF_ONVIF_PATROL_DISTANCE, 0.1)
+        self._patrol_speed = config.get(CONF_ONVIF_PATROL_SPEED)
+        self._patrol_pan = (config.get(CONF_ONVIF_PATROL_PAN_MIN, 0.1), config.get(CONF_ONVIF_PATROL_PAN_MAX, 0.1))
+        self._patrol_tilt = (config.get(CONF_ONVIF_PATROL_TILT_MIN, 0.1), config.get(CONF_ONVIF_PATROL_TILT_MAX, 0.1))
 
         _LOGGER.debug(f"VirtualCamera: {self.name} created")
 
@@ -225,6 +260,10 @@ class VirtualCamera(VirtualEntity, Camera):
         self._attr_is_recording = config.get(CONF_IS_RECORDING)
         self._attr_is_streaming = config.get(CONF_IS_STREAMING)
         self._attr_motion_detection_enabled = config.get(CONF_MOTION_DETECTION)
+        # Camera's state serializer may run before the normal entity update
+        # cycle (notably while an entity is being removed). Initialise the
+        # shared virtual attributes here rather than relying on that cycle.
+        self._update_attributes()
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
@@ -373,6 +412,11 @@ class VirtualCamera(VirtualEntity, Camera):
         try:
             async with asyncio.timeout(MEDIA_ALIAS_TIMEOUT):
                 payload = await source.async_image()
+                # Cancellation is cooperative: some source integrations
+                # return a final image after cancellation. Never let that
+                # image repopulate a cache for a replaced source.
+                if generation != self._image_generation or self._media_removed:
+                    return None
                 if payload is None:
                     return self._last_camera_image
                 if not isinstance(payload, (bytes, bytearray, memoryview)):
@@ -622,6 +666,8 @@ class VirtualCamera(VirtualEntity, Camera):
         """Track source replacement and capability changes."""
         await super().async_added_to_hass()
         self._sync_source_camera_listener()
+        if self._patrol_enabled:
+            await self.async_start_patrol()
 
     async def async_will_remove_from_hass(self) -> None:
         """Remove the independently managed source-camera listener."""
@@ -630,6 +676,7 @@ class VirtualCamera(VirtualEntity, Camera):
         self._invalidate_image_source()
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
+        await self.async_stop_patrol()
         if self._source_camera_remove_listener is not None:
             self._source_camera_remove_listener()
             self._source_camera_remove_listener = None
@@ -775,6 +822,85 @@ class VirtualCamera(VirtualEntity, Camera):
         self._attr_motion_detection_enabled = False
         self.async_write_ha_state()
 
+    async def async_start_patrol(self) -> None:
+        """Start a bounded ONVIF PTZ patrol without replacing this camera's feed."""
+        if not self._patrol_target:
+            raise HomeAssistantError("Configure an ONVIF PTZ camera before starting patrol")
+        if self._patrol_task is None or self._patrol_task.done():
+            self._patrol_task = self.hass.async_create_task(self._async_patrol_loop())
+        self.async_write_ha_state()
+
+    async def async_stop_patrol(self) -> None:
+        """Stop the local patrol scheduler and request ONVIF motion stop."""
+        task, self._patrol_task = self._patrol_task, None
+        if task is None and not self._patrol_target:
+            return
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        if self._patrol_target:
+            await self._async_call_onvif_ptz({ATTR_ENTITY_ID: self._patrol_target, "move_mode": "Stop"})
+        self.async_write_ha_state()
+
+    async def _async_patrol_loop(self) -> None:
+        """Alternate relative ONVIF movements inside the configured patrol axes."""
+        try:
+            while True:
+                for pan, tilt, distance in self._patrol_moves():
+                    data = {ATTR_ENTITY_ID: self._patrol_target, "move_mode": "RelativeMove", "distance": distance}
+                    if pan:
+                        data["pan"] = pan
+                    if tilt:
+                        data["tilt"] = tilt
+                    if self._patrol_speed is not None:
+                        data["speed"] = self._patrol_speed
+                    await self._async_call_onvif_ptz(data)
+                    await asyncio.sleep(self._patrol_interval)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # An unavailable ONVIF integration must not crash the virtual camera.
+            _LOGGER.warning("ONVIF patrol for %s stopped: %s", self.entity_id, err)
+        finally:
+            self._patrol_task = None
+            self.async_write_ha_state()
+
+    async def _async_call_onvif_ptz(self, data: dict) -> None:
+        """Prefer the public ONVIF action, with the entity-client fallback."""
+        try:
+            await self.hass.services.async_call("onvif", "ptz", data, blocking=True)
+        except (HomeAssistantError, vol.Invalid) as err:
+            await self._async_direct_onvif_ptz(data, err)
+
+    async def _async_direct_onvif_ptz(self, data: dict, service_error: Exception) -> None:
+        """Invoke the configured ONVIF camera's native PTZ client as a fallback.
+
+        The normal entity service is deliberately preferred.  Some ONVIF
+        devices expose a camera entity but do not register (or reject) that
+        service; their entity still owns an authenticated ONVIF SOAP client.
+        Reusing that client keeps credentials and connections inside the
+        existing ONVIF integration rather than duplicating either here.
+        """
+        target = self.hass.data.get("camera").get_entity(self._patrol_target)
+        perform_ptz = getattr(target, "async_perform_ptz", None)
+        profile = getattr(target, "profile", None)
+        device = getattr(target, "device", None)
+        if not callable(perform_ptz) or profile is None or device is None:
+            raise HomeAssistantError(
+                f"ONVIF PTZ service failed and {self._patrol_target} is not an ONVIF camera"
+            ) from service_error
+        await perform_ptz(
+            data.get("distance", 0.1), data["move_mode"], 0.5, "0", data.get("speed"),
+            data.get("pan"), data.get("tilt"), data.get("zoom"),
+        )
+
+    def _patrol_moves(self):
+        horizontal = (("LEFT", self._patrol_pan[0]), ("RIGHT", self._patrol_pan[1]))
+        vertical = (("DOWN", self._patrol_tilt[0]), ("UP", self._patrol_tilt[1]))
+        if self._patrol_mode == "horizontal":
+            return ((direction, None, distance) for direction, distance in horizontal)
+        if self._patrol_mode == "vertical":
+            return ((None, direction, distance) for direction, distance in vertical)
+        return ((pan[0], tilt[0], max(pan[1], tilt[1])) for tilt in vertical for pan in horizontal)
+
     def _apply_native_template_value(self, name: str, value) -> bool:
         backing_fields = {
             CONF_IMAGE_PATH: "_image_path",
@@ -865,3 +991,9 @@ class VirtualCamera(VirtualEntity, Camera):
 
     def set_state(self, value) -> None:
         self._attr_is_on = _camera_state_is_on(value)
+
+
+def validate_domain_options(config) -> None:
+    """Require a target when a stored camera enables ONVIF patrol."""
+    if config.get(CONF_ONVIF_PATROL_ENABLED) and not config.get(CONF_ONVIF_PATROL_TARGET):
+        raise vol.Invalid("ONVIF patrol needs an ONVIF camera target")

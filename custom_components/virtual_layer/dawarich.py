@@ -9,7 +9,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from math import isfinite
+from math import asin, cos, isfinite, radians, sin, sqrt
 
 from aiohttp import ClientError
 from homeassistant.util import dt as dt_util
@@ -29,6 +29,8 @@ from .const import (
     CONF_DAWARICH_VERIFY_SSL,
     CONF_DAWARICH_INCLUDE_VISITS,
     CONF_DAWARICH_VISIT_LOOKBACK_DAYS,
+    CONF_DAWARICH_MAX_AGE_SECONDS,
+    CONF_DAWARICH_MAX_ACCURACY,
 )
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -36,6 +38,8 @@ DEFAULT_POLL_INTERVAL = 60
 DEFAULT_HISTORY_LIMIT = 10
 DEFAULT_REQUEST_TIMEOUT = 15
 DEFAULT_VISIT_LOOKBACK_DAYS = 30
+DEFAULT_MAX_AGE_SECONDS = 86400
+DEFAULT_MAX_ACCURACY = 200
 
 
 class DawarichError(Exception):
@@ -76,6 +80,8 @@ def normalize_config(value):
         CONF_DAWARICH_REQUEST_TIMEOUT,
         CONF_DAWARICH_INCLUDE_VISITS,
         CONF_DAWARICH_VISIT_LOOKBACK_DAYS,
+        CONF_DAWARICH_MAX_AGE_SECONDS,
+        CONF_DAWARICH_MAX_ACCURACY,
     }
     if not isinstance(value, dict) or set(value) - allowed:
         raise vol.Invalid("invalid Dawarich configuration")
@@ -154,6 +160,19 @@ def normalize_config(value):
         CONF_DAWARICH_VISIT_LOOKBACK_DAYS: _integer(
             value.get(CONF_DAWARICH_VISIT_LOOKBACK_DAYS, DEFAULT_VISIT_LOOKBACK_DAYS),
             1, 365, CONF_DAWARICH_VISIT_LOOKBACK_DAYS,
+        ),
+        # New UI configurations always persist these filters.  A missing
+        # value identifies a legacy tracker, whose historical behaviour must
+        # remain unchanged until its owner saves the new controls.
+        CONF_DAWARICH_MAX_AGE_SECONDS: (
+            _integer(value[CONF_DAWARICH_MAX_AGE_SECONDS], 60, 86400,
+                     CONF_DAWARICH_MAX_AGE_SECONDS)
+            if value.get(CONF_DAWARICH_MAX_AGE_SECONDS) is not None else None
+        ),
+        CONF_DAWARICH_MAX_ACCURACY: (
+            _integer(value[CONF_DAWARICH_MAX_ACCURACY], 1, 10000,
+                     CONF_DAWARICH_MAX_ACCURACY)
+            if value.get(CONF_DAWARICH_MAX_ACCURACY) is not None else None
         ),
     }
 
@@ -348,6 +367,52 @@ class DawarichSnapshot:
     history: list[dict]
     visit: dict | None
     visit_error: str | None = None
+    analysis: dict | None = None
+
+
+def _distance_meters(first, second) -> float:
+    """Return the great-circle distance between two validated GPS points."""
+    latitude_1, longitude_1 = map(radians, first)
+    latitude_2, longitude_2 = map(radians, second)
+    value = sin((latitude_2 - latitude_1) / 2) ** 2 + cos(latitude_1) * cos(latitude_2) * sin((longitude_2 - longitude_1) / 2) ** 2
+    return 6_371_000 * 2 * asin(sqrt(max(0.0, min(1.0, value))))
+
+
+def movement_analysis(points):
+    """Derive a bounded, explainable movement sample from two GPS fixes.
+
+    Raw Dawarich activity is retained where supplied.  Otherwise this is an
+    estimate only: accuracy circles are removed before classifying movement.
+    """
+    if not points:
+        return {}
+    raw_activity = points[0].get("activity")
+    result = {"raw_activity": raw_activity} if isinstance(raw_activity, str) else {}
+    if len(points) < 2:
+        result["state"] = "unknown"
+        return result
+    latest, previous = points[0], points[1]
+    elapsed = latest["timestamp"] - previous["timestamp"]
+    if elapsed <= 0:
+        result["state"] = "unknown"
+        return result
+    distance = _distance_meters(
+        (previous["latitude"], previous["longitude"]),
+        (latest["latitude"], latest["longitude"]),
+    )
+    adjusted = max(0.0, distance - previous["accuracy"] - latest["accuracy"])
+    speed = adjusted / elapsed
+    result.update({
+        "distance_m": round(distance, 1),
+        "duration_s": round(elapsed, 1),
+        "speed_m_s": round(speed, 3),
+        "state": (
+            "stationary" if speed < 0.5 else "walking" if speed < 2.5
+            else "running" if speed < 5.5 else "cycling" if speed < 12
+            else "driving"
+        ),
+    })
+    return result
 
 
 class DawarichClient:
@@ -423,6 +488,15 @@ class DawarichClient:
         ]
         points.sort(key=lambda point: point["timestamp"], reverse=True)
         points = points[: self.config[CONF_DAWARICH_HISTORY_LIMIT]]
+        max_age = self.config[CONF_DAWARICH_MAX_AGE_SECONDS]
+        max_accuracy = self.config[CONF_DAWARICH_MAX_ACCURACY]
+        if max_age is not None or max_accuracy is not None:
+            newest_allowed = dt_util.utcnow().timestamp() - max_age if max_age is not None else None
+            points = [
+                point for point in points
+                if (newest_allowed is None or point["timestamp"] >= newest_allowed)
+                and (max_accuracy is None or point["accuracy"] <= max_accuracy)
+            ]
         if not points:
             raise DawarichError("no_points")
         visit = None
@@ -432,7 +506,7 @@ class DawarichClient:
                 visit = await self._latest_visit(points[0])
             except DawarichError as err:
                 visit_error = err.code
-        return DawarichSnapshot(points[0], points, visit, visit_error)
+        return DawarichSnapshot(points[0], points, visit, visit_error, movement_analysis(points))
 
     async def _latest_visit(self, point):
         end = datetime.fromtimestamp(point["timestamp"], tz=timezone.utc)

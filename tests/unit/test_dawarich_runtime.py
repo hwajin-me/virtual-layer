@@ -159,3 +159,18 @@ async def test_dawarich_motion_participates_in_helper_without_poll_freshness(
     assert result.extra_state_attributes["dawarich_stale"] is True
     assert result.extra_state_attributes["location_stale"] is True
     assert result.latitude == 37.51
+
+
+async def test_dawarich_refresh_publishes_explainable_movement_analysis(hass, monkeypatch):
+    latest = valid_point(point(age=0, latitude=37.51, accuracy=5, activity="walking"))
+    older = valid_point(point(age=600, latitude=37.5, accuracy=5))
+    fetch = AsyncMock(return_value=DawarichSnapshot(
+        latest, [latest, older], None,
+        analysis={"state": "driving", "distance_m": 1112.0, "raw_activity": "walking"},
+    ))
+    monkeypatch.setattr(platform.DawarichClient, "async_fetch", fetch)
+    result, _ = tracker(hass)
+    await result._async_refresh_dawarich()
+    assert result.extra_state_attributes["dawarich_activity"] == {
+        "state": "driving", "distance_m": 1112.0, "raw_activity": "walking",
+    }

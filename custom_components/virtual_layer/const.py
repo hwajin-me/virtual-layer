@@ -80,6 +80,16 @@ CONF_INITIAL_VALUE = "initial_value"
 CONF_LOCATION_HELPER = "location_helper"
 CONF_MOTION_HOLD_MINUTES = "motion_hold_minutes"
 CONF_MOTION_DETECTION_LOGIC = "motion_detection_logic"
+CONF_ONVIF_PATROL_ENABLED = "onvif_patrol_enabled"
+CONF_ONVIF_PATROL_TARGET = "onvif_patrol_target"
+CONF_ONVIF_PATROL_MODE = "onvif_patrol_mode"
+CONF_ONVIF_PATROL_INTERVAL = "onvif_patrol_interval"
+CONF_ONVIF_PATROL_DISTANCE = "onvif_patrol_distance"
+CONF_ONVIF_PATROL_SPEED = "onvif_patrol_speed"
+CONF_ONVIF_PATROL_PAN_MIN = "onvif_patrol_pan_min"
+CONF_ONVIF_PATROL_PAN_MAX = "onvif_patrol_pan_max"
+CONF_ONVIF_PATROL_TILT_MIN = "onvif_patrol_tilt_min"
+CONF_ONVIF_PATROL_TILT_MAX = "onvif_patrol_tilt_max"
 CONF_PRESENCE_CLASSIFICATION = "presence_classification"
 CONF_POLYGONAL_ZONE = "polygonal_zone"
 CONF_POLYGON_GEOJSON = "geojson"
@@ -102,6 +112,8 @@ CONF_DAWARICH_VERIFY_SSL = "verify_ssl"
 CONF_DAWARICH_REQUEST_TIMEOUT = "request_timeout"
 CONF_DAWARICH_INCLUDE_VISITS = "include_visits"
 CONF_DAWARICH_VISIT_LOOKBACK_DAYS = "visit_lookback_days"
+CONF_DAWARICH_MAX_AGE_SECONDS = "max_age_seconds"
+CONF_DAWARICH_MAX_ACCURACY = "max_accuracy"
 CONF_LOCAL_PRESENCE = "local_presence"
 CONF_MAX = "max"
 CONF_MIN = "min"
@@ -260,7 +272,8 @@ VIRTUAL_ENTITY_COMMANDS = {
     }),
     "button": frozenset({"press"}),
     "camera": frozenset({
-        "disable_motion_detection", "enable_motion_detection", "turn_off", "turn_on",
+        "disable_motion_detection", "enable_motion_detection", "start_patrol",
+        "stop_patrol", "turn_off", "turn_on",
     }),
     "climate": frozenset({
         "set_fan_mode", "set_humidity", "set_hvac_mode", "set_preset_mode",

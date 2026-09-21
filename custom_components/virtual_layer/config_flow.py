@@ -231,6 +231,8 @@ CONF_DAWARICH_VERIFY_SSL_INPUT = "dawarich_verify_ssl"
 CONF_DAWARICH_REQUEST_TIMEOUT_INPUT = "dawarich_request_timeout"
 CONF_DAWARICH_INCLUDE_VISITS_INPUT = "dawarich_include_visits"
 CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT = "dawarich_visit_lookback_days"
+CONF_DAWARICH_MAX_AGE_SECONDS_INPUT = "dawarich_max_age_seconds"
+CONF_DAWARICH_MAX_ACCURACY_INPUT = "dawarich_max_accuracy"
 CONF_LOCAL_PRESENCE_SETTINGS = "local_presence_settings"
 CONF_PRESENCE_ENABLED_INPUT = "presence_enabled"
 CAMERA_SOURCE_ENTITY_OPTION = "source_entity"
@@ -3636,6 +3638,24 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
                 reorder=True,
             )
         )
+    elif platform == "camera":
+        patrol_target = defaults.get(CONF_ONVIF_PATROL_TARGET)
+        patrol_target_marker = (
+            vol.Optional(CONF_ONVIF_PATROL_TARGET, default=patrol_target)
+            if patrol_target
+            else vol.Optional(CONF_ONVIF_PATROL_TARGET)
+        )
+        domain_schema.update({
+            vol.Optional(CONF_ONVIF_PATROL_ENABLED, default=defaults.get(CONF_ONVIF_PATROL_ENABLED, False)): selector.BooleanSelector(),
+            patrol_target_marker: selector.EntitySelector(selector.EntitySelectorConfig(domain="camera")),
+            vol.Optional(CONF_ONVIF_PATROL_MODE, default=defaults.get(CONF_ONVIF_PATROL_MODE, "horizontal")): selector.SelectSelector(selector.SelectSelectorConfig(options=["horizontal", "vertical", "grid"], translation_key="onvif_patrol_mode")),
+            vol.Optional(CONF_ONVIF_PATROL_INTERVAL, default=defaults.get(CONF_ONVIF_PATROL_INTERVAL, 15)): selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=3600, step=1, mode=selector.NumberSelectorMode.BOX)),
+            vol.Optional(CONF_ONVIF_PATROL_SPEED, default=defaults.get(CONF_ONVIF_PATROL_SPEED, 0.5)): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1, step=0.05, mode=selector.NumberSelectorMode.BOX)),
+            vol.Optional(CONF_ONVIF_PATROL_PAN_MIN, default=defaults.get(CONF_ONVIF_PATROL_PAN_MIN, 0.1)): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1, step=0.05, mode=selector.NumberSelectorMode.BOX)),
+            vol.Optional(CONF_ONVIF_PATROL_PAN_MAX, default=defaults.get(CONF_ONVIF_PATROL_PAN_MAX, 0.1)): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1, step=0.05, mode=selector.NumberSelectorMode.BOX)),
+            vol.Optional(CONF_ONVIF_PATROL_TILT_MIN, default=defaults.get(CONF_ONVIF_PATROL_TILT_MIN, 0.1)): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1, step=0.05, mode=selector.NumberSelectorMode.BOX)),
+            vol.Optional(CONF_ONVIF_PATROL_TILT_MAX, default=defaults.get(CONF_ONVIF_PATROL_TILT_MAX, 0.1)): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1, step=0.05, mode=selector.NumberSelectorMode.BOX)),
+        })
     if platform == "sensor":
         units = sorted({aq_options.normalize_unit(str(unit))
                         for values in DEVICE_CLASS_UNITS.values() for unit in values
@@ -3690,6 +3710,12 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
             ),
             vol.Optional(CONF_DAWARICH_HISTORY_LIMIT_INPUT, default=defaults.get(CONF_DAWARICH_HISTORY_LIMIT_INPUT, 10)): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=1, max=100, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Optional(CONF_DAWARICH_MAX_AGE_SECONDS_INPUT, default=defaults.get(CONF_DAWARICH_MAX_AGE_SECONDS_INPUT, 86400)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=60, max=86400, step=60, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Optional(CONF_DAWARICH_MAX_ACCURACY_INPUT, default=defaults.get(CONF_DAWARICH_MAX_ACCURACY_INPUT, 200)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=10000, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Optional(CONF_DAWARICH_INCLUDE_VISITS_INPUT, default=defaults.get(CONF_DAWARICH_INCLUDE_VISITS_INPUT, True)): selector.BooleanSelector(),
             vol.Optional(CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT, default=defaults.get(CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT, 30)): selector.NumberSelector(
@@ -5138,6 +5164,30 @@ def _build_entity_config(
                     domain_options[field_name] = value
             elif value is not None:
                 domain_options[field_name] = value
+    elif platform == "camera":
+        patrol_fields = (
+            CONF_ONVIF_PATROL_ENABLED, CONF_ONVIF_PATROL_TARGET,
+            CONF_ONVIF_PATROL_MODE, CONF_ONVIF_PATROL_INTERVAL,
+            CONF_ONVIF_PATROL_SPEED, CONF_ONVIF_PATROL_PAN_MIN,
+            CONF_ONVIF_PATROL_PAN_MAX, CONF_ONVIF_PATROL_TILT_MIN,
+            CONF_ONVIF_PATROL_TILT_MAX,
+        )
+        for field_name in patrol_fields:
+            domain_options.pop(field_name, None)
+            if field_name in user_input:
+                value = user_input[field_name]
+                if field_name == CONF_ONVIF_PATROL_TARGET:
+                    value = str(value or "").strip()
+                    if value:
+                        try:
+                            value = cv.entity_id(value)
+                        except vol.Invalid as err:
+                            raise InvalidEntityReference(field_name) from err
+                        if not value.startswith("camera."):
+                            raise InvalidEntityReference(field_name)
+                    else:
+                        value = None
+                domain_options[field_name] = value
 
     # The hold time is deliberately a dedicated UI-only control rather than a
     # binary-sensor platform option. It is encoded into an automatic helper so
@@ -5385,6 +5435,8 @@ def _build_entity_config(
             "request_timeout": user_input.get(CONF_DAWARICH_REQUEST_TIMEOUT_INPUT, 15),
             "include_visits": user_input.get(CONF_DAWARICH_INCLUDE_VISITS_INPUT, True),
             "visit_lookback_days": user_input.get(CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT, 30),
+            "max_age_seconds": user_input.get(CONF_DAWARICH_MAX_AGE_SECONDS_INPUT, 86400),
+            "max_accuracy": user_input.get(CONF_DAWARICH_MAX_ACCURACY_INPUT, 200),
         }
         try:
             entity[CONF_DAWARICH] = normalize_dawarich_config(dawarich_config)
@@ -5401,6 +5453,8 @@ def _build_entity_config(
                 "request_timeout": CONF_DAWARICH_REQUEST_TIMEOUT_INPUT,
                 "include_visits": CONF_DAWARICH_INCLUDE_VISITS_INPUT,
                 "visit_lookback_days": CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT,
+                "max_age_seconds": CONF_DAWARICH_MAX_AGE_SECONDS_INPUT,
+                "max_accuracy": CONF_DAWARICH_MAX_ACCURACY_INPUT,
             }.get(err.path[0] if err.path else None, CONF_DAWARICH_ENABLED_INPUT)
             raise InvalidFieldValue(field, "invalid_dawarich_config") from None
     if platform == "device_tracker" and user_input.get(CONF_PRESENCE_CLASSIFICATION):
@@ -11212,6 +11266,12 @@ def _entity_form_defaults(
             ),
             CONF_DAWARICH_VISIT_LOOKBACK_DAYS_INPUT: min(365, max(1, _nonnegative_int_default(
                 dawarich.get("visit_lookback_days") or 30
+            ))),
+            CONF_DAWARICH_MAX_AGE_SECONDS_INPUT: min(86400, max(60, _nonnegative_int_default(
+                dawarich.get("max_age_seconds") or 86400
+            ))),
+            CONF_DAWARICH_MAX_ACCURACY_INPUT: min(10000, max(1, _nonnegative_int_default(
+                dawarich.get("max_accuracy") or 200
             ))),
             CONF_DAWARICH_PERSON_INPUT: dawarich_person,
             CONF_PRESENCE_CLASSIFICATION: _boolean_default(
