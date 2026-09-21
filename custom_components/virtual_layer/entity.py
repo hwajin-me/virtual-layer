@@ -686,6 +686,11 @@ class VirtualEntity(RestoreEntity):
             self._apply_templates()
 
         if source_entities:
+            from .zigbee_refresh import async_watch_sources
+
+            self._refresh_remove_listeners.append(
+                async_watch_sources(self.hass, source_entities)
+            )
             self._refresh_remove_listeners.append(
                 async_track_state_change_event(
                     self.hass,

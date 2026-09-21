@@ -1517,7 +1517,55 @@ async def test_config_flow_create_modify_runtime():
         await hass.async_stop()
 
 
+async def test_zigbee_refresh_runtime():
+    import json
+    from types import SimpleNamespace
+    from homeassistant.components import mqtt
+    from custom_components.virtual_layer import zigbee_refresh as refresh
+
+    hass = HomeAssistant(tempfile.mkdtemp())
+    address = "0x00124b0012345678"
+    source = "light.docker_zigbee_source"
+    inventory = [{"ieee_address": address, "supported": True, "type": "Router",
+                  "power_source": "Mains (single phase)", "definition": {"exposes": [
+                      {"type": "binary", "property": "state", "access": 7},
+                  ]}}]
+    hass.states.async_set(source, "unavailable")
+    hass.data[mqtt.DATA_MQTT] = SimpleNamespace(client=SimpleNamespace(connected=True))
+    unsubs = []
+
+    async def subscribe(_hass, topic, callback, _qos):
+        callback(SimpleNamespace(topic=topic, payload=json.dumps(
+            inventory if topic.endswith("/devices") else {"state": "online"},
+        )))
+        remove = Mock()
+        unsubs.append(remove)
+        return remove
+
+    with patch.object(refresh, "_source_target", return_value=("custom/zigbee", address)), \
+         patch.object(mqtt, "async_subscribe", side_effect=subscribe), \
+         patch.object(mqtt, "async_publish", new_callable=AsyncMock) as publish:
+        remove = refresh.async_watch_sources(hass, [source])
+        try:
+            await hass.async_block_till_done()
+            publish.assert_awaited_once_with(
+                hass, f"custom/zigbee/{address}/get", '{"state": ""}', qos=0, retain=False,
+            )
+            assert hass.states.get(source).state == "unavailable"
+            await hass.data[refresh._DATA]._refresh()
+            assert publish.await_count == 1
+        finally:
+            remove()
+            await hass.async_block_till_done()
+        assert refresh._DATA not in hass.data
+        assert all(unsubscribe.call_count == 1 for unsubscribe in unsubs)
+    hass.data.pop(mqtt.DATA_MQTT)
+    await hass.async_stop()
+    print("Zigbee refresh Docker passed: native MQTT API, bounded GET, truthful availability, cleanup (mocked broker)")
+
+
 asyncio.run(test_config_flow_create_modify_runtime())
+asyncio.run(test_zigbee_refresh_runtime())
 print(
     "Virtual Layer Docker compatibility smoke passed "
     f"on Home Assistant {HA_VERSION}"

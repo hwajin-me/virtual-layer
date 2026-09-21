@@ -186,8 +186,13 @@ history attributes expose the controller state.
   while a slow bulb responds; transition duration is included before checking.
   Only mismatched bulbs receive retries, and a new command cancels older retries.
   After acknowledgement or retry exhaustion, the virtual light follows its
-  source again. A zero response delay disables this behavior; custom actions
-  retain their existing semantics.
+  source again. A zero response delay disables retries. Single-source custom
+  actions share command ordering with default actions and are never retried;
+  `optimistic: false` still follows source reports. Cancelled custom actions
+  release the temporary state hold. Transitions are exposed when a light source
+  advertises support, forwarded through HA services, and included in the initial
+  reconciliation delay. On/off-only members are checked for power alone;
+  hue comparisons account for the 0°/360° boundary to avoid needless retries.
 - Humidifier target humidity defaults to 5% steps. Edit the humidity adjustment
   step Jinja input in the entity's native settings (for example `{{ 10 }}`).
   An advertised source step or an existing custom value remains authoritative.
@@ -455,6 +460,26 @@ delays, and templated action data are supported.
 Set `pull_interval` to a positive number of seconds to periodically refresh
 source values and templates. Leave it empty or set it to `0` to update from
 source entity state changes only.
+
+Referenced Zigbee2MQTT devices also receive automatic read-only MQTT refreshes,
+independently of `pull_interval`. Virtual Layer resolves their IEEE identity and
+custom bridge topic from MQTT discovery, then checks the bridge's device
+inventory for mains/DC power and readable live properties. Healthy devices are
+queried at most once every 15 minutes. Unavailable sources use retries starting
+at one minute, backing off to 30 minutes; a successful source state resets the
+backoff on the next scan. A newly detected outage bypasses the healthy polling
+delay. Across all virtual entities, requests are shared by
+physical device and limited to one device per 30 seconds.
+
+Battery devices, unsupported properties, disabled devices and offline bridges
+are not polled. Missing discovery or inventory data safely disables polling
+until it becomes available. Queries use non-retained `/get` messages and never
+change power settings, publish fake availability, restart the bridge or update
+firmware. Home Assistant updates the original entities from actual MQTT replies,
+and the virtual entities follow those source updates. This helps recover stale
+state but cannot repair a disconnected radio or wake a sleeping battery device.
+Only devices referenced by Virtual Layer are included; subscriptions and retries
+are removed when those references are unloaded.
 
 On startup, persistent entities with a valid saved state have a three-minute
 source recovery window. While a declared source is missing, `unknown`, or
@@ -1332,6 +1357,13 @@ Virtual Layer provides these services:
 - `virtual_layer.move`: move a virtual device tracker
 
 ## Translations and Icons
+
+When a selected source has no explicit icon, light, switch, fan,
+lock, cover, and media player helpers provide an editable Jinja `if/else`
+icon template by default. The icon follows the source state; unknown or
+unavailable sources show a question mark. Multiple sources must all match the
+active branch. Source-provided icons and customized templates remain supported.
+Clear the icon template to use the static icon instead.
 
 Virtual Layer includes integration icons, brand assets, and Home Assistant UI
 translations.

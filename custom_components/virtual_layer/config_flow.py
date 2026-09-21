@@ -7032,6 +7032,34 @@ _VENTILATION_NAME_PATTERN = re.compile(
 )
 
 
+def _stateful_icon_helper_template(entity_ids: list[str], platform: str) -> str | None:
+    """Offer editable state branches for sources without an explicit icon."""
+    profiles = {
+        "light": ("on", "mdi:lightbulb", "mdi:lightbulb-off"),
+        "switch": ("on", "mdi:toggle-switch", "mdi:toggle-switch-off"),
+        "fan": ("on", "mdi:fan", "mdi:fan-off"),
+        "lock": ("locked", "mdi:lock", "mdi:lock-open"),
+        "cover": ("closed", "mdi:window-shutter", "mdi:window-shutter-open"),
+        "media_player": ("playing", "mdi:play-circle", "mdi:pause-circle"),
+    }
+    if platform not in profiles or not entity_ids:
+        return None
+    if any(entity_id.split(".", 1)[0] != platform for entity_id in entity_ids):
+        return None
+    state, active, inactive = profiles[platform]
+    # Match the boolean helper's AND semantics; include offline sources so
+    # their recovery is observed without regenerating the configuration.
+    condition = " and ".join(f"is_state({entity_id!r}, {state!r})" for entity_id in entity_ids)
+    unavailable = " or ".join(
+        f"states({entity_id!r}) in ['unknown', 'unavailable']" for entity_id in entity_ids
+    )
+    return (
+        f"{{% if {unavailable} %}}\n  mdi:help-circle-outline\n"
+        f"{{% elif {condition} %}}\n  {active}\n"
+        f"{{% else %}}\n  {inactive}\n{{% endif %}}"
+    )
+
+
 def _named_icon_helper_template(
     entity_ids: list[str], states: list, entity_name: str
 ) -> tuple[str, str] | None:
@@ -9967,6 +9995,12 @@ def _reference_entity_defaults(
         entity_ids, states, defaults[CONF_ENTITY_NAME]
     ):
         defaults[CONF_ICON], defaults[CONF_ICON_TEMPLATE] = named_icon_helper
+    elif (
+        not any(_source_icon(hass, entity_id, state)
+                for entity_id, state in zip(entity_ids, states, strict=True))
+        and (stateful_icon := _stateful_icon_helper_template(entity_ids, platform))
+    ):
+        defaults[CONF_ICON_TEMPLATE] = stateful_icon
     elif boiler_profile is not None:
         climate_entity_id = entity_ids[boiler_profile[0]]
         defaults[CONF_ICON_TEMPLATE] = (

@@ -5318,7 +5318,10 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
             CONF_INITIAL_AVAILABILITY: True,
             CONF_PERSISTENT: True,
             CONF_ICON_TEMPLATE: (
-                "{{ state_attr('light.kitchen_lamp', 'icon') | default('', true) }}"
+                "{% if states('light.kitchen_lamp') in ['unknown', 'unavailable'] %}\n"
+                "  mdi:help-circle-outline\n"
+                "{% elif is_state('light.kitchen_lamp', 'on') %}\n"
+                "  mdi:lightbulb\n{% else %}\n  mdi:lightbulb-off\n{% endif %}"
             ),
             CONF_SOURCE_ENTITIES: ["light.kitchen_lamp"],
             CONF_TEMPLATE_SOURCES: {

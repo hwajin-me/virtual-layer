@@ -6183,6 +6183,66 @@ def test_reference_icon_uses_source_registry_original_icon_as_fallback(hass):
     )
 
 
+@pytest.mark.parametrize(
+    "domain,active_state,inactive_state,active_icon,inactive_icon",
+    [
+        ("light", "on", "off", "mdi:lightbulb", "mdi:lightbulb-off"),
+        ("switch", "on", "off", "mdi:toggle-switch", "mdi:toggle-switch-off"),
+        ("fan", "on", "off", "mdi:fan", "mdi:fan-off"),
+        ("lock", "locked", "unlocked", "mdi:lock", "mdi:lock-open"),
+        ("cover", "closed", "open", "mdi:window-shutter", "mdi:window-shutter-open"),
+        ("media_player", "playing", "paused", "mdi:play-circle", "mdi:pause-circle"),
+    ],
+)
+def test_reference_default_icon_branches_follow_state(
+    hass, domain, active_state, inactive_state, active_icon, inactive_icon
+):
+    entity_id = f"{domain}.example"
+    hass.states.async_set(entity_id, active_state)
+    defaults = _reference_entity_defaults(hass, [entity_id])
+    template = Template(defaults[CONF_ICON_TEMPLATE], hass)
+    assert "{% if " in template.template
+    assert "{% else %}" in template.template
+    for state, expected in [
+        (active_state, active_icon), (inactive_state, inactive_icon),
+        ("unavailable", "mdi:help-circle-outline"),
+        ("unknown", "mdi:help-circle-outline"), (active_state, active_icon),
+    ]:
+        hass.states.async_set(entity_id, state)
+        assert template.async_render().strip() == expected
+
+
+def test_reference_default_icon_includes_recovering_sources(hass):
+    hass.states.async_set("light.one", "on")
+    hass.states.async_set("light.two", "unavailable")
+    defaults = _reference_entity_defaults(hass, ["light.one", "light.two"])
+    template = Template(defaults[CONF_ICON_TEMPLATE], hass)
+    assert template.async_render().strip() == "mdi:help-circle-outline"
+    hass.states.async_set("light.two", "off")
+    assert template.async_render().strip() == "mdi:lightbulb-off"
+    hass.states.async_set("light.two", "on")
+    assert template.async_render().strip() == "mdi:lightbulb"
+
+
+def test_reference_dynamic_icon_edit_policies(hass):
+    hass.states.async_set("switch.old", "on")
+    hass.states.async_set("switch.new", "off")
+    generated = _reference_entity_defaults(hass, ["switch.old"])
+    reference = _reference_entity_defaults(hass, ["switch.new"])
+    _, entity = _build_entity_config(_entity_input(generated))
+    assert entity[CONF_ICON_TEMPLATE] == generated[CONF_ICON_TEMPLATE]
+    profile = _auto_helper_profile(generated)
+    refreshed = _reference_edit_defaults(generated, reference, profile)
+    assert refreshed[CONF_ICON_TEMPLATE] == reference[CONF_ICON_TEMPLATE]
+    customized = {**generated, CONF_ICON_TEMPLATE: "{{ 'mdi:star' }}"}
+    refreshed = _reference_edit_defaults(customized, reference, profile)
+    assert refreshed[CONF_ICON_TEMPLATE] == customized[CONF_ICON_TEMPLATE]
+    forced = _reference_edit_defaults(
+        customized, reference, profile, force_template_helper=True
+    )
+    assert forced[CONF_ICON_TEMPLATE] == reference[CONF_ICON_TEMPLATE]
+
+
 def test_reference_ventilation_name_generates_stateful_icon_helper(hass):
     hass.states.async_set("fan.air_ventilator", "on")
 

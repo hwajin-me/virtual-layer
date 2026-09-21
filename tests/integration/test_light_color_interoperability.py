@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from homeassistant.components.light import ColorMode, LightEntity
+from homeassistant.components.light import ColorMode, LightEntity, LightEntityFeature
 from homeassistant.components.light.const import DATA_COMPONENT
 from homeassistant.setup import async_setup_component
 
@@ -157,10 +157,13 @@ async def test_single_slow_bulb_retries_then_resumes_source_state(hass, responds
             assert len(bulb.calls) == 1
             assert light._response_refresh_cancel is None
             return
+        later.reset_mock()
         await light._async_refresh_group(light._group_revision, 1)
         await hass.async_block_till_done()
         assert light.is_on  # Stale off reports cannot overwrite the request.
         assert len(bulb.calls) == 2
+        if responds:
+            later.assert_not_called()  # Acknowledged retries need no extra transition wait.
         await light._async_refresh_group(light._group_revision, 0)
         assert light.is_on == responds
         assert len(bulb.calls) == 2
@@ -168,3 +171,76 @@ async def test_single_slow_bulb_retries_then_resumes_source_state(hass, responds
         bulb.async_write_ha_state()
         await hass.async_block_till_done()
         assert not light.is_on
+
+
+@pytest.mark.parametrize("command", ["turn_on", "turn_off"])
+@pytest.mark.parametrize("source_count", [1, 2])
+async def test_transition_reaches_sources_through_ha_service(hass, command, source_count):
+    """HA must retain transition before forwarding and scheduling a retry."""
+    assert await async_setup_component(hass, "light", {})
+    component = hass.data[DATA_COMPONENT]
+    bulbs = [RecordingBulb(f"Transition {i}", ColorMode.BRIGHTNESS) for i in range(source_count)]
+    for bulb in bulbs:
+        bulb._attr_supported_features = LightEntityFeature.TRANSITION
+        bulb.async_turn_on = AsyncMock()
+        bulb.async_turn_off = AsyncMock()
+    await component.async_add_entities(bulbs)
+    light = VirtualLight(LIGHT_SCHEMA({
+        "name": "Transition virtual", "entity_id": "light.transition_virtual",
+        "initial_value": "on", "matter_light_type": "dimmable",
+        "source_entities": [bulb.entity_id for bulb in bulbs], "persistent": False,
+    }), False)
+    await component.async_add_entities([light])
+    with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()) as later:
+        await hass.services.async_call("light", command, {
+            "entity_id": light.entity_id, "transition": 5,
+        }, blocking=True)
+        for bulb in bulbs:
+            getattr(bulb, f"async_{command}").assert_awaited_once_with(transition=5)
+        assert later.call_args.args[1] == 7
+        light._cancel_group_refresh()
+
+
+async def test_delayed_brightness_steps_and_late_on_report_after_off(hass):
+    assert await async_setup_component(hass, "light", {})
+    component = hass.data[DATA_COMPONENT]
+    bulb = RecordingBulb("Delayed brightness", ColorMode.BRIGHTNESS)
+    bulb.async_turn_on = AsyncMock()
+    bulb.async_turn_off = AsyncMock()
+    await component.async_add_entities([bulb])
+    light = VirtualLight(LIGHT_SCHEMA({
+        "name": "Delayed steps", "entity_id": "light.delayed_steps",
+        "initial_value": "off", "matter_light_type": "dimmable",
+        "source_entities": [bulb.entity_id], "persistent": False,
+        "native_templates": {
+            "is_on": "{{ is_state(" + repr(bulb.entity_id) + ", 'on') }}",
+            "brightness": "{{ state_attr(" + repr(bulb.entity_id) + ", 'brightness') }}",
+        },
+    }), False)
+    await component.async_add_entities([light])
+    with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()), patch(
+        "custom_components.virtual_layer.light.async_update_entity", new_callable=AsyncMock
+    ):
+        for payload, expected in [({"brightness": 100}, 100), ({"brightness_step": 30}, 130),
+                                  ({"brightness_step": 30}, 160)]:
+            await hass.services.async_call("light", "turn_on", {
+                "entity_id": light.entity_id, **payload,
+            }, blocking=True)
+            bulb._attr_is_on = True
+            bulb._attr_brightness = 80  # An old response arrives after each command.
+            bulb.async_write_ha_state()
+            await hass.async_block_till_done()
+            assert light.is_on and light.brightness == expected
+        revision = light._group_revision
+        await hass.services.async_call("light", "turn_on", {
+            "entity_id": light.entity_id, "brightness": 0,
+        }, blocking=True)
+        bulb.async_write_ha_state()
+        await hass.async_block_till_done()
+        assert not light.is_on
+        await light._async_refresh_group(revision, 2)
+        assert bulb.async_turn_on.await_count == 3
+        await light._async_refresh_group(light._group_revision, 1)
+        assert bulb.async_turn_off.await_count == 2
+        assert not light.is_on
+        light._cancel_group_refresh()

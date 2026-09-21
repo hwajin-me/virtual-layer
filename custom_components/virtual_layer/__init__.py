@@ -1974,6 +1974,9 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
         ))
 
     if source_entities:
+        from .zigbee_refresh import async_watch_sources
+
+        listeners.append(async_watch_sources(hass, source_entities))
         listeners.append(async_track_state_change_event(
             hass,
             source_entities,

@@ -546,7 +546,7 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._attr_is_on = True
         self._update_attributes()
         self.async_write_ha_state()
-        self._schedule_source_reconciliation()
+        self._schedule_source_reconciliation(kwargs.get("transition", 0))
 
     def _apply_turn_on_values(self, kwargs: dict[str, Any]) -> None:
         """Validate and stage light service values before publishing state."""
@@ -608,7 +608,19 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._attr_is_on = False
         self._update_attributes()
         self.async_write_ha_state()
-        self._schedule_source_reconciliation()
+        self._schedule_source_reconciliation(kwargs.get("transition", 0))
+
+    @property
+    def supported_features(self):
+        """Forward transitions only when a physical source supports them."""
+        if self.hass is not None:
+            for source in self._group_sources():
+                state = self.hass.states.get(source)
+                features = state.attributes.get("supported_features", 0) if state else 0
+                if (isinstance(features, int) and not isinstance(features, bool)
+                        and features >= 0 and features & LightEntityFeature.TRANSITION):
+                    return LightEntityFeature.TRANSITION
+        return LightEntityFeature(0)
 
     def _preserve_optimistic_command_state(self, command, args, kwargs) -> bool:
         """Keep a command value visible until slow source bulbs can report it."""
@@ -683,25 +695,9 @@ class VirtualLight(VirtualEntity, LightEntity):
 
     async def _async_run_command_action(self, command, method, args, kwargs):
         sources = self._group_sources()
-        if (not sources or command not in {"turn_on", "turn_off"}
-                or len(sources) == 1 and (
-                    self._response_delay <= 0 or not self._has_stock_group_action(command)
-                )):
-            if (len(sources) == 1 and command in {"turn_on", "turn_off"}
-                    and self._group_target is not None):
-                self._validate_command_action(command, args, kwargs)
-                self._group_revision += 1
-                self._cancel_group_refresh()
-                self._group_target = None
-                self._group_authoritative = False
-                self._response_pending = False
-            # A single-source light previously only started its reconciliation
-            # window after forwarding the command.  A state event emitted by a
-            # slow bulb while that action was running could therefore render
-            # the old ``off`` source value over the requested virtual ``on``
-            # value.  Hold source rendering from the beginning of an
-            # optimistic power command, just as grouped lights do below.
-            # Explicit ``optimistic: false`` actions remain source-authoritative.
+        if not sources or command not in {"turn_on", "turn_off"}:
+            # Cross-domain sources retain their proxy path. Hold stale source
+            # reports during optimistic actions, including cancellation cleanup.
             spec = self._command_action_spec(command)
             hold_source_state = bool(
                 self._source_entities
@@ -715,7 +711,7 @@ class VirtualLight(VirtualEntity, LightEntity):
                 return await super()._async_run_command_action(
                     command, method, args, kwargs
                 )
-            except Exception:
+            except BaseException:
                 if hold_source_state:
                     self._response_pending = False
                 raise
@@ -732,12 +728,34 @@ class VirtualLight(VirtualEntity, LightEntity):
         async with self._group_command_lock:
             if self._group_removed:
                 return False
+            # The preceding command can install its timer while we wait for
+            # the lock, after the cancellation above has already happened.
+            self._cancel_group_refresh()
+            self._response_pending = False
             spec = self._command_action_spec(command)
             if spec is not None and not spec[1]:
                 self._group_authoritative = False
                 self._group_target = None
                 self._response_pending = False
                 return await super()._async_run_command_action(command, method, args, kwargs)
+            if len(sources) == 1 and (
+                self._response_delay <= 0 or not self._has_stock_group_action(command)
+            ):
+                # Serialize custom actions with stock commands as well. Keep
+                # their action-before-optimistic-state order and never retry a
+                # user script. Publish under the lock so an older completion
+                # cannot overwrite the next command's target.
+                self._group_authoritative = False
+                self._group_target = None
+                self._response_pending = self._response_delay > 0
+                try:
+                    await super()._async_run_command_action(command, method, args, kwargs)
+                    await method(self, *args, **kwargs)
+                except BaseException:
+                    self._response_pending = False
+                    self._apply_templates()
+                    raise
+                return False
             # Validate and publish the virtual target before dispatch. Source
             # reports arriving while actions run cannot replace this target.
             self._group_dispatching = True
@@ -752,6 +770,12 @@ class VirtualLight(VirtualEntity, LightEntity):
                         _LOGGER.debug("Grouped light command timed out for %s", self.entity_id)
                 else:
                     await super()._async_run_command_action(command, method, args, kwargs)
+            except BaseException:
+                if len(sources) == 1:
+                    self._group_authoritative = False
+                    self._group_target = None
+                    self._apply_templates()
+                raise
             finally:
                 self._group_dispatching = False
             if revision == self._group_revision and self._has_stock_group_action(command):
@@ -776,6 +800,11 @@ class VirtualLight(VirtualEntity, LightEntity):
             return True
         data = dict(data)
         modes = state.attributes.get("supported_color_modes", [])
+        if (isinstance(modes, (list, tuple, set)) and modes
+                and all(mode == "onoff" for mode in modes)):
+            # Core strips brightness/colour for on/off-only group members.
+            # Once power matches, resending those unsupported values is futile.
+            return True
         if ("color_temp_kelvin" in data and isinstance(modes, (list, tuple, set))
                 and "color_temp" not in modes):
             kelvin = data.pop("color_temp_kelvin")
@@ -827,9 +856,14 @@ class VirtualLight(VirtualEntity, LightEntity):
                 if not isinstance(actual, (list, tuple)) or len(actual) != len(data[name]):
                     return False
                 tolerance = 0.005 if name == "xy_color" else 2
-                if any(not isinstance(a, (int, float)) or not math.isfinite(a)
-                       or abs(a - b) > tolerance for a, b in zip(actual, data[name])):
-                    return False
+                for index, (a, b) in enumerate(zip(actual, data[name])):
+                    if isinstance(a, bool) or not isinstance(a, (int, float)) or not math.isfinite(a):
+                        return False
+                    distance = abs(a - b)
+                    if name == "hs_color" and index == 0:
+                        distance = abs((a - b + 180) % 360 - 180)
+                    if distance > tolerance:
+                        return False
         return True
 
     def _schedule_group_refresh(self, revision, retries):
@@ -883,6 +917,10 @@ class VirtualLight(VirtualEntity, LightEntity):
                     _LOGGER.debug("Grouped light retry timed out for %s", self.entity_id)
                 finally:
                     self._group_retry_sources = None
+                # A retry may acknowledge synchronously. Do not keep a single
+                # bulb frozen for another full transition after it has replied.
+                pending = [source for source in pending
+                           if not self._group_source_matches(source, command, data)]
             self._response_pending = False
             # Single bulbs resume following their source after acknowledgement
             # or the bounded retry window. Group targets retain their existing
@@ -893,7 +931,7 @@ class VirtualLight(VirtualEntity, LightEntity):
             if pending and retries and revision == self._group_revision:
                 self._schedule_group_refresh(revision, retries - 1)
 
-    def _schedule_source_reconciliation(self) -> None:
+    def _schedule_source_reconciliation(self, transition=0) -> None:
         """Refresh a composite light after slow or sleeping bulbs have replied."""
         if self._group_dispatching or not self._source_entities or self._response_delay <= 0:
             return
@@ -916,7 +954,7 @@ class VirtualLight(VirtualEntity, LightEntity):
                 self._response_refresh_cancel = None
 
         self._response_refresh_cancel = async_call_later(
-            self.hass, self._response_delay, _refresh
+            self.hass, transition + self._response_delay, _refresh
         )
 
     def _apply_templates(self):

@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 
 from homeassistant import bootstrap, loader
-from homeassistant.components.light import ColorMode, LightEntity
+from homeassistant.components.light import ColorMode, LightEntity, LightEntityFeature
 from homeassistant.components.light.const import DATA_COMPONENT
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
@@ -18,6 +18,7 @@ from custom_components.virtual_layer.light import LIGHT_SCHEMA, VirtualLight
 
 
 class Bulb(LightEntity):
+    _attr_supported_features = LightEntityFeature.TRANSITION
     _attr_should_poll = False
     _attr_is_on = False
     _attr_brightness = 128
@@ -29,6 +30,7 @@ class Bulb(LightEntity):
         self._attr_supported_color_modes = {mode}
         self._attr_color_mode = mode
         self.calls = []
+        self.off_calls = []
         self.drop_remaining = 0
         self.updates = 0
         self.responded = asyncio.Event()
@@ -45,6 +47,7 @@ class Bulb(LightEntity):
         self.responded.set()
 
     async def async_turn_off(self, **kwargs):
+        self.off_calls.append(dict(kwargs))
         self._attr_is_on = False
         self.async_write_ha_state()
 
@@ -150,14 +153,30 @@ async def main():
             fast.calls.clear()
             fast.responded.clear()
             fast.drop_remaining = 1
-            await single.async_turn_on(brightness=190)
+            await hass.services.async_call("light", "turn_on", {
+                "entity_id": single.entity_id, "brightness": 190, "transition": 1,
+            }, blocking=True)
             assert single.is_on and single.brightness == 190
+            assert fast.calls[-1]["transition"] == 1
             async with asyncio.timeout(8):
                 await fast.responded.wait()
             await asyncio.sleep(1.2)
             assert len(fast.calls) == 2 and single.is_on
             await fast.async_turn_off()
             await hass.async_block_till_done()
+            assert not single.is_on
+            await hass.services.async_call("light", "turn_on", {
+                "entity_id": single.entity_id, "brightness": 100,
+            }, blocking=True)
+            for expected in (130, 160):
+                await hass.services.async_call("light", "turn_on", {
+                    "entity_id": single.entity_id, "brightness_step": 30,
+                }, blocking=True)
+                assert single.brightness == expected
+            await hass.services.async_call("light", "turn_off", {
+                "entity_id": single.entity_id, "transition": 2,
+            }, blocking=True)
+            assert fast.off_calls[-1]["transition"] == 2
             assert not single.is_on
             await hass.data[DATA_COMPONENT].async_remove_entity(single.entity_id)
             assert single._response_refresh_cancel is None
@@ -170,6 +189,7 @@ async def main():
             "delayed_bulb_retry": "passed", "healthy_bulb_not_resent": "passed",
             "timer_cleanup": "passed", "error_logs": errors.errors,
             "single_bulb_retry_and_external_change": "passed",
+            "service_transitions_and_brightness_steps": "passed",
             "source_devices": "simulated LightEntity instances",
         }, indent=2))
 
