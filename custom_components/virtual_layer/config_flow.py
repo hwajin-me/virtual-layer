@@ -3657,7 +3657,8 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
             {"default": recording_switch} if recording_switch else {}
         ))] = selector.EntitySelector(selector.EntitySelectorConfig(domain="switch", integration="frigate"))
         domain_schema[vol.Optional(CONF_FRIGATE_MQTT_RECORDINGS_TOPIC, default=defaults.get(CONF_FRIGATE_MQTT_RECORDINGS_TOPIC, ""))] = selector.TextSelector()
-        domain_schema[vol.Optional(CONF_FRIGATE_RECORDING_DURING_PATROL, default=defaults.get(CONF_FRIGATE_RECORDING_DURING_PATROL, "keep"))] = selector.SelectSelector(selector.SelectSelectorConfig(options=["keep", "on", "off"], translation_key="frigate_patrol_state"))
+        domain_schema[vol.Optional(CONF_FRIGATE_RECORDING_DURING_PATROL, default=defaults.get(CONF_FRIGATE_RECORDING_DURING_PATROL, "off"))] = selector.SelectSelector(selector.SelectSelectorConfig(options=["keep", "on", "off"], translation_key="frigate_patrol_state"))
+        domain_schema[vol.Optional(CONF_FRIGATE_MOTION_DURING_PATROL, default=defaults.get(CONF_FRIGATE_MOTION_DURING_PATROL, defaults.get(CONF_FRIGATE_RECORDING_DURING_PATROL, "off")))] = selector.SelectSelector(selector.SelectSelectorConfig(options=["keep", "on", "off"], translation_key="frigate_patrol_state"))
         patrol_target_marker = (
             vol.Optional(CONF_ONVIF_PATROL_TARGET, default=patrol_target)
             if patrol_target

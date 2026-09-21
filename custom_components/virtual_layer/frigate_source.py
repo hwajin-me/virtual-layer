@@ -12,6 +12,24 @@ def _mapping(value):
     return value if isinstance(value, Mapping) else {}
 
 
+def frigate_camera_switches(hass, entity_id: str) -> dict[str, str]:
+    """Find controls on one verified Frigate device, independent of HA names."""
+    registry = er.async_get(hass)
+    source = registry.async_get(entity_id)
+    if source is None or source.platform != "frigate" or not source.device_id:
+        return {}
+    controls = {}
+    for kind in ("detect", "motion", "recordings"):
+        matches = [entry.entity_id for entry in er.async_entries_for_device(
+            registry, source.device_id, include_disabled_entities=True
+        ) if entry.platform == "frigate"
+            and entry.config_entry_id == source.config_entry_id
+            and entry.domain == "switch" and entry.unique_id.endswith(f"_{kind}")]
+        if len(matches) == 1:
+            controls[kind] = matches[0]
+    return controls
+
+
 def _filtered_rtsp(value):
     if not isinstance(value, str) or any(char.isspace() for char in value):
         return None

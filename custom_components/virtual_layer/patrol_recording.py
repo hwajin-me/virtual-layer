@@ -1,9 +1,14 @@
 """Temporarily control Frigate recordings through Home Assistant MQTT."""
 import asyncio
+from importlib import import_module
 
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.importlib import async_import_module
+
+
+async def async_import_module(hass, name):
+    """Load optional MQTT off the loop without requiring newer HA import helpers."""
+    return await hass.async_add_executor_job(import_module, name)
 
 
 class PatrolRecording:
@@ -14,7 +19,7 @@ class PatrolRecording:
         self.topic = topic
         self.previous = None
 
-    async def apply(self, value):
+    async def apply(self, value, *, force=False):
         mqtt = await async_import_module(self.hass, "homeassistant.components.mqtt")
         result = asyncio.get_running_loop().create_future()
 
@@ -29,7 +34,7 @@ class PatrolRecording:
                 previous = await result
                 if self.previous is None:
                     self.previous = previous
-                if previous == value.upper():
+                if previous == value.upper() and not force:
                     return
                 result = asyncio.get_running_loop().create_future()
                 await mqtt.async_publish(self.hass, self.topic + "/set", value.upper(), qos=1, retain=False)
@@ -43,6 +48,6 @@ class PatrolRecording:
     async def restore(self):
         if self.previous is None:
             return
-        mqtt = await async_import_module(self.hass, "homeassistant.components.mqtt")
-        await mqtt.async_publish(self.hass, self.topic + "/set", self.previous, qos=1, retain=False)
+        # Confirm motion is restored before re-enabling dependent detection.
+        await self.apply(self.previous.lower(), force=True)
         self.previous = None

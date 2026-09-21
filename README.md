@@ -29,9 +29,19 @@ Zoom is unchanged. Unsupported position queries or return moves are logged;
 relative patrol remains available on those cameras. Return commands do not
 guarantee physical arrival before recording resumes.
 
-In camera Domain settings, select a Frigate recording switch **or** enter an
+Patrol now defaults to Off for Frigate controls. Existing explicit Keep/On
+policies are preserved: set both Recording during patrol and Detection during
+patrol to Off and choose Entire patrol to suppress
+recording and detection for the whole session. With no explicit target, controls
+are discovered only on the selected source camera's Frigate device. Detection
+is disabled and confirmed before motion is disabled. All switch commands must
+be confirmed before movement; stop restores each captured state in reverse order.
+The virtual camera's recording state follows the linked recording switch.
+
+In camera Domain settings, optionally select a Frigate recording switch **or** enter an
 MQTT base topic such as `frigate/front/recordings`, then set Recording during
-patrol to Off. MQTT uses Home Assistant's configured broker, subscribes to
+patrol to Off. This also controls detect and motion (including the sibling MQTT
+topics); explicit legacy motion policies remain supported. MQTT uses Home Assistant's configured broker, subscribes to
 `<base>/state`, and publishes non-retained commands to `<base>/set`. It requires
 a known ON/OFF state and confirmation before starting movement. Stop restores
 the previous recording state after requesting return to the initial position.

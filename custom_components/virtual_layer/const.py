@@ -101,6 +101,7 @@ CAMERA_PATROL_FORM_FIELDS = (
     CONF_ONVIF_PATROL_PAN_MAX, CONF_ONVIF_PATROL_TILT_MIN,
     CONF_ONVIF_PATROL_TILT_MAX, CONF_FRIGATE_RECORDING_SWITCH,
     CONF_FRIGATE_MQTT_RECORDINGS_TOPIC, "frigate_recording_during_patrol",
+    "frigate_motion_during_patrol",
 )
 CONF_FRIGATE_MOTION_SWITCH = "frigate_motion_switch"
 CONF_FRIGATE_RECORDING_DURING_PATROL = "frigate_recording_during_patrol"

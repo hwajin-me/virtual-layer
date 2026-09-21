@@ -44,6 +44,7 @@ from webrtc_models import RTCIceCandidateInit
 from . import get_entity_configs
 from .const import *
 from .patrol_recording import PatrolRecording
+from .frigate_source import frigate_camera_switches
 from .entity import (
     MAX_LOCAL_MEDIA_BYTES,
     VirtualEntity,
@@ -181,8 +182,8 @@ BASE_SCHEMA = virtual_schema(DEFAULT_CAMERA_VALUE, {
     vol.Optional(CONF_FRIGATE_RECORDING_SWITCH): cv.entity_id,
     vol.Optional(CONF_FRIGATE_MQTT_RECORDINGS_TOPIC): cv.string,
     vol.Optional(CONF_FRIGATE_MOTION_SWITCH): cv.entity_id,
-    vol.Optional(CONF_FRIGATE_RECORDING_DURING_PATROL, default="keep"): vol.In({"keep", "on", "off"}),
-    vol.Optional(CONF_FRIGATE_MOTION_DURING_PATROL, default="keep"): vol.In({"keep", "on", "off"}),
+    vol.Optional(CONF_FRIGATE_RECORDING_DURING_PATROL, default="off"): vol.In({"keep", "on", "off"}),
+    vol.Optional(CONF_FRIGATE_MOTION_DURING_PATROL): vol.In({"keep", "on", "off"}),
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
@@ -207,7 +208,10 @@ async def async_setup_entry(
     _LOGGER.debug("setting up the entries...")
     entities = []
     for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN):
-        entities.append(VirtualCamera(CAMERA_SCHEMA(entity), False))
+        try:
+            entities.append(VirtualCamera(CAMERA_SCHEMA(entity), False))
+        except (vol.Invalid, ValueError, TypeError, OverflowError):
+            _LOGGER.error("Cannot load virtual camera %s: invalid configuration", entity.get(ATTR_ENTITY_ID))
     async_add_entities(entities)
 
 
@@ -263,14 +267,16 @@ class VirtualCamera(VirtualEntity, Camera):
         self._patrol_speed = config.get(CONF_ONVIF_PATROL_SPEED)
         self._patrol_pan = (config.get(CONF_ONVIF_PATROL_PAN_MIN, 0.1), config.get(CONF_ONVIF_PATROL_PAN_MAX, 0.1))
         self._patrol_tilt = (config.get(CONF_ONVIF_PATROL_TILT_MIN, 0.1), config.get(CONF_ONVIF_PATROL_TILT_MAX, 0.1))
-        self._frigate_patrol_switches = (
-            (config.get(CONF_FRIGATE_RECORDING_SWITCH), config.get(CONF_FRIGATE_RECORDING_DURING_PATROL, "keep")),
-            (config.get(CONF_FRIGATE_MOTION_SWITCH), config.get(CONF_FRIGATE_MOTION_DURING_PATROL, "keep")),
-        )
+        self._recording_switch = config.get(CONF_FRIGATE_RECORDING_SWITCH)
+        self._motion_switch = config.get(CONF_FRIGATE_MOTION_SWITCH)
+        self._motion_policy = config.get(CONF_FRIGATE_MOTION_DURING_PATROL)
+        self._frigate_controls = {}
+        self._frigate_state_unsubscribe = None
         self._frigate_previous_switch_states: dict[str, str] = {}
         self._mqtt_recording_topic = config.get(CONF_FRIGATE_MQTT_RECORDINGS_TOPIC)
-        self._mqtt_recording = None
-        self._recording_policy = config.get(CONF_FRIGATE_RECORDING_DURING_PATROL, "keep")
+        self._recording_policy = config.get(CONF_FRIGATE_RECORDING_DURING_PATROL, "off")
+        self._mqtt_controls = {}
+        self._mqtt_recording_state = None
 
         _LOGGER.debug(f"VirtualCamera: {self.name} created")
 
@@ -317,6 +323,19 @@ class VirtualCamera(VirtualEntity, Camera):
             except vol.Invalid:
                 value = fallback
             setattr(self, attribute_name, value)
+
+    @property
+    def is_recording(self):
+        """Prefer the controlled recorder's real state over a source template."""
+        mqtt_state = getattr(self, "_mqtt_recording_state", None)
+        if mqtt_state is not None:
+            return mqtt_state == "on"
+        entity_id = getattr(self, "_recording_switch", None) or getattr(self, "_frigate_controls", {}).get("recordings")
+        if entity_id and self.hass:
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state in {"on", "off"}:
+                return state.state == "on"
+        return self._attr_is_recording
 
     @property
     def state_attributes(self):
@@ -702,7 +721,10 @@ class VirtualCamera(VirtualEntity, Camera):
                 eager_start=False,
             )
         elif self._patrol_enabled:
-            await self.async_start_patrol()
+            try:
+                await self.async_start_patrol()
+            except Exception:
+                _LOGGER.warning("Unable to start patrol for %s; camera remains loaded", self.entity_id)
 
     async def async_will_remove_from_hass(self) -> None:
         """Remove the independently managed source-camera listener."""
@@ -711,12 +733,18 @@ class VirtualCamera(VirtualEntity, Camera):
         self._invalidate_image_source()
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
-        await self.async_stop_patrol()
+        try:
+            await self.async_stop_patrol()
+        except Exception:
+            _LOGGER.warning("Unable to stop patrol for %s during unload", self.entity_id)
         if self._source_camera_remove_listener is not None:
             self._source_camera_remove_listener()
             self._source_camera_remove_listener = None
         self._tracked_source_camera = None
         self._camera_internal_added = False
+        if self._frigate_state_unsubscribe is not None:
+            self._frigate_state_unsubscribe()
+            self._frigate_state_unsubscribe = None
         await super().async_will_remove_from_hass()
 
     @callback
@@ -1017,17 +1045,66 @@ class VirtualCamera(VirtualEntity, Camera):
 
     async def _async_set_frigate_patrol_switches(self, *, restore: bool) -> None:
         """Use Frigate's own recording/detection switch entities during patrol."""
-        if self._mqtt_recording_topic and self._recording_policy != "keep":
-            if self._mqtt_recording is None:
-                self._mqtt_recording = PatrolRecording(self.hass, self._mqtt_recording_topic)
-            if restore:
+        if not restore:
+            # Explicit recording targets take precedence over the media alias.
+            source = self._recording_switch or self._source_entity
+            if not source:
+                sources = [value for value in self._source_entities if value.startswith("camera.")]
+                source = sources[0] if len(sources) == 1 else None
+            self._frigate_controls = frigate_camera_switches(self.hass, source) if source else {}
+        motion_policy = self._motion_policy or self._recording_policy
+        if self._mqtt_recording_topic:
+            base = self._mqtt_recording_topic.rsplit("/", 1)[0]
+            kinds = ["detect", "motion", "recordings"] if motion_policy == "off" else ["motion", "detect", "recordings"]
+            for kind in reversed(kinds) if restore else kinds:
+                policy = self._recording_policy if kind == "recordings" else motion_policy
+                if policy == "keep":
+                    continue
+                controller = self._mqtt_controls.setdefault(kind, PatrolRecording(self.hass, f"{base}/{kind}"))
                 try:
-                    await self._mqtt_recording.restore()
+                    if restore:
+                        await controller.restore()
+                        if kind == "recordings":
+                            self._mqtt_recording_state = None
+                    else:
+                        await controller.apply(policy)
+                        if kind == "recordings":
+                            self._mqtt_recording_state = policy
                 except Exception:
-                    _LOGGER.warning("Unable to restore Frigate MQTT recordings for %s", self.entity_id)
-            else:
-                await self._mqtt_recording.apply(self._recording_policy)
-        for entity_id, requested_state in self._frigate_patrol_switches:
+                    if not restore:
+                        raise
+                    _LOGGER.warning("Unable to restore Frigate MQTT %s for %s", kind, self.entity_id)
+            self.async_write_ha_state()
+            return
+        controls = dict(self._frigate_controls)
+        if self._recording_switch:
+            controls["recordings"] = self._recording_switch
+        if self._motion_switch and self._motion_switch not in controls.values():
+            controls["motion"] = self._motion_switch
+        if not restore:
+            if self._frigate_state_unsubscribe is not None:
+                self._frigate_state_unsubscribe()
+                self._frigate_state_unsubscribe = None
+            if controls:
+                @callback
+                def control_changed(event):
+                    self.async_write_ha_state()
+
+                self._frigate_state_unsubscribe = async_track_state_change_event(
+                    self.hass, list(controls.values()), control_changed,
+                )
+        if not restore and self._frigate_controls:
+            required = ({"recordings"} if self._recording_policy != "keep" else set())
+            if motion_policy != "keep":
+                required.update({"detect", "motion"})
+            if required - controls.keys():
+                raise HomeAssistantError("Frigate patrol requires recording, detect and motion controls on the same camera")
+        kinds = ["detect", "motion", "recordings"] if motion_policy == "off" else ["motion", "detect", "recordings"]
+        targets = [(controls.get(kind), self._recording_policy if kind == "recordings" else motion_policy) for kind in kinds]
+        if restore:
+            # Restore the actual captured targets, even if the source changed.
+            targets = list(reversed(list(self._frigate_previous_switch_states.items())))
+        for entity_id, requested_state in targets:
             if not entity_id or requested_state == "keep":
                 continue
             if not entity_id.startswith("switch."):
@@ -1043,9 +1120,7 @@ class VirtualCamera(VirtualEntity, Camera):
                     raise HomeAssistantError(f"Frigate patrol switch {entity_id} is unavailable")
                 self._frigate_previous_switch_states.setdefault(entity_id, state.state)
             try:
-                await self.hass.services.async_call(
-                    "switch", f"turn_{requested_state}", {ATTR_ENTITY_ID: entity_id}, blocking=True
-                )
+                await self._async_confirm_frigate_switch(entity_id, requested_state)
             except Exception:
                 if not restore:
                     raise
@@ -1053,6 +1128,30 @@ class VirtualCamera(VirtualEntity, Camera):
             else:
                 if restore:
                     self._frigate_previous_switch_states.pop(entity_id, None)
+        self.async_write_ha_state()
+
+    async def _async_confirm_frigate_switch(self, entity_id, requested_state):
+        """A successful service call only means MQTT was published, not applied."""
+        confirmed = asyncio.Event()
+
+        @callback
+        def changed(event):
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state == requested_state:
+                confirmed.set()
+
+        unsubscribe = async_track_state_change_event(self.hass, [entity_id], changed)
+        try:
+            async with asyncio.timeout(10):
+                await self.hass.services.async_call(
+                    "switch", f"turn_{requested_state}", {ATTR_ENTITY_ID: entity_id}, blocking=True
+                )
+                changed(None)
+                await confirmed.wait()
+        except TimeoutError as err:
+            raise HomeAssistantError(f"Frigate switch {entity_id} did not confirm {requested_state}") from err
+        finally:
+            unsubscribe()
 
     async def _async_direct_onvif_ptz(self, data: dict, service_error: Exception) -> None:
         """Invoke the configured ONVIF camera's native PTZ client as a fallback.
@@ -1200,16 +1299,24 @@ def validate_domain_options(config) -> None:
         raise vol.Invalid("ONVIF patrol needs an ONVIF camera target")
     if config.get("patrol_auto_cycle") and not config.get(CONF_ONVIF_PATROL_TARGET):
         raise vol.Invalid("Automatic patrol needs an ONVIF camera target")
-    for field in ("patrol_on_seconds", "patrol_off_seconds", "patrol_settle_seconds"):
+    target = config.get(CONF_ONVIF_PATROL_TARGET)
+    if target and (not target.startswith("camera.") or target == config.get(ATTR_ENTITY_ID)):
+        raise vol.Invalid("Patrol requires a different camera target")
+    for field in (CONF_FRIGATE_RECORDING_SWITCH, CONF_FRIGATE_MOTION_SWITCH):
+        if config.get(field) and not config[field].startswith("switch."):
+            raise vol.Invalid("Frigate controls must be switch entities")
+    for field in (
+        "patrol_on_seconds", "patrol_off_seconds", "patrol_settle_seconds",
+        CONF_ONVIF_PATROL_INTERVAL, CONF_ONVIF_PATROL_SPEED,
+        CONF_ONVIF_PATROL_DISTANCE, CONF_ONVIF_PATROL_PAN_MIN,
+        CONF_ONVIF_PATROL_PAN_MAX, CONF_ONVIF_PATROL_TILT_MIN,
+        CONF_ONVIF_PATROL_TILT_MAX,
+    ):
         if field in config and not math.isfinite(config[field]):
-            raise vol.Invalid("Patrol durations must be finite")
+            raise vol.Invalid("Patrol numeric values must be finite")
     topic = config.get(CONF_FRIGATE_MQTT_RECORDINGS_TOPIC)
     if topic:
         if any(char in topic for char in ("+", "#", "\x00")) or not topic.endswith("/recordings"):
             raise vol.Invalid("Use a concrete Frigate camera topic ending in /recordings")
         if config.get(CONF_FRIGATE_RECORDING_SWITCH):
             raise vol.Invalid("Choose either a recording switch or MQTT topic")
-    if config.get(CONF_FRIGATE_RECORDING_DURING_PATROL, "keep") != "keep" and not (
-        topic or config.get(CONF_FRIGATE_RECORDING_SWITCH)
-    ):
-        raise vol.Invalid("Recording control requires a switch or MQTT topic")

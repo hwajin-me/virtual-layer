@@ -49,6 +49,7 @@ def test_edit_preserves_patrol_and_recording_controls():
         "onvif_patrol_target": "camera.ptz", "onvif_patrol_interval": 120,
         "frigate_mqtt_recordings_topic": "frigate/front/recordings",
         "frigate_recording_during_patrol": "off",
+        "frigate_motion_during_patrol": "off",
     }
     defaults = _entity_form_defaults("Front", configured)
     for field in ("onvif_patrol_target", "onvif_patrol_interval", "frigate_mqtt_recordings_topic", "frigate_recording_during_patrol"):
@@ -56,3 +57,4 @@ def test_edit_preserves_patrol_and_recording_controls():
     _, rebuilt = _build_entity_config(defaults)
     assert rebuilt["frigate_mqtt_recordings_topic"] == configured["frigate_mqtt_recordings_topic"]
     assert rebuilt["onvif_patrol_interval"] == 120
+    assert rebuilt["frigate_motion_during_patrol"] == "off"

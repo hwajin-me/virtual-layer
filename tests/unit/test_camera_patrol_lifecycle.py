@@ -29,6 +29,7 @@ async def test_start_stop_restores_recording_even_when_ptz_stop_fails(hass):
     calls = []
     async def switch(call):
         calls.append(call.service)
+        hass.states.async_set(call.data["entity_id"], call.service.removeprefix("turn_"))
     hass.services.async_register("switch", "turn_off", switch)
     hass.services.async_register("switch", "turn_on", switch)
     entered = asyncio.Event()
@@ -52,6 +53,7 @@ async def test_move_failure_restores_recording(hass):
     calls = []
     async def switch(call):
         calls.append(call.service)
+        hass.states.async_set(call.data["entity_id"], call.service.removeprefix("turn_"))
     hass.services.async_register("switch", "turn_off", switch)
     hass.services.async_register("switch", "turn_on", switch)
     entity._async_call_onvif_ptz = AsyncMock(side_effect=HomeAssistantError("offline"))
