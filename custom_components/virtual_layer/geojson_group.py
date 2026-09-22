@@ -1,6 +1,7 @@
 """One shared GeoJSON config entry, with one native HA Device per document."""
 
 import asyncio
+from datetime import timedelta
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
@@ -10,11 +11,12 @@ from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo, Entity
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .geojson_catalog import async_get_catalog, snapshot_document
 from .geojson_metrics import summarize
-from .osm_tiles import async_osm_background
+from .osm_tiles import async_map_background
 from .polygon import render_polygon_map_svg
 
 DOMAIN = "virtual_layer"
@@ -267,6 +269,24 @@ class GeoJSONMap(GeoJSONEntity, ImageEntity):
         GeoJSONEntity.__init__(self, runtime, key, "map")
         self._attr_image_last_updated = dt_util.utcnow()
 
+    async def async_added_to_hass(self):
+        """Rotate the image URL when the Naver style version may change."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_track_time_interval(
+                self.hass, self._async_refresh_map, timedelta(hours=1)
+            )
+        )
+
+    @callback
+    def _async_refresh_map(self, _now) -> None:
+        """Cause clients to fetch a fresh map without changing GeoJSON data."""
+        if self.hass is None or self.runtime.stopped:
+            return
+        self._cached_image = None
+        self._attr_image_last_updated = dt_util.utcnow()
+        self.async_write_ha_state()
+
     @property
     def available(self):
         return super().available and bool(
@@ -282,7 +302,7 @@ class GeoJSONMap(GeoJSONEntity, ImageEntity):
         # turn an otherwise valid GeoJSON SVG into a 500 response.
         try:
             async with asyncio.timeout(7):
-                background = await async_osm_background(self.hass, zones)
+                background = await async_map_background(self.hass, zones)
         except Exception:  # OSM is optional; always preserve the SVG map.
             background = None
         svg = await self.hass.async_add_executor_job(

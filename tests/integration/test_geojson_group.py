@@ -177,7 +177,7 @@ async def test_geojson_map_falls_back_to_plain_svg_when_osm_background_fails(
         raise OSError("OSM tile cache unavailable")
 
     monkeypatch.setattr(
-        "custom_components.virtual_layer.geojson_group.async_osm_background",
+        "custom_components.virtual_layer.geojson_group.async_map_background",
         unavailable_background,
     )
     map_row = next(
@@ -187,6 +187,21 @@ async def test_geojson_map_falls_back_to_plain_svg_when_osm_background_fails(
     rendered = await image.async_image()
     assert rendered.startswith(b'<svg xmlns="http://www.w3.org/2000/svg"')
     assert b"Home" in rendered
+
+
+async def test_geojson_map_refreshes_its_image_url_hourly(hass):
+    entry = await create_group(hass)
+    catalog = await async_get_catalog(hass)
+    await catalog.save("home", record(), catalog.revision)
+    await hass.async_block_till_done()
+
+    map_row = next(
+        row for row in rows(hass, entry) if row.unique_id == "geojson:home:map"
+    )
+    image = hass.data["image"].get_entity(map_row.entity_id)
+    before = image._attr_image_last_updated
+    image._async_refresh_map(None)
+    assert image._attr_image_last_updated >= before
 
 
 async def test_legacy_catalog_migrates_once_without_changing_references(hass):

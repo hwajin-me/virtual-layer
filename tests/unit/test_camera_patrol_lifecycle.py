@@ -1,5 +1,6 @@
 """Patrol must not proxy camera-only commands or strand recording disabled."""
 import asyncio
+import logging
 from unittest.mock import AsyncMock, Mock
 from unittest.mock import patch, call
 from types import SimpleNamespace
@@ -114,6 +115,18 @@ async def test_patrol_captures_and_returns_exact_coordinates(hass):
     })
     await entity._async_return_patrol_origin()
     assert service.AbsoluteMove.await_count == 1
+
+
+async def test_patrol_return_failure_keeps_transport_error_in_log(hass, caplog):
+    entity = camera(hass)
+    service = SimpleNamespace(AbsoluteMove=AsyncMock(side_effect=HomeAssistantError("request timed out")))
+    entity._patrol_origin = (service, "profile1", {"x": -0.25, "y": 0.4})
+
+    with caplog.at_level(logging.WARNING, logger="custom_components.virtual_layer.camera"):
+        await entity._async_return_patrol_origin()
+
+    assert "Unable to return camera.patrol to patrol start position: request timed out" in caplog.text
+    assert entity._patrol_origin is None
 
 
 async def test_automatic_cycle_runs_on_and_off_periods(hass):

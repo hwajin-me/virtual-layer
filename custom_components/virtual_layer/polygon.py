@@ -36,6 +36,10 @@ SVG_COLORS = (
     "#ea580c",
     "#0891b2",
 )
+# Leave enough geographical context around a polygon for roads, nearby places,
+# and locations just outside a configured zone to remain useful on the map.
+MAP_VIEWPORT_MARGIN = 0.35
+MAP_VIEWPORT_MIN_MARGIN = 0.0008
 
 
 class InvalidGeoJson(ValueError):
@@ -380,6 +384,39 @@ def _align_unwrapped_ring(ring, anchor: float) -> list[tuple[float, float]]:
     return [(longitude + shift, latitude) for longitude, latitude in unwrapped]
 
 
+def map_viewport(zones) -> tuple[float, float, float, float]:
+    """Return an expanded, date-line-safe viewport for polygon map layers."""
+    zones = list(zones)
+    try:
+        anchor = zones[0]["polygons"][0]["outer"][0][0]
+    except (IndexError, KeyError, TypeError):
+        raise ValueError("No polygon rings to render") from None
+
+    points = [
+        point
+        for zone in zones
+        for polygon in zone["polygons"]
+        for ring in (polygon["outer"], *polygon["holes"])
+        for point in _align_unwrapped_ring(ring, anchor)
+    ]
+    if not points:
+        raise ValueError("No polygon rings to render")
+    west, east = min(point[0] for point in points), max(point[0] for point in points)
+    south, north = min(point[1] for point in points), max(point[1] for point in points)
+    longitude_padding = max(
+        (east - west) * MAP_VIEWPORT_MARGIN, MAP_VIEWPORT_MIN_MARGIN
+    )
+    latitude_padding = max(
+        (north - south) * MAP_VIEWPORT_MARGIN, MAP_VIEWPORT_MIN_MARGIN
+    )
+    return (
+        west - longitude_padding,
+        south - latitude_padding,
+        east + longitude_padding,
+        north + latitude_padding,
+    )
+
+
 def render_polygon_map_svg(
     zones,
     width: int = 720,
@@ -447,10 +484,13 @@ def render_polygon_map_svg(
     longitudes.extend(marker["longitude"] for marker in render_markers)
     latitudes = [latitude for ring in rings for _longitude, latitude in ring]
     latitudes.extend(marker["latitude"] for marker in render_markers)
-    min_longitude = min(longitudes)
-    max_longitude = max(longitudes)
-    min_latitude = min(latitudes)
-    max_latitude = max(latitudes)
+    min_longitude, min_latitude, max_longitude, max_latitude = map_viewport(zones)
+    # Keep a configured location marker visible even when it lies outside the
+    # zone, without changing the normal polygon-context viewport.
+    min_longitude = min(min_longitude, *longitudes)
+    max_longitude = max(max_longitude, *longitudes)
+    min_latitude = min(min_latitude, *latitudes)
+    max_latitude = max(max_latitude, *latitudes)
     longitude_span = max(max_longitude - min_longitude, 0.0001)
     latitude_span = max(max_latitude - min_latitude, 0.0001)
     padding = 32
@@ -461,17 +501,20 @@ def render_polygon_map_svg(
     map_height = latitude_span * scale
     offset_x = (width - map_width) / 2
     offset_y = (height - map_height) / 2
+
     def mercator(latitude):
-        return math.asinh(math.tan(math.radians(max(-85.05112878, min(85.05112878, latitude)))))
+        return math.asinh(
+            math.tan(math.radians(max(-85.05112878, min(85.05112878, latitude))))
+        )
 
     mercator_top = mercator(max_latitude) if background_image else None
     mercator_bottom = mercator(min_latitude) if background_image else None
 
     def project(longitude, latitude):
         if mercator_top is not None and mercator_bottom != mercator_top:
-            y_fraction = (
-                mercator_top - mercator(latitude)
-            ) / (mercator_top - mercator_bottom)
+            y_fraction = (mercator_top - mercator(latitude)) / (
+                mercator_top - mercator_bottom
+            )
         else:
             y_fraction = (max_latitude - latitude) / latitude_span
         return (
@@ -529,7 +572,7 @@ def render_polygon_map_svg(
     attribution = (
         '<text x="708" y="468" text-anchor="end" font-family="Arial, sans-serif" '
         'font-size="11" fill="#111827" stroke="#ffffff" stroke-width="3" '
-        'paint-order="stroke">© OpenStreetMap contributors</text>'
+        'paint-order="stroke">© Naver Corp.</text>'
         if background_image
         else ""
     )

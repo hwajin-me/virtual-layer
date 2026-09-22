@@ -31,6 +31,8 @@ from custom_components.virtual_layer.device_tracker import (
     validate_domain_options,
 )
 from custom_components.virtual_layer.polygon import (
+    MAP_VIEWPORT_MARGIN,
+    map_viewport,
     find_polygon_zone,
     load_polygon_zones,
     parse_geojson_zones,
@@ -69,13 +71,15 @@ GEOJSON = {
         _feature("Seoul", [SEOUL_OUTER, SEOUL_HOLE], priority=10),
         _feature(
             "Office",
-            [[
-                [126.9, 37.45],
-                [127.1, 37.45],
-                [127.1, 37.75],
-                [126.9, 37.75],
-                [126.9, 37.45],
-            ]],
+            [
+                [
+                    [126.9, 37.45],
+                    [127.1, 37.45],
+                    [127.1, 37.75],
+                    [126.9, 37.75],
+                    [126.9, 37.45],
+                ]
+            ],
             priority=1,
         ),
         _feature(
@@ -124,32 +128,74 @@ def test_polygon_map_svg_renders_multipolygon_and_labels():
     assert svg.count("<path") >= 4
 
 
-def test_polygon_map_svg_aligns_date_line_features_and_renders_safe_markers():
-    zones = parse_geojson_zones({
-        "type": "FeatureCollection",
-        "features": [
-            _feature("East", [[
-                [179.0, 0.0], [180.0, 0.0], [180.0, 1.0], [179.0, 0.0],
-            ]]),
-            _feature("West", [[
-                [-180.0, 0.0], [-179.0, 0.0], [-179.0, 1.0], [-180.0, 0.0],
-            ]]),
-        ],
-    })
+def test_polygon_map_viewport_keeps_surrounding_context():
+    zones = parse_geojson_zones(
+        {
+            "type": "Feature",
+            "properties": {"name": "Home"},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [[127.0, 37.5], [127.01, 37.5], [127.01, 37.51], [127.0, 37.5]]
+                ],
+            },
+        }
+    )
 
-    svg = render_polygon_map_svg(zones, markers=[
+    west, south, east, north = map_viewport(zones)
+    assert west == pytest.approx(127.0 - 0.01 * MAP_VIEWPORT_MARGIN)
+    assert east == pytest.approx(127.01 + 0.01 * MAP_VIEWPORT_MARGIN)
+    assert south == pytest.approx(37.5 - 0.01 * MAP_VIEWPORT_MARGIN)
+    assert north == pytest.approx(37.51 + 0.01 * MAP_VIEWPORT_MARGIN)
+
+
+def test_polygon_map_svg_aligns_date_line_features_and_renders_safe_markers():
+    zones = parse_geojson_zones(
         {
-            "entity_id": 'device_tracker.phone"unsafe',
-            "label": "Phone <A>",
-            "latitude": 0.5,
-            "longitude": -179.5,
-        },
-        {
-            "entity_id": "device_tracker.boolean",
-            "latitude": True,
-            "longitude": False,
-        },
-    ])
+            "type": "FeatureCollection",
+            "features": [
+                _feature(
+                    "East",
+                    [
+                        [
+                            [179.0, 0.0],
+                            [180.0, 0.0],
+                            [180.0, 1.0],
+                            [179.0, 0.0],
+                        ]
+                    ],
+                ),
+                _feature(
+                    "West",
+                    [
+                        [
+                            [-180.0, 0.0],
+                            [-179.0, 0.0],
+                            [-179.0, 1.0],
+                            [-180.0, 0.0],
+                        ]
+                    ],
+                ),
+            ],
+        }
+    )
+
+    svg = render_polygon_map_svg(
+        zones,
+        markers=[
+            {
+                "entity_id": 'device_tracker.phone"unsafe',
+                "label": "Phone <A>",
+                "latitude": 0.5,
+                "longitude": -179.5,
+            },
+            {
+                "entity_id": "device_tracker.boolean",
+                "latitude": True,
+                "longitude": False,
+            },
+        ],
+    )
 
     polygon_paths = re.findall(r'<path d="([^"]+)" fill=', svg)
     path_widths = []
@@ -158,7 +204,7 @@ def test_polygon_map_svg_aligns_date_line_features_and_renders_safe_markers():
         x_values = coordinates[::2]
         path_widths.append(max(x_values) - min(x_values))
     assert min(path_widths) > 100
-    assert svg.count('<circle cx=') == 1
+    assert svg.count("<circle cx=") == 1
     assert 'data-entity-id="device_tracker.phone&quot;unsafe"' in svg
     assert "Phone &lt;A&gt;" in svg
 
@@ -202,10 +248,13 @@ def test_geojson_rejects_invalid_features(payload, match):
 
 
 def test_geojson_rejects_holes_outside_their_polygon():
-    invalid = _feature("Invalid hole", [
-        SEOUL_OUTER,
-        [[128.0, 35.0], [128.1, 35.0], [128.1, 35.1], [128.0, 35.0]],
-    ])
+    invalid = _feature(
+        "Invalid hole",
+        [
+            SEOUL_OUTER,
+            [[128.0, 35.0], [128.1, 35.0], [128.1, 35.1], [128.0, 35.0]],
+        ],
+    )
 
     with pytest.raises(ValueError, match="hole must be inside"):
         parse_geojson_zones(invalid)
@@ -214,9 +263,14 @@ def test_geojson_rejects_holes_outside_their_polygon():
 @pytest.mark.parametrize("longitude", [10**400, {}, None])
 def test_geojson_rejects_malformed_coordinate_without_overflow(longitude):
     with pytest.raises(ValueError, match="finite number"):
-        parse_geojson_zones(_feature("Invalid", [
-            [[longitude, 0], [1, 0], [1, 1], [0, 0]],
-        ]))
+        parse_geojson_zones(
+            _feature(
+                "Invalid",
+                [
+                    [[longitude, 0], [1, 0], [1, 1], [0, 0]],
+                ],
+            )
+        )
 
 
 def test_geojson_zone_name_fits_home_assistant_state():
@@ -266,25 +320,37 @@ def test_dominant_priority_latest_and_median_strategies():
 
 
 def test_tracker_median_handles_the_international_date_line():
-    selected = select_tracker_position([
-        _sample("device_tracker.east", 10.0, 179.9, 1),
-        _sample("device_tracker.west", 10.0, -179.9, 2),
-    ], "median")
+    selected = select_tracker_position(
+        [
+            _sample("device_tracker.east", 10.0, 179.9, 1),
+            _sample("device_tracker.west", 10.0, -179.9, 2),
+        ],
+        "median",
+    )
 
     assert abs(selected["longitude"]) == pytest.approx(180.0)
 
 
 def test_polygon_crossing_the_date_line_is_detected():
-    zones = parse_geojson_zones({
-        "type": "FeatureCollection",
-        "features": [_feature("Date Line", [[
-            [179.5, 9.0],
-            [-179.5, 9.0],
-            [-179.5, 11.0],
-            [179.5, 11.0],
-            [179.5, 9.0],
-        ]])],
-    })
+    zones = parse_geojson_zones(
+        {
+            "type": "FeatureCollection",
+            "features": [
+                _feature(
+                    "Date Line",
+                    [
+                        [
+                            [179.5, 9.0],
+                            [-179.5, 9.0],
+                            [-179.5, 11.0],
+                            [179.5, 11.0],
+                            [179.5, 9.0],
+                        ]
+                    ],
+                )
+            ],
+        }
+    )
 
     assert find_polygon_zone(10.0, 179.9, 0, zones)["name"] == "Date Line"
     assert find_polygon_zone(10.0, -179.9, 0, zones)["name"] == "Date Line"
@@ -338,15 +404,28 @@ def test_polygon_domain_options_validate_rules_and_survive_invalid_stored_data(
     assert VirtualDeviceTracker._normalize_polygon_config({"broken": True}) is None
     normalized = VirtualDeviceTracker._normalize_polygon_config(valid)
     assert normalized is not None
-    assert normalized[CONF_POLYGON_TRACKER_RULES]["device_tracker.phone"][
-        "condition_template"
-    ] == "{{ True }}"
-    assert VirtualDeviceTracker._normalize_location_helper({
-        "distance_threshold_meters": float("nan"),
-    }) is None
-    assert VirtualDeviceTracker._normalize_location_helper({
-        "priority_window_seconds": True,
-    }) is None
+    assert (
+        normalized[CONF_POLYGON_TRACKER_RULES]["device_tracker.phone"][
+            "condition_template"
+        ]
+        == "{{ True }}"
+    )
+    assert (
+        VirtualDeviceTracker._normalize_location_helper(
+            {
+                "distance_threshold_meters": float("nan"),
+            }
+        )
+        is None
+    )
+    assert (
+        VirtualDeviceTracker._normalize_location_helper(
+            {
+                "priority_window_seconds": True,
+            }
+        )
+        is None
+    )
 
 
 def test_virtual_tracker_applies_jinja_rules_and_person_metadata(hass):
@@ -481,7 +560,9 @@ def test_unavailable_tracker_coordinates_are_not_used(hass):
 
 
 @pytest.mark.asyncio
-async def test_polygon_zones_load_from_a_local_geojson_file(hass, tmp_path, monkeypatch):
+async def test_polygon_zones_load_from_a_local_geojson_file(
+    hass, tmp_path, monkeypatch
+):
     geojson_file = tmp_path / "family-zones.geojson"
     geojson_file.write_text(json.dumps(GEOJSON), encoding="utf-8")
     resolve = AsyncMock(return_value=str(geojson_file))
@@ -659,10 +740,12 @@ async def test_polygon_file_reload_keeps_last_working_zones_on_transient_failure
         "zones.geojson: offline"
     )
 
-    updated_zones = parse_geojson_zones({
-        "type": "FeatureCollection",
-        "features": [_feature("Updated", [SEOUL_OUTER])],
-    })
+    updated_zones = parse_geojson_zones(
+        {
+            "type": "FeatureCollection",
+            "features": [_feature("Updated", [SEOUL_OUTER])],
+        }
+    )
     loader.return_value = (updated_zones, ["secondary.geojson: offline"])
     await tracker._async_reload_polygon_zones()
 

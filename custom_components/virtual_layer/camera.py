@@ -1053,8 +1053,15 @@ class VirtualCamera(VirtualEntity, Camera):
                 })
             if self._patrol_recording_scope == "movement":
                 await self._async_settle_patrol_move()
-        except Exception:
-            _LOGGER.warning("Unable to return %s to patrol start position", self.entity_id)
+        except Exception as err:
+            # A return move often follows the failure that stopped patrol. Keep
+            # the transport/device error so this warning is actionable rather
+            # than appearing to be an unrelated return-to-origin bug.
+            _LOGGER.warning(
+                "Unable to return %s to patrol start position: %s",
+                self.entity_id,
+                err,
+            )
 
     async def _async_call_onvif_ptz(self, data: dict) -> None:
         """Prefer the public ONVIF action, with the entity-client fallback."""

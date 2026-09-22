@@ -1,4 +1,4 @@
-"""Cached OpenStreetMap raster backgrounds for locally rendered SVG maps."""
+"""Cached Naver Map raster backgrounds for locally rendered SVG maps."""
 
 from __future__ import annotations
 
@@ -13,12 +13,22 @@ import aiofiles
 from aiohttp import ClientError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .polygon import _align_unwrapped_ring
+from .polygon import map_viewport
 
-TILE_SIZE = 256
+# Naver's @2x endpoint returns 512 px raster tiles.
+TILE_SIZE = 512
 MAX_TILES = 12
 MIN_CACHE_SECONDS = 7 * 24 * 60 * 60
 MAX_TILE_BYTES = 1024 * 1024
+NAVER_METADATA_URL = (
+    "https://map.pstatic.net/nrb/styles/basic@2x.json?fmt=png&mt=bg.ol.ts.ar.lko"
+)
+NAVER_TILE_URL = (
+    "https://map.pstatic.net/nrb/styles/basic/{version}/{zoom}/{x}/{y}@2x.png"
+    "?mt=bg.ol.ts.ar.lko"
+)
+NAVER_VERSION_REFRESH_SECONDS = 60 * 60
+_NAVER_VERSION_DATA = "virtual_layer_naver_map_version"
 
 
 def _valid_png(data: bytes) -> bool:
@@ -39,22 +49,7 @@ def _mercator_y(latitude: float) -> float:
 
 
 def _viewport(zones):
-    anchor = zones[0]["polygons"][0]["outer"][0][0]
-    points = [
-        point
-        for zone in zones
-        for polygon in zone["polygons"]
-        for ring in (polygon["outer"], *polygon["holes"])
-        for point in _align_unwrapped_ring(ring, anchor)
-    ]
-    west, east = min(p[0] for p in points), max(p[0] for p in points)
-    south, north = min(p[1] for p in points), max(p[1] for p in points)
-    return (
-        west - max((east - west) * 0.08, 0.0003),
-        south - max((north - south) * 0.08, 0.0003),
-        east + max((east - west) * 0.08, 0.0003),
-        north + max((north - south) * 0.08, 0.0003),
-    )
+    return map_viewport(zones)
 
 
 def _tile_plan(zones):
@@ -74,10 +69,15 @@ def _tile_plan(zones):
     return west, south, east, north, 0, 0, 0, 0, 0
 
 
-def _tile_path(hass, zoom, x, y):
+def _tile_path(hass, version, zoom, x, y):
     return Path(
         hass.config.path(
-            ".storage", "virtual_layer_osm_tiles", str(zoom), str(x), f"{y}.png"
+            ".storage",
+            "virtual_layer_naver_tiles",
+            version,
+            str(zoom),
+            str(x),
+            f"{y}.png",
         )
     )
 
@@ -92,18 +92,48 @@ async def _read_fresh(path):
         return None
 
 
-async def _fetch_tile(hass, zoom, x, y):
+async def _naver_version(hass):
+    """Fetch and cache Naver's active raster style version."""
+    now = time.monotonic()
+    cached = hass.data.get(_NAVER_VERSION_DATA)
+    if (
+        isinstance(cached, tuple)
+        and len(cached) == 2
+        and isinstance(cached[0], str)
+        and now - cached[1] < NAVER_VERSION_REFRESH_SECONDS
+    ):
+        return cached[0]
+    try:
+        session = async_get_clientsession(hass)
+        async with session.get(NAVER_METADATA_URL, timeout=10) as response:
+            response.raise_for_status()
+            metadata = await response.json(content_type=None)
+        version = metadata.get("version") if isinstance(metadata, dict) else None
+        if not isinstance(version, str) or not version.isdecimal():
+            return None
+    except (asyncio.TimeoutError, ClientError, TypeError, ValueError):
+        return (
+            cached[0]
+            if isinstance(cached, tuple) and isinstance(cached[0], str)
+            else None
+        )
+    hass.data[_NAVER_VERSION_DATA] = (version, now)
+    return version
+
+
+async def _fetch_tile(hass, version, zoom, x, y):
     scale = 2**zoom
     x %= scale
-    path = _tile_path(hass, zoom, x, y)
+    path = _tile_path(hass, version, zoom, x, y)
     if cached := await _read_fresh(path):
         return cached
     try:
         session = async_get_clientsession(hass)
         async with session.get(
-            f"https://tile.openstreetmap.org/{zoom}/{x}/{y}.png",
+            NAVER_TILE_URL.format(version=version, zoom=zoom, x=x, y=y),
             headers={
-                "User-Agent": "Home-Assistant-Virtual-Layer/1.0 (+https://github.com/hwajin-me/virtual-layer)"
+                "User-Agent": "Home-Assistant-Virtual-Layer/1.0 (+https://github.com/hwajin-me/virtual-layer)",
+                "Referer": "https://map.naver.com/",
             },
             timeout=15,
         ) as response:
@@ -140,7 +170,8 @@ def _compose(tiles, plan, width, height):
             try:
                 with Image.open(io.BytesIO(data)) as tile:
                     canvas.paste(
-                        tile.convert("RGB"), ((x - left) * TILE_SIZE, (y - top) * TILE_SIZE)
+                        tile.convert("RGB"),
+                        ((x - left) * TILE_SIZE, (y - top) * TILE_SIZE),
                     )
             except (OSError, SyntaxError, ValueError):
                 # A stale/corrupt cache entry must not make the Image endpoint 500.
@@ -167,15 +198,17 @@ def _compose(tiles, plan, width, height):
     return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode()
 
 
-async def async_osm_background(hass, zones, width=720, height=480):
-    """Return a cache-backed embedded OSM image, or None when unavailable."""
+async def async_map_background(hass, zones, width=720, height=480):
+    """Return a cache-backed embedded Naver Map image, or None when unavailable."""
     try:
         plan = _tile_plan(list(zones))
     except (IndexError, KeyError, TypeError, ValueError):
         return None
+    if not (version := await _naver_version(hass)):
+        return None
     _, _, _, _, zoom, left, right, top, bottom = plan
     jobs = {
-        (x, y): _fetch_tile(hass, zoom, x, y)
+        (x, y): _fetch_tile(hass, version, zoom, x, y)
         for x in range(left, right + 1)
         for y in range(top, bottom + 1)
     }
@@ -187,3 +220,8 @@ async def async_osm_background(hass, zones, width=720, height=480):
     if not any(tiles.values()):
         return None
     return await hass.async_add_executor_job(_compose, tiles, plan, width, height)
+
+
+# Compatibility alias for callers from releases which exposed this helper under
+# its former OSM-specific name. New callers should use async_map_background.
+async_osm_background = async_map_background
