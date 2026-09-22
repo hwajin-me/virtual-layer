@@ -31,6 +31,9 @@ Result: **95 passed** on local HA 2026.2.3 / Python 3.14.7.
 `sh tests/docker/run_presence_fusion_smoke.sh` passed on HA 2026.9.3 /
 Python 3.14.6, now including `Name` input and clearing the source through actual
 HA options-flow schema validation. Compileall, Ruff and `git diff --check` passed.
+`PYTHONPATH=. .venv/bin/pytest tests/unit tests/integration -q` reported
+**3670 passed, 3 failed, 1 warning in 182.25s**. Failures remain the same existing
+water-unit and PM2.5 companion cases listed below. No new failures were found.
 
 ## Follow-up: GPS membership audit
 
