@@ -141,6 +141,30 @@ def test_unitless_sensor_remains_unitless():
     assert sensor.native_unit_of_measurement is None
 
 
+def test_concentration_with_legacy_gas_class_drops_the_incompatible_class():
+    """`gas` is a volume class, not a generic gas-concentration class."""
+    sensor = make_sensor({
+        "name": "Room HCHO",
+        "class": "gas",
+        "unit_of_measurement": "μg/m³",
+        "initial_value": 12,
+    })
+
+    assert sensor.device_class is None
+    assert sensor.native_unit_of_measurement == "μg/m³"
+
+
+def test_native_metadata_recovery_drops_incompatible_gas_class():
+    sensor = make_sensor({"name": "Room HCHO", "initial_value": 12})
+
+    sensor._apply_native_template_value("device_class", "gas")
+    sensor._apply_native_template_value("native_unit_of_measurement", "μg/m³")
+    sensor._native_templates_applied()
+
+    assert sensor.device_class is None
+    assert sensor.native_unit_of_measurement == "μg/m³"
+
+
 @pytest.mark.parametrize("missing", [None, "", "  ", "None", "unknown", "unavailable"])
 @pytest.mark.parametrize("device_class", ["pm1", "pm25", "pm4", "pm10"])
 def test_first_missing_unit_preserves_particulate_default(missing, device_class):

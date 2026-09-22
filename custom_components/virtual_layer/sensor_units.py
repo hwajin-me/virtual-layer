@@ -1,6 +1,6 @@
 """Sensor device-class default units shared during configuration and runtime."""
 
-from homeassistant.components.sensor import SensorDeviceClass
+from homeassistant.components.sensor import DEVICE_CLASS_UNITS, SensorDeviceClass
 from homeassistant.const import (
     LIGHT_LUX,
     PERCENTAGE,
@@ -68,3 +68,21 @@ UNITS_OF_MEASUREMENT = {
     SensorDeviceClass.VOLUME_STORAGE: UnitOfVolume.CUBIC_METERS,
     SensorDeviceClass.WATER: UnitOfVolume.LITERS,
 }
+
+
+def is_compatible_device_class_unit(device_class, unit) -> bool:
+    """Return whether a known sensor device class accepts ``unit``.
+
+    Unknown (including integration-specific) classes deliberately remain
+    permissive; Home Assistant only defines a unit contract for its own sensor
+    device classes.  Empty units are also valid for classes which support a
+    unitless reading.
+    """
+    if device_class in (None, "") or unit in (None, ""):
+        return True
+    try:
+        device_class = SensorDeviceClass(str(device_class))
+    except ValueError:
+        return True
+    allowed_units = DEVICE_CLASS_UNITS.get(device_class)
+    return allowed_units is None or unit in allowed_units

@@ -211,6 +211,20 @@ def test_geojson_rejects_holes_outside_their_polygon():
         parse_geojson_zones(invalid)
 
 
+@pytest.mark.parametrize("longitude", [10**400, {}, None])
+def test_geojson_rejects_malformed_coordinate_without_overflow(longitude):
+    with pytest.raises(ValueError, match="finite number"):
+        parse_geojson_zones(_feature("Invalid", [
+            [[longitude, 0], [1, 0], [1, 1], [0, 0]],
+        ]))
+
+
+def test_geojson_zone_name_fits_home_assistant_state():
+    assert parse_geojson_zones(_feature("Z" * 255, [SEOUL_OUTER]))
+    with pytest.raises(ValueError, match="state length"):
+        parse_geojson_zones(_feature("Z" * 256, [SEOUL_OUTER]))
+
+
 def test_majority_uses_weight_then_latest_update_to_break_ties():
     samples = [
         _sample("device_tracker.a", 37.5000, 127.0000, 1),
@@ -462,7 +476,7 @@ def test_unavailable_tracker_coordinates_are_not_used(hass):
 
     tracker._update_polygon_from_sources()
 
-    assert tracker.state == "not_home"
+    assert tracker.state == "unknown"
     assert tracker.latitude is None
 
 

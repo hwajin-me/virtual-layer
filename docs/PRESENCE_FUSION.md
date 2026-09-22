@@ -13,11 +13,11 @@ cannot hold a carried device at home after a confirmed departure.
    installing Python integration updates; this task does not perform that step
    on an operational server.
 2. Add **Virtual Layer** in Settings → Devices & services. Enter a blank-form
-   Device name identifying the person and enable **Create a Presence Fusion
-   Device**. Do not choose the unrelated source-Device-copy option.
+   Device name identifying the person and choose **Presence Fusion — track a
+   person**. Do not choose the unrelated source-Device-copy option.
 3. Add each **physical device**, such as a phone or watch. Set a distinct integer
    GPS priority (lower wins at confirmed reunion). A device with no GPS may be
-   a local accessory; disable GPS candidate for it.
+   a local accessory; disable **Use this device for GPS tracking** for it.
 4. Add source mappings inside that physical device: at most one GPS tracker,
    any configured home Wi-Fi/BLE presence entities, and at most one room entity.
    A watch is a GPS candidate only if it actually has an independently updating
@@ -30,17 +30,20 @@ cannot hold a carried device at home after a confirmed departure.
    positive values must be your exact home SSIDs, one per line. Unmapped values,
    unknown, unavailable and removed entities are **unknown**, not absent.
    Choose state or an explicitly named attribute.
-7. Use `source_managed` when the upstream integration manages timeout. A
+7. Choose **Use expiry handled by the source** (`source_managed`) when the upstream integration manages timeout. A
    long-lived `on` does not expire merely because last_changed is old.
-   `timestamp_ttl` requires a trustworthy heartbeat/measurement attribute and a
-   TTL. HA state timestamps do not prove an MQTT retained message is recent.
+   **Use timestamp and validity period** (`timestamp_ttl`) requires a trustworthy
+   heartbeat/measurement attribute and a validity period. HA state timestamps
+   do not prove an MQTT retained message is recent.
 8. Room mappings optionally rename values using `source=display` lines.
    `not_home` is absent; unknown/unavailable do not become room names. The room
    provider must manage its own signal timeout, or use timestamp TTL.
-9. Finish the source/device screens and choose **Save**. Advanced heuristic
-   settings are on a separate screen. Their defaults are tunable starting
+9. Choose **Finish connecting**, then **Save and apply** on the main screen.
+   **Fine-tune detection** opens the advanced settings. Their defaults are tunable starting
    points, not accuracy guarantees. Home geometry defaults to `zone.home`; an
    explicitly selected [shared GeoJSON boundary](GEOJSON_AREAS.md) overrides its shape.
+   Register/edit these boundaries in the separate, single **GeoJson Device Group**;
+   Presence Fusion selects from that group's catalog.
 
 Each person uses a separate Virtual Layer entry and shares one output Device.
 Do not assign another person's devices as this person's evidence. The Device

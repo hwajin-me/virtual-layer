@@ -783,6 +783,20 @@ def test_native_domains_offer_semantically_safe_sensor_conversions(
     ) == pytest.approx(float(expected_value))
 
 
+def test_sensor_reference_does_not_copy_gas_class_to_mass_concentration(hass):
+    hass.states.async_set(
+        "sensor.room_hcho",
+        "12",
+        {"device_class": "gas", "unit_of_measurement": "μg/m³"},
+    )
+
+    defaults = _reference_entity_defaults(hass, ["sensor.room_hcho"], "sensor")
+    options = _yaml_value(defaults[CONF_DOMAIN_OPTIONS_JSON])
+
+    assert options[CONF_UNIT_OF_MEASUREMENT] == "μg/m³"
+    assert "class" not in options
+
+
 @pytest.mark.parametrize(
     ("power", "attributes", "expected"),
     [
@@ -7609,7 +7623,6 @@ def test_options_schema_allows_deleting_but_not_editing_invalid_stored_entity():
         "copy_device",
         "manage_devices",
         "delete_device",
-        "manage_geojson",
         "finish",
     ]
 
@@ -7635,7 +7648,6 @@ def test_options_schema_groups_entity_and_device_management_actions_first():
     assert action_selector.config["options"][6:] == [
         "copy_entity",
         "regenerate_entity_ids",
-        "manage_geojson",
         "finish",
     ]
 

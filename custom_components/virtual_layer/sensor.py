@@ -56,7 +56,7 @@ from .source_usage import SOURCE_USAGE, SourceUsageSensor
 from .air_quality_options import default_air_quality_icon, normalize_unit
 from . import unit_history
 from . import meter
-from .sensor_units import UNITS_OF_MEASUREMENT
+from .sensor_units import UNITS_OF_MEASUREMENT, is_compatible_device_class_unit
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -226,6 +226,9 @@ async def async_setup_entry(
 ) -> None:
     _LOGGER.debug("setting up the entries...")
 
+    if entry.data.get("geojson_group"):
+        await entry.runtime_data.register("sensor", async_add_entities)
+        return
     if entry.data.get("presence_fusion"):
         from .presence_fusion.entities import entities as fusion_entities
         async_add_entities(fusion_entities(entry, "sensor"))
@@ -326,6 +329,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             SensorDeviceClass.CONDUCTIVITY,
         }:
             self._last_valid_unit = normalize_unit(self._attr_native_unit_of_measurement) or None
+        self._drop_incompatible_device_class()
         # Keep this alias for old callers while SensorEntity uses the native unit.
         self._attr_unit_of_measurement = self._attr_native_unit_of_measurement
 
@@ -661,6 +665,26 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                     pass
             return None
 
+    def _drop_incompatible_device_class(self) -> None:
+        """Keep concentration readings from being published as gas volume.
+
+        Legacy records and source metadata can contain arbitrary pairs.  HA's
+        ``gas`` class represents cumulative/instantaneous *volume*, whereas a
+        unit such as μg/m³ is a concentration.  Preserve the truthful unit and
+        measurement value, but remove the incompatible semantic class.
+        """
+        if not is_compatible_device_class_unit(
+            self._attr_device_class, self._attr_native_unit_of_measurement
+        ):
+            _LOGGER.debug(
+                "Virtual sensor %s has incompatible device class %r and unit %r; "
+                "publishing it without a device class",
+                self.name,
+                self._attr_device_class,
+                self._attr_native_unit_of_measurement,
+            )
+            self._attr_device_class = None
+
     def _coerce_native_value(self, value):
         if value is None:
             return None
@@ -843,6 +867,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             self._last_valid_unit = None
         elif self._attr_native_unit_of_measurement:
             self._last_valid_unit = self._attr_native_unit_of_measurement
+        self._drop_incompatible_device_class()
         valid_state_classes = DEVICE_CLASS_STATE_CLASSES.get(self._attr_device_class)
         if (
             valid_state_classes is not None

@@ -158,9 +158,9 @@ def _safe_gps_accuracy(value) -> float | None:
         accuracy = float(value or 0)
     except (TypeError, ValueError, OverflowError):
         return None
-    if not isfinite(accuracy):
+    if not isfinite(accuracy) or accuracy < 0:
         return None
-    return max(0.0, accuracy)
+    return accuracy
 
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
@@ -1262,15 +1262,11 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         )
         if selected is None:
             self._virtual_attributes[ATTR_POLYGON_ZONE] = None
+            self._virtual_attributes["polygon_inside"] = None
+            self._virtual_attributes["polygon_containing_zone"] = None
             self._update_attributes()
-            missing_presence = self._local_presence_config and any(
-                (state := self._location_source_state(source)) is None
-                or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}
-                for source in self._polygon_source_entities()
-            )
-            self.move_to_location(
-                STATE_UNKNOWN if missing_presence else self._polygon_config[CONF_POLYGON_AWAY_STATE]
-            )
+            # Missing/expired coordinates cannot establish that someone left.
+            self.move_to_location(STATE_UNKNOWN)
             return
 
         zone = find_polygon_zone(
@@ -1279,10 +1275,24 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             selected["gps_accuracy"],
             self._polygon_zones,
         )
-        location = (
-            zone["name"] if zone else self._polygon_config[CONF_POLYGON_AWAY_STATE]
+        containing_zone = find_polygon_zone(
+            selected["latitude"], selected["longitude"], 0, self._polygon_zones
+        )
+        # A cached complete geometry remains usable on transient load errors.
+        # Without a match, missing definitions prevent a reliable outside result.
+        complete = bool(self._polygon_zones) and not self._virtual_attributes.get(
+            ATTR_POLYGON_LOAD_ERROR
+        )
+        location = zone["name"] if zone else (
+            self._polygon_config[CONF_POLYGON_AWAY_STATE] if complete else STATE_UNKNOWN
         )
         self._virtual_attributes[ATTR_POLYGON_ZONE] = zone["name"] if zone else None
+        self._virtual_attributes["polygon_inside"] = (
+            True if containing_zone else False if complete else None
+        )
+        self._virtual_attributes["polygon_containing_zone"] = (
+            containing_zone["name"] if containing_zone else None
+        )
         self._update_attributes()
         self._location = location
         self._coords = {

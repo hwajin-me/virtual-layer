@@ -8,6 +8,7 @@ import voluptuous as vol
 from homeassistant.helpers import selector
 
 from .geojson_catalog import MAX_RECORDS, async_get_catalog
+from .geojson_group import GROUP_KEY, GROUP_TITLE, GROUP_UNIQUE_ID, group_entry
 
 
 def choice(options, key=None, multiple=False):
@@ -18,7 +19,35 @@ def choice(options, key=None, multiple=False):
 
 
 class GeoJSONFlow:
+    async def async_step_geojson_group(self, user_input=None):
+        await self.async_set_unique_id(GROUP_UNIQUE_ID)
+        if group_entry(self.hass):
+            return self.async_abort(reason="geojson_group_exists")
+        self._abort_if_unique_id_configured()
+        if user_input is not None:
+            return self.async_create_entry(
+                title=GROUP_TITLE,
+                data={"group_name": GROUP_TITLE, GROUP_KEY: True},
+                options={},
+            )
+        return self.async_show_form(step_id="geojson_group", data_schema=vol.Schema({}))
+
+    async def async_step_integration_discovery(self, discovery_info):
+        if not discovery_info.get(GROUP_KEY):
+            return self.async_abort(reason="unsupported_import")
+        return await self.async_step_geojson_group({})
+
+    async def async_step_geojson_link(self, user_input=None):
+        if user_input is not None:
+            if getattr(self, "_geo_return", None) == "fusion":
+                return await self.async_step_fusion()
+            return await self.async_step_init()
+        return self.async_show_form(step_id="geojson_link", data_schema=vol.Schema({}))
+
     async def async_step_geojson(self, user_input=None):
+        entry = getattr(self, "config_entry", None)
+        if entry is None or not entry.data.get(GROUP_KEY):
+            return await self.async_step_geojson_link()
         self._geo_catalog = await async_get_catalog(self.hass)
         errors = {}
         if user_input:
@@ -37,9 +66,7 @@ class GeoJSONFlow:
             elif action == "refresh":
                 await self._geo_catalog.refresh()
             elif action == "done":
-                if getattr(self, "_geo_return", None) == "fusion":
-                    return await self.async_step_fusion()
-                return await self.async_step_init()
+                return self.async_create_entry(title="", data=dict(entry.options))
         return self.async_show_form(
             step_id="geojson",
             errors=errors,

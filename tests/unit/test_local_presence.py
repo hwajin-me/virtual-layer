@@ -83,7 +83,10 @@ def test_polygon_presence_home_disconnect_and_missing(hass):
     assert (entity.latitude, entity.longitude) == (37.5, 127)
     hass.states.async_set("binary_sensor.phone_wifi", "off")
     entity._update_polygon_from_sources()
-    assert entity.state == "not_home"
+    # Wi-Fi disconnect removes inferred Home coordinates, but cannot prove
+    # that the device left an arbitrary GeoJSON area.
+    assert entity.state == "unknown"
+    assert entity.extra_state_attributes["polygon_inside"] is None
     assert entity.latitude is None
     hass.states.async_set("binary_sensor.phone_wifi", "unavailable")
     entity._update_polygon_from_sources()

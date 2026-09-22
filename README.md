@@ -6,7 +6,7 @@ devices and entities from the Home Assistant UI.
 **Presence Fusion** is an optional person-specific Virtual Layer Device profile.
 It maps GPS/Wi-Fi/BLE/room sources per physical device, excludes devices left
 behind, retains tracking at stops, and restores priority only after observed
-reunion. Start with **Create a Presence Fusion Device** in the initial setup.
+reunion. Choose **Presence Fusion — track a person** in the initial setup.
 See [installation, source mapping, outputs, manual override and privacy](docs/PRESENCE_FUSION.md).
 
 ![Virtual Layer icon](images/virtual-icon.png)
@@ -768,8 +768,11 @@ configured anchor lifetimes (with a one-second minimum refresh interval).
 
 A virtual `device_tracker` can combine multiple source trackers and resolve its
 GPS position against named GeoJSON polygons. Multiple documents can now be
-[managed in a shared UI catalog](docs/GEOJSON_AREAS.md), reused by ordinary
+[managed in one GeoJson Device Group](docs/GEOJSON_AREAS.md), reused by ordinary
 trackers and Presence Fusion, and selected as a Presence Fusion Home boundary.
+Choose **GeoJson Device Group** when adding Virtual Layer. Only one such group
+can exist per Home Assistant; each registered document creates its own Device
+with zone names, bounds, estimated area, data size, status and an SVG map.
 Configure it entirely in the
 Add/Edit Virtual Entity form:
 

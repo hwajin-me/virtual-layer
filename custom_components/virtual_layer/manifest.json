@@ -18,5 +18,5 @@
     "aiofiles",
     "cronsim==2.7"
   ],
-  "version": "1.0.141"
+  "version": "1.0.142"
 }

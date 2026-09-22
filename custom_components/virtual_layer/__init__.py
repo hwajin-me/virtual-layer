@@ -357,12 +357,18 @@ async def async_setup(hass, config):
 
     _async_register_virtual_services(hass)
 
+    from .geojson_group import migrate_legacy_catalog
+    hass.async_create_task(migrate_legacy_catalog(hass), "Migrate shared GeoJSON group")
+
     return True
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, *, incremental=False
 ) -> bool:
+    if entry.data.get("geojson_group"):
+        from .geojson_group import setup
+        return await setup(hass, entry)
     if entry.data.get("presence_fusion"):
         from .presence_fusion.lifecycle import setup
         return await setup(hass, entry)
@@ -556,6 +562,9 @@ async def async_setup_entry(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    if entry.data.get("geojson_group"):
+        from .geojson_group import unload
+        return await unload(hass, entry)
     if entry.data.get("presence_fusion"):
         from .presence_fusion.lifecycle import unload
         return await unload(hass, entry)
@@ -583,6 +592,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Clean up Virtual Layer data when a config entry is removed."""
+    if entry.data.get("geojson_group"):
+        from .geojson_group import remove
+        await remove(hass, entry)
+        return
     if entry.data.get("presence_fusion"):
         from .presence_fusion.lifecycle import remove
         await remove(hass, entry)

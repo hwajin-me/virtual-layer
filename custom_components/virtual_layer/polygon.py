@@ -42,8 +42,11 @@ def _coordinate(value) -> tuple[float, float]:
         raise ValueError("GeoJSON coordinates must contain longitude and latitude")
     if isinstance(value[0], bool) or isinstance(value[1], bool):
         raise ValueError("GeoJSON coordinate must be numeric")
-    longitude = float(value[0])
-    latitude = float(value[1])
+    try:
+        longitude = float(value[0])
+        latitude = float(value[1])
+    except (TypeError, ValueError, OverflowError) as err:
+        raise InvalidGeoJson("GeoJSON coordinate must be a finite number") from err
     if (
         not math.isfinite(longitude)
         or not math.isfinite(latitude)
@@ -171,6 +174,8 @@ def parse_geojson_zones(data, default_priority: int = 0) -> list[dict[str, Any]]
         name = properties.get("name")
         if not isinstance(name, str) or not name.strip():
             raise ValueError("Every polygon zone needs a name property")
+        if len(name.strip()) > 255:
+            raise InvalidGeoJson("Polygon zone name exceeds the HA state length limit")
         try:
             raw_priority = properties.get("priority", default_priority)
             if isinstance(raw_priority, bool):

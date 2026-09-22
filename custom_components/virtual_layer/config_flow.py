@@ -63,6 +63,7 @@ from .meter_flow import MeterFlow, meter_form
 from . import air_quality_options as aq_options
 from . import unit_history
 from . import meter
+from .sensor_units import is_compatible_device_class_unit
 from .dawarich import DawarichClient, DawarichError, normalize_config as normalize_dawarich_config
 from .local_presence import DEFAULTS as LOCAL_PRESENCE_DEFAULTS, normalize as normalize_local_presence
 from .cfg import (
@@ -3131,7 +3132,6 @@ def _options_schema(options: dict[str, Any]) -> vol.Schema:
         actions.append(ACTION_REGENERATE_ENTITY_IDS)
     if patrol_camera_choices(options):
         actions.append("camera_patrol")
-    actions.append("manage_geojson")
     actions.append(ACTION_FINISH)
     return _complete_form_schema(
         vol.Schema(
@@ -3159,8 +3159,13 @@ def _setup_schema(
         name_marker(ATTR_GROUP_NAME, default=defaults.get(ATTR_GROUP_NAME, "")): str,
     }
     if include_entity_toggle:
+        schema = {
+            vol.Optional("device_group_type", default=defaults.get("device_group_type", "virtual_device")): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=["virtual_device", "presence_fusion", "geojson_group"], translation_key="device_group_type", mode="dropdown")
+            ),
+            **schema,
+        }
         schema[vol.Optional(CONF_ADD_FIRST_ENTITY, default=False)] = cv.boolean
-        schema[vol.Optional("presence_fusion", default=False)] = cv.boolean
         schema[vol.Optional(CONF_SOURCE_DEVICE)] = selector.DeviceSelector()
     return _complete_form_schema(vol.Schema(schema))
 
@@ -10175,6 +10180,13 @@ def _reference_entity_defaults(
 
         if len(source_units) == 1 and "" not in source_units:
             domain_options[CONF_UNIT_OF_MEASUREMENT] = next(iter(source_units))
+        if not is_compatible_device_class_unit(
+            domain_options.get(CONF_CLASS),
+            domain_options.get(CONF_UNIT_OF_MEASUREMENT),
+        ):
+            # A gas device class measures volume, not gas concentration.  Do
+            # not reproduce malformed source metadata on a new virtual sensor.
+            domain_options.pop(CONF_CLASS, None)
         defaults[CONF_DOMAIN_OPTIONS_JSON] = _json_default(domain_options)
     elif platform == "climate" and (len(states) == 1 or boiler_profile is not None):
         climate_index = boiler_profile[0] if boiler_profile is not None else 0
@@ -12511,6 +12523,12 @@ class VirtualFlowHandler(MeterFlow, FusionFlow, _CopyDeviceFlow, _TrackerSetting
 
         errors = _flow_errors(self, "user")
         if user_input is not None:
+            profile = user_input.get("device_group_type", "virtual_device")
+            if profile == "geojson_group":
+                return await self.async_step_geojson_group()
+            # Existing flows and saved integrations keep their original flags.
+            if profile == "presence_fusion":
+                user_input = {**user_input, "presence_fusion": True}
             if user_input.get(CONF_SOURCE_DEVICE) and not user_input.get("presence_fusion"):
                 return await self.async_step_copy_device({
                     CONF_SOURCE_DEVICE: user_input[CONF_SOURCE_DEVICE],
@@ -12548,6 +12566,8 @@ class VirtualFlowHandler(MeterFlow, FusionFlow, _CopyDeviceFlow, _TrackerSetting
     async def async_step_reconfigure(self, user_input=None):
         """Reconfigure group metadata."""
         entry = self._get_reconfigure_entry()
+        if entry.data.get("geojson_group"):
+            return self.async_abort(reason="geojson_group_fixed")
         errors = _flow_errors(self, "reconfigure")
 
         if user_input is not None:
@@ -13136,6 +13156,8 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
 
     async def async_step_init(self, user_input=None):
         await async_get_catalog(self.hass)
+        if self.config_entry.data.get("geojson_group"):
+            return await self.async_step_geojson(user_input)
         if self.config_entry.data.get("presence_fusion"):
             return await self.async_step_fusion(user_input)
         errors = _flow_errors(self, "init")

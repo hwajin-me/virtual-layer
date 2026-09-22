@@ -101,6 +101,9 @@ async def async_setup_entry(
     async_add_entities: Callable[[list], None],
 ) -> None:
     """Create virtual image entities from the UI config entry."""
+    if entry.data.get("geojson_group"):
+        await entry.runtime_data.register("image", async_add_entities)
+        return
     if entry.data.get("presence_fusion"):
         from .presence_fusion.entities import entities as fusion_entities
         async_add_entities(fusion_entities(entry, "image"))

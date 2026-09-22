@@ -120,15 +120,22 @@ async def test_fusion_shared_live_geometry_map_and_unload(hass):
     assert output(hass, entry, "map").state == "unavailable"
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
+    from custom_components.virtual_layer.geojson_group import group_entry
+
+    assert catalog.listeners  # The shared group still displays its documents.
+    assert await hass.config_entries.async_unload(group_entry(hass).entry_id)
+    await hass.async_block_till_done()
     assert not catalog.listeners and catalog.timer is None
 
 
 async def test_geojson_flow_add_edit_delete_and_select_home(hass):
+    from tests.integration.test_geojson_group import create_group
+
+    group = await create_group(hass)
     entry, _ = await setup(hass)
     manager = hass.config_entries.options
-    result = await manager.async_init(entry.entry_id)
+    result = await manager.async_init(group.entry_id)
     for data in [
-        {"action": "manage_geojson"},
         {"action": "add"},
         {
             "name": "Garden",
@@ -142,8 +149,9 @@ async def test_geojson_flow_add_edit_delete_and_select_home(hass):
         assert not result.get("errors"), result
     catalog = await async_get_catalog(hass)
     key = next(iter(catalog.records))
+    await manager.async_configure(result["flow_id"], {"action": "done"})
+    result = await manager.async_init(entry.entry_id)
     for data in [
-        {"action": "done"},
         {"action": "zones"},
         {"catalog_ids": [key], "home": key},
         {"action": "save"},
@@ -167,6 +175,7 @@ async def test_geojson_flow_add_edit_delete_and_select_home(hass):
         len(er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)) == 9
     )
     assert await hass.config_entries.async_unload(entry.entry_id)
+    assert await hass.config_entries.async_unload(group.entry_id)
 
 
 async def test_polygon_clearance_holes_and_dateline(hass):
@@ -232,9 +241,15 @@ async def test_generic_tracker_uses_same_catalog_and_live_map(hass):
     assert b"Home" in await image.async_image()
     manager = hass.config_entries.options
     result = await manager.async_init(entry.entry_id)
-    result = await manager.async_configure(
-        result["flow_id"], {"action": "manage_geojson"}
+    action = next(
+        v for k, v in result["data_schema"].schema.items() if k.schema == "action"
     )
+    assert "manage_geojson" not in action.config["options"]
+    manager.async_abort(result["flow_id"])
+    from custom_components.virtual_layer.geojson_group import group_entry
+
+    group = group_entry(hass)
+    result = await manager.async_init(group.entry_id)
     assert result["step_id"] == "geojson"
     for data in [
         {"action": "edit"},
@@ -257,12 +272,15 @@ async def test_generic_tracker_uses_same_catalog_and_live_map(hass):
         result = await manager.async_configure(result["flow_id"], data)
         assert not result.get("errors"), result
     await hass.async_block_till_done()
-    assert hass.states.get("device_tracker.areas").state == "not_home"
+    assert hass.states.get("device_tracker.areas").state == "unknown"
     assert b"New" not in (await image.async_image() or b"")
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert catalog.listeners and catalog.timer is not None
     assert await hass.config_entries.async_unload(fusion_entry.entry_id)
+    await hass.async_block_till_done()
+    assert catalog.listeners and catalog.timer is not None
+    assert await hass.config_entries.async_unload(group.entry_id)
     await hass.async_block_till_done()
     assert not catalog.listeners and catalog.timer is None
 

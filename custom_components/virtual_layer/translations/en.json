@@ -2,17 +2,20 @@
   "title": "Virtual Devices",
   "config": {
     "abort": {
-      "import_not_supported": "File-based configuration is not supported. Add virtual entities from the integration UI."
+      "import_not_supported": "File-based configuration is not supported. Add virtual entities from the integration UI.",
+      "geojson_group_exists": "GeoJson Device Group already exists. Open its Configure menu to manage shared GeoJSON Devices.",
+      "geojson_group_fixed": "This group has a fixed name. Use Configure to manage its GeoJSON Devices.",
+      "already_in_progress": "A setup for this group is already open. Finish or cancel it before starting another."
     },
     "error": {
-      "fusion_limit": "At most 16 physical devices per person.",
-      "fusion_gps_required": "Add at least one candidate with a GPS source.",
+      "fusion_limit": "You can register up to 16 physical devices per person.",
+      "fusion_gps_required": "Enable GPS tracking for at least one physical device and connect its GPS entity.",
       "fusion_priority": "Candidate priorities must be unique integers from 0 to 9999.",
       "fusion_source": "Select an existing source for this physical device. Person and Virtual Layer outputs are not allowed.",
       "fusion_duplicate": "Duplicate source or duplicate GPS/room mapping.",
-      "fusion_number": "Check finite positive numbers and the ordering between thresholds.",
-      "fusion_mapping": "Use distinct known positive/negative values; room mappings use source=display name per line.",
-      "fusion_invalid_config": "Repair or delete invalid device/source records before saving.",
+      "fusion_number": "Enter a positive number within the field’s range. Check the units and the relationships to other thresholds described below.",
+      "fusion_mapping": "Use distinct Home and Away values. Do not include unknown or unavailable. For room names, enter source=display name on each line.",
+      "fusion_invalid_config": "Check connected devices and signals, Home boundaries and detection thresholds before saving. Repair or remove any invalid entries.",
       "invalid_icon": "Enter an icon in prefix:name format, or leave it empty.",
       "invalid_pull_interval": "Enter non-negative whole seconds within the supported date range. Use 0 to disable periodic updates.",
       "invalid_parent_device": "Select an existing parent device without a circular relationship, or clear the selection.",
@@ -43,163 +46,172 @@
       "no_device_entities": "No eligible entities. Check the device and selected entities.",
       "device_copy_failed": "Could not prepare {failed_source}. Deselect this entity or correct its source configuration. Nothing was saved.",
       "device_sources_changed": "A source device/entity or target ID changed. Check the selection and review again. Nothing was saved.",
-      "geojson_invalid": "Enter valid GeoJSON with names and finite coordinates.",
-      "geojson_name": "Enter a management name.",
+      "geojson_invalid": "Check the GeoJSON: each Feature needs a name and a valid Polygon or MultiPolygon. Use longitude, latitude coordinate order.",
+      "geojson_name": "Enter a name for this area set.",
       "geojson_priority": "Enter an integer from -100000 to 100000.",
-      "geojson_source": "Cannot load the file, URL or GeoJSON.",
+      "geojson_source": "Could not read valid GeoJSON from this file or URL. Check the address, HA path permissions and file contents.",
       "geojson_one_source": "Use inline GeoJSON or a file/URL, not both.",
-      "geojson_conflict": "Catalog changed. Return to the list and select again.",
-      "geojson_limit": "Document count or size limit exceeded.",
-      "geojson_home": "Choose an enabled selected document containing the zone.home center."
+      "geojson_conflict": "This area set changed while you were editing. Go back to the list, select it again and retry.",
+      "geojson_limit": "Use at most 32 area sets and 20,000 coordinate positions in total. Each document must fit within 2 MiB and the stored catalog within 4 MiB.",
+      "geojson_home": "Choose an enabled area set selected above that contains the HA Home center, or use the default Home zone.",
+      "fusion_source_limit": "This device already has 64 input signals. Disconnect an unused signal before adding another.",
+      "fusion_url": "Enter an HTTP or HTTPS settings page address, or leave it blank.",
+      "fusion_device_id": "Another virtual Device already uses this ID. Choose a different ID or leave it blank.",
+      "fusion_parent": "Choose a different parent Device. A Device cannot be its own parent or create a parent-child loop."
     },
     "step": {
       "fusion_metadata": {
-        "title": "Presence Fusion Device metadata",
+        "title": "Virtual Device details",
         "data": {
-          "device_id": "Stable Device ID",
-          "area_id": "Area",
-          "parent_device": "Parent Device",
+          "device_id": "Device ID (optional)",
+          "area_id": "Home Assistant area",
+          "parent_device": "Parent Device (optional)",
           "manufacturer": "Manufacturer",
           "model": "Model",
           "sw_version": "Software version",
           "hw_version": "Hardware version",
           "serial_number": "Serial number",
-          "configuration_url": "Configuration URL"
+          "configuration_url": "Settings page URL (optional)"
         },
         "data_description": {
-          "device_id": "Blank uses the config entry ID. Independent of name changes; explicit edits migrate the same registry Device.",
-          "area_id": "HA area for this person's output Device.",
-          "parent_device": "Choose the parent HA Device; the output Device itself cannot be selected.",
-          "manufacturer": "Display manufacturer; blank uses the default. Configuration URL must use HTTP(S).",
-          "model": "Display model; blank uses the default. Configuration URL must use HTTP(S).",
-          "sw_version": "Display software version; blank uses the default. Configuration URL must use HTTP(S).",
-          "hw_version": "Display hardware version; blank uses the default. Configuration URL must use HTTP(S).",
-          "serial_number": "Display serial number; blank uses the default. Configuration URL must use HTTP(S).",
-          "configuration_url": "Display configuration url; blank uses the default. Configuration URL must use HTTP(S)."
-        }
+          "device_id": "Leave blank to use the config entry ID. This identity stays stable when the name changes; change it only when you need a specific identifier.",
+          "area_id": "Choose the room/area where this virtual Device should appear. This is separate from geographic location areas.",
+          "parent_device": "Choose an existing Device to group this virtual Device under. It cannot be itself or create a parent-child loop.",
+          "manufacturer": "The manufacturer shown on the virtual Device information page. Leave blank if not needed.",
+          "model": "The model shown on the virtual Device information page. Leave blank if not needed.",
+          "sw_version": "The software version shown on the virtual Device information page. Leave blank if not needed.",
+          "hw_version": "The hardware version shown on the virtual Device information page. Leave blank if not needed.",
+          "serial_number": "The serial number shown on the virtual Device information page. Leave blank if not needed.",
+          "configuration_url": "An HTTP or HTTPS address opened from this Device’s information page. Leave blank if there is no settings page."
+        },
+        "description": "These details describe the virtual Device that groups this person’s output entities, not their physical phone or watch. All fields are optional."
       },
       "fusion": {
-        "title": "Presence Fusion · physical devices (maximum 16)",
+        "title": "Set up Presence Fusion",
         "data": {
-          "action": "Action"
+          "action": "What would you like to do?"
         },
         "data_description": {
-          "action": "Choose the next step; Save applies this person's devices."
+          "action": "Add or edit physical devices, adjust detection, or select the areas to use."
         },
-        "description": "Configured: {count}. Choose Save after editing."
+        "description": "Combine signals from this person’s phones and watches to determine their location. Physical devices: {count} of 16. Add devices and their signals, then choose Save and apply. Shared area changes are saved separately and apply immediately."
       },
       "fusion_choose_device": {
-        "title": "Choose physical device",
+        "title": "Choose a physical device",
         "data": {
           "device": "Physical device"
         },
         "data_description": {
           "device": "Choose this person's physical device to edit or delete."
-        }
+        },
+        "description": "Choose the phone or watch to edit or remove from this person’s configuration."
       },
       "fusion_device": {
-        "title": "Physical device settings",
+        "title": "Set up a physical device",
         "data": {
-          "name": "Physical device name",
+          "name": "Device name",
           "priority": "GPS priority",
-          "candidate": "GPS candidate"
+          "candidate": "Use this device for GPS tracking"
         },
         "data_description": {
-          "name": "A display name; renaming preserves the internal UUID.",
-          "priority": "Lower integers win after confirmed reunion; candidate priorities must be unique.",
-          "candidate": "Enable only when this physical device supplies its own GPS entity."
-        }
+          "name": "Use a name such as Personal phone or Watch. Renaming preserves its identity and signal connections.",
+          "priority": "Use a unique integer from 0 to 9999; lower numbers have higher priority. After devices separate, priority returns only when they are observed together again.",
+          "candidate": "Enable only if this device has its own GPS entity. Otherwise, its local presence signals can still be used."
+        },
+        "description": "Create one item per phone or watch. Connect signals from that same physical device in the next step."
       },
       "fusion_sources": {
-        "title": "Physical device sources",
+        "title": "Connect this device’s signals",
         "data": {
-          "action": "Action"
+          "action": "What would you like to do?"
         },
         "data_description": {
-          "action": "Choose the next step; Save applies this person's devices."
+          "action": "Add, edit or remove a signal connection, or finish connecting this device."
         },
-        "description": "Configured: {count}. Choose Save after editing."
+        "description": "Connected signals: {count}. Add the GPS, Wi-Fi, BLE or room entities belonging to this device. Choose Finish connecting to return, then Save and apply on the main screen."
       },
       "fusion_choose_source": {
-        "title": "Choose source",
+        "title": "Choose an input signal",
         "data": {
-          "source": "Source mapping"
+          "source": "Input signal"
         },
         "data_description": {
-          "source": "Choose a source mapped to this physical device."
-        }
+          "source": "Select an entity connected to this physical device."
+        },
+        "description": "Choose a connected entity to edit or disconnect. The original entity is not deleted."
       },
       "fusion_source": {
-        "title": "Device source mapping",
+        "title": "Set up an input signal",
         "data": {
           "kind": "Signal type",
-          "entity_id": "Existing source entity",
-          "attribute": "Value attribute",
-          "positive": "Home values / SSIDs",
-          "negative": "Absent values",
-          "freshness": "Local freshness policy",
-          "timestamp_attribute": "Measurement timestamp attribute",
+          "entity_id": "Source entity",
+          "attribute": "Attribute to read (optional)",
+          "positive": "Values that mean Home",
+          "negative": "Values that mean Away",
+          "freshness": "When should this signal expire?",
+          "timestamp_attribute": "Timestamp attribute (optional)",
           "timestamp_format": "Timestamp format",
-          "ttl": "Local TTL (seconds)",
-          "room_mapping": "Room name mapping"
+          "ttl": "Signal validity (seconds)",
+          "room_mapping": "Room display names (optional)"
         },
         "data_description": {
-          "kind": "GPS, home Wi-Fi, home BLE presence, or timeout-managed room source.",
-          "entity_id": "Choose an existing entity for this physical device; person and Virtual Layer outputs are rejected.",
-          "attribute": "Leave blank to read state. GPS reads latitude, longitude and gps_accuracy.",
-          "positive": "Exact case-sensitive positive values, one per line; include only your home SSIDs for an SSID sensor.",
-          "negative": "Explicit absent values, one per line. Other values remain unknown.",
-          "freshness": "source_managed trusts the source timeout; timestamp_ttl requires a reliable measurement/heartbeat attribute.",
-          "timestamp_attribute": "GPS: optional trusted timestamp; blank only refreshes on changed coordinates/accuracy. TTL: required heartbeat attribute.",
-          "timestamp_format": "Timezone-aware ISO 8601, epoch seconds, or epoch milliseconds. Units are never guessed.",
-          "ttl": "For timestamp_ttl only: time after a measurement until the signal becomes unknown, from 1 to 86400.",
-          "room_mapping": "Optional source=display name pairs, one per line. Unmapped room names are retained."
-        }
+          "kind": "Choose GPS location, Home Wi-Fi connection, Home BLE presence, or room detection.",
+          "entity_id": "Choose an existing entity belonging to this device. Person entities and Virtual Layer outputs cannot be used as inputs.",
+          "attribute": "For Wi-Fi, BLE and room signals, leave blank to read the entity state, or enter an attribute such as ssid. GPS always uses latitude, longitude and gps_accuracy.",
+          "positive": "For Wi-Fi/BLE only. Enter one exact value per line, such as on or home. For an SSID sensor, enter only your Home network name. Matching is case-sensitive.",
+          "negative": "For Wi-Fi, BLE and room signals. Enter one exact Away value per line, such as off or not_home. Unlisted Wi-Fi/BLE values remain unknown; room signals use other known values as room names.",
+          "freshness": "For Wi-Fi, BLE and room signals, use expiry handled by the source integration, or a reliable measurement/heartbeat timestamp plus a validity period.",
+          "timestamp_attribute": "Enter the attribute holding the actual measurement or heartbeat time. Required for timestamp-based expiry. For GPS, leaving it blank counts only coordinate/accuracy changes as new measurements.",
+          "timestamp_format": "Match the timestamp attribute: ISO 8601 with a timezone, Unix seconds, or Unix milliseconds. Units are not detected automatically.",
+          "ttl": "Used only for timestamp-based local expiry. Enter 1–86400 seconds; after this time the signal becomes unknown. GPS has a separate expiry setting.",
+          "room_mapping": "For room signals, enter one source=display name per line, such as bedroom=Bedroom. Unlisted names are unchanged."
+        },
+        "description": "Choose an existing entity from this physical device. GPS uses coordinates; Wi-Fi and BLE use Home/Away values; room signals provide a room name."
       },
       "fusion_settings": {
-        "title": "Presence Fusion advanced heuristics",
-        "description": "Defaults are heuristics, not accuracy guarantees. Times are seconds and distances metres.",
+        "title": "Fine-tune location detection",
+        "description": "Start with the defaults and adjust only when needed. These thresholds are initial estimates, not accuracy guarantees. The main screen’s Save and apply commits your changes.",
         "data": {
-          "movement_window_s": "Movement window",
-          "movement_bucket_s": "Movement bucket",
-          "minimum_movement_m": "Minimum movement",
-          "minimum_movement_segments": "Minimum segments",
-          "gps_stale_after_s": "GPS expiry",
-          "gps_fresh_full_s": "Full freshness",
-          "gps_max_accuracy_m": "Maximum GPS error",
-          "gps_missing_accuracy_m": "Assumed GPS error",
-          "gps_future_tolerance_s": "Future tolerance",
-          "max_observation_gap_s": "Maximum path gap",
-          "max_speed_m_s": "Jump speed limit",
-          "pair_max_skew_s": "Pair timestamp skew",
-          "pair_max_age_s": "Pair evidence age",
-          "together_radius_m": "Together radius",
-          "separation_radius_m": "Separation radius",
-          "group_confirm_s": "Group confirmation",
-          "challenger_ratio": "Challenger ratio",
-          "challenger_margin": "Challenger margin",
-          "challenger_hold_s": "Challenger hold",
-          "minimum_primary_hold_s": "Minimum primary hold",
-          "reunion_hold_s": "Reunion hold",
-          "safe_companion_age_s": "Safe companion age",
-          "home_enter_hold_s": "Local home hold",
-          "gps_home_enter_hold_s": "GPS home hold",
-          "home_exit_hold_s": "Home exit hold",
-          "home_exit_margin_m": "Home exit margin",
-          "nearby_enter_m": "Nearby entry distance",
-          "nearby_exit_m": "Nearby exit distance",
-          "direction_window_s": "Direction window",
-          "direction_min_span_s": "Direction minimum span",
-          "direction_min_change_m": "Direction minimum change",
-          "direction_slope_m_s": "Direction slope",
-          "room_change_hold_s": "Room change hold",
-          "room_missing_hold_s": "Room missing hold",
-          "evidence_hold_s": "Missing evidence hold",
-          "manual_override_default_s": "Default manual duration"
+          "movement_window_s": "Movement history window (seconds)",
+          "movement_bucket_s": "Movement sample interval (seconds)",
+          "minimum_movement_m": "Minimum movement distance (m)",
+          "minimum_movement_segments": "Minimum movement segments",
+          "gps_stale_after_s": "GPS validity (seconds)",
+          "gps_fresh_full_s": "GPS full-score period (seconds)",
+          "gps_max_accuracy_m": "Maximum accepted GPS error (m)",
+          "gps_missing_accuracy_m": "Assumed error when missing (m)",
+          "gps_future_tolerance_s": "Future timestamp tolerance (seconds)",
+          "max_observation_gap_s": "Maximum gap between measurements (seconds)",
+          "max_speed_m_s": "Maximum plausible speed (m/s)",
+          "pair_max_skew_s": "Maximum timestamp difference between devices (seconds)",
+          "pair_max_age_s": "Device comparison validity (seconds)",
+          "together_radius_m": "Distance to count as together (m)",
+          "separation_radius_m": "Distance to count as separated (m)",
+          "group_confirm_s": "Time to confirm devices are together (seconds)",
+          "challenger_ratio": "GPS replacement score ratio",
+          "challenger_margin": "GPS replacement score difference",
+          "challenger_hold_s": "Time to confirm a better GPS device (seconds)",
+          "minimum_primary_hold_s": "Minimum time to keep the main GPS device (seconds)",
+          "reunion_hold_s": "Time to confirm devices have reunited (seconds)",
+          "safe_companion_age_s": "Companion validity for GPS failover (seconds)",
+          "home_enter_hold_s": "Home confirmation from local signals (seconds)",
+          "gps_home_enter_hold_s": "Home confirmation from GPS (seconds)",
+          "home_exit_hold_s": "Departure confirmation (seconds)",
+          "home_exit_margin_m": "Additional distance beyond Home (m)",
+          "nearby_enter_m": "Distance to enter Nearby (m)",
+          "nearby_exit_m": "Distance to leave Nearby (m)",
+          "direction_window_s": "Direction history window (seconds)",
+          "direction_min_span_s": "Minimum direction observation time (seconds)",
+          "direction_min_change_m": "Minimum distance change for direction (m)",
+          "direction_slope_m_s": "Minimum rate of approach or departure (m/s)",
+          "room_change_hold_s": "Room change confirmation (seconds)",
+          "room_missing_hold_s": "Keep last room when signal is missing (seconds)",
+          "evidence_hold_s": "Keep last presence when signals are missing (seconds)",
+          "manual_override_default_s": "Default manual GPS selection duration (seconds)"
         },
         "data_description": {
           "movement_window_s": "Retain measured path contributions within this many seconds.",
-          "movement_bucket_s": "UTC bucket seconds; smaller than the window. Best accuracy, then latest sample wins.",
+          "movement_bucket_s": "Group measurements into intervals aligned to UTC. Keep the most accurate measurement in each interval, or the newest on a tie. Must be shorter than the movement history window.",
           "minimum_movement_m": "Minimum measured path in metres before becoming a movement challenger.",
           "minimum_movement_segments": "Minimum independent accepted movement segments (integer).",
           "gps_stale_after_s": "Seconds since measurement before automatic GPS use stops.",
@@ -221,10 +233,10 @@
           "reunion_hold_s": "Seconds of renewed observations with previously separated devices.",
           "safe_companion_age_s": "Maximum seconds since confirmed companionship to authorize failover.",
           "home_enter_hold_s": "Seconds of eligible local home evidence before entering home.",
-          "gps_home_enter_hold_s": "Seconds of GPS position plus accuracy inside zone.home.",
+          "gps_home_enter_hold_s": "The GPS position and its accuracy circle must remain inside the selected Home boundary for this long. Uses the HA Home circle unless a GeoJSON area set is selected.",
           "home_exit_hold_s": "Seconds of valid GPS outside home before leaving home.",
-          "home_exit_margin_m": "Extra metres beyond zone.home radius required for departure.",
-          "nearby_enter_m": "Home-centre distance in metres; must exceed the Home radius.",
+          "home_exit_margin_m": "Require this extra distance beyond the selected Home boundary, in addition to GPS error, before confirming departure.",
+          "nearby_enter_m": "Distance from the HA Home center. Must exceed the Home radius, or the distance to the furthest Home polygon vertex.",
           "nearby_exit_m": "Metres from Home centre to leave nearby; must exceed entry distance.",
           "direction_window_s": "Seconds of same-source continuous path used for direction.",
           "direction_min_span_s": "Minimum observed span in seconds, with at least three positions.",
@@ -240,26 +252,26 @@
         "title": "Create Virtual Device",
         "description": "Create a UI-managed virtual device and entity set. You can add an entity now or later from Configure.",
         "data": {
-          "group_name": "Device",
-          "presence_fusion": "Create a Presence Fusion Device",
+          "group_name": "Virtual Device name",
           "add_first_entity": "Add an entity now",
-          "source_device": "Source device (optional)"
+          "source_device": "Source device (optional)",
+          "device_group_type": "What would you like to create?"
         },
         "data_description": {
-          "group_name": "Device metadata and entity IDs are scoped to this device set.",
+          "group_name": "Name for a regular virtual Device or a Presence Fusion person. Leave blank for GeoJson Device Group; that group uses its fixed name.",
           "add_first_entity": "Continue directly to source selection and entity settings after creating the device.",
-          "presence_fusion": "Create a person-specific Device with physical GPS/Wi-Fi/BLE/room mappings. This takes precedence over adding a generic entity; do not select a source Device to copy.",
-          "source_device": "Select to create entities in bulk. Leave Device blank to use a suggested source name."
+          "source_device": "Select to create entities in bulk. Leave Device blank to use a suggested source name.",
+          "device_group_type": "Choose regular virtual Devices, Presence Fusion for one person, or the single shared GeoJson Device Group. The GeoJSON group has a fixed name and ignores the fields for regular Devices."
         }
       },
       "reconfigure": {
         "title": "Update Virtual Device",
         "description": "Change the device name used by this Virtual Layer entry.",
         "data": {
-          "group_name": "Device"
+          "group_name": "Virtual Device name"
         },
         "data_description": {
-          "group_name": "Device metadata and entity IDs are scoped to this device set."
+          "group_name": "A name for the virtual Device that groups your entities, such as Family location. You can rename it later."
         }
       },
       "air_quality": {
@@ -412,7 +424,7 @@
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
               "configure_air_quality_sources": "Configure air quality per source",
-              "polygon_catalog_ids": "Shared GeoJSON documents"
+              "polygon_catalog_ids": "Shared area sets"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -455,7 +467,7 @@
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
               "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration.",
-              "polygon_catalog_ids": "Select multiple documents from the shared catalog."
+              "polygon_catalog_ids": "Select one or more shared areas from GeoJson Device Group. Register or edit GeoJSON in that group’s Configure menu."
             }
           },
           "native_value_templates": {
@@ -1389,80 +1401,91 @@
         }
       },
       "geojson": {
-        "title": "Shared GeoJSON areas",
-        "description": "Documents: {count}. Saving a document immediately updates all consumers.",
+        "title": "GeoJson Device Group",
+        "description": "Registered GeoJSON Devices: {count}. Each area set becomes one Device in this shared group. Saved edits update its entities and all trackers using it immediately.",
         "data": {
-          "action": "Action"
+          "action": "What would you like to do?"
         },
         "data_description": {
-          "action": "Add, edit, delete or refresh external sources."
+          "action": "Add, edit or delete an area set. Refresh reloads configured files and URLs."
         }
       },
       "geojson_choose": {
-        "title": "Choose document",
-        "description": "Select from the shared catalog.",
+        "title": "Choose an area set",
+        "description": "Choose the shared area set you want to edit or delete.",
         "data": {
-          "record": "Document"
+          "record": "Area set"
         },
         "data_description": {
-          "record": "Document to edit or delete."
+          "record": "All trackers using this set receive saved changes."
         }
       },
       "geojson_delete": {
-        "title": "Delete shared document",
-        "description": "Applies immediately to all consumers. Deleting a Home boundary suspends GPS Home detection.",
+        "title": "Delete this area set?",
+        "description": "This removes the GeoJSON Device and all its generated entities immediately. Trackers keep their reference but cannot use the deleted areas. If used as Home, select another valid boundary.",
         "data": {
-          "confirm": "Confirm deletion"
+          "confirm": "Delete this shared area set"
         },
         "data_description": {
-          "confirm": "Remove this document from the shared catalog."
+          "confirm": "Confirm to remove it from the catalog. Leave unchecked to return without deleting."
         }
       },
       "geojson_record": {
-        "title": "GeoJSON document",
-        "description": "Named Polygon/MultiPolygon Features or FeatureCollection. Coordinates are longitude, latitude.",
+        "title": "Set up an area set",
+        "description": "Register or edit one GeoJSON Device. Paste GeoJSON or provide a file/URL. A FeatureCollection can contain several named zones; they remain on the same Device. Coordinates are longitude, latitude.",
         "data": {
-          "name": "Management name",
-          "enabled": "Enabled",
-          "priority": "Priority",
-          "source": "File or URL",
-          "geojson": "Inline GeoJSON"
+          "name": "GeoJSON Device name",
+          "enabled": "Use this area set",
+          "priority": "Overlap priority",
+          "source": "GeoJSON file or URL (optional)",
+          "geojson": "Paste GeoJSON (optional)"
         },
         "data_description": {
-          "name": "Catalog label. Zone names use Feature properties.name.",
-          "enabled": "Enable or disable this document while retaining selections.",
-          "priority": "Lower integers win, then Feature priority, area and name.",
-          "source": "HA configuration file or HTTP(S) URL; refreshed every 5 minutes. Use this or inline JSON.",
-          "geojson": "Feature/FeatureCollection JSON. Leave blank when using a file or URL."
+          "name": "Name for the Device and shared area selector. Renaming preserves its identity and tracker selections; individual zone names still come from properties.name.",
+          "enabled": "Turn off to pause matching without deleting the set or its tracker selections. A disabled Home boundary cannot be used for GPS Home detection.",
+          "priority": "Use an integer from -100000 to 100000. Lower numbers win, then Feature priority, smaller area and name.",
+          "source": "Enter a path under the HA configuration folder, an allowlisted path, or an HTTP(S) URL. Leave the GeoJSON field empty. Active sets refresh every 5 minutes; failed loads keep the last valid boundaries.",
+          "geojson": "Paste a Feature or FeatureCollection with properties.name on each Feature. Leave the file/URL field empty. For example, set properties.name to Garden."
         }
       },
       "fusion_zones": {
-        "title": "Presence Fusion areas",
-        "description": "Preserves GPS coordinates and adds a zone sensor and SVG map.",
+        "title": "Choose location areas and Home",
+        "description": "Select shared area sets for this person. A separate zone sensor and polygon map are added; the GPS tracker keeps its original coordinates.",
         "data": {
-          "catalog_ids": "Shared documents",
+          "catalog_ids": "Area sets to use",
           "home": "Home boundary"
         },
         "data_description": {
-          "catalog_ids": "Select multiple area documents.",
-          "home": "Choose an enabled selected document containing the zone.home center. Blank uses the HA circular boundary."
+          "catalog_ids": "Select areas registered in GeoJson Device Group. Add or edit GeoJSON from that group’s Configure menu; all trackers share the same list.",
+          "home": "Use the default HA Home circle or choose an enabled set selected above. A custom boundary must contain the HA Home center; all its Features count as Home."
         }
+      },
+      "geojson_group": {
+        "title": "GeoJson Device Group",
+        "description": "Create the one shared GeoJSON group for this Home Assistant. Its name is fixed. After creation, open Configure to register GeoJSON; each registration creates a Device with zone names, bounds, area, data size and a map. Existing shared areas are retained."
+      },
+      "geojson_link": {
+        "title": "Open GeoJson Device Group",
+        "description": "GeoJSON is managed only in the shared GeoJson Device Group. Open its Configure menu under Settings → Devices & services → Virtual Layer. If missing, add Virtual Layer and choose GeoJson Device Group. This tracker only selects shared areas."
       }
     }
   },
   "options": {
     "abort": {
-      "entity_not_found": "The configuration changed while this form was open. Reopen the entity editor before changing its unit or history."
+      "entity_not_found": "The configuration changed while this form was open. Reopen the entity editor before changing its unit or history.",
+      "geojson_group_exists": "GeoJson Device Group already exists. Open its Configure menu to manage shared GeoJSON Devices.",
+      "geojson_group_fixed": "This group has a fixed name. Use Configure to manage its GeoJSON Devices.",
+      "already_in_progress": "A setup for this group is already open. Finish or cancel it before starting another."
     },
     "error": {
-      "fusion_limit": "At most 16 physical devices per person.",
-      "fusion_gps_required": "Add at least one candidate with a GPS source.",
+      "fusion_limit": "You can register up to 16 physical devices per person.",
+      "fusion_gps_required": "Enable GPS tracking for at least one physical device and connect its GPS entity.",
       "fusion_priority": "Candidate priorities must be unique integers from 0 to 9999.",
       "fusion_source": "Select an existing source for this physical device. Person and Virtual Layer outputs are not allowed.",
       "fusion_duplicate": "Duplicate source or duplicate GPS/room mapping.",
-      "fusion_number": "Check finite positive numbers and the ordering between thresholds.",
-      "fusion_mapping": "Use distinct known positive/negative values; room mappings use source=display name per line.",
-      "fusion_invalid_config": "Repair or delete invalid device/source records before saving.",
+      "fusion_number": "Enter a positive number within the field’s range. Check the units and the relationships to other thresholds described below.",
+      "fusion_mapping": "Use distinct Home and Away values. Do not include unknown or unavailable. For room names, enter source=display name on each line.",
+      "fusion_invalid_config": "Check connected devices and signals, Home boundaries and detection thresholds before saving. Repair or remove any invalid entries.",
       "patrol_connection_failed": "Cannot use this ONVIF camera. Check connectivity, absolute PTZ support and valid speed/interval.",
       "patrol_command_failed": "ONVIF command or position read failed. Wait for motion to stop and retry. GetStatus/AbsoluteMove support is required. Nothing was saved.",
       "patrol_invalid_points": "Choose a named position. Save needs 2–32 points including two different coordinates in the same coordinate space.",
@@ -1501,163 +1524,172 @@
       "no_device_entities": "No eligible entities. Check the device and selected entities.",
       "device_copy_failed": "Could not prepare {failed_source}. Deselect this entity or correct its source configuration. Nothing was saved.",
       "device_sources_changed": "A source device/entity or target ID changed. Check the selection and review again. Nothing was saved.",
-      "geojson_invalid": "Enter valid GeoJSON with names and finite coordinates.",
-      "geojson_name": "Enter a management name.",
+      "geojson_invalid": "Check the GeoJSON: each Feature needs a name and a valid Polygon or MultiPolygon. Use longitude, latitude coordinate order.",
+      "geojson_name": "Enter a name for this area set.",
       "geojson_priority": "Enter an integer from -100000 to 100000.",
-      "geojson_source": "Cannot load the file, URL or GeoJSON.",
+      "geojson_source": "Could not read valid GeoJSON from this file or URL. Check the address, HA path permissions and file contents.",
       "geojson_one_source": "Use inline GeoJSON or a file/URL, not both.",
-      "geojson_conflict": "Catalog changed. Return to the list and select again.",
-      "geojson_limit": "Document count or size limit exceeded.",
-      "geojson_home": "Choose an enabled selected document containing the zone.home center."
+      "geojson_conflict": "This area set changed while you were editing. Go back to the list, select it again and retry.",
+      "geojson_limit": "Use at most 32 area sets and 20,000 coordinate positions in total. Each document must fit within 2 MiB and the stored catalog within 4 MiB.",
+      "geojson_home": "Choose an enabled area set selected above that contains the HA Home center, or use the default Home zone.",
+      "fusion_source_limit": "This device already has 64 input signals. Disconnect an unused signal before adding another.",
+      "fusion_url": "Enter an HTTP or HTTPS settings page address, or leave it blank.",
+      "fusion_device_id": "Another virtual Device already uses this ID. Choose a different ID or leave it blank.",
+      "fusion_parent": "Choose a different parent Device. A Device cannot be its own parent or create a parent-child loop."
     },
     "step": {
       "fusion_metadata": {
-        "title": "Presence Fusion Device metadata",
+        "title": "Virtual Device details",
         "data": {
-          "device_id": "Stable Device ID",
-          "area_id": "Area",
-          "parent_device": "Parent Device",
+          "device_id": "Device ID (optional)",
+          "area_id": "Home Assistant area",
+          "parent_device": "Parent Device (optional)",
           "manufacturer": "Manufacturer",
           "model": "Model",
           "sw_version": "Software version",
           "hw_version": "Hardware version",
           "serial_number": "Serial number",
-          "configuration_url": "Configuration URL"
+          "configuration_url": "Settings page URL (optional)"
         },
         "data_description": {
-          "device_id": "Blank uses the config entry ID. Independent of name changes; explicit edits migrate the same registry Device.",
-          "area_id": "HA area for this person's output Device.",
-          "parent_device": "Choose the parent HA Device; the output Device itself cannot be selected.",
-          "manufacturer": "Display manufacturer; blank uses the default. Configuration URL must use HTTP(S).",
-          "model": "Display model; blank uses the default. Configuration URL must use HTTP(S).",
-          "sw_version": "Display software version; blank uses the default. Configuration URL must use HTTP(S).",
-          "hw_version": "Display hardware version; blank uses the default. Configuration URL must use HTTP(S).",
-          "serial_number": "Display serial number; blank uses the default. Configuration URL must use HTTP(S).",
-          "configuration_url": "Display configuration url; blank uses the default. Configuration URL must use HTTP(S)."
-        }
+          "device_id": "Leave blank to use the config entry ID. This identity stays stable when the name changes; change it only when you need a specific identifier.",
+          "area_id": "Choose the room/area where this virtual Device should appear. This is separate from geographic location areas.",
+          "parent_device": "Choose an existing Device to group this virtual Device under. It cannot be itself or create a parent-child loop.",
+          "manufacturer": "The manufacturer shown on the virtual Device information page. Leave blank if not needed.",
+          "model": "The model shown on the virtual Device information page. Leave blank if not needed.",
+          "sw_version": "The software version shown on the virtual Device information page. Leave blank if not needed.",
+          "hw_version": "The hardware version shown on the virtual Device information page. Leave blank if not needed.",
+          "serial_number": "The serial number shown on the virtual Device information page. Leave blank if not needed.",
+          "configuration_url": "An HTTP or HTTPS address opened from this Device’s information page. Leave blank if there is no settings page."
+        },
+        "description": "These details describe the virtual Device that groups this person’s output entities, not their physical phone or watch. All fields are optional."
       },
       "fusion": {
-        "title": "Presence Fusion · physical devices (maximum 16)",
+        "title": "Set up Presence Fusion",
         "data": {
-          "action": "Action"
+          "action": "What would you like to do?"
         },
         "data_description": {
-          "action": "Choose the next step; Save applies this person's devices."
+          "action": "Add or edit physical devices, adjust detection, or select the areas to use."
         },
-        "description": "Configured: {count}. Choose Save after editing."
+        "description": "Combine signals from this person’s phones and watches to determine their location. Physical devices: {count} of 16. Add devices and their signals, then choose Save and apply. Shared area changes are saved separately and apply immediately."
       },
       "fusion_choose_device": {
-        "title": "Choose physical device",
+        "title": "Choose a physical device",
         "data": {
           "device": "Physical device"
         },
         "data_description": {
           "device": "Choose this person's physical device to edit or delete."
-        }
+        },
+        "description": "Choose the phone or watch to edit or remove from this person’s configuration."
       },
       "fusion_device": {
-        "title": "Physical device settings",
+        "title": "Set up a physical device",
         "data": {
-          "name": "Physical device name",
+          "name": "Device name",
           "priority": "GPS priority",
-          "candidate": "GPS candidate"
+          "candidate": "Use this device for GPS tracking"
         },
         "data_description": {
-          "name": "A display name; renaming preserves the internal UUID.",
-          "priority": "Lower integers win after confirmed reunion; candidate priorities must be unique.",
-          "candidate": "Enable only when this physical device supplies its own GPS entity."
-        }
+          "name": "Use a name such as Personal phone or Watch. Renaming preserves its identity and signal connections.",
+          "priority": "Use a unique integer from 0 to 9999; lower numbers have higher priority. After devices separate, priority returns only when they are observed together again.",
+          "candidate": "Enable only if this device has its own GPS entity. Otherwise, its local presence signals can still be used."
+        },
+        "description": "Create one item per phone or watch. Connect signals from that same physical device in the next step."
       },
       "fusion_sources": {
-        "title": "Physical device sources",
+        "title": "Connect this device’s signals",
         "data": {
-          "action": "Action"
+          "action": "What would you like to do?"
         },
         "data_description": {
-          "action": "Choose the next step; Save applies this person's devices."
+          "action": "Add, edit or remove a signal connection, or finish connecting this device."
         },
-        "description": "Configured: {count}. Choose Save after editing."
+        "description": "Connected signals: {count}. Add the GPS, Wi-Fi, BLE or room entities belonging to this device. Choose Finish connecting to return, then Save and apply on the main screen."
       },
       "fusion_choose_source": {
-        "title": "Choose source",
+        "title": "Choose an input signal",
         "data": {
-          "source": "Source mapping"
+          "source": "Input signal"
         },
         "data_description": {
-          "source": "Choose a source mapped to this physical device."
-        }
+          "source": "Select an entity connected to this physical device."
+        },
+        "description": "Choose a connected entity to edit or disconnect. The original entity is not deleted."
       },
       "fusion_source": {
-        "title": "Device source mapping",
+        "title": "Set up an input signal",
         "data": {
           "kind": "Signal type",
-          "entity_id": "Existing source entity",
-          "attribute": "Value attribute",
-          "positive": "Home values / SSIDs",
-          "negative": "Absent values",
-          "freshness": "Local freshness policy",
-          "timestamp_attribute": "Measurement timestamp attribute",
+          "entity_id": "Source entity",
+          "attribute": "Attribute to read (optional)",
+          "positive": "Values that mean Home",
+          "negative": "Values that mean Away",
+          "freshness": "When should this signal expire?",
+          "timestamp_attribute": "Timestamp attribute (optional)",
           "timestamp_format": "Timestamp format",
-          "ttl": "Local TTL (seconds)",
-          "room_mapping": "Room name mapping"
+          "ttl": "Signal validity (seconds)",
+          "room_mapping": "Room display names (optional)"
         },
         "data_description": {
-          "kind": "GPS, home Wi-Fi, home BLE presence, or timeout-managed room source.",
-          "entity_id": "Choose an existing entity for this physical device; person and Virtual Layer outputs are rejected.",
-          "attribute": "Leave blank to read state. GPS reads latitude, longitude and gps_accuracy.",
-          "positive": "Exact case-sensitive positive values, one per line; include only your home SSIDs for an SSID sensor.",
-          "negative": "Explicit absent values, one per line. Other values remain unknown.",
-          "freshness": "source_managed trusts the source timeout; timestamp_ttl requires a reliable measurement/heartbeat attribute.",
-          "timestamp_attribute": "GPS: optional trusted timestamp; blank only refreshes on changed coordinates/accuracy. TTL: required heartbeat attribute.",
-          "timestamp_format": "Timezone-aware ISO 8601, epoch seconds, or epoch milliseconds. Units are never guessed.",
-          "ttl": "For timestamp_ttl only: time after a measurement until the signal becomes unknown, from 1 to 86400.",
-          "room_mapping": "Optional source=display name pairs, one per line. Unmapped room names are retained."
-        }
+          "kind": "Choose GPS location, Home Wi-Fi connection, Home BLE presence, or room detection.",
+          "entity_id": "Choose an existing entity belonging to this device. Person entities and Virtual Layer outputs cannot be used as inputs.",
+          "attribute": "For Wi-Fi, BLE and room signals, leave blank to read the entity state, or enter an attribute such as ssid. GPS always uses latitude, longitude and gps_accuracy.",
+          "positive": "For Wi-Fi/BLE only. Enter one exact value per line, such as on or home. For an SSID sensor, enter only your Home network name. Matching is case-sensitive.",
+          "negative": "For Wi-Fi, BLE and room signals. Enter one exact Away value per line, such as off or not_home. Unlisted Wi-Fi/BLE values remain unknown; room signals use other known values as room names.",
+          "freshness": "For Wi-Fi, BLE and room signals, use expiry handled by the source integration, or a reliable measurement/heartbeat timestamp plus a validity period.",
+          "timestamp_attribute": "Enter the attribute holding the actual measurement or heartbeat time. Required for timestamp-based expiry. For GPS, leaving it blank counts only coordinate/accuracy changes as new measurements.",
+          "timestamp_format": "Match the timestamp attribute: ISO 8601 with a timezone, Unix seconds, or Unix milliseconds. Units are not detected automatically.",
+          "ttl": "Used only for timestamp-based local expiry. Enter 1–86400 seconds; after this time the signal becomes unknown. GPS has a separate expiry setting.",
+          "room_mapping": "For room signals, enter one source=display name per line, such as bedroom=Bedroom. Unlisted names are unchanged."
+        },
+        "description": "Choose an existing entity from this physical device. GPS uses coordinates; Wi-Fi and BLE use Home/Away values; room signals provide a room name."
       },
       "fusion_settings": {
-        "title": "Presence Fusion advanced heuristics",
-        "description": "Defaults are heuristics, not accuracy guarantees. Times are seconds and distances metres.",
+        "title": "Fine-tune location detection",
+        "description": "Start with the defaults and adjust only when needed. These thresholds are initial estimates, not accuracy guarantees. The main screen’s Save and apply commits your changes.",
         "data": {
-          "movement_window_s": "Movement window",
-          "movement_bucket_s": "Movement bucket",
-          "minimum_movement_m": "Minimum movement",
-          "minimum_movement_segments": "Minimum segments",
-          "gps_stale_after_s": "GPS expiry",
-          "gps_fresh_full_s": "Full freshness",
-          "gps_max_accuracy_m": "Maximum GPS error",
-          "gps_missing_accuracy_m": "Assumed GPS error",
-          "gps_future_tolerance_s": "Future tolerance",
-          "max_observation_gap_s": "Maximum path gap",
-          "max_speed_m_s": "Jump speed limit",
-          "pair_max_skew_s": "Pair timestamp skew",
-          "pair_max_age_s": "Pair evidence age",
-          "together_radius_m": "Together radius",
-          "separation_radius_m": "Separation radius",
-          "group_confirm_s": "Group confirmation",
-          "challenger_ratio": "Challenger ratio",
-          "challenger_margin": "Challenger margin",
-          "challenger_hold_s": "Challenger hold",
-          "minimum_primary_hold_s": "Minimum primary hold",
-          "reunion_hold_s": "Reunion hold",
-          "safe_companion_age_s": "Safe companion age",
-          "home_enter_hold_s": "Local home hold",
-          "gps_home_enter_hold_s": "GPS home hold",
-          "home_exit_hold_s": "Home exit hold",
-          "home_exit_margin_m": "Home exit margin",
-          "nearby_enter_m": "Nearby entry distance",
-          "nearby_exit_m": "Nearby exit distance",
-          "direction_window_s": "Direction window",
-          "direction_min_span_s": "Direction minimum span",
-          "direction_min_change_m": "Direction minimum change",
-          "direction_slope_m_s": "Direction slope",
-          "room_change_hold_s": "Room change hold",
-          "room_missing_hold_s": "Room missing hold",
-          "evidence_hold_s": "Missing evidence hold",
-          "manual_override_default_s": "Default manual duration"
+          "movement_window_s": "Movement history window (seconds)",
+          "movement_bucket_s": "Movement sample interval (seconds)",
+          "minimum_movement_m": "Minimum movement distance (m)",
+          "minimum_movement_segments": "Minimum movement segments",
+          "gps_stale_after_s": "GPS validity (seconds)",
+          "gps_fresh_full_s": "GPS full-score period (seconds)",
+          "gps_max_accuracy_m": "Maximum accepted GPS error (m)",
+          "gps_missing_accuracy_m": "Assumed error when missing (m)",
+          "gps_future_tolerance_s": "Future timestamp tolerance (seconds)",
+          "max_observation_gap_s": "Maximum gap between measurements (seconds)",
+          "max_speed_m_s": "Maximum plausible speed (m/s)",
+          "pair_max_skew_s": "Maximum timestamp difference between devices (seconds)",
+          "pair_max_age_s": "Device comparison validity (seconds)",
+          "together_radius_m": "Distance to count as together (m)",
+          "separation_radius_m": "Distance to count as separated (m)",
+          "group_confirm_s": "Time to confirm devices are together (seconds)",
+          "challenger_ratio": "GPS replacement score ratio",
+          "challenger_margin": "GPS replacement score difference",
+          "challenger_hold_s": "Time to confirm a better GPS device (seconds)",
+          "minimum_primary_hold_s": "Minimum time to keep the main GPS device (seconds)",
+          "reunion_hold_s": "Time to confirm devices have reunited (seconds)",
+          "safe_companion_age_s": "Companion validity for GPS failover (seconds)",
+          "home_enter_hold_s": "Home confirmation from local signals (seconds)",
+          "gps_home_enter_hold_s": "Home confirmation from GPS (seconds)",
+          "home_exit_hold_s": "Departure confirmation (seconds)",
+          "home_exit_margin_m": "Additional distance beyond Home (m)",
+          "nearby_enter_m": "Distance to enter Nearby (m)",
+          "nearby_exit_m": "Distance to leave Nearby (m)",
+          "direction_window_s": "Direction history window (seconds)",
+          "direction_min_span_s": "Minimum direction observation time (seconds)",
+          "direction_min_change_m": "Minimum distance change for direction (m)",
+          "direction_slope_m_s": "Minimum rate of approach or departure (m/s)",
+          "room_change_hold_s": "Room change confirmation (seconds)",
+          "room_missing_hold_s": "Keep last room when signal is missing (seconds)",
+          "evidence_hold_s": "Keep last presence when signals are missing (seconds)",
+          "manual_override_default_s": "Default manual GPS selection duration (seconds)"
         },
         "data_description": {
           "movement_window_s": "Retain measured path contributions within this many seconds.",
-          "movement_bucket_s": "UTC bucket seconds; smaller than the window. Best accuracy, then latest sample wins.",
+          "movement_bucket_s": "Group measurements into intervals aligned to UTC. Keep the most accurate measurement in each interval, or the newest on a tie. Must be shorter than the movement history window.",
           "minimum_movement_m": "Minimum measured path in metres before becoming a movement challenger.",
           "minimum_movement_segments": "Minimum independent accepted movement segments (integer).",
           "gps_stale_after_s": "Seconds since measurement before automatic GPS use stops.",
@@ -1679,10 +1711,10 @@
           "reunion_hold_s": "Seconds of renewed observations with previously separated devices.",
           "safe_companion_age_s": "Maximum seconds since confirmed companionship to authorize failover.",
           "home_enter_hold_s": "Seconds of eligible local home evidence before entering home.",
-          "gps_home_enter_hold_s": "Seconds of GPS position plus accuracy inside zone.home.",
+          "gps_home_enter_hold_s": "The GPS position and its accuracy circle must remain inside the selected Home boundary for this long. Uses the HA Home circle unless a GeoJSON area set is selected.",
           "home_exit_hold_s": "Seconds of valid GPS outside home before leaving home.",
-          "home_exit_margin_m": "Extra metres beyond zone.home radius required for departure.",
-          "nearby_enter_m": "Home-centre distance in metres; must exceed the Home radius.",
+          "home_exit_margin_m": "Require this extra distance beyond the selected Home boundary, in addition to GPS error, before confirming departure.",
+          "nearby_enter_m": "Distance from the HA Home center. Must exceed the Home radius, or the distance to the furthest Home polygon vertex.",
           "nearby_exit_m": "Metres from Home centre to leave nearby; must exceed entry distance.",
           "direction_window_s": "Seconds of same-source continuous path used for direction.",
           "direction_min_span_s": "Minimum observed span in seconds, with at least three positions.",
@@ -1992,7 +2024,7 @@
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
               "configure_air_quality_sources": "Configure air quality per source",
-              "polygon_catalog_ids": "Shared GeoJSON documents"
+              "polygon_catalog_ids": "Shared area sets"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -2035,7 +2067,7 @@
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
               "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration.",
-              "polygon_catalog_ids": "Select multiple documents from the shared catalog."
+              "polygon_catalog_ids": "Select one or more shared areas from GeoJson Device Group. Register or edit GeoJSON in that group’s Configure menu."
             }
           },
           "native_value_templates": {
@@ -2780,7 +2812,7 @@
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
               "configure_air_quality_sources": "Configure air quality per source",
-              "polygon_catalog_ids": "Shared GeoJSON documents"
+              "polygon_catalog_ids": "Shared area sets"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -2823,7 +2855,7 @@
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
               "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration.",
-              "polygon_catalog_ids": "Select multiple documents from the shared catalog."
+              "polygon_catalog_ids": "Select one or more shared areas from GeoJson Device Group. Register or edit GeoJSON in that group’s Configure menu."
             }
           },
           "native_value_templates": {
@@ -3907,64 +3939,72 @@
         }
       },
       "geojson": {
-        "title": "Shared GeoJSON areas",
-        "description": "Documents: {count}. Saving a document immediately updates all consumers.",
+        "title": "GeoJson Device Group",
+        "description": "Registered GeoJSON Devices: {count}. Each area set becomes one Device in this shared group. Saved edits update its entities and all trackers using it immediately.",
         "data": {
-          "action": "Action"
+          "action": "What would you like to do?"
         },
         "data_description": {
-          "action": "Add, edit, delete or refresh external sources."
+          "action": "Add, edit or delete an area set. Refresh reloads configured files and URLs."
         }
       },
       "geojson_choose": {
-        "title": "Choose document",
-        "description": "Select from the shared catalog.",
+        "title": "Choose an area set",
+        "description": "Choose the shared area set you want to edit or delete.",
         "data": {
-          "record": "Document"
+          "record": "Area set"
         },
         "data_description": {
-          "record": "Document to edit or delete."
+          "record": "All trackers using this set receive saved changes."
         }
       },
       "geojson_delete": {
-        "title": "Delete shared document",
-        "description": "Applies immediately to all consumers. Deleting a Home boundary suspends GPS Home detection.",
+        "title": "Delete this area set?",
+        "description": "This removes the GeoJSON Device and all its generated entities immediately. Trackers keep their reference but cannot use the deleted areas. If used as Home, select another valid boundary.",
         "data": {
-          "confirm": "Confirm deletion"
+          "confirm": "Delete this shared area set"
         },
         "data_description": {
-          "confirm": "Remove this document from the shared catalog."
+          "confirm": "Confirm to remove it from the catalog. Leave unchecked to return without deleting."
         }
       },
       "geojson_record": {
-        "title": "GeoJSON document",
-        "description": "Named Polygon/MultiPolygon Features or FeatureCollection. Coordinates are longitude, latitude.",
+        "title": "Set up an area set",
+        "description": "Register or edit one GeoJSON Device. Paste GeoJSON or provide a file/URL. A FeatureCollection can contain several named zones; they remain on the same Device. Coordinates are longitude, latitude.",
         "data": {
-          "name": "Management name",
-          "enabled": "Enabled",
-          "priority": "Priority",
-          "source": "File or URL",
-          "geojson": "Inline GeoJSON"
+          "name": "GeoJSON Device name",
+          "enabled": "Use this area set",
+          "priority": "Overlap priority",
+          "source": "GeoJSON file or URL (optional)",
+          "geojson": "Paste GeoJSON (optional)"
         },
         "data_description": {
-          "name": "Catalog label. Zone names use Feature properties.name.",
-          "enabled": "Enable or disable this document while retaining selections.",
-          "priority": "Lower integers win, then Feature priority, area and name.",
-          "source": "HA configuration file or HTTP(S) URL; refreshed every 5 minutes. Use this or inline JSON.",
-          "geojson": "Feature/FeatureCollection JSON. Leave blank when using a file or URL."
+          "name": "Name for the Device and shared area selector. Renaming preserves its identity and tracker selections; individual zone names still come from properties.name.",
+          "enabled": "Turn off to pause matching without deleting the set or its tracker selections. A disabled Home boundary cannot be used for GPS Home detection.",
+          "priority": "Use an integer from -100000 to 100000. Lower numbers win, then Feature priority, smaller area and name.",
+          "source": "Enter a path under the HA configuration folder, an allowlisted path, or an HTTP(S) URL. Leave the GeoJSON field empty. Active sets refresh every 5 minutes; failed loads keep the last valid boundaries.",
+          "geojson": "Paste a Feature or FeatureCollection with properties.name on each Feature. Leave the file/URL field empty. For example, set properties.name to Garden."
         }
       },
       "fusion_zones": {
-        "title": "Presence Fusion areas",
-        "description": "Preserves GPS coordinates and adds a zone sensor and SVG map.",
+        "title": "Choose location areas and Home",
+        "description": "Select shared area sets for this person. A separate zone sensor and polygon map are added; the GPS tracker keeps its original coordinates.",
         "data": {
-          "catalog_ids": "Shared documents",
+          "catalog_ids": "Area sets to use",
           "home": "Home boundary"
         },
         "data_description": {
-          "catalog_ids": "Select multiple area documents.",
-          "home": "Choose an enabled selected document containing the zone.home center. Blank uses the HA circular boundary."
+          "catalog_ids": "Select areas registered in GeoJson Device Group. Add or edit GeoJSON from that group’s Configure menu; all trackers share the same list.",
+          "home": "Use the default HA Home circle or choose an enabled set selected above. A custom boundary must contain the HA Home center; all its Features count as Home."
         }
+      },
+      "geojson_group": {
+        "title": "GeoJson Device Group",
+        "description": "Create the one shared GeoJSON group for this Home Assistant. Its name is fixed. After creation, open Configure to register GeoJSON; each registration creates a Device with zone names, bounds, area, data size and a map. Existing shared areas are retained."
+      },
+      "geojson_link": {
+        "title": "Open GeoJson Device Group",
+        "description": "GeoJSON is managed only in the shared GeoJson Device Group. Open its Configure menu under Settings → Devices & services → Virtual Layer. If missing, add Virtual Layer and choose GeoJson Device Group. This tracker only selects shared areas."
       }
     }
   },
@@ -4078,8 +4118,7 @@
         "manage_devices": "Manage virtual devices",
         "delete_device": "Delete a virtual device",
         "finish": "Done",
-        "copy_device": "Create virtual Device from a device",
-        "manage_geojson": "Manage shared GeoJSON areas"
+        "copy_device": "Create virtual Device from a device"
       }
     },
     "polygon_strategy": {
@@ -4311,23 +4350,63 @@
     },
     "geojson_action": {
       "options": {
-        "add": "Add",
-        "edit": "Edit",
-        "delete": "Delete",
-        "refresh": "Refresh",
-        "done": "Back"
+        "add": "Add an area set",
+        "edit": "Edit an area set",
+        "delete": "Delete an area set",
+        "refresh": "Reload files and URLs",
+        "done": "Done"
       }
     },
     "fusion_action": {
       "options": {
-        "add": "Add device",
-        "edit": "Edit device",
-        "delete": "Delete device",
-        "metadata": "Device metadata",
-        "settings": "Detection settings",
-        "manage_geojson": "Manage shared GeoJSON",
-        "zones": "Areas and Home boundary",
-        "save": "Save"
+        "add": "Add a physical device",
+        "edit": "Edit a physical device",
+        "delete": "Remove a physical device",
+        "metadata": "Virtual Device details",
+        "settings": "Fine-tune detection",
+        "zones": "Choose location areas and Home",
+        "save": "Save and apply"
+      }
+    },
+    "fusion_source_action": {
+      "options": {
+        "add": "Connect a signal",
+        "edit": "Edit a signal",
+        "delete": "Disconnect a signal",
+        "done": "Finish connecting"
+      }
+    },
+    "fusion_source_kind": {
+      "options": {
+        "gps": "GPS location",
+        "wifi": "Home Wi-Fi connection",
+        "ble": "Home BLE presence",
+        "room": "Room detection"
+      }
+    },
+    "fusion_freshness": {
+      "options": {
+        "source_managed": "Use expiry handled by the source",
+        "timestamp_ttl": "Use timestamp and validity period"
+      }
+    },
+    "fusion_timestamp_format": {
+      "options": {
+        "iso": "ISO 8601 (with timezone)",
+        "seconds": "Unix timestamp in seconds",
+        "milliseconds": "Unix timestamp in milliseconds"
+      }
+    },
+    "fusion_home": {
+      "options": {
+        "default": "Home Assistant Home zone (default)"
+      }
+    },
+    "device_group_type": {
+      "options": {
+        "virtual_device": "Virtual Devices and entities",
+        "presence_fusion": "Presence Fusion — track a person",
+        "geojson_group": "GeoJson Device Group"
       }
     }
   },
@@ -4914,6 +4993,38 @@
             }
           }
         }
+      }
+    },
+    "sensor": {
+      "geojson_information": {
+        "name": "GeoJSON information",
+        "state": {
+          "ok": "Ready",
+          "cached": "Using saved boundaries",
+          "disabled": "Disabled",
+          "invalid": "Invalid configuration",
+          "source_unavailable": "Source unavailable; last valid data retained"
+        }
+      },
+      "geojson_zone_names": {
+        "name": "Zone names"
+      },
+      "geojson_bounds": {
+        "name": "Bounds (west, south, east, north)"
+      },
+      "geojson_area": {
+        "name": "Estimated area"
+      },
+      "geojson_size": {
+        "name": "GeoJSON data size"
+      },
+      "geojson_zone_count": {
+        "name": "Zone count"
+      }
+    },
+    "image": {
+      "geojson_map": {
+        "name": "GeoJSON map"
       }
     }
   }

@@ -376,7 +376,7 @@ async def test_polygon_tracker_triangulates_espresense_anchors_into_geojson_zone
     async_fire_time_changed(hass, dt_util.utcnow())
     await hass.async_block_till_done()
     expired = hass.states.get("device_tracker.room_position")
-    assert expired.state == "not_home"
+    assert expired.state == "unknown"
     assert expired.attributes["espresense_sources"] == []
     assert expired.attributes["polygon_zone"] is None
     assert ATTR_LATITUDE not in expired.attributes

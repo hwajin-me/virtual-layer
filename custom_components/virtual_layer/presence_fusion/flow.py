@@ -8,6 +8,7 @@ import voluptuous as vol
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
+from homeassistant.helpers.translation import async_get_translations
 
 from ..device_metadata import (
     async_get_virtual_device,
@@ -24,10 +25,11 @@ from .movement import distance
 KEY = "presence_fusion"
 
 
-def select(options):
-    return selector.SelectSelector(
-        selector.SelectSelectorConfig(options=options, mode="dropdown")
-    )
+def select(options, translation_key=None):
+    config = {"options": options, "mode": "dropdown"}
+    if translation_key:
+        config["translation_key"] = translation_key
+    return selector.SelectSelector(selector.SelectSelectorConfig(**config))
 
 
 def form_schema(values, fields):
@@ -186,7 +188,6 @@ class FusionFlow(GeoJSONFlow):
                             "delete",
                             "metadata",
                             "settings",
-                            "manage_geojson",
                             "zones",
                             "save",
                         ],
@@ -200,6 +201,13 @@ class FusionFlow(GeoJSONFlow):
 
     async def async_step_fusion_zones(self, user_input=None):
         catalog = await async_get_catalog(self.hass)
+        translations = await async_get_translations(
+            self.hass, self.hass.config.language, "selector", {"virtual_layer"}
+        )
+        default_home_label = translations.get(
+            "component.virtual_layer.selector.fusion_home.options.default",
+            "Home Assistant Home zone (default)",
+        )
         values = user_input or self._fusion.get("zones", {})
         if not isinstance(values, dict):
             values = {}
@@ -239,7 +247,7 @@ class FusionFlow(GeoJSONFlow):
                     ),
                     vol.Optional("home", default=values.get("home", "")): choice(
                         [
-                            {"value": "", "label": "zone.home"},
+                            {"value": "", "label": default_home_label},
                             *catalog.choices(
                                 [values["home"]] if values.get("home") else []
                             ),
@@ -254,7 +262,7 @@ class FusionFlow(GeoJSONFlow):
         if user_input:
             url = user_input.get("configuration_url", "")
             if url and configuration_url_or_none(url) is None:
-                errors["configuration_url"] = "fusion_source"
+                errors["configuration_url"] = "fusion_url"
             device_id = user_input.get("device_id", "").strip()
             entry = getattr(self, "config_entry", None)
             registry = dr.async_get(self.hass)
@@ -264,7 +272,7 @@ class FusionFlow(GeoJSONFlow):
             if existing and (
                 entry is None or entry.entry_id not in existing.config_entries
             ):
-                errors["device_id"] = "fusion_duplicate"
+                errors["device_id"] = "fusion_device_id"
             parent = user_input.get("parent_device")
             previous_id = (
                 entry.options.get(KEY, {}).get("metadata", {}).get("device_id")
@@ -282,7 +290,7 @@ class FusionFlow(GeoJSONFlow):
                     and entry.entry_id in registry.async_get(parent).config_entries
                 )
             ):
-                errors["parent_device"] = "fusion_source"
+                errors["parent_device"] = "fusion_parent"
             if not errors:
                 self._fusion["metadata"] = dict(user_input)
                 return await self.async_step_fusion()
@@ -416,7 +424,7 @@ class FusionFlow(GeoJSONFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required("action", default="add"): select(
-                        ["add", "edit", "delete", "done"]
+                        ["add", "edit", "delete", "done"], "fusion_source_action"
                     )
                 }
             ),
@@ -443,7 +451,7 @@ class FusionFlow(GeoJSONFlow):
                         [
                             {
                                 "value": s["id"],
-                                "label": s["entity_id"] + " (" + s["kind"] + ")",
+                                "label": s["entity_id"],
                             }
                             for s in sources
                         ]
@@ -499,7 +507,7 @@ class FusionFlow(GeoJSONFlow):
             if len(self._fusion_device["sources"]) >= 64 and not any(
                 s["id"] == source["id"] for s in self._fusion_device["sources"]
             ):
-                errors["entity_id"] = "fusion_limit"
+                errors["entity_id"] = "fusion_source_limit"
             if set(user_input.get("positive", "on\nhome").splitlines()) & set(
                 user_input.get("negative", "off\nnot_home").splitlines()
             ):
@@ -555,7 +563,11 @@ class FusionFlow(GeoJSONFlow):
         defaults.update(user_input or {})
         text = selector.TextSelector(selector.TextSelectorConfig(multiline=True))
         fields = [
-            ("kind", "gps", select(["gps", "wifi", "ble", "room"])),
+            (
+                "kind",
+                "gps",
+                select(["gps", "wifi", "ble", "room"], "fusion_source_kind"),
+            ),
             ("entity_id", "", selector.EntitySelector()),
             ("attribute", "", str),
             ("positive", "on\nhome", text),
@@ -563,10 +575,14 @@ class FusionFlow(GeoJSONFlow):
             (
                 "freshness",
                 "source_managed",
-                select(["source_managed", "timestamp_ttl"]),
+                select(["source_managed", "timestamp_ttl"], "fusion_freshness"),
             ),
             ("timestamp_attribute", "", str),
-            ("timestamp_format", "iso", select(["iso", "seconds", "milliseconds"])),
+            (
+                "timestamp_format",
+                "iso",
+                select(["iso", "seconds", "milliseconds"], "fusion_timestamp_format"),
+            ),
             ("ttl", 300, vol.Coerce(float)),
             ("room_mapping", "", text),
         ]
