@@ -2,6 +2,36 @@
 
 Verified on 2026-09-22. Setup and entity details are in [GEOJSON_AREAS.md](GEOJSON_AREAS.md).
 
+## Follow-up: exported names and clearing a source
+
+`polygon.py` now accepts both `properties.name` and the common editor export
+`properties.Name`, preferring `name` when both are present. The supplied
+FeatureCollection was checked unchanged, including one interior and one exterior
+sample. Saved catalog snapshots normalize the label to `name`.
+
+`geojson_flow.py` previously used stored source values as optional schema
+defaults, then merged omitted input with the old record. HA can omit optional
+text fields after they are cleared, so both paths restored the deleted source.
+The form now uses suggested values for display and treats omitted source/text
+fields as empty. Removing a file/URL preserves its last valid snapshot as inline
+GeoJSON, or uses replacement GeoJSON supplied in the same submission. Validation
+errors retain the entered/cleared fields without changing saved data. Both
+English and Korean descriptions explain this behavior.
+
+`tests/integration/test_geojson_source_edit.py` adds nine regression cases:
+file and actual loopback HTTP sources, omitted/empty clear submissions, replacement
+inline data, switching inline data to a file, validation-error redisplay, storage
+reload, and name aliases/precedence. No geometry or save function is mocked.
+
+```sh
+PYTHONPATH=. .venv/bin/pytest tests/integration/test_geojson_source_edit.py tests/integration/test_geojson_catalog.py tests/integration/test_geojson_group.py tests/integration/test_presence_ui_translations.py tests/unit/test_polygon_zones.py tests/unit/test_translations.py -q
+```
+
+Result: **95 passed** on local HA 2026.2.3 / Python 3.14.7.
+`sh tests/docker/run_presence_fusion_smoke.sh` passed on HA 2026.9.3 /
+Python 3.14.6, now including `Name` input and clearing the source through actual
+HA options-flow schema validation. Compileall, Ruff and `git diff --check` passed.
+
 ## Follow-up: GPS membership audit
 
 The existing ordinary-tracker implementation already selects GPS coordinates and

@@ -123,6 +123,10 @@ class GeoJSONFlow:
 
     async def async_step_geojson_record(self, user_input=None):
         record = self._geo_record
+        if user_input is not None:
+            # HA omits cleared optional text fields. Omission must not inherit
+            # the stored source or inline document when editing a record.
+            user_input = {"source": "", "geojson": "", **user_input}
         defaults = {
             "name": record.get("name", ""),
             "enabled": record.get("enabled", True),
@@ -147,6 +151,14 @@ class GeoJSONFlow:
                 ):
                     raise ValueError("geojson_one_source")
                 new = {**record, **user_input, "priority": int(priority)}
+                if (
+                    record.get("source")
+                    and not new["source"].strip()
+                    and not new["geojson"].strip()
+                    and record.get("snapshot")
+                ):
+                    # Detach the file/URL while retaining its last valid areas.
+                    new["geojson"] = record["snapshot"]
                 await self._geo_catalog.save(self._geo_key, new, self._geo_revision)
                 return await self.async_step_geojson()
             except (ValueError, TypeError, RecursionError, OverflowError) as err:
@@ -179,9 +191,11 @@ class GeoJSONFlow:
                     vol.Required("priority", default=defaults["priority"]): vol.Coerce(
                         float
                     ),
-                    vol.Optional("source", default=defaults["source"]): str,
                     vol.Optional(
-                        "geojson", default=defaults["geojson"]
+                        "source", description={"suggested_value": defaults["source"]}
+                    ): str,
+                    vol.Optional(
+                        "geojson", description={"suggested_value": defaults["geojson"]}
                     ): selector.TextSelector(
                         selector.TextSelectorConfig(multiline=True)
                     ),

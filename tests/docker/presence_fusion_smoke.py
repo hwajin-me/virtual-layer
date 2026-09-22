@@ -49,7 +49,7 @@ async def main():
         result = await manager.async_init(group.entry_id)
         geometry = {
             "type": "Feature",
-            "properties": {"name": "Polygon Home"},
+            "properties": {"Name": "Polygon Home"},
             "geometry": {
                 "type": "Polygon",
                 "coordinates": [
@@ -106,6 +106,24 @@ async def main():
 
         catalog = await async_get_catalog(hass)
         key = next(iter(catalog.records))
+        source_path = root / "areas.json"
+        await hass.async_add_executor_job(source_path.write_text, json.dumps(geometry))
+        # Switching source types and clearing an optional source must survive
+        # HA schema validation, rather than restoring the previous default.
+        for inputs in (
+            {"source": str(source_path)},
+            {},  # HA omits optional text fields after the user clears them.
+        ):
+            result = await manager.async_init(group.entry_id)
+            for data in ({"action": "edit"}, {"record": key}):
+                result = await manager.async_configure(result["flow_id"], data)
+            result = await manager.async_configure(result["flow_id"], {
+                "name": "Home boundary", "enabled": True, "priority": 0, **inputs,
+            })
+            assert not result.get("errors"), result
+            await manager.async_configure(result["flow_id"], {"action": "done"})
+        assert catalog.records[key]["source"] == ""
+        assert catalog.records[key]["geojson"]["features"][0]["properties"]["name"] == "Polygon Home"
         manager = hass.config_entries.flow
         result = await manager.async_init(
             "virtual_layer",
@@ -236,6 +254,7 @@ async def main():
                     "checks": [
                         "config_flow",
                         "shared_geojson_flow",
+                        "geojson_name_alias_and_source_clear",
                         "singleton_geojson_group",
                         "geojson_device_information",
                         "gps_inside_outside_accuracy_and_recovery",

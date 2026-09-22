@@ -18,6 +18,10 @@ No YAML configuration or account connection is required.
    other paths must be explicitly allowlisted by HA. Save the document. Repeat
    for additional documents. Each registration creates a separate Device.
    Edit, disable, delete and reload sources from this same group.
+   Feature labels may use `properties.name` or `properties.Name`; `name` takes
+   precedence if both are present. Clearing a saved file/URL stops source
+   refresh and keeps the last valid boundaries as inline GeoJSON. You can also
+   paste new GeoJSON when clearing the source to replace those boundaries.
 4. For an ordinary `device_tracker`, select multiple **Shared area sets**
    in its domain settings alongside the usual source entities. Existing inline
    GeoJSON and file settings continue to work.

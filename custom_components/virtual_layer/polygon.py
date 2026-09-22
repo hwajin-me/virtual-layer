@@ -171,7 +171,9 @@ def parse_geojson_zones(data, default_priority: int = 0) -> list[dict[str, Any]]
         geometry_type = geometry.get("type")
         if geometry_type not in SUPPORTED_GEOMETRY_TYPES:
             raise ValueError(f"Unsupported GeoJSON geometry: {geometry_type}")
-        name = properties.get("name")
+        # Common GeoJSON editors export the label as "Name". Prefer the
+        # canonical spelling when both are supplied; normalize on persistence.
+        name = properties.get("name", properties.get("Name"))
         if not isinstance(name, str) or not name.strip():
             raise ValueError("Every polygon zone needs a name property")
         if len(name.strip()) > 255:

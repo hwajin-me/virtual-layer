@@ -46,7 +46,7 @@
       "no_device_entities": "No eligible entities. Check the device and selected entities.",
       "device_copy_failed": "Could not prepare {failed_source}. Deselect this entity or correct its source configuration. Nothing was saved.",
       "device_sources_changed": "A source device/entity or target ID changed. Check the selection and review again. Nothing was saved.",
-      "geojson_invalid": "Check the GeoJSON: each Feature needs a name and a valid Polygon or MultiPolygon. Use longitude, latitude coordinate order.",
+      "geojson_invalid": "Each Feature needs properties.name or properties.Name and a valid Polygon or MultiPolygon. Coordinates must be longitude, latitude.",
       "geojson_name": "Enter a name for this area set.",
       "geojson_priority": "Enter an integer from -100000 to 100000.",
       "geojson_source": "Could not read valid GeoJSON from this file or URL. Check the address, HA path permissions and file contents.",
@@ -1441,11 +1441,11 @@
           "geojson": "Paste GeoJSON (optional)"
         },
         "data_description": {
-          "name": "Name for the Device and shared area selector. Renaming preserves its identity and tracker selections; individual zone names still come from properties.name.",
+          "name": "Name for the Device and shared area selector. Renaming preserves its identity and tracker selections; individual zone names still come from properties.name / properties.Name.",
           "enabled": "Turn off to pause matching without deleting the set or its tracker selections. A disabled Home boundary cannot be used for GPS Home detection.",
           "priority": "Use an integer from -100000 to 100000. Lower numbers win, then Feature priority, smaller area and name.",
-          "source": "Enter a path under the HA configuration folder, an allowlisted path, or an HTTP(S) URL. Leave the GeoJSON field empty. Active sets refresh every 5 minutes; failed loads keep the last valid boundaries.",
-          "geojson": "Paste a Feature or FeatureCollection with properties.name on each Feature. Leave the file/URL field empty. For example, set properties.name to Garden."
+          "source": "Enter a path under the HA configuration folder, an allowlisted path, or an HTTP(S) URL. Leave the GeoJSON field empty. Active sets refresh every 5 minutes; failed loads keep the last valid boundaries. Clear this field to stop loading the source and keep its last valid boundaries as inline GeoJSON, or paste replacement GeoJSON.",
+          "geojson": "Paste a Feature or FeatureCollection with properties.name or properties.Name on each Feature. If both exist, name takes precedence. Leave the file/URL field empty."
         }
       },
       "fusion_zones": {
@@ -1524,7 +1524,7 @@
       "no_device_entities": "No eligible entities. Check the device and selected entities.",
       "device_copy_failed": "Could not prepare {failed_source}. Deselect this entity or correct its source configuration. Nothing was saved.",
       "device_sources_changed": "A source device/entity or target ID changed. Check the selection and review again. Nothing was saved.",
-      "geojson_invalid": "Check the GeoJSON: each Feature needs a name and a valid Polygon or MultiPolygon. Use longitude, latitude coordinate order.",
+      "geojson_invalid": "Each Feature needs properties.name or properties.Name and a valid Polygon or MultiPolygon. Coordinates must be longitude, latitude.",
       "geojson_name": "Enter a name for this area set.",
       "geojson_priority": "Enter an integer from -100000 to 100000.",
       "geojson_source": "Could not read valid GeoJSON from this file or URL. Check the address, HA path permissions and file contents.",
@@ -3979,11 +3979,11 @@
           "geojson": "Paste GeoJSON (optional)"
         },
         "data_description": {
-          "name": "Name for the Device and shared area selector. Renaming preserves its identity and tracker selections; individual zone names still come from properties.name.",
+          "name": "Name for the Device and shared area selector. Renaming preserves its identity and tracker selections; individual zone names still come from properties.name / properties.Name.",
           "enabled": "Turn off to pause matching without deleting the set or its tracker selections. A disabled Home boundary cannot be used for GPS Home detection.",
           "priority": "Use an integer from -100000 to 100000. Lower numbers win, then Feature priority, smaller area and name.",
-          "source": "Enter a path under the HA configuration folder, an allowlisted path, or an HTTP(S) URL. Leave the GeoJSON field empty. Active sets refresh every 5 minutes; failed loads keep the last valid boundaries.",
-          "geojson": "Paste a Feature or FeatureCollection with properties.name on each Feature. Leave the file/URL field empty. For example, set properties.name to Garden."
+          "source": "Enter a path under the HA configuration folder, an allowlisted path, or an HTTP(S) URL. Leave the GeoJSON field empty. Active sets refresh every 5 minutes; failed loads keep the last valid boundaries. Clear this field to stop loading the source and keep its last valid boundaries as inline GeoJSON, or paste replacement GeoJSON.",
+          "geojson": "Paste a Feature or FeatureCollection with properties.name or properties.Name on each Feature. If both exist, name takes precedence. Leave the file/URL field empty."
         }
       },
       "fusion_zones": {
