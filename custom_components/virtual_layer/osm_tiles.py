@@ -91,7 +91,7 @@ async def _fetch_tile(hass, zoom, x, y):
         async with session.get(
             f"https://tile.openstreetmap.org/{zoom}/{x}/{y}.png",
             headers={
-                "User-Agent": "Home-Assistant-Virtual-Layer/1.0 (+https://github.com/hwajin-me/home-assistant-virtual-layer)"
+                "User-Agent": "Home-Assistant-Virtual-Layer/1.0 (+https://github.com/hwajin-me/virtual-layer)"
             },
             timeout=15,
         ) as response:
