@@ -9,7 +9,7 @@ import math
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from functools import partial
-from decimal import Decimal, DecimalException
+from decimal import Decimal, DecimalException, ROUND_HALF_UP, localcontext
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -280,11 +280,6 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         self._attr_icon = config.get(CONF_ICON)
         self._domain_options = generic_entity_options(config)
         self._attr_options = config.get("options")
-        # Keep sensor display precision bounded even for legacy records and
-        # source-generated templates.  This is deliberately an entity default
-        # as well as a config-flow default, so existing sensors without the
-        # native template get the same sensible limit.
-        self._attr_suggested_display_precision = 5
         self._utility_meter_enabled = bool(config.get("utility_meter_enabled", False))
         self._utility_meter_cycle = config.get("utility_meter_cycle", "monthly")
         self._utility_meter_last_source: Decimal | None = None
@@ -730,7 +725,29 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                     and self._attr_device_class not in NON_NUMERIC_DEVICE_CLASSES)):
             if not math.isfinite(float(value)):
                 raise ValueError("Numeric sensor value must be finite")
+            return self._limit_decimal_places(value)
         return value
+
+    @staticmethod
+    def _limit_decimal_places(value):
+        """Round numeric readings to at most five decimal places.
+
+        Preserve the supplied representation unless it exceeds the limit: a
+        source value such as ``1.2`` must not become the fixed-width ``1.20000``.
+        """
+        decimal_value = Decimal(str(value))
+        if decimal_value.as_tuple().exponent >= -5:
+            return value
+        with localcontext() as context:
+            context.prec = max(len(decimal_value.as_tuple().digits), 6)
+            limited = decimal_value.quantize(
+                Decimal("0.00001"), rounding=ROUND_HALF_UP
+            ).normalize()
+        if isinstance(value, str):
+            return format(limited, "f")
+        if isinstance(value, Decimal):
+            return limited
+        return float(limited)
 
     def _update_attributes(self):
         super()._update_attributes()

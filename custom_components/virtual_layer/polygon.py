@@ -82,7 +82,10 @@ def _polygon(value, point_budget: list[int]) -> dict[str, Any]:
     if any(_ring_area(hole) == 0 for hole in rings[1:]):
         raise ValueError("GeoJSON polygon hole has no area")
     if any(
-        not all(_point_in_ring(longitude, latitude, rings[0]) for longitude, latitude in hole[:-1])
+        not all(
+            _point_in_ring(longitude, latitude, rings[0])
+            for longitude, latitude in hole[:-1]
+        )
         for hole in rings[1:]
     ):
         raise ValueError("GeoJSON polygon hole must be inside its exterior ring")
@@ -91,10 +94,15 @@ def _polygon(value, point_budget: list[int]) -> dict[str, Any]:
 
 def _ring_area(ring: list[tuple[float, float]]) -> float:
     unwrapped = _unwrap_ring(ring)
-    return abs(sum(
-        first[0] * second[1] - second[0] * first[1]
-        for first, second in pairwise(unwrapped)
-    )) / 2
+    return (
+        abs(
+            sum(
+                first[0] * second[1] - second[0] * first[1]
+                for first, second in pairwise(unwrapped)
+            )
+        )
+        / 2
+    )
 
 
 def _longitude_delta(longitude: float, anchor: float) -> float:
@@ -115,10 +123,9 @@ def median_longitude(values, anchor: float | None = None) -> float:
     if max(values) - min(values) <= 180:
         return median(values)
     anchor = values[0] if anchor is None else anchor
-    return _normalize_longitude(median(
-        anchor + _longitude_delta(longitude, anchor)
-        for longitude in values
-    ))
+    return _normalize_longitude(
+        median(anchor + _longitude_delta(longitude, anchor) for longitude in values)
+    )
 
 
 def _unwrap_ring(ring) -> list[tuple[float, float]]:
@@ -127,10 +134,12 @@ def _unwrap_ring(ring) -> list[tuple[float, float]]:
     for point in ring[1:]:
         previous_original = ring[len(unwrapped) - 1]
         previous_longitude = unwrapped[-1][0]
-        unwrapped.append((
-            previous_longitude + _longitude_delta(point[0], previous_original[0]),
-            point[1],
-        ))
+        unwrapped.append(
+            (
+                previous_longitude + _longitude_delta(point[0], previous_original[0]),
+                point[1],
+            )
+        )
     return unwrapped
 
 
@@ -194,18 +203,19 @@ def parse_geojson_zones(data, default_priority: int = 0) -> list[dict[str, Any]]
                 raise ValueError("GeoJSON MultiPolygon must contain polygons")
             polygons = [_polygon(item, point_budget) for item in coordinates]
         area = sum(
-            _ring_area(item["outer"])
-            - sum(_ring_area(hole) for hole in item["holes"])
+            _ring_area(item["outer"]) - sum(_ring_area(hole) for hole in item["holes"])
             for item in polygons
         )
-        zones.append({
-            "name": name.strip(),
-            "priority": priority,
-            "polygons": polygons,
-            "area": max(area, 0),
-            "properties": dict(properties),
-            "feature_index": feature_index,
-        })
+        zones.append(
+            {
+                "name": name.strip(),
+                "priority": priority,
+                "polygons": polygons,
+                "area": max(area, 0),
+                "properties": dict(properties),
+                "feature_index": feature_index,
+            }
+        )
     if not zones:
         raise ValueError("GeoJSON must contain at least one polygon zone")
     return zones
@@ -221,7 +231,11 @@ def _point_in_ring(longitude: float, latitude: float, ring) -> bool:
         y1 = first[1]
         y2 = second[1]
         cross = (longitude - x1) * (y2 - y1) - (latitude - y1) * (x2 - x1)
-        if abs(cross) < 1e-12 and min(x1, x2) <= longitude <= max(x1, x2) and min(y1, y2) <= latitude <= max(y1, y2):
+        if (
+            abs(cross) < 1e-12
+            and min(x1, x2) <= longitude <= max(x1, x2)
+            and min(y1, y2) <= latitude <= max(y1, y2)
+        ):
             return True
         if (y1 > latitude) != (y2 > latitude):
             intersection = (x2 - x1) * (latitude - y1) / (y2 - y1) + x1
@@ -287,7 +301,16 @@ def find_polygon_zone(latitude, longitude, accuracy, zones):
     ]
     if not matches:
         return None
-    return min(matches, key=lambda zone: (zone.get("catalog_priority", 0), zone["priority"], zone["area"], zone["name"], zone.get("catalog_id", "")))
+    return min(
+        matches,
+        key=lambda zone: (
+            zone.get("catalog_priority", 0),
+            zone["priority"],
+            zone["area"],
+            zone["name"],
+            zone.get("catalog_id", ""),
+        ),
+    )
 
 
 def polygon_clearance(latitude, longitude, zones):
@@ -304,7 +327,11 @@ def polygon_clearance(latitude, longitude, zones):
                 for ring in [polygon["outer"], *polygon["holes"]]
                 for first, second in pairwise(ring)
             )
-            values.append(margin if _polygon_contains(latitude, longitude, 0, polygon) else -margin)
+            values.append(
+                margin
+                if _polygon_contains(latitude, longitude, 0, polygon)
+                else -margin
+            )
     return max(values) if values else float("-inf")
 
 
@@ -333,9 +360,15 @@ def render_polygon_map_svg(
     width: int = 720,
     height: int = 480,
     markers=None,
+    background_image=None,
 ) -> str:
     """Render polygon zones as a compact SVG image for Home Assistant image entities."""
-    if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
+    if (
+        not isinstance(width, int)
+        or not isinstance(height, int)
+        or width <= 0
+        or height <= 0
+    ):
         raise ValueError("SVG width and height must be positive integers")
 
     zones = list(zones)
@@ -351,8 +384,7 @@ def render_polygon_map_svg(
         for polygon in zone["polygons"]:
             outer = _align_unwrapped_ring(polygon["outer"], anchor)
             holes = [
-                _align_unwrapped_ring(hole, outer[0][0])
-                for hole in polygon["holes"]
+                _align_unwrapped_ring(hole, outer[0][0]) for hole in polygon["holes"]
             ]
             render_polygons.append({"outer": outer, "holes": holes})
             rings.extend((outer, *holes))
@@ -378,11 +410,13 @@ def render_polygon_map_svg(
             or not -180 <= longitude <= 180
         ):
             continue
-        render_markers.append({
-            **marker,
-            "latitude": latitude,
-            "longitude": anchor + _longitude_delta(longitude, anchor),
-        })
+        render_markers.append(
+            {
+                **marker,
+                "latitude": latitude,
+                "longitude": anchor + _longitude_delta(longitude, anchor),
+            }
+        )
 
     longitudes = [longitude for ring in rings for longitude, _latitude in ring]
     longitudes.extend(marker["longitude"] for marker in render_markers)
@@ -402,11 +436,22 @@ def render_polygon_map_svg(
     map_height = latitude_span * scale
     offset_x = (width - map_width) / 2
     offset_y = (height - map_height) / 2
+    def mercator(latitude):
+        return math.asinh(math.tan(math.radians(max(-85.05112878, min(85.05112878, latitude)))))
+
+    mercator_top = mercator(max_latitude) if background_image else None
+    mercator_bottom = mercator(min_latitude) if background_image else None
 
     def project(longitude, latitude):
+        if mercator_top is not None and mercator_bottom != mercator_top:
+            y_fraction = (
+                mercator_top - mercator(latitude)
+            ) / (mercator_top - mercator_bottom)
+        else:
+            y_fraction = (max_latitude - latitude) / latitude_span
         return (
             offset_x + (longitude - min_longitude) * scale,
-            offset_y + (max_latitude - latitude) * scale,
+            offset_y + y_fraction * map_height,
         )
 
     paths = []
@@ -431,7 +476,7 @@ def render_polygon_map_svg(
                 'font-family="Arial, sans-serif" font-size="16" '
                 'font-weight="700" fill="#111827" paint-order="stroke" '
                 'stroke="#ffffff" stroke-width="4" stroke-linejoin="round">'
-                f'{html.escape(str(zone["name"]))}</text>'
+                f"{html.escape(str(zone['name']))}</text>"
             )
 
     marker_elements = []
@@ -449,18 +494,38 @@ def render_polygon_map_svg(
             f'stroke-width="4" stroke-linejoin="round">{label}</text></g>'
         )
 
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
-        f'viewBox="0 0 {width} {height}" role="img" aria-label="Polygon map">'
-        '<rect width="100%" height="100%" fill="#f8fafc"/>'
-        '<g opacity="0.35" stroke="#cbd5e1" stroke-width="1">'
-        f'<path d="M {padding} {height / 2:.2f} H {width - padding}"/>'
-        f'<path d="M {width / 2:.2f} {padding} V {height - padding}"/>'
-        '</g>'
-        f'<g>{"".join(paths)}</g>'
-        f'<g>{"".join(labels)}</g>'
-        f'<g>{"".join(marker_elements)}</g>'
-        '</svg>'
+    background = (
+        f'<image href="{html.escape(background_image, quote=True)}" '
+        f'x="{offset_x:.2f}" y="{offset_y:.2f}" width="{map_width:.2f}" '
+        f'height="{map_height:.2f}" preserveAspectRatio="none"/>'
+        if background_image
+        else ""
+    )
+    attribution = (
+        '<text x="708" y="468" text-anchor="end" font-family="Arial, sans-serif" '
+        'font-size="11" fill="#111827" stroke="#ffffff" stroke-width="3" '
+        'paint-order="stroke">© OpenStreetMap contributors</text>'
+        if background_image
+        else ""
+    )
+    return "".join(
+        (
+            (
+                f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+                f'viewBox="0 0 {width} {height}" role="img" aria-label="Polygon map">'
+            ),
+            '<rect width="100%" height="100%" fill="#f8fafc"/>',
+            background,
+            '<g opacity="0.35" stroke="#cbd5e1" stroke-width="1">',
+            f'<path d="M {padding} {height / 2:.2f} H {width - padding}"/>',
+            f'<path d="M {width / 2:.2f} {padding} V {height - padding}"/>',
+            "</g>",
+            f"<g>{''.join(paths)}</g>",
+            f"<g>{''.join(labels)}</g>",
+            f"<g>{''.join(marker_elements)}</g>",
+            attribution,
+            "</svg>",
+        )
     )
 
 
@@ -471,9 +536,13 @@ async def _local_geojson_path(hass, file_name: str) -> str:
             candidate = Path(hass.config.config_dir) / candidate
         candidate = candidate.resolve()
         config_root = Path(hass.config.config_dir).resolve()
-        if candidate.is_relative_to(config_root) or hass.config.is_allowed_path(str(candidate)):
+        if candidate.is_relative_to(config_root) or hass.config.is_allowed_path(
+            str(candidate)
+        ):
             return str(candidate)
-        raise ValueError(f"GeoJSON path is outside Home Assistant's allowed directories: {file_name}")
+        raise ValueError(
+            f"GeoJSON path is outside Home Assistant's allowed directories: {file_name}"
+        )
 
     return await hass.async_add_executor_job(resolve)
 
@@ -553,9 +622,13 @@ def distance_meters(first, second) -> float:
         + math.cos(latitude1) * math.cos(latitude2) * math.sin(delta_longitude / 2) ** 2
     )
     value = max(0.0, min(1.0, value))
-    return EARTH_RADIUS_METERS * 2 * math.atan2(
-        math.sqrt(value),
-        math.sqrt(1 - value),
+    return (
+        EARTH_RADIUS_METERS
+        * 2
+        * math.atan2(
+            math.sqrt(value),
+            math.sqrt(1 - value),
+        )
     )
 
 
@@ -589,15 +662,18 @@ def _connected_clusters(samples, distance_threshold):
                 if distance_meters(
                     (samples[current]["latitude"], samples[current]["longitude"]),
                     (samples[candidate]["latitude"], samples[candidate]["longitude"]),
-                ) <= distance_threshold
+                )
+                <= distance_threshold
             }
             remaining.difference_update(neighbours)
             cluster_indexes.update(neighbours)
             pending.extend(neighbours)
-        clusters.append(sorted(
-            (samples[index] for index in cluster_indexes),
-            key=lambda sample: sample["entity_id"],
-        ))
+        clusters.append(
+            sorted(
+                (samples[index] for index in cluster_indexes),
+                key=lambda sample: sample["entity_id"],
+            )
+        )
     return clusters
 
 
@@ -617,11 +693,15 @@ def select_tracker_position(samples, strategy="majority", distance_threshold=300
         selected_samples = [selected]
         reason = "priority"
     elif strategy == "latest":
-        selected = max(samples, key=lambda sample: (_latest_timestamp(sample), sample["entity_id"]))
+        selected = max(
+            samples, key=lambda sample: (_latest_timestamp(sample), sample["entity_id"])
+        )
         selected_samples = [selected]
         reason = "latest"
     elif strategy == "median":
-        selected = max(samples, key=lambda sample: (_latest_timestamp(sample), sample["entity_id"]))
+        selected = max(
+            samples, key=lambda sample: (_latest_timestamp(sample), sample["entity_id"])
+        )
         selected_samples = samples
         reason = "median"
     else:
@@ -651,7 +731,9 @@ def select_tracker_position(samples, strategy="majority", distance_threshold=300
     return {
         "latitude": median(sample["latitude"] for sample in selected_samples),
         "longitude": longitude,
-        "gps_accuracy": max(float(sample.get("gps_accuracy", 0)) for sample in selected_samples),
+        "gps_accuracy": max(
+            float(sample.get("gps_accuracy", 0)) for sample in selected_samples
+        ),
         "selected_source": selected["entity_id"],
         "members": [sample["entity_id"] for sample in selected_samples],
         "reason": reason,

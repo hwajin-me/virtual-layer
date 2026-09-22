@@ -35,6 +35,21 @@ HA options-flow schema validation. Compileall, Ruff and `git diff --check` passe
 **3670 passed, 3 failed, 1 warning in 182.25s**. Failures remain the same existing
 water-unit and PM2.5 companion cases listed below. No new failures were found.
 
+## Follow-up: map background
+
+`osm_tiles.py` downloads only the bounded set of OpenStreetMap raster tiles
+needed by a GeoJSON Device map (at most 12), identifies this integration in the
+HTTP User-Agent, stores them in HA's `.storage/virtual_layer_osm_tiles` for at
+least seven days, and composites the cropped result into a data URI. The SVG
+uses the same fitted viewport for that image and draws polygons, labels and GPS
+markers over it. Attribution is rendered in the image. Failures or unavailable
+tiles retain the plain SVG map instead of failing the Image entity.
+
+`tests/unit/test_osm_tiles.py` verifies the embedded PNG, bounded tile set,
+correct SVG layer ordering/attribution and no-tile fallback without accessing
+the network. Google Maps is intentionally excluded because a static-map API key
+and the user's billing/terms setup are required.
+
 ## Follow-up: GPS membership audit
 
 The existing ordinary-tracker implementation already selects GPS coordinates and

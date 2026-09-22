@@ -14,6 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from .geojson_catalog import async_get_catalog, snapshot_document
 from .geojson_metrics import summarize
+from .osm_tiles import async_osm_background
 from .polygon import render_polygon_map_svg
 
 DOMAIN = "virtual_layer"
@@ -276,7 +277,10 @@ class GeoJSONMap(GeoJSONEntity, ImageEntity):
         zones = self.runtime.catalog.zones.get(self.record_key)
         if not zones:
             return None
-        svg = await self.hass.async_add_executor_job(render_polygon_map_svg, zones)
+        background = await async_osm_background(self.hass, zones)
+        svg = await self.hass.async_add_executor_job(
+            render_polygon_map_svg, zones, 720, 480, None, background
+        )
         return svg.encode()
 
 

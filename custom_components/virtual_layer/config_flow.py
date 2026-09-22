@@ -444,10 +444,7 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
     },
     "sensor": {
         "options": None,
-        # Home Assistant treats this as a display hint. Five decimal places is
-        # sufficiently precise for the virtual sensor domains while keeping
-        # newly-created entities readable by default.
-        "suggested_display_precision": 5,
+        "suggested_display_precision": None,
     },
     "siren": {
         "support_volume": True,

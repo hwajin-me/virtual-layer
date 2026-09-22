@@ -102,11 +102,25 @@ Virtual Layer
 | Estimated area | Square metres on a mean-radius sphere; holes subtracted; areas of overlapping polygons are added rather than dissolved into a union |
 | GeoJSON data size | UTF-8 bytes of the normalized cached GeoJSON, not the original remote file size |
 | Zone count | Number of named Features; MultiPolygon parts are counted separately only in the information attributes |
-| GeoJSON map | SVG preview of all geometry in this document, including when matching is disabled |
+| GeoJSON map | OpenStreetMap raster background with the document's SVG geometry layered above it, including when matching is disabled |
 
 Several Features in one FeatureCollection stay on **one Device**. Device and
 entity identities use the existing document UUID, so renaming/reload preserves
 them. User-assigned Device names and entity names/disable settings are preserved.
+
+### Map background
+
+The GeoJSON map downloads the OpenStreetMap raster tiles needed for its current
+area, caches them under HA's `.storage` directory for at least seven days, and
+embeds the composed image in the SVG before drawing zones and labels. Attribution
+is shown in the image. This means the browser does not fetch map tiles itself.
+If HA cannot reach the tile service, the map remains available with the existing
+plain SVG background and geometry. The tile request reveals the tile area that
+contains the configured boundary to OpenStreetMap.
+
+Google Maps is not requested automatically: its static-map service requires a
+user-owned API key and a billing/terms configuration. It is deliberately not
+treated as a drop-in public tile endpoint.
 Deleting a document removes its Device and generated entities immediately.
 These are informational entities; they do not create circular `zone.*` entities.
 

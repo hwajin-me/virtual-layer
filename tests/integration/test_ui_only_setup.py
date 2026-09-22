@@ -989,8 +989,7 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
         "{{ state_attr('sensor.energy_monitor', 'options') }}"
     )
     assert native_templates["suggested_display_precision"] == (
-        "{{ state_attr('sensor.energy_monitor', 'suggested_display_precision') "
-        "if state_attr('sensor.energy_monitor', 'suggested_display_precision') is not none else 5 }}"
+        "{{ state_attr('sensor.energy_monitor', 'suggested_display_precision') }}"
     )
 
     result = await hass.config_entries.options.async_configure(
@@ -1050,7 +1049,7 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
     sensor._apply_templates()
     assert sensor.native_value == "14.0"
     assert sensor.options is None
-    assert sensor.suggested_display_precision == 5
+    assert sensor.suggested_display_precision is None
 
 
 async def test_options_flow_converts_single_switch_source_to_fan(hass):

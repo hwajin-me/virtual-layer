@@ -45,10 +45,15 @@ def test_display_precision_does_not_silently_truncate(value):
         sensor._apply_native_template_value("suggested_display_precision", value)
 
 
-def test_display_precision_defaults_to_five_decimal_places():
+def test_numeric_sensor_rounds_to_at_most_five_decimal_places():
     sensor = make_sensor({"name": "PM", "class": "pm25"})
+    sensor._schedule_state_update = lambda: None
 
-    assert sensor.suggested_display_precision == 5
+    sensor.set("1.234567")
+
+    assert sensor.native_value == "1.23457"
+    sensor.set("1.2")
+    assert sensor.native_value == "1.2"
 
 
 def test_text_information_sensor_is_not_forced_to_numeric_by_precision():
