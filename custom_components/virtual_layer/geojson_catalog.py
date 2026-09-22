@@ -8,6 +8,7 @@ from copy import deepcopy
 from datetime import timedelta
 from urllib.parse import urlsplit
 
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 
@@ -92,6 +93,15 @@ class GeoJSONCatalog:
         self.lock = asyncio.Lock()
         self.timer = None
         self.task = None
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self._on_hass_stop)
+
+    def _on_hass_stop(self, _event) -> None:
+        """Stop a background refresh before Home Assistant closes its loop."""
+        if self.timer:
+            self.timer()
+            self.timer = None
+        if self.task and not self.task.done():
+            self.task.cancel()
 
     async def load(self):
         data = await self.store.async_load()

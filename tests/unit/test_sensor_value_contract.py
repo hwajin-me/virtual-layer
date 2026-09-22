@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 from homeassistant.core import State
 
-from custom_components.virtual_layer.sensor import VirtualSensor
+from custom_components.virtual_layer.sensor import VirtualDiagnosticSensor, VirtualSensor
 
 pytestmark = pytest.mark.unit
 
@@ -60,6 +60,20 @@ def test_text_information_sensor_is_not_forced_to_numeric_by_precision():
     sensor = make_sensor({"name": "Info", "initial_value": "configured"})
     assert sensor.suggested_display_precision is None
     assert sensor.state == "configured"
+
+
+def test_diagnostic_sensor_without_precision_is_safe_with_numeric_metadata():
+    sensor = VirtualDiagnosticSensor(
+        {
+            "name": "Source debug",
+            "diagnostic_source_entity": "sensor.source",
+            "class": "energy",
+            "unit_of_measurement": "kWh",
+        },
+        False,
+    )
+
+    assert sensor.suggested_display_precision is None
 
 
 @pytest.mark.parametrize("native", [True, False])

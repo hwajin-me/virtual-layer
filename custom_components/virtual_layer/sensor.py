@@ -280,6 +280,11 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         self._attr_icon = config.get(CONF_ICON)
         self._domain_options = generic_entity_options(config)
         self._attr_options = config.get("options")
+        # SensorEntity reads this attribute whenever a sensor has numeric
+        # metadata.  Diagnostic sensors can inherit that metadata from a
+        # source after setup, so it must exist even when no precision template
+        # or static value was configured.
+        self._attr_suggested_display_precision = None
         self._utility_meter_enabled = bool(config.get("utility_meter_enabled", False))
         self._utility_meter_cycle = config.get("utility_meter_cycle", "monthly")
         self._utility_meter_last_source: Decimal | None = None
@@ -307,8 +312,13 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         )
         if not isinstance(self._attr_native_unit_of_measurement, (str, type(None))):
             self._attr_native_unit_of_measurement = None
-        if self._attr_device_class == SensorDeviceClass.CONDUCTIVITY:
-            self._attr_native_unit_of_measurement = normalize_unit(self._attr_native_unit_of_measurement) or None
+        # Home Assistant validates native units before exposing state
+        # attributes. Normalize accepted spelling variants for every sensor,
+        # not just conductivity, so valid upstream values such as ``ug/m^3``
+        # remain available to dependent entities (including AQI companions).
+        self._attr_native_unit_of_measurement = (
+            normalize_unit(self._attr_native_unit_of_measurement) or None
+        )
         self._last_valid_unit = normalize_unit(self._attr_native_unit_of_measurement) or None
         if (
             not self._attr_native_unit_of_measurement
@@ -671,6 +681,16 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         if not is_compatible_device_class_unit(
             self._attr_device_class, self._attr_native_unit_of_measurement
         ):
+            # Keep water measurement classes long enough for
+            # ``_coerce_native_value`` to reject their invalid unit/value
+            # pair. Dropping the class here would turn an invalid pH or
+            # conductivity measurement into an apparently valid generic
+            # numeric sensor.
+            if self._attr_device_class in {
+                SensorDeviceClass.PH,
+                SensorDeviceClass.CONDUCTIVITY,
+            }:
+                return
             _LOGGER.debug(
                 "Virtual sensor %s has incompatible device class %r and unit %r; "
                 "publishing it without a device class",

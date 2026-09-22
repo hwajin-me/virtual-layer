@@ -11,7 +11,7 @@ from homeassistant.const import (
 
 COMPONENT_DOMAIN = "virtual_layer"
 COMPONENT_SERVICES = "virtual_layer-services"
-COMPONENT_MANUFACTURER = "twrecked"
+COMPONENT_MANUFACTURER = "VIRTUAL_DEVICE"
 COMPONENT_MODEL = "virtual_layer"
 
 ATTR_AVAILABLE = 'available'
