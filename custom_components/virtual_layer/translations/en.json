@@ -1432,20 +1432,22 @@
       },
       "geojson_record": {
         "title": "Set up an area set",
-        "description": "Register or edit one GeoJSON Device. Paste GeoJSON or provide a file/URL. A FeatureCollection can contain several named zones; they remain on the same Device. Coordinates are longitude, latitude.",
+        "description": "{preview}\n\nRegister or edit one GeoJSON Device. Paste GeoJSON or provide a file/URL. A FeatureCollection can contain several named zones; they remain on the same Device. Coordinates are longitude, latitude.",
         "data": {
           "name": "GeoJSON Device name",
           "enabled": "Use this area set",
           "priority": "Overlap priority",
           "source": "GeoJSON file or URL (optional)",
-          "geojson": "Paste GeoJSON (optional)"
+          "geojson": "Paste GeoJSON (optional)",
+          "preview": "Show map preview"
         },
         "data_description": {
           "name": "Name for the Device and shared area selector. Renaming preserves its identity and tracker selections; individual zone names still come from properties.name / properties.Name.",
           "enabled": "Turn off to pause matching without deleting the set or its tracker selections. A disabled Home boundary cannot be used for GPS Home detection.",
           "priority": "Use an integer from -100000 to 100000. Lower numbers win, then Feature priority, smaller area and name.",
           "source": "Enter a path under the HA configuration folder, an allowlisted path, or an HTTP(S) URL. Leave the GeoJSON field empty. Active sets refresh every 5 minutes; failed loads keep the last valid boundaries. Clear this field to stop loading the source and keep its last valid boundaries as inline GeoJSON, or paste replacement GeoJSON.",
-          "geojson": "Paste a Feature or FeatureCollection with properties.name or properties.Name on each Feature. If both exist, name takes precedence. Leave the file/URL field empty."
+          "geojson": "Paste a Feature or FeatureCollection with properties.name or properties.Name on each Feature. If both exist, name takes precedence. Leave the file/URL field empty.",
+          "preview": "Select this and submit to render a temporary preview without saving changes. Clear it before saving."
         }
       },
       "fusion_zones": {
@@ -3970,20 +3972,22 @@
       },
       "geojson_record": {
         "title": "Set up an area set",
-        "description": "Register or edit one GeoJSON Device. Paste GeoJSON or provide a file/URL. A FeatureCollection can contain several named zones; they remain on the same Device. Coordinates are longitude, latitude.",
+        "description": "{preview}\n\nRegister or edit one GeoJSON Device. Paste GeoJSON or provide a file/URL. A FeatureCollection can contain several named zones; they remain on the same Device. Coordinates are longitude, latitude.",
         "data": {
           "name": "GeoJSON Device name",
           "enabled": "Use this area set",
           "priority": "Overlap priority",
           "source": "GeoJSON file or URL (optional)",
-          "geojson": "Paste GeoJSON (optional)"
+          "geojson": "Paste GeoJSON (optional)",
+          "preview": "Show map preview"
         },
         "data_description": {
           "name": "Name for the Device and shared area selector. Renaming preserves its identity and tracker selections; individual zone names still come from properties.name / properties.Name.",
           "enabled": "Turn off to pause matching without deleting the set or its tracker selections. A disabled Home boundary cannot be used for GPS Home detection.",
           "priority": "Use an integer from -100000 to 100000. Lower numbers win, then Feature priority, smaller area and name.",
           "source": "Enter a path under the HA configuration folder, an allowlisted path, or an HTTP(S) URL. Leave the GeoJSON field empty. Active sets refresh every 5 minutes; failed loads keep the last valid boundaries. Clear this field to stop loading the source and keep its last valid boundaries as inline GeoJSON, or paste replacement GeoJSON.",
-          "geojson": "Paste a Feature or FeatureCollection with properties.name or properties.Name on each Feature. If both exist, name takes precedence. Leave the file/URL field empty."
+          "geojson": "Paste a Feature or FeatureCollection with properties.name or properties.Name on each Feature. If both exist, name takes precedence. Leave the file/URL field empty.",
+          "preview": "Select this and submit to render a temporary preview without saving changes. Clear it before saving."
         }
       },
       "fusion_zones": {

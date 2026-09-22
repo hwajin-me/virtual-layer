@@ -9,6 +9,8 @@ from homeassistant.helpers import selector
 
 from .geojson_catalog import MAX_RECORDS, async_get_catalog
 from .geojson_group import GROUP_KEY, GROUP_TITLE, GROUP_UNIQUE_ID, group_entry
+from .geojson_preview import async_store_preview
+from .polygon import load_polygon_zones, parse_geojson_zones, render_polygon_map_svg
 
 
 def choice(options, key=None, multiple=False):
@@ -150,7 +152,15 @@ class GeoJSONFlow:
                     and user_input.get("geojson", "").strip()
                 ):
                     raise ValueError("geojson_one_source")
-                new = {**record, **user_input, "priority": int(priority)}
+                new = {
+                    **record,
+                    **{
+                        key: value
+                        for key, value in user_input.items()
+                        if key != "preview"
+                    },
+                    "priority": int(priority),
+                }
                 if (
                     record.get("source")
                     and not new["source"].strip()
@@ -159,6 +169,27 @@ class GeoJSONFlow:
                 ):
                     # Detach the file/URL while retaining its last valid areas.
                     new["geojson"] = record["snapshot"]
+                if user_input.get("preview"):
+                    if new["source"].strip():
+                        zones = await load_polygon_zones(
+                            self.hass, None, [new["source"]]
+                        )
+                    else:
+                        zones = parse_geojson_zones(new["geojson"])
+                    if not zones:
+                        raise ValueError("geojson_invalid")
+                    svg = await self.hass.async_add_executor_job(
+                        render_polygon_map_svg, zones, 720, 480
+                    )
+                    self._geo_preview_url = async_store_preview(self.hass, svg)
+                    defaults.update(user_input)
+                    return self.async_show_form(
+                        step_id="geojson_record",
+                        data_schema=self._geojson_record_schema(defaults),
+                        description_placeholders={
+                            "preview": f"![GeoJSON preview]({self._geo_preview_url})"
+                        },
+                    )
                 await self._geo_catalog.save(self._geo_key, new, self._geo_revision)
                 return await self.async_step_geojson()
             except (ValueError, TypeError, RecursionError, OverflowError) as err:
@@ -184,21 +215,31 @@ class GeoJSONFlow:
         return self.async_show_form(
             step_id="geojson_record",
             errors=errors,
-            data_schema=vol.Schema(
-                {
-                    vol.Required("name", default=defaults["name"]): str,
-                    vol.Required("enabled", default=defaults["enabled"]): bool,
-                    vol.Required("priority", default=defaults["priority"]): vol.Coerce(
-                        float
-                    ),
-                    vol.Optional(
-                        "source", description={"suggested_value": defaults["source"]}
-                    ): str,
-                    vol.Optional(
-                        "geojson", description={"suggested_value": defaults["geojson"]}
-                    ): selector.TextSelector(
-                        selector.TextSelectorConfig(multiline=True)
-                    ),
-                }
-            ),
+            data_schema=self._geojson_record_schema(defaults),
+            description_placeholders={
+                "preview": (
+                    f"![GeoJSON preview]({self._geo_preview_url})"
+                    if getattr(self, "_geo_preview_url", None)
+                    else ""
+                )
+            },
+        )
+
+    @staticmethod
+    def _geojson_record_schema(defaults):
+        return vol.Schema(
+            {
+                vol.Required("name", default=defaults["name"]): str,
+                vol.Required("enabled", default=defaults["enabled"]): bool,
+                vol.Required("priority", default=defaults["priority"]): vol.Coerce(
+                    float
+                ),
+                vol.Optional(
+                    "source", description={"suggested_value": defaults["source"]}
+                ): str,
+                vol.Optional(
+                    "geojson", description={"suggested_value": defaults["geojson"]}
+                ): selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
+                vol.Optional("preview", default=False): bool,
+            }
         )

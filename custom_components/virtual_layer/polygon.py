@@ -384,8 +384,10 @@ def _align_unwrapped_ring(ring, anchor: float) -> list[tuple[float, float]]:
     return [(longitude + shift, latitude) for longitude, latitude in unwrapped]
 
 
-def map_viewport(zones) -> tuple[float, float, float, float]:
-    """Return an expanded, date-line-safe viewport for polygon map layers."""
+def map_viewport(
+    zones, width: int = 720, height: int = 480
+) -> tuple[float, float, float, float]:
+    """Return an expanded viewport cropped to the rendered map aspect ratio."""
     zones = list(zones)
     try:
         anchor = zones[0]["polygons"][0]["outer"][0][0]
@@ -409,12 +411,32 @@ def map_viewport(zones) -> tuple[float, float, float, float]:
     latitude_padding = max(
         (north - south) * MAP_VIEWPORT_MARGIN, MAP_VIEWPORT_MIN_MARGIN
     )
-    return (
-        west - longitude_padding,
-        south - latitude_padding,
-        east + longitude_padding,
-        north + latitude_padding,
-    )
+    west -= longitude_padding
+    east += longitude_padding
+    south -= latitude_padding
+    north += latitude_padding
+
+    # Expand the shorter Web Mercator dimension so the map fills the whole
+    # image canvas. This avoids letterboxed white strips without stretching the
+    # raster tiles or polygon geometry.
+    mercator_south = math.asinh(math.tan(math.radians(south)))
+    mercator_north = math.asinh(math.tan(math.radians(north)))
+    longitude_span = east - west
+    mercator_span = mercator_north - mercator_south
+    aspect_ratio = width / height
+    target_mercator_span = longitude_span * math.pi / (180 * aspect_ratio)
+    if mercator_span < target_mercator_span:
+        center = (mercator_north + mercator_south) / 2
+        mercator_south = center - target_mercator_span / 2
+        mercator_north = center + target_mercator_span / 2
+        south = math.degrees(math.atan(math.sinh(mercator_south)))
+        north = math.degrees(math.atan(math.sinh(mercator_north)))
+    else:
+        target_longitude_span = mercator_span * 180 * aspect_ratio / math.pi
+        center = (east + west) / 2
+        west = center - target_longitude_span / 2
+        east = center + target_longitude_span / 2
+    return west, south, east, north
 
 
 def render_polygon_map_svg(
@@ -484,7 +506,9 @@ def render_polygon_map_svg(
     longitudes.extend(marker["longitude"] for marker in render_markers)
     latitudes = [latitude for ring in rings for _longitude, latitude in ring]
     latitudes.extend(marker["latitude"] for marker in render_markers)
-    min_longitude, min_latitude, max_longitude, max_latitude = map_viewport(zones)
+    min_longitude, min_latitude, max_longitude, max_latitude = map_viewport(
+        zones, width, height
+    )
     # Keep a configured location marker visible even when it lies outside the
     # zone, without changing the normal polygon-context viewport.
     min_longitude = min(min_longitude, *longitudes)
@@ -493,14 +517,6 @@ def render_polygon_map_svg(
     max_latitude = max(max_latitude, *latitudes)
     longitude_span = max(max_longitude - min_longitude, 0.0001)
     latitude_span = max(max_latitude - min_latitude, 0.0001)
-    padding = 32
-    draw_width = max(width - padding * 2, 1)
-    draw_height = max(height - padding * 2, 1)
-    scale = min(draw_width / longitude_span, draw_height / latitude_span)
-    map_width = longitude_span * scale
-    map_height = latitude_span * scale
-    offset_x = (width - map_width) / 2
-    offset_y = (height - map_height) / 2
 
     def mercator(latitude):
         return math.asinh(
@@ -518,8 +534,8 @@ def render_polygon_map_svg(
         else:
             y_fraction = (max_latitude - latitude) / latitude_span
         return (
-            offset_x + (longitude - min_longitude) * scale,
-            offset_y + y_fraction * map_height,
+            (longitude - min_longitude) / longitude_span * width,
+            y_fraction * height,
         )
 
     paths = []
@@ -564,8 +580,8 @@ def render_polygon_map_svg(
 
     background = (
         f'<image href="{html.escape(background_image, quote=True)}" '
-        f'x="{offset_x:.2f}" y="{offset_y:.2f}" width="{map_width:.2f}" '
-        f'height="{map_height:.2f}" preserveAspectRatio="none"/>'
+        f'x="0" y="0" width="{width}" height="{height}" '
+        'preserveAspectRatio="none"/>'
         if background_image
         else ""
     )
@@ -585,8 +601,8 @@ def render_polygon_map_svg(
             '<rect width="100%" height="100%" fill="#f8fafc"/>',
             background,
             '<g opacity="0.35" stroke="#cbd5e1" stroke-width="1">',
-            f'<path d="M {padding} {height / 2:.2f} H {width - padding}"/>',
-            f'<path d="M {width / 2:.2f} {padding} V {height - padding}"/>',
+            f'<path d="M 0 {height / 2:.2f} H {width}"/>',
+            f'<path d="M {width / 2:.2f} 0 V {height}"/>',
             "</g>",
             f"<g>{''.join(paths)}</g>",
             f"<g>{''.join(labels)}</g>",

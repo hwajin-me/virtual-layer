@@ -143,10 +143,11 @@ def test_polygon_map_viewport_keeps_surrounding_context():
     )
 
     west, south, east, north = map_viewport(zones)
-    assert west == pytest.approx(127.0 - 0.01 * MAP_VIEWPORT_MARGIN)
-    assert east == pytest.approx(127.01 + 0.01 * MAP_VIEWPORT_MARGIN)
-    assert south == pytest.approx(37.5 - 0.01 * MAP_VIEWPORT_MARGIN)
-    assert north == pytest.approx(37.51 + 0.01 * MAP_VIEWPORT_MARGIN)
+    assert west < 127.0 - 0.01 * MAP_VIEWPORT_MARGIN
+    assert east > 127.01 + 0.01 * MAP_VIEWPORT_MARGIN
+    assert south <= 37.5 - 0.01 * MAP_VIEWPORT_MARGIN
+    assert north >= 37.51 + 0.01 * MAP_VIEWPORT_MARGIN
+    assert (west + east) / 2 == pytest.approx(127.005)
 
 
 def test_polygon_map_svg_aligns_date_line_features_and_renders_safe_markers():

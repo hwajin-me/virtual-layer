@@ -48,12 +48,12 @@ def _mercator_y(latitude: float) -> float:
     return (1 - math.asinh(math.tan(math.radians(latitude))) / math.pi) / 2
 
 
-def _viewport(zones):
-    return map_viewport(zones)
+def _viewport(zones, width, height):
+    return map_viewport(zones, width, height)
 
 
-def _tile_plan(zones):
-    west, south, east, north = _viewport(zones)
+def _tile_plan(zones, width, height):
+    west, south, east, north = _viewport(zones, width, height)
     for zoom in range(18, 0, -1):
         scale = 2**zoom
         left, right = (
@@ -201,7 +201,7 @@ def _compose(tiles, plan, width, height):
 async def async_map_background(hass, zones, width=720, height=480):
     """Return a cache-backed embedded Naver Map image, or None when unavailable."""
     try:
-        plan = _tile_plan(list(zones))
+        plan = _tile_plan(list(zones), width, height)
     except (IndexError, KeyError, TypeError, ValueError):
         return None
     if not (version := await _naver_version(hass)):
