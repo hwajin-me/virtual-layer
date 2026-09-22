@@ -4,6 +4,7 @@ This component provides support for a virtual sensor.
 """
 
 import asyncio
+import json
 import logging
 import math
 from collections.abc import Callable
@@ -64,6 +65,42 @@ DEPENDENCIES = [COMPONENT_DOMAIN]
 
 DEFAULT_SENSOR_VALUE = "0"
 CONF_STATE_CLASS = "state_class"
+MAX_DIAGNOSTIC_SOURCE_ATTRIBUTES_BYTES = 10 * 1024
+
+
+def _diagnostic_attribute_preview(value, depth=0):
+    """Keep live source diagnostics recorder-safe without changing the source."""
+    if depth >= 4:
+        return "…"
+    if isinstance(value, str):
+        return value[:1024] + ("…" if len(value) > 1024 else "")
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, (list, tuple)):
+        result = [_diagnostic_attribute_preview(item, depth + 1) for item in value[:25]]
+        if len(value) > 25:
+            result.append("…")
+        return result
+    if isinstance(value, dict):
+        result = {
+            str(name): _diagnostic_attribute_preview(item, depth + 1)
+            for name, item in list(value.items())[:25]
+        }
+        if len(value) > 25:
+            result["__truncated__"] = True
+        return result
+    return str(value)[:1024]
+
+
+def _bounded_source_attributes(attributes):
+    result = {}
+    for name, value in attributes.items():
+        candidate = {**result, str(name): _diagnostic_attribute_preview(value)}
+        if len(json.dumps(candidate, default=str, ensure_ascii=False).encode()) > MAX_DIAGNOSTIC_SOURCE_ATTRIBUTES_BYTES:
+            result["__truncated__"] = True
+            break
+        result = candidate
+    return result
 
 
 def validate_domain_options(config):
@@ -941,11 +978,11 @@ class VirtualDiagnosticSensor(VirtualSensor):
             return
         self._attr_extra_state_attributes.update({
             "source_state": source_state.state,
-            "source_attributes": {
+            "source_attributes": _bounded_source_attributes({
                 name: value
                 for name, value in source_state.attributes.items()
                 if name not in TRANSIENT_SOURCE_ATTRIBUTE_NAMES
-            },
+            }),
             "source_last_updated": source_state.last_updated.isoformat(),
             "source_last_changed": source_state.last_changed.isoformat(),
         })

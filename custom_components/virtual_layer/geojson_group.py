@@ -277,7 +277,14 @@ class GeoJSONMap(GeoJSONEntity, ImageEntity):
         zones = self.runtime.catalog.zones.get(self.record_key)
         if not zones:
             return None
-        background = await async_osm_background(self.hass, zones)
+        # The base ImageEntity view allows ten seconds to produce the image.
+        # OSM is a visual enhancement only: a slow or malformed tile must not
+        # turn an otherwise valid GeoJSON SVG into a 500 response.
+        try:
+            async with asyncio.timeout(7):
+                background = await async_osm_background(self.hass, zones)
+        except Exception:  # OSM is optional; always preserve the SVG map.
+            background = None
         svg = await self.hass.async_add_executor_job(
             render_polygon_map_svg, zones, 720, 480, None, background
         )

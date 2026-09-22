@@ -7,9 +7,19 @@ from unittest.mock import Mock
 import pytest
 from homeassistant.core import State
 
-from custom_components.virtual_layer.sensor import VirtualDiagnosticSensor, VirtualSensor
+from custom_components.virtual_layer.sensor import (
+    VirtualDiagnosticSensor,
+    VirtualSensor,
+    _bounded_source_attributes,
+)
 
 pytestmark = pytest.mark.unit
+
+
+def test_source_diagnostic_attributes_are_bounded():
+    attributes = {f"attribute_{index}": "x" * 2_000 for index in range(20)}
+    result = _bounded_source_attributes(attributes)
+    assert result["__truncated__"] is True
 
 
 def make_sensor(config):

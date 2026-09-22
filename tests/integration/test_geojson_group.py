@@ -165,6 +165,30 @@ async def test_each_geojson_has_own_device_and_live_information(hass):
     assert not catalog.listeners and catalog.timer is None
 
 
+async def test_geojson_map_falls_back_to_plain_svg_when_osm_background_fails(
+    hass, monkeypatch
+):
+    entry = await create_group(hass)
+    catalog = await async_get_catalog(hass)
+    await catalog.save("home", record(), catalog.revision)
+    await hass.async_block_till_done()
+
+    async def unavailable_background(*_args):
+        raise OSError("OSM tile cache unavailable")
+
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.geojson_group.async_osm_background",
+        unavailable_background,
+    )
+    map_row = next(
+        row for row in rows(hass, entry) if row.unique_id == "geojson:home:map"
+    )
+    image = hass.data["image"].get_entity(map_row.entity_id)
+    rendered = await image.async_image()
+    assert rendered.startswith(b'<svg xmlns="http://www.w3.org/2000/svg"')
+    assert b"Home" in rendered
+
+
 async def test_legacy_catalog_migrates_once_without_changing_references(hass):
     from tests.integration.test_presence_fusion_ha import (
         configuration,

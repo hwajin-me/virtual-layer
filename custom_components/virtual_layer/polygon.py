@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import gzip
 import html
+import io
 import json
 import math
 from collections.abc import Mapping
@@ -12,6 +16,7 @@ from itertools import pairwise
 from pathlib import Path
 from statistics import median
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import aiofiles
 from aiohttp import ClientError
@@ -35,6 +40,26 @@ SVG_COLORS = (
 
 class InvalidGeoJson(ValueError):
     """Raised when a GeoJSON document cannot describe usable polygon zones."""
+
+
+def _geojson_io_document(url: str) -> bytes | None:
+    """Decode geojson.io's compressed ``?data=gz:`` share links locally."""
+    parts = urlsplit(url)
+    if parts.hostname not in {"geojson.io", "www.geojson.io"}:
+        return None
+    data = parse_qs(parts.query).get("data", [""])[0]
+    if not data.startswith("gz:"):
+        return None
+    try:
+        encoded = data[3:]
+        compressed = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as archive:
+            document = archive.read(MAX_GEOJSON_BYTES + 1)
+    except (EOFError, OSError, ValueError, binascii.Error) as err:
+        raise InvalidGeoJson("Invalid compressed geojson.io share link") from err
+    if len(document) > MAX_GEOJSON_BYTES:
+        raise InvalidGeoJson("GeoJSON document is too large")
+    return document
 
 
 def _coordinate(value) -> tuple[float, float]:
@@ -570,7 +595,8 @@ async def load_polygon_zones(
             continue
         file_name = file_name.strip()
         try:
-            if file_name.startswith(("http://", "https://")):
+            document = _geojson_io_document(file_name)
+            if document is None and file_name.startswith(("http://", "https://")):
                 session = session or async_get_clientsession(hass)
                 async with session.get(file_name, timeout=20) as response:
                     response.raise_for_status()
@@ -589,7 +615,7 @@ async def load_polygon_zones(
                             raise InvalidGeoJson("GeoJSON document is too large")
                         chunks.append(chunk)
                     document = b"".join(chunks)
-            else:
+            elif document is None:
                 path = await _local_geojson_path(hass, file_name)
                 async with aiofiles.open(path, "rb") as geojson_file:
                     document = await geojson_file.read(MAX_GEOJSON_BYTES + 1)

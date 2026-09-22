@@ -180,6 +180,10 @@ class GeoJSONCatalog:
         return remove
 
     def _schedule_refresh(self, _now):
+        """Schedule from HA's loop even when a timer callback uses another loop."""
+        self.hass.loop.call_soon_threadsafe(self._async_schedule_refresh)
+
+    def _async_schedule_refresh(self):
         if self.task is None or self.task.done():
             self.task = self.hass.async_create_background_task(
                 self.refresh(), "Virtual Layer GeoJSON refresh"

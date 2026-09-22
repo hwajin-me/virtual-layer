@@ -53,6 +53,7 @@ SENSOR_SCHEMA = vol.Schema(virtual_schema(SENSOR_DEFAULT_INITIAL_VALUE, {
 _meta_lock = asyncio.Lock()
 STORAGE_VERSION = 1
 MAX_METADATA_BYTES = 10 * 1024 * 1024
+MAX_DIAGNOSTIC_CONFIGURATION_BYTES = 10 * 1024
 
 _CLIMATE_INITIAL_VALUES = {
     "off",
@@ -896,7 +897,31 @@ def _diagnostic_configuration(entity, platform):
             CONF_DAWARICH_POLL_INTERVAL: dawarich.get(CONF_DAWARICH_POLL_INTERVAL, 60),
             CONF_DAWARICH_HISTORY_LIMIT: dawarich.get(CONF_DAWARICH_HISTORY_LIMIT, 10),
         }
-    return configuration
+    # Diagnostic entities are persisted in the recorder too.  Keep their
+    # useful shape but never let an unusually large action/template payload
+    # exceed Home Assistant's 16 KiB state-attribute limit.
+    encoded = json.dumps(configuration, default=str, ensure_ascii=False).encode()
+    if len(encoded) <= MAX_DIAGNOSTIC_CONFIGURATION_BYTES:
+        return configuration
+    compact = {
+        "platform": configuration["platform"],
+        "initial_value": configuration["initial_value"],
+        "persistent": configuration["persistent"],
+        "source_entities": configuration["source_entities"],
+        "configuration_truncated": True,
+    }
+    for key in (
+        "value_template", "availability_template", "template_sources",
+        "attribute_sources", "attribute_templates", "native_templates",
+        "command_actions", "attributes", "event_hooks", CONF_POLYGONAL_ZONE,
+    ):
+        value = configuration.get(key)
+        if value in (None, {}, []):
+            compact[key] = value
+            continue
+        preview = json.dumps(value, default=str, ensure_ascii=False)
+        compact[key] = preview[:512] + ("…" if len(preview) > 512 else "")
+    return compact
 
 
 def _diagnostic_source_name(hass, entity_id):

@@ -63,3 +63,12 @@ async def test_osm_background_degrades_to_plain_geojson_when_all_tiles_fail(
 
     monkeypatch.setattr(osm_tiles, "_fetch_tile", unavailable)
     assert await osm_tiles.async_osm_background(hass, _zones()) is None
+
+
+async def test_osm_background_ignores_a_truncated_cached_tile(hass, monkeypatch):
+    async def tiles(_hass, _zoom, x, _y):
+        return b"\x89PNG\r\n\x1a\n" if x % 2 else _png()
+
+    monkeypatch.setattr(osm_tiles, "_fetch_tile", tiles)
+    background = await osm_tiles.async_osm_background(hass, _zones(), 320, 180)
+    assert background and background.startswith("data:image/png;base64,")

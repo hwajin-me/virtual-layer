@@ -1,6 +1,8 @@
 """Shared geometry through real storage, flows and HA platforms."""
 
 import json
+import base64
+import gzip
 
 import pytest
 from homeassistant.helpers import entity_registry as er
@@ -72,6 +74,17 @@ async def test_catalog_file_last_good_and_recovery(hass, tmp_path):
     await catalog.refresh()
     assert not catalog.errors(["file"])
     assert catalog.selected(["file"])[0]["name"] == "Changed"
+
+
+async def test_catalog_accepts_geojson_io_compressed_share_link(hass):
+    payload = base64.urlsafe_b64encode(gzip.compress(json.dumps(document()).encode())).decode()
+    catalog = await async_get_catalog(hass)
+    await catalog.save(
+        "shared",
+        {**record(), "source": f"https://geojson.io/?data=gz:{payload}"},
+        catalog.revision,
+    )
+    assert catalog.selected(["shared"])[0]["name"] == "Home"
 
 
 @pytest.mark.parametrize(

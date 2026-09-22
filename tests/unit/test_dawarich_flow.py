@@ -1,5 +1,6 @@
 """UI-only Dawarich configuration and edit round trips."""
 
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -108,6 +109,14 @@ def test_diagnostic_configuration_does_not_publish_key_url_or_member():
     assert output[CONF_DAWARICH]["configured"] is True
     for private in ("private-test-key", "example.test", "person.alex"):
         assert private not in str(output)
+
+
+def test_diagnostic_configuration_is_bounded_for_recorder():
+    entity = build(form())
+    entity["command_actions"] = {"turn_on": "x" * 20_000}
+    output = _diagnostic_configuration(entity, "device_tracker")
+    assert output["configuration_truncated"] is True
+    assert len(json.dumps(output).encode()) < 10 * 1024
 
 
 def test_polygon_can_use_dawarich_without_local_trackers():

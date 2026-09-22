@@ -21,6 +21,18 @@ MIN_CACHE_SECONDS = 7 * 24 * 60 * 60
 MAX_TILE_BYTES = 1024 * 1024
 
 
+def _valid_png(data: bytes) -> bool:
+    """Fully load a tile: a PNG signature alone does not reject truncation."""
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+        return True
+    except (OSError, SyntaxError, ValueError):
+        return False
+
+
 def _mercator_y(latitude: float) -> float:
     latitude = max(-85.05112878, min(85.05112878, latitude))
     return (1 - math.asinh(math.tan(math.radians(latitude))) / math.pi) / 2
@@ -104,6 +116,8 @@ async def _fetch_tile(hass, zoom, x, y):
             data = await response.content.read(MAX_TILE_BYTES + 1)
             if len(data) > MAX_TILE_BYTES or not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 return None
+        if not await hass.async_add_executor_job(_valid_png, data):
+            return None
         await hass.async_add_executor_job(path.parent.mkdir, 0o755, True, True)
         async with aiofiles.open(path, "wb") as file:
             await file.write(data)
@@ -123,10 +137,14 @@ def _compose(tiles, plan, width, height):
     )
     for (x, y), data in tiles.items():
         if data:
-            with Image.open(io.BytesIO(data)) as tile:
-                canvas.paste(
-                    tile.convert("RGB"), ((x - left) * TILE_SIZE, (y - top) * TILE_SIZE)
-                )
+            try:
+                with Image.open(io.BytesIO(data)) as tile:
+                    canvas.paste(
+                        tile.convert("RGB"), ((x - left) * TILE_SIZE, (y - top) * TILE_SIZE)
+                    )
+            except (OSError, SyntaxError, ValueError):
+                # A stale/corrupt cache entry must not make the Image endpoint 500.
+                continue
     scale = 2**zoom
     x0, x1 = (
         (west + 180) / 360 * scale * TILE_SIZE,
