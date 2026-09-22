@@ -20,7 +20,8 @@ def test_bad_numbers(value):
 
 
 @pytest.mark.parametrize("values", [
-    {"enabled": "false"}, {"cycle": "bad"}, {"days": 0}, {"days": 1.5},
+    {"enabled": "false"}, {"compare_previous_month": "false"},
+    {"compare_previous_month": 1}, {"cycle": "bad"}, {"days": 0}, {"days": 1.5},
     {"offset": 40320}, {"start": 1}, {"start": "bad"}, {"cycle": "days"},
     {"cycle": "cron", "cron": "bad"}, {"cycle": "cron", "cron": "0 0 31 2 *"},
     {"rate": -1}, {"base_charge": -1}, {"currency": 123}, {"currency": "K"},
@@ -120,6 +121,38 @@ def test_invalid_option_field_paths(values, field):
 
 def test_tariff_and_currency_normalization():
     assert settings(currency="krw", tariff_entity="select.tariff", tariff="peak")["currency"] == "KRW"
+
+
+@pytest.mark.parametrize("now,expected", [
+    ("2026-03-31T12:34:00Z", "2026-02-28T12:34:00Z"),
+    ("2024-03-31T12:34:00Z", "2024-02-29T12:34:00Z"),
+    ("2026-01-31T12:34:00Z", "2025-12-31T12:34:00Z"),
+])
+def test_previous_month_same_time_clamps_calendar_month_ends(now, expected):
+    previous_timezone = dt_util.DEFAULT_TIME_ZONE
+    try:
+        dt_util.set_default_time_zone(timezone.utc)
+        assert meter.previous_month_same_time(dt_util.parse_datetime(now)) == dt_util.parse_datetime(expected)
+    finally:
+        dt_util.set_default_time_zone(previous_timezone)
+
+
+@pytest.mark.parametrize("zone,now,expected", [
+    ("Asia/Seoul", "2026-03-30T16:30:00Z", "2026-02-27T16:30:00Z"),
+    # April's 02:30 maps into March's missing hour and normalizes to 03:30.
+    ("America/New_York", "2026-04-08T06:30:00Z", "2026-03-08T07:30:00Z"),
+    # Prefer the first occurrence of a repeated historical wall-clock time.
+    ("America/New_York", "2026-12-01T06:30:00Z", "2026-11-01T05:30:00Z"),
+])
+def test_previous_month_local_time_dst(zone, now, expected):
+    from zoneinfo import ZoneInfo
+    previous_timezone = dt_util.DEFAULT_TIME_ZONE
+    try:
+        dt_util.set_default_time_zone(ZoneInfo(zone))
+        actual = meter.previous_month_same_time(dt_util.parse_datetime(now))
+        assert dt_util.as_utc(actual) == dt_util.parse_datetime(expected)
+    finally:
+        dt_util.set_default_time_zone(previous_timezone)
 
 
 @pytest.mark.parametrize("cycle,keys", [

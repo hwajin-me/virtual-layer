@@ -5,6 +5,14 @@
       "import_not_supported": "File-based configuration is not supported. Add virtual entities from the integration UI."
     },
     "error": {
+      "fusion_limit": "At most 16 physical devices per person.",
+      "fusion_gps_required": "Add at least one candidate with a GPS source.",
+      "fusion_priority": "Candidate priorities must be unique integers from 0 to 9999.",
+      "fusion_source": "Select an existing source for this physical device. Person and Virtual Layer outputs are not allowed.",
+      "fusion_duplicate": "Duplicate source or duplicate GPS/room mapping.",
+      "fusion_number": "Check finite positive numbers and the ordering between thresholds.",
+      "fusion_mapping": "Use distinct known positive/negative values; room mappings use source=display name per line.",
+      "fusion_invalid_config": "Repair or delete invalid device/source records before saving.",
       "invalid_icon": "Enter an icon in prefix:name format, or leave it empty.",
       "invalid_pull_interval": "Enter non-negative whole seconds within the supported date range. Use 0 to disable periodic updates.",
       "invalid_parent_device": "Select an existing parent device without a circular relationship, or clear the selection.",
@@ -34,20 +42,213 @@
       "invalid_local_presence": "Select Wi-Fi sources or valid BLE addresses. SSID sensors require an SSID list; check scanner IDs, timeout and RSSI.",
       "no_device_entities": "No eligible entities. Check the device and selected entities.",
       "device_copy_failed": "Could not prepare {failed_source}. Deselect this entity or correct its source configuration. Nothing was saved.",
-      "device_sources_changed": "A source device/entity or target ID changed. Check the selection and review again. Nothing was saved."
+      "device_sources_changed": "A source device/entity or target ID changed. Check the selection and review again. Nothing was saved.",
+      "geojson_invalid": "Enter valid GeoJSON with names and finite coordinates.",
+      "geojson_name": "Enter a management name.",
+      "geojson_priority": "Enter an integer from -100000 to 100000.",
+      "geojson_source": "Cannot load the file, URL or GeoJSON.",
+      "geojson_one_source": "Use inline GeoJSON or a file/URL, not both.",
+      "geojson_conflict": "Catalog changed. Return to the list and select again.",
+      "geojson_limit": "Document count or size limit exceeded.",
+      "geojson_home": "Choose an enabled selected document containing the zone.home center."
     },
     "step": {
+      "fusion_metadata": {
+        "title": "Presence Fusion Device metadata",
+        "data": {
+          "device_id": "Stable Device ID",
+          "area_id": "Area",
+          "parent_device": "Parent Device",
+          "manufacturer": "Manufacturer",
+          "model": "Model",
+          "sw_version": "Software version",
+          "hw_version": "Hardware version",
+          "serial_number": "Serial number",
+          "configuration_url": "Configuration URL"
+        },
+        "data_description": {
+          "device_id": "Blank uses the config entry ID. Independent of name changes; explicit edits migrate the same registry Device.",
+          "area_id": "HA area for this person's output Device.",
+          "parent_device": "Choose the parent HA Device; the output Device itself cannot be selected.",
+          "manufacturer": "Display manufacturer; blank uses the default. Configuration URL must use HTTP(S).",
+          "model": "Display model; blank uses the default. Configuration URL must use HTTP(S).",
+          "sw_version": "Display software version; blank uses the default. Configuration URL must use HTTP(S).",
+          "hw_version": "Display hardware version; blank uses the default. Configuration URL must use HTTP(S).",
+          "serial_number": "Display serial number; blank uses the default. Configuration URL must use HTTP(S).",
+          "configuration_url": "Display configuration url; blank uses the default. Configuration URL must use HTTP(S)."
+        }
+      },
+      "fusion": {
+        "title": "Presence Fusion · physical devices (maximum 16)",
+        "data": {
+          "action": "Action"
+        },
+        "data_description": {
+          "action": "Choose the next step; Save applies this person's devices."
+        },
+        "description": "Configured: {count}. Choose Save after editing."
+      },
+      "fusion_choose_device": {
+        "title": "Choose physical device",
+        "data": {
+          "device": "Physical device"
+        },
+        "data_description": {
+          "device": "Choose this person's physical device to edit or delete."
+        }
+      },
+      "fusion_device": {
+        "title": "Physical device settings",
+        "data": {
+          "name": "Physical device name",
+          "priority": "GPS priority",
+          "candidate": "GPS candidate"
+        },
+        "data_description": {
+          "name": "A display name; renaming preserves the internal UUID.",
+          "priority": "Lower integers win after confirmed reunion; candidate priorities must be unique.",
+          "candidate": "Enable only when this physical device supplies its own GPS entity."
+        }
+      },
+      "fusion_sources": {
+        "title": "Physical device sources",
+        "data": {
+          "action": "Action"
+        },
+        "data_description": {
+          "action": "Choose the next step; Save applies this person's devices."
+        },
+        "description": "Configured: {count}. Choose Save after editing."
+      },
+      "fusion_choose_source": {
+        "title": "Choose source",
+        "data": {
+          "source": "Source mapping"
+        },
+        "data_description": {
+          "source": "Choose a source mapped to this physical device."
+        }
+      },
+      "fusion_source": {
+        "title": "Device source mapping",
+        "data": {
+          "kind": "Signal type",
+          "entity_id": "Existing source entity",
+          "attribute": "Value attribute",
+          "positive": "Home values / SSIDs",
+          "negative": "Absent values",
+          "freshness": "Local freshness policy",
+          "timestamp_attribute": "Measurement timestamp attribute",
+          "timestamp_format": "Timestamp format",
+          "ttl": "Local TTL (seconds)",
+          "room_mapping": "Room name mapping"
+        },
+        "data_description": {
+          "kind": "GPS, home Wi-Fi, home BLE presence, or timeout-managed room source.",
+          "entity_id": "Choose an existing entity for this physical device; person and Virtual Layer outputs are rejected.",
+          "attribute": "Leave blank to read state. GPS reads latitude, longitude and gps_accuracy.",
+          "positive": "Exact case-sensitive positive values, one per line; include only your home SSIDs for an SSID sensor.",
+          "negative": "Explicit absent values, one per line. Other values remain unknown.",
+          "freshness": "source_managed trusts the source timeout; timestamp_ttl requires a reliable measurement/heartbeat attribute.",
+          "timestamp_attribute": "GPS: optional trusted timestamp; blank only refreshes on changed coordinates/accuracy. TTL: required heartbeat attribute.",
+          "timestamp_format": "Timezone-aware ISO 8601, epoch seconds, or epoch milliseconds. Units are never guessed.",
+          "ttl": "For timestamp_ttl only: time after a measurement until the signal becomes unknown, from 1 to 86400.",
+          "room_mapping": "Optional source=display name pairs, one per line. Unmapped room names are retained."
+        }
+      },
+      "fusion_settings": {
+        "title": "Presence Fusion advanced heuristics",
+        "description": "Defaults are heuristics, not accuracy guarantees. Times are seconds and distances metres.",
+        "data": {
+          "movement_window_s": "Movement window",
+          "movement_bucket_s": "Movement bucket",
+          "minimum_movement_m": "Minimum movement",
+          "minimum_movement_segments": "Minimum segments",
+          "gps_stale_after_s": "GPS expiry",
+          "gps_fresh_full_s": "Full freshness",
+          "gps_max_accuracy_m": "Maximum GPS error",
+          "gps_missing_accuracy_m": "Assumed GPS error",
+          "gps_future_tolerance_s": "Future tolerance",
+          "max_observation_gap_s": "Maximum path gap",
+          "max_speed_m_s": "Jump speed limit",
+          "pair_max_skew_s": "Pair timestamp skew",
+          "pair_max_age_s": "Pair evidence age",
+          "together_radius_m": "Together radius",
+          "separation_radius_m": "Separation radius",
+          "group_confirm_s": "Group confirmation",
+          "challenger_ratio": "Challenger ratio",
+          "challenger_margin": "Challenger margin",
+          "challenger_hold_s": "Challenger hold",
+          "minimum_primary_hold_s": "Minimum primary hold",
+          "reunion_hold_s": "Reunion hold",
+          "safe_companion_age_s": "Safe companion age",
+          "home_enter_hold_s": "Local home hold",
+          "gps_home_enter_hold_s": "GPS home hold",
+          "home_exit_hold_s": "Home exit hold",
+          "home_exit_margin_m": "Home exit margin",
+          "nearby_enter_m": "Nearby entry distance",
+          "nearby_exit_m": "Nearby exit distance",
+          "direction_window_s": "Direction window",
+          "direction_min_span_s": "Direction minimum span",
+          "direction_min_change_m": "Direction minimum change",
+          "direction_slope_m_s": "Direction slope",
+          "room_change_hold_s": "Room change hold",
+          "room_missing_hold_s": "Room missing hold",
+          "evidence_hold_s": "Missing evidence hold",
+          "manual_override_default_s": "Default manual duration"
+        },
+        "data_description": {
+          "movement_window_s": "Retain measured path contributions within this many seconds.",
+          "movement_bucket_s": "UTC bucket seconds; smaller than the window. Best accuracy, then latest sample wins.",
+          "minimum_movement_m": "Minimum measured path in metres before becoming a movement challenger.",
+          "minimum_movement_segments": "Minimum independent accepted movement segments (integer).",
+          "gps_stale_after_s": "Seconds since measurement before automatic GPS use stops.",
+          "gps_fresh_full_s": "Seconds before the freshness score begins to decrease; below GPS expiry.",
+          "gps_max_accuracy_m": "Reject automatic candidates with reported accuracy worse than this many metres.",
+          "gps_missing_accuracy_m": "Conservative metres when accuracy is absent/invalid; assumed values cannot confirm reunion.",
+          "gps_future_tolerance_s": "Maximum accepted measurement clock lead in seconds.",
+          "max_observation_gap_s": "Do not connect path segments across larger gaps in seconds.",
+          "max_speed_m_s": "Accuracy-adjusted metres/second limit; not a guarantee for air travel.",
+          "pair_max_skew_s": "Maximum measurement time difference in seconds for pair comparisons.",
+          "pair_max_age_s": "Maximum age in seconds of each position used for grouping.",
+          "together_radius_m": "Distance plus both accuracy values must be within this many metres.",
+          "separation_radius_m": "Distance minus both accuracy values must exceed this many metres; above together radius.",
+          "group_confirm_s": "Minimum span in seconds of at least three new close observations.",
+          "challenger_ratio": "Candidate score must strictly exceed primary score multiplied by this ratio.",
+          "challenger_margin": "Candidate score must also strictly exceed primary score plus this margin.",
+          "challenger_hold_s": "Seconds of continuous score advantage before switching.",
+          "minimum_primary_hold_s": "Minimum seconds before ordinary switches; departure/failover have separate rules.",
+          "reunion_hold_s": "Seconds of renewed observations with previously separated devices.",
+          "safe_companion_age_s": "Maximum seconds since confirmed companionship to authorize failover.",
+          "home_enter_hold_s": "Seconds of eligible local home evidence before entering home.",
+          "gps_home_enter_hold_s": "Seconds of GPS position plus accuracy inside zone.home.",
+          "home_exit_hold_s": "Seconds of valid GPS outside home before leaving home.",
+          "home_exit_margin_m": "Extra metres beyond zone.home radius required for departure.",
+          "nearby_enter_m": "Home-centre distance in metres; must exceed the Home radius.",
+          "nearby_exit_m": "Metres from Home centre to leave nearby; must exceed entry distance.",
+          "direction_window_s": "Seconds of same-source continuous path used for direction.",
+          "direction_min_span_s": "Minimum observed span in seconds, with at least three positions.",
+          "direction_min_change_m": "Minimum change in Home distance in metres, also guarded by accuracy.",
+          "direction_slope_m_s": "Absolute regression slope in metres/second required for towards or away_from.",
+          "room_change_hold_s": "Seconds of a stable room name before changing the output.",
+          "room_missing_hold_s": "Maximum seconds to retain a room after its source disappears.",
+          "evidence_hold_s": "Maximum seconds of held presence; then unknown, never inferred away.",
+          "manual_override_default_s": "Default override seconds from 1 to 86400; expiry is not extended on restart."
+        }
+      },
       "user": {
         "title": "Create Virtual Device",
         "description": "Create a UI-managed virtual device and entity set. You can add an entity now or later from Configure.",
         "data": {
           "group_name": "Device",
+          "presence_fusion": "Create a Presence Fusion Device",
           "add_first_entity": "Add an entity now",
           "source_device": "Source device (optional)"
         },
         "data_description": {
           "group_name": "Device metadata and entity IDs are scoped to this device set.",
           "add_first_entity": "Continue directly to source selection and entity settings after creating the device.",
+          "presence_fusion": "Create a person-specific Device with physical GPS/Wi-Fi/BLE/room mappings. This takes precedence over adding a generic entity; do not select a source Device to copy.",
           "source_device": "Select to create entities in bulk. Leave Device blank to use a suggested source name."
         }
       },
@@ -186,7 +387,6 @@
               "light_ignore_unresponsive": "Ignore unresponsive bulbs",
               "sensor_unit": "Sensor unit",
               "utility_meter_enabled": "Utility Meter mode",
-              "utility_meter_cycle": "Reset cycle",
               "boiler_dynamic_control": "Dynamic boiler control",
               "boiler_dynamic_template": "Dynamic water-target formula",
               "boiler_room_temperature_entity_id": "Room temperature sensors",
@@ -212,21 +412,7 @@
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
               "configure_air_quality_sources": "Configure air quality per source",
-              "utility_meter_start": "Start date/time",
-              "utility_meter_days": "Repeat every N days",
-              "utility_meter_offset": "Offset (minutes)",
-              "utility_meter_cron": "Cron schedule",
-              "utility_meter_delta_values": "Source reports increments",
-              "utility_meter_net_consumption": "Allow net consumption",
-              "utility_meter_periodically_resetting": "Source periodically resets",
-              "utility_meter_always_available": "Keep total available",
-              "utility_meter_tariff_entity": "Tariff selector entity",
-              "utility_meter_tariff": "Collecting tariff",
-              "utility_meter_rate": "Unit price",
-              "utility_meter_base_charge": "Period base charge",
-              "utility_meter_currency": "Currency",
-              "utility_meter_tiers": "Progressive tiers",
-              "utility_meter_current_value": "Correct current-period total"
+              "polygon_catalog_ids": "Shared GeoJSON documents"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -244,14 +430,13 @@
               "light_ignore_unresponsive": "Keep the combined light available and use responding bulbs when another selected bulb is unavailable.",
               "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
               "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
-              "utility_meter_cycle": "Changing the cycle or dates retains the running total and schedules future resets from the edit onward. Use the reset action to start at zero.",
               "boiler_dynamic_control": "Opt in for one boiler and room sensors in Celsius. Replaces the configured set_temperature action with periodic water-temperature writes. Set a room target after enabling. Calculates every 60s; writes at least 120s apart. Boiler current_temperature must measure heating water. Power actions remain separately configured.",
               "boiler_dynamic_template": "Returns Celsius. Variables: temperature (saved room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (C/min over up to 10min), heating_elapsed_minutes (observed heat duration), heat_accumulation (decaying C-min proxy, 30min time constant), base_water_temperature (existing calibration result). Tune default gains for the system. Missing inputs pause writes. Boiler limits and steps apply.",
               "boiler_room_temperature_entity_id": "Optional sensors combined as the virtual climate's current room temperature. Available numeric readings are averaged; raw boiler-water temperatures remain available as attributes.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "onvif_patrol_enabled": "Starts the patrol after this virtual camera loads. The video source remains independent from the PTZ target.",
               "onvif_patrol_target": "Select the camera created by Home Assistant's existing ONVIF integration. Its authenticated ONVIF client is also used if the PTZ action is unavailable.",
-              "onvif_patrol_mode": "Horizontal alternates left and right; vertical alternates down and up; grid cycles both axes.",
+              "onvif_patrol_mode": "Legacy relative patrol only: horizontal alternates left/right, vertical down/up, grid both axes. A saved route from Configure camera patrol positions takes priority over these axes and ranges.",
               "onvif_patrol_interval": "Seconds to wait after each relative ONVIF move.",
               "onvif_patrol_speed": "Optional ONVIF speed coefficient, from 0 to 1.",
               "onvif_patrol_pan_min": "Relative move distance from 0 to 1 for each left movement.",
@@ -270,21 +455,7 @@
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
               "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration.",
-              "utility_meter_start": "ISO date/time, e.g. 2026-01-15T00:00:00. Local HA time unless an offset is supplied. Day 31 clamps to month end.",
-              "utility_meter_days": "Calendar days from the start date; used for the N-day cycle.",
-              "utility_meter_offset": "Shift the calendar anchor by 0–40319 minutes. Ignored for cron.",
-              "utility_meter_cron": "Five-field cron in Home Assistant local time; used only for cron cycle.",
-              "utility_meter_delta_values": "Add each new source event as consumption rather than subtracting cumulative readings.",
-              "utility_meter_net_consumption": "Allow negative deltas for import/export meters; publishes total statistics.",
-              "utility_meter_periodically_resetting": "Discard the baseline across invalid source states. Disable for a lifetime counter to bridge outages.",
-              "utility_meter_always_available": "Retain the accumulated total when the source is unavailable.",
-              "utility_meter_tariff_entity": "Optional select/input_select entity; create one meter per tariff on this Device.",
-              "utility_meter_tariff": "Collect only while the tariff selector matches this exact option. Automations can switch the selector by time.",
-              "utility_meter_rate": "Price per source unit, also above the final tier. Editing prices recalculates the entire current-period estimate, not historical price segments.",
-              "utility_meter_base_charge": "Fixed charge per period. For multiple tariff meters, charge the base on one meter only.",
-              "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
-              "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
-              "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline."
+              "polygon_catalog_ids": "Select multiple documents from the shared catalog."
             }
           },
           "native_value_templates": {
@@ -781,6 +952,16 @@
           "sensor_aggregation": "Average ignores unavailable and non-finite values and removes positive spikes above three times the median reference. Other modes ignore invalid values without removing valid extremes."
         }
       },
+      "boiler_temperature_calibration": {
+        "title": "Boiler Temperature Adjustment",
+        "description": "Choose this before source templates are generated. Direct setpoints are the default; enable conversion only when the boiler expects a water-temperature target rather than the room target.",
+        "data": {
+          "boiler_temperature_calibration_enabled": "Convert room target to water target"
+        },
+        "data_description": {
+          "boiler_temperature_calibration_enabled": "Off by default: send the requested temperature to the boiler unchanged. Turn it on only to generate and apply the room-to-water conversion formula."
+        }
+      },
       "entity_helper": {
         "title": "Choose Template Generation",
         "description": "Choose whether to prefill the new virtual entity with Jinja templates generated from the selected source entities. You can review and customize all entity details and templates on the next screen.",
@@ -1160,6 +1341,112 @@
         "data_description": {
           "action": "Create the reviewed batch, edit the name/selection, or choose another source device."
         }
+      },
+      "utility_meter": {
+        "title": "Utility meter settings",
+        "description": "Configure the schedule, billing and current usage correction. Nothing is saved before submission. Enable the option below to return to the entity form.",
+        "data": {
+          "utility_meter_enabled": "Utility Meter mode",
+          "back": "Back to entity settings",
+          "utility_meter_cycle": "Reset cycle",
+          "utility_meter_start": "Start date/time",
+          "utility_meter_days": "Repeat every N days",
+          "utility_meter_offset": "Offset (minutes)",
+          "utility_meter_cron": "Cron schedule",
+          "utility_meter_delta_values": "Source reports increments",
+          "utility_meter_net_consumption": "Allow net consumption",
+          "utility_meter_periodically_resetting": "Source periodically resets",
+          "utility_meter_always_available": "Keep total available",
+          "utility_meter_tariff_entity": "Tariff selector entity",
+          "utility_meter_tariff": "Collecting tariff",
+          "utility_meter_rate": "Unit price",
+          "utility_meter_base_charge": "Period base charge",
+          "utility_meter_currency": "Currency",
+          "utility_meter_tiers": "Progressive tiers",
+          "utility_meter_current_value": "Correct current-period total",
+          "utility_meter_compare_previous_month": "Create last-month comparison sensor"
+        },
+        "data_description": {
+          "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
+          "back": "Keep the draft and return without saving.",
+          "utility_meter_cycle": "Changing the cycle or dates retains the running total and schedules future resets from the edit onward. Use the reset action to start at zero.",
+          "utility_meter_start": "ISO date/time, e.g. 2026-01-15T00:00:00. Local HA time unless an offset is supplied. Day 31 clamps to month end.",
+          "utility_meter_days": "Calendar days from the start date; used for the N-day cycle.",
+          "utility_meter_offset": "Shift the calendar anchor by 0–40319 minutes. Ignored for cron.",
+          "utility_meter_cron": "Five-field cron in Home Assistant local time; used only for cron cycle.",
+          "utility_meter_delta_values": "Add each new source event as consumption rather than subtracting cumulative readings.",
+          "utility_meter_net_consumption": "Allow negative deltas for import/export meters; publishes total statistics.",
+          "utility_meter_periodically_resetting": "Discard the baseline across invalid source states. Disable for a lifetime counter to bridge outages.",
+          "utility_meter_always_available": "Retain the accumulated total when the source is unavailable.",
+          "utility_meter_tariff_entity": "Optional select/input_select entity; create one meter per tariff on this Device.",
+          "utility_meter_tariff": "Collect only while the tariff selector matches this exact option. Automations can switch the selector by time.",
+          "utility_meter_rate": "Price per source unit, also above the final tier. Editing prices recalculates the entire current-period estimate, not historical price segments.",
+          "utility_meter_base_charge": "Fixed charge per period. For multiple tariff meters, charge the base on one meter only.",
+          "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
+          "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
+          "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline.",
+          "utility_meter_compare_previous_month": "Reads the same local date and time one month earlier, refreshed every minute. Requires a month of Recorder state history (35-day retention recommended). Missing history or a changed unit reports unknown."
+        }
+      },
+      "geojson": {
+        "title": "Shared GeoJSON areas",
+        "description": "Documents: {count}. Saving a document immediately updates all consumers.",
+        "data": {
+          "action": "Action"
+        },
+        "data_description": {
+          "action": "Add, edit, delete or refresh external sources."
+        }
+      },
+      "geojson_choose": {
+        "title": "Choose document",
+        "description": "Select from the shared catalog.",
+        "data": {
+          "record": "Document"
+        },
+        "data_description": {
+          "record": "Document to edit or delete."
+        }
+      },
+      "geojson_delete": {
+        "title": "Delete shared document",
+        "description": "Applies immediately to all consumers. Deleting a Home boundary suspends GPS Home detection.",
+        "data": {
+          "confirm": "Confirm deletion"
+        },
+        "data_description": {
+          "confirm": "Remove this document from the shared catalog."
+        }
+      },
+      "geojson_record": {
+        "title": "GeoJSON document",
+        "description": "Named Polygon/MultiPolygon Features or FeatureCollection. Coordinates are longitude, latitude.",
+        "data": {
+          "name": "Management name",
+          "enabled": "Enabled",
+          "priority": "Priority",
+          "source": "File or URL",
+          "geojson": "Inline GeoJSON"
+        },
+        "data_description": {
+          "name": "Catalog label. Zone names use Feature properties.name.",
+          "enabled": "Enable or disable this document while retaining selections.",
+          "priority": "Lower integers win, then Feature priority, area and name.",
+          "source": "HA configuration file or HTTP(S) URL; refreshed every 5 minutes. Use this or inline JSON.",
+          "geojson": "Feature/FeatureCollection JSON. Leave blank when using a file or URL."
+        }
+      },
+      "fusion_zones": {
+        "title": "Presence Fusion areas",
+        "description": "Preserves GPS coordinates and adds a zone sensor and SVG map.",
+        "data": {
+          "catalog_ids": "Shared documents",
+          "home": "Home boundary"
+        },
+        "data_description": {
+          "catalog_ids": "Select multiple area documents.",
+          "home": "Choose an enabled selected document containing the zone.home center. Blank uses the HA circular boundary."
+        }
       }
     }
   },
@@ -1168,6 +1455,17 @@
       "entity_not_found": "The configuration changed while this form was open. Reopen the entity editor before changing its unit or history."
     },
     "error": {
+      "fusion_limit": "At most 16 physical devices per person.",
+      "fusion_gps_required": "Add at least one candidate with a GPS source.",
+      "fusion_priority": "Candidate priorities must be unique integers from 0 to 9999.",
+      "fusion_source": "Select an existing source for this physical device. Person and Virtual Layer outputs are not allowed.",
+      "fusion_duplicate": "Duplicate source or duplicate GPS/room mapping.",
+      "fusion_number": "Check finite positive numbers and the ordering between thresholds.",
+      "fusion_mapping": "Use distinct known positive/negative values; room mappings use source=display name per line.",
+      "fusion_invalid_config": "Repair or delete invalid device/source records before saving.",
+      "patrol_connection_failed": "Cannot use this ONVIF camera. Check connectivity, absolute PTZ support and valid speed/interval.",
+      "patrol_command_failed": "ONVIF command or position read failed. Wait for motion to stop and retry. GetStatus/AbsoluteMove support is required. Nothing was saved.",
+      "patrol_invalid_points": "Choose a named position. Save needs 2–32 points including two different coordinates in the same coordinate space.",
       "unit_history_failed": "Confirm the statistics change. If it fails, reopen this step to refresh metadata, or keep existing history. No raw history is rewritten.",
       "invalid_icon": "Enter an icon in prefix:name format, or leave it empty.",
       "invalid_pull_interval": "Enter non-negative whole seconds within the supported date range. Use 0 to disable periodic updates.",
@@ -1202,9 +1500,240 @@
       "invalid_local_presence": "Select Wi-Fi sources or valid BLE addresses. SSID sensors require an SSID list; check scanner IDs, timeout and RSSI.",
       "no_device_entities": "No eligible entities. Check the device and selected entities.",
       "device_copy_failed": "Could not prepare {failed_source}. Deselect this entity or correct its source configuration. Nothing was saved.",
-      "device_sources_changed": "A source device/entity or target ID changed. Check the selection and review again. Nothing was saved."
+      "device_sources_changed": "A source device/entity or target ID changed. Check the selection and review again. Nothing was saved.",
+      "geojson_invalid": "Enter valid GeoJSON with names and finite coordinates.",
+      "geojson_name": "Enter a management name.",
+      "geojson_priority": "Enter an integer from -100000 to 100000.",
+      "geojson_source": "Cannot load the file, URL or GeoJSON.",
+      "geojson_one_source": "Use inline GeoJSON or a file/URL, not both.",
+      "geojson_conflict": "Catalog changed. Return to the list and select again.",
+      "geojson_limit": "Document count or size limit exceeded.",
+      "geojson_home": "Choose an enabled selected document containing the zone.home center."
     },
     "step": {
+      "fusion_metadata": {
+        "title": "Presence Fusion Device metadata",
+        "data": {
+          "device_id": "Stable Device ID",
+          "area_id": "Area",
+          "parent_device": "Parent Device",
+          "manufacturer": "Manufacturer",
+          "model": "Model",
+          "sw_version": "Software version",
+          "hw_version": "Hardware version",
+          "serial_number": "Serial number",
+          "configuration_url": "Configuration URL"
+        },
+        "data_description": {
+          "device_id": "Blank uses the config entry ID. Independent of name changes; explicit edits migrate the same registry Device.",
+          "area_id": "HA area for this person's output Device.",
+          "parent_device": "Choose the parent HA Device; the output Device itself cannot be selected.",
+          "manufacturer": "Display manufacturer; blank uses the default. Configuration URL must use HTTP(S).",
+          "model": "Display model; blank uses the default. Configuration URL must use HTTP(S).",
+          "sw_version": "Display software version; blank uses the default. Configuration URL must use HTTP(S).",
+          "hw_version": "Display hardware version; blank uses the default. Configuration URL must use HTTP(S).",
+          "serial_number": "Display serial number; blank uses the default. Configuration URL must use HTTP(S).",
+          "configuration_url": "Display configuration url; blank uses the default. Configuration URL must use HTTP(S)."
+        }
+      },
+      "fusion": {
+        "title": "Presence Fusion · physical devices (maximum 16)",
+        "data": {
+          "action": "Action"
+        },
+        "data_description": {
+          "action": "Choose the next step; Save applies this person's devices."
+        },
+        "description": "Configured: {count}. Choose Save after editing."
+      },
+      "fusion_choose_device": {
+        "title": "Choose physical device",
+        "data": {
+          "device": "Physical device"
+        },
+        "data_description": {
+          "device": "Choose this person's physical device to edit or delete."
+        }
+      },
+      "fusion_device": {
+        "title": "Physical device settings",
+        "data": {
+          "name": "Physical device name",
+          "priority": "GPS priority",
+          "candidate": "GPS candidate"
+        },
+        "data_description": {
+          "name": "A display name; renaming preserves the internal UUID.",
+          "priority": "Lower integers win after confirmed reunion; candidate priorities must be unique.",
+          "candidate": "Enable only when this physical device supplies its own GPS entity."
+        }
+      },
+      "fusion_sources": {
+        "title": "Physical device sources",
+        "data": {
+          "action": "Action"
+        },
+        "data_description": {
+          "action": "Choose the next step; Save applies this person's devices."
+        },
+        "description": "Configured: {count}. Choose Save after editing."
+      },
+      "fusion_choose_source": {
+        "title": "Choose source",
+        "data": {
+          "source": "Source mapping"
+        },
+        "data_description": {
+          "source": "Choose a source mapped to this physical device."
+        }
+      },
+      "fusion_source": {
+        "title": "Device source mapping",
+        "data": {
+          "kind": "Signal type",
+          "entity_id": "Existing source entity",
+          "attribute": "Value attribute",
+          "positive": "Home values / SSIDs",
+          "negative": "Absent values",
+          "freshness": "Local freshness policy",
+          "timestamp_attribute": "Measurement timestamp attribute",
+          "timestamp_format": "Timestamp format",
+          "ttl": "Local TTL (seconds)",
+          "room_mapping": "Room name mapping"
+        },
+        "data_description": {
+          "kind": "GPS, home Wi-Fi, home BLE presence, or timeout-managed room source.",
+          "entity_id": "Choose an existing entity for this physical device; person and Virtual Layer outputs are rejected.",
+          "attribute": "Leave blank to read state. GPS reads latitude, longitude and gps_accuracy.",
+          "positive": "Exact case-sensitive positive values, one per line; include only your home SSIDs for an SSID sensor.",
+          "negative": "Explicit absent values, one per line. Other values remain unknown.",
+          "freshness": "source_managed trusts the source timeout; timestamp_ttl requires a reliable measurement/heartbeat attribute.",
+          "timestamp_attribute": "GPS: optional trusted timestamp; blank only refreshes on changed coordinates/accuracy. TTL: required heartbeat attribute.",
+          "timestamp_format": "Timezone-aware ISO 8601, epoch seconds, or epoch milliseconds. Units are never guessed.",
+          "ttl": "For timestamp_ttl only: time after a measurement until the signal becomes unknown, from 1 to 86400.",
+          "room_mapping": "Optional source=display name pairs, one per line. Unmapped room names are retained."
+        }
+      },
+      "fusion_settings": {
+        "title": "Presence Fusion advanced heuristics",
+        "description": "Defaults are heuristics, not accuracy guarantees. Times are seconds and distances metres.",
+        "data": {
+          "movement_window_s": "Movement window",
+          "movement_bucket_s": "Movement bucket",
+          "minimum_movement_m": "Minimum movement",
+          "minimum_movement_segments": "Minimum segments",
+          "gps_stale_after_s": "GPS expiry",
+          "gps_fresh_full_s": "Full freshness",
+          "gps_max_accuracy_m": "Maximum GPS error",
+          "gps_missing_accuracy_m": "Assumed GPS error",
+          "gps_future_tolerance_s": "Future tolerance",
+          "max_observation_gap_s": "Maximum path gap",
+          "max_speed_m_s": "Jump speed limit",
+          "pair_max_skew_s": "Pair timestamp skew",
+          "pair_max_age_s": "Pair evidence age",
+          "together_radius_m": "Together radius",
+          "separation_radius_m": "Separation radius",
+          "group_confirm_s": "Group confirmation",
+          "challenger_ratio": "Challenger ratio",
+          "challenger_margin": "Challenger margin",
+          "challenger_hold_s": "Challenger hold",
+          "minimum_primary_hold_s": "Minimum primary hold",
+          "reunion_hold_s": "Reunion hold",
+          "safe_companion_age_s": "Safe companion age",
+          "home_enter_hold_s": "Local home hold",
+          "gps_home_enter_hold_s": "GPS home hold",
+          "home_exit_hold_s": "Home exit hold",
+          "home_exit_margin_m": "Home exit margin",
+          "nearby_enter_m": "Nearby entry distance",
+          "nearby_exit_m": "Nearby exit distance",
+          "direction_window_s": "Direction window",
+          "direction_min_span_s": "Direction minimum span",
+          "direction_min_change_m": "Direction minimum change",
+          "direction_slope_m_s": "Direction slope",
+          "room_change_hold_s": "Room change hold",
+          "room_missing_hold_s": "Room missing hold",
+          "evidence_hold_s": "Missing evidence hold",
+          "manual_override_default_s": "Default manual duration"
+        },
+        "data_description": {
+          "movement_window_s": "Retain measured path contributions within this many seconds.",
+          "movement_bucket_s": "UTC bucket seconds; smaller than the window. Best accuracy, then latest sample wins.",
+          "minimum_movement_m": "Minimum measured path in metres before becoming a movement challenger.",
+          "minimum_movement_segments": "Minimum independent accepted movement segments (integer).",
+          "gps_stale_after_s": "Seconds since measurement before automatic GPS use stops.",
+          "gps_fresh_full_s": "Seconds before the freshness score begins to decrease; below GPS expiry.",
+          "gps_max_accuracy_m": "Reject automatic candidates with reported accuracy worse than this many metres.",
+          "gps_missing_accuracy_m": "Conservative metres when accuracy is absent/invalid; assumed values cannot confirm reunion.",
+          "gps_future_tolerance_s": "Maximum accepted measurement clock lead in seconds.",
+          "max_observation_gap_s": "Do not connect path segments across larger gaps in seconds.",
+          "max_speed_m_s": "Accuracy-adjusted metres/second limit; not a guarantee for air travel.",
+          "pair_max_skew_s": "Maximum measurement time difference in seconds for pair comparisons.",
+          "pair_max_age_s": "Maximum age in seconds of each position used for grouping.",
+          "together_radius_m": "Distance plus both accuracy values must be within this many metres.",
+          "separation_radius_m": "Distance minus both accuracy values must exceed this many metres; above together radius.",
+          "group_confirm_s": "Minimum span in seconds of at least three new close observations.",
+          "challenger_ratio": "Candidate score must strictly exceed primary score multiplied by this ratio.",
+          "challenger_margin": "Candidate score must also strictly exceed primary score plus this margin.",
+          "challenger_hold_s": "Seconds of continuous score advantage before switching.",
+          "minimum_primary_hold_s": "Minimum seconds before ordinary switches; departure/failover have separate rules.",
+          "reunion_hold_s": "Seconds of renewed observations with previously separated devices.",
+          "safe_companion_age_s": "Maximum seconds since confirmed companionship to authorize failover.",
+          "home_enter_hold_s": "Seconds of eligible local home evidence before entering home.",
+          "gps_home_enter_hold_s": "Seconds of GPS position plus accuracy inside zone.home.",
+          "home_exit_hold_s": "Seconds of valid GPS outside home before leaving home.",
+          "home_exit_margin_m": "Extra metres beyond zone.home radius required for departure.",
+          "nearby_enter_m": "Home-centre distance in metres; must exceed the Home radius.",
+          "nearby_exit_m": "Metres from Home centre to leave nearby; must exceed entry distance.",
+          "direction_window_s": "Seconds of same-source continuous path used for direction.",
+          "direction_min_span_s": "Minimum observed span in seconds, with at least three positions.",
+          "direction_min_change_m": "Minimum change in Home distance in metres, also guarded by accuracy.",
+          "direction_slope_m_s": "Absolute regression slope in metres/second required for towards or away_from.",
+          "room_change_hold_s": "Seconds of a stable room name before changing the output.",
+          "room_missing_hold_s": "Maximum seconds to retain a room after its source disappears.",
+          "evidence_hold_s": "Maximum seconds of held presence; then unknown, never inferred away.",
+          "manual_override_default_s": "Default override seconds from 1 to 86400; expiry is not extended on restart."
+        }
+      },
+      "patrol_camera": {
+        "title": "Camera patrol",
+        "description": "Create a virtual camera first, then choose it to teach its patrol route.",
+        "data": {
+          "entity_key": "Virtual camera"
+        },
+        "data_description": {
+          "entity_key": "Select the virtual camera. Media sources and Frigate settings are preserved."
+        }
+      },
+      "patrol_settings": {
+        "title": "Patrol camera and timing",
+        "description": "Continuing stops this camera’s running and automatic patrol. Watch its feed in another dashboard tab. Teaching uses normal recording settings. Changing the ONVIF target clears draft positions.",
+        "data": {
+          "onvif_patrol_target": "ONVIF camera",
+          "onvif_patrol_interval": "Interval (seconds)",
+          "onvif_patrol_speed": "Speed"
+        },
+        "data_description": {
+          "onvif_patrol_target": "Select an existing ONVIF camera supporting GetStatus and AbsoluteMove. The video source is unchanged.",
+          "onvif_patrol_interval": "Wait 5–3600 seconds between movement commands.",
+          "onvif_patrol_speed": "ONVIF speed 0.01–1. Choose a low speed while teaching."
+        }
+      },
+      "patrol_positions": {
+        "title": "Teach patrol positions",
+        "description": "Watch {camera} in another dashboard tab. Submit a direction to jog, wait until stopped, then name and capture the current position. Repeat for the next position. Visit saved positions to verify their views. Patrol repeats in listed order, from last back to first; this is not a hard boundary. Zoom is unchanged. Positions: {count}\n\n{positions}\n\nSave requires 2–32 positions including two distinct coordinates. Cancel discards edits, but does not undo physical movement or restart patrol.",
+        "data": {
+          "action": "Action",
+          "point_name": "Position name",
+          "jog_distance": "Jog amount",
+          "point": "Saved position"
+        },
+        "data_description": {
+          "action": "Submit one action at a time. Save commits the route. Legacy mode removes the saved route and retains the old relative range.",
+          "point_name": "Describe the view, for example Left doorway. Used by Capture and Replace.",
+          "jog_distance": "Small relative movement from 0.01 to 0.2; the actual angle depends on the camera.",
+          "point": "Select the point to visit, replace, remove, or reorder."
+        }
+      },
       "init": {
         "title": "Configure Virtual Layer",
         "description": "Add, copy, edit, delete, or manage UI-managed virtual devices and entities.",
@@ -1439,7 +1968,6 @@
               "sensor_unit": "Sensor unit",
               "boiler_dynamic_control": "Dynamic boiler control",
               "utility_meter_enabled": "Utility Meter mode",
-              "utility_meter_cycle": "Reset cycle",
               "boiler_dynamic_template": "Dynamic water-target formula",
               "boiler_room_temperature_entity_id": "Room temperature sensors",
               "media_player_source_priority": "Media source priority",
@@ -1464,21 +1992,7 @@
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
               "configure_air_quality_sources": "Configure air quality per source",
-              "utility_meter_start": "Start date/time",
-              "utility_meter_days": "Repeat every N days",
-              "utility_meter_offset": "Offset (minutes)",
-              "utility_meter_cron": "Cron schedule",
-              "utility_meter_delta_values": "Source reports increments",
-              "utility_meter_net_consumption": "Allow net consumption",
-              "utility_meter_periodically_resetting": "Source periodically resets",
-              "utility_meter_always_available": "Keep total available",
-              "utility_meter_tariff_entity": "Tariff selector entity",
-              "utility_meter_tariff": "Collecting tariff",
-              "utility_meter_rate": "Unit price",
-              "utility_meter_base_charge": "Period base charge",
-              "utility_meter_currency": "Currency",
-              "utility_meter_tiers": "Progressive tiers",
-              "utility_meter_current_value": "Correct current-period total"
+              "polygon_catalog_ids": "Shared GeoJSON documents"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -1497,13 +2011,12 @@
               "sensor_unit": "Choose a normalized Home Assistant unit to replace the unit template. Keep template preserves dynamic or custom units. This does not convert readings.",
               "boiler_dynamic_control": "Opt in for one boiler and room sensors in Celsius. Replaces the configured set_temperature action with periodic water-temperature writes. Set a room target after enabling. Calculates every 60s; writes at least 120s apart. Boiler current_temperature must measure heating water. Power actions remain separately configured.",
               "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
-              "utility_meter_cycle": "Changing the cycle or dates retains the running total and schedules future resets from the edit onward. Use the reset action to start at zero.",
               "boiler_dynamic_template": "Returns Celsius. Variables: temperature (saved room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (C/min over up to 10min), heating_elapsed_minutes (observed heat duration), heat_accumulation (decaying C-min proxy, 30min time constant), base_water_temperature (existing calibration result). Tune default gains for the system. Missing inputs pause writes. Boiler limits and steps apply.",
               "boiler_room_temperature_entity_id": "Optional sensors combined as the virtual climate's current room temperature. Available numeric readings are averaged; raw boiler-water temperatures remain available as attributes.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "onvif_patrol_enabled": "Starts the patrol after this virtual camera loads. The video source remains independent from the PTZ target.",
               "onvif_patrol_target": "Select the camera created by Home Assistant's existing ONVIF integration. Its authenticated ONVIF client is also used if the PTZ action is unavailable.",
-              "onvif_patrol_mode": "Horizontal alternates left and right; vertical alternates down and up; grid cycles both axes.",
+              "onvif_patrol_mode": "Legacy relative patrol only: horizontal alternates left/right, vertical down/up, grid both axes. A saved route from Configure camera patrol positions takes priority over these axes and ranges.",
               "onvif_patrol_interval": "Seconds to wait after each relative ONVIF move.",
               "onvif_patrol_speed": "Optional ONVIF speed coefficient, from 0 to 1.",
               "onvif_patrol_pan_min": "Relative move distance from 0 to 1 for each left movement.",
@@ -1522,21 +2035,7 @@
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
               "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration.",
-              "utility_meter_start": "ISO date/time, e.g. 2026-01-15T00:00:00. Local HA time unless an offset is supplied. Day 31 clamps to month end.",
-              "utility_meter_days": "Calendar days from the start date; used for the N-day cycle.",
-              "utility_meter_offset": "Shift the calendar anchor by 0–40319 minutes. Ignored for cron.",
-              "utility_meter_cron": "Five-field cron in Home Assistant local time; used only for cron cycle.",
-              "utility_meter_delta_values": "Add each new source event as consumption rather than subtracting cumulative readings.",
-              "utility_meter_net_consumption": "Allow negative deltas for import/export meters; publishes total statistics.",
-              "utility_meter_periodically_resetting": "Discard the baseline across invalid source states. Disable for a lifetime counter to bridge outages.",
-              "utility_meter_always_available": "Retain the accumulated total when the source is unavailable.",
-              "utility_meter_tariff_entity": "Optional select/input_select entity; create one meter per tariff on this Device.",
-              "utility_meter_tariff": "Collect only while the tariff selector matches this exact option. Automations can switch the selector by time.",
-              "utility_meter_rate": "Price per source unit, also above the final tier. Editing prices recalculates the entire current-period estimate, not historical price segments.",
-              "utility_meter_base_charge": "Fixed charge per period. For multiple tariff meters, charge the base on one meter only.",
-              "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
-              "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
-              "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline."
+              "polygon_catalog_ids": "Select multiple documents from the shared catalog."
             }
           },
           "native_value_templates": {
@@ -2043,6 +2542,16 @@
           "sensor_aggregation": "Average ignores unavailable and non-finite values and removes positive spikes above three times the median reference. Other modes ignore invalid values without removing valid extremes."
         }
       },
+      "boiler_temperature_calibration": {
+        "title": "Boiler Temperature Adjustment",
+        "description": "Choose this before source templates are generated. Direct setpoints are the default; enable conversion only when the boiler expects a water-temperature target rather than the room target.",
+        "data": {
+          "boiler_temperature_calibration_enabled": "Convert room target to water target"
+        },
+        "data_description": {
+          "boiler_temperature_calibration_enabled": "Off by default: send the requested temperature to the boiler unchanged. Turn it on only to generate and apply the room-to-water conversion formula."
+        }
+      },
       "edit_entity_helper": {
         "title": "Choose Template Helper Usage",
         "description": "Choose whether to use the template helper for this edit. Automatic uses helpers only for fields that were not customized, Keep current does not apply helpers, and Force replaces all helper-capable fields. The next screen keeps every entity, ID, value, and template field editable.",
@@ -2050,13 +2559,15 @@
           "helper_update_mode": "Template update",
           "boiler_temperature_calibration_template": "Base room-to-water formula",
           "boiler_dynamic_control": "Enable dynamic boiler feedback",
-          "boiler_dynamic_template": "Dynamic water-target formula"
+          "boiler_dynamic_template": "Dynamic water-target formula",
+          "boiler_temperature_calibration_enabled": "Apply room-to-water formula"
         },
         "data_description": {
           "helper_update_mode": "Automatic preserves each template you edited and regenerates untouched helpers. Keep current means the helper is not used and every template stays unchanged. Force helper replaces generated and custom templates using the selected source entities.",
           "boiler_temperature_calibration_template": "Base conversion only: temperature * 1.5 + 2.5 (25°C room → 40°C water, 27°C → 43°C). This is not the dynamic formula. Its result is base_water_temperature in the feedback formula below. With feedback disabled it runs on temperature commands. Saved custom formulas are preserved.",
           "boiler_dynamic_control": "Opt-in periodic feedback for one boiler climate source only; boiler + air-conditioner composite sources are not supported. Select room sensors on the next screen and use Celsius virtual units. Boiler current_temperature must measure water. This mode owns temperature writes; power/mode actions remain unchanged.",
-          "boiler_dynamic_template": "Default includes room error, warming rate and residual heat. Variables: temperature (room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (°C/min), heating_elapsed_minutes, heat_accumulation (decaying °C·min), base_water_temperature. Returns Celsius. When enabled, evaluates every 60 seconds; writes at least 120 seconds apart, limited to 2°C per change and boiler limits. Missing inputs pause writes. Tune gains for your system."
+          "boiler_dynamic_template": "Default includes room error, warming rate and residual heat. Variables: temperature (room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (°C/min), heating_elapsed_minutes, heat_accumulation (decaying °C·min), base_water_temperature. Returns Celsius. When enabled, evaluates every 60 seconds; writes at least 120 seconds apart, limited to 2°C per change and boiler limits. Missing inputs pause writes. Tune gains for your system.",
+          "boiler_temperature_calibration_enabled": "Turn this off when the boiler accepts the same room target directly. The formula is retained for later use. Dynamic feedback then uses the room target as its base water temperature."
         }
       },
       "entity_helper": {
@@ -2066,13 +2577,15 @@
           "use_template_helper": "Generate source-based templates",
           "boiler_temperature_calibration_template": "Base room-to-water formula",
           "boiler_dynamic_control": "Enable dynamic boiler feedback",
-          "boiler_dynamic_template": "Dynamic water-target formula"
+          "boiler_dynamic_template": "Dynamic water-target formula",
+          "boiler_temperature_calibration_enabled": "Apply room-to-water formula"
         },
         "data_description": {
           "use_template_helper": "Turn this on to generate value, availability, icon, attribute, and domain-specific property templates. Turn it off to copy the source selection, current state, and metadata without generated templates.",
           "boiler_temperature_calibration_template": "Base conversion only: temperature * 1.5 + 2.5 (25°C room → 40°C water, 27°C → 43°C). This is not the dynamic formula. Its result is base_water_temperature in the feedback formula below. With feedback disabled it runs on temperature commands. Saved custom formulas are preserved.",
           "boiler_dynamic_control": "Opt-in periodic feedback for one boiler climate source only; boiler + air-conditioner composite sources are not supported. Select room sensors on the next screen and use Celsius virtual units. Boiler current_temperature must measure water. This mode owns temperature writes; power/mode actions remain unchanged.",
-          "boiler_dynamic_template": "Default includes room error, warming rate and residual heat. Variables: temperature (room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (°C/min), heating_elapsed_minutes, heat_accumulation (decaying °C·min), base_water_temperature. Returns Celsius. When enabled, evaluates every 60 seconds; writes at least 120 seconds apart, limited to 2°C per change and boiler limits. Missing inputs pause writes. Tune gains for your system."
+          "boiler_dynamic_template": "Default includes room error, warming rate and residual heat. Variables: temperature (room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (°C/min), heating_elapsed_minutes, heat_accumulation (decaying °C·min), base_water_temperature. Returns Celsius. When enabled, evaluates every 60 seconds; writes at least 120 seconds apart, limited to 2°C per change and boiler limits. Missing inputs pause writes. Tune gains for your system.",
+          "boiler_temperature_calibration_enabled": "Turn this off when the boiler accepts the same room target directly. The formula is retained for later use. Dynamic feedback then uses the room target as its base water temperature."
         }
       },
       "matter_fan_levels": {
@@ -2244,7 +2757,6 @@
               "boiler_dynamic_control": "Dynamic boiler control",
               "boiler_dynamic_template": "Dynamic water-target formula",
               "utility_meter_enabled": "Utility Meter mode",
-              "utility_meter_cycle": "Reset cycle",
               "boiler_room_temperature_entity_id": "Room temperature sensors",
               "media_player_source_priority": "Media source priority",
               "onvif_patrol_enabled": "Enable ONVIF PTZ patrol",
@@ -2268,21 +2780,7 @@
               "configure_air_quality_rules": "Customize air-quality rules",
               "air_quality_per_source": "Create one air-quality sensor per source",
               "configure_air_quality_sources": "Configure air quality per source",
-              "utility_meter_start": "Start date/time",
-              "utility_meter_days": "Repeat every N days",
-              "utility_meter_offset": "Offset (minutes)",
-              "utility_meter_cron": "Cron schedule",
-              "utility_meter_delta_values": "Source reports increments",
-              "utility_meter_net_consumption": "Allow net consumption",
-              "utility_meter_periodically_resetting": "Source periodically resets",
-              "utility_meter_always_available": "Keep total available",
-              "utility_meter_tariff_entity": "Tariff selector entity",
-              "utility_meter_tariff": "Collecting tariff",
-              "utility_meter_rate": "Unit price",
-              "utility_meter_base_charge": "Period base charge",
-              "utility_meter_currency": "Currency",
-              "utility_meter_tiers": "Progressive tiers",
-              "utility_meter_current_value": "Correct current-period total"
+              "polygon_catalog_ids": "Shared GeoJSON documents"
             },
             "data_description": {
               "polygon_geojson_json": "Optional GeoJSON FeatureCollection containing named Polygon or MultiPolygon features. Used only by device_tracker entities.",
@@ -2302,12 +2800,11 @@
               "boiler_dynamic_control": "Opt in for one boiler and room sensors in Celsius. Replaces the configured set_temperature action with periodic water-temperature writes. Set a room target after enabling. Calculates every 60s; writes at least 120s apart. Boiler current_temperature must measure heating water. Power actions remain separately configured.",
               "boiler_dynamic_template": "Returns Celsius. Variables: temperature (saved room target), room_temperature (sensor mean), boiler_water_temperature, room_temperature_rate (C/min over up to 10min), heating_elapsed_minutes (observed heat duration), heat_accumulation (decaying C-min proxy, 30min time constant), base_water_temperature (existing calibration result). Tune default gains for the system. Missing inputs pause writes. Boiler limits and steps apply.",
               "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
-              "utility_meter_cycle": "Changing the cycle or dates retains the running total and schedules future resets from the edit onward. Use the reset action to start at zero.",
               "boiler_room_temperature_entity_id": "Optional sensors combined as the virtual climate's current room temperature. Available numeric readings are averaged; raw boiler-water temperatures remain available as attributes.",
               "media_player_source_priority": "Optional ordered fallback for the combined player. Drag sources into priority order. A playing, paused, or buffering source wins first; off, idle, unavailable, or unusable sources fall through. This shared order applies to all standard media-player properties.",
               "onvif_patrol_enabled": "Starts the patrol after this virtual camera loads. The video source remains independent from the PTZ target.",
               "onvif_patrol_target": "Select the camera created by Home Assistant's existing ONVIF integration. Its authenticated ONVIF client is also used if the PTZ action is unavailable.",
-              "onvif_patrol_mode": "Horizontal alternates left and right; vertical alternates down and up; grid cycles both axes.",
+              "onvif_patrol_mode": "Legacy relative patrol only: horizontal alternates left/right, vertical down/up, grid both axes. A saved route from Configure camera patrol positions takes priority over these axes and ranges.",
               "onvif_patrol_interval": "Seconds to wait after each relative ONVIF move.",
               "onvif_patrol_speed": "Optional ONVIF speed coefficient, from 0 to 1.",
               "onvif_patrol_pan_min": "Relative move distance from 0 to 1 for each left movement.",
@@ -2326,21 +2823,7 @@
               "configure_air_quality_rules": "Automatically classify recognized PM1.0, PM2.5, PM4, PM10, radon, formaldehyde, CO2, CO, NO2, ozone, SO2, NO, N2O, benzene, ammonia, hydrogen sulfide and TVOC/eTVOC (mass or parts) measurements with separate starter profiles, then use the worst available grade. Source categories and AQI are also supported. Unsupported quantities or units remain unknown. Display bands are instantaneous, not official health standards or exposure-time assessments; good does not certify safe air. PM4 uses a labelled PM2.5-shaped display proxy; N2O uses local display bands, not occupational limits. Review/edit thresholds in the generated template or check for manual rules. Original sensors are unchanged.",
               "air_quality_per_source": "Keep the aggregate and original sensors; also create a categorical sensor for each source on this Device. Each uses its own automatic profile. Unsupported measurements remain unknown. Matterbridge Air Quality Regex and endpoint grouping must be configured separately.",
               "configure_air_quality_sources": "Keep the original sensor. Configure units, attributes, five boundaries, six grades and formulas for the combined measurement or each source. Unlike pollutants use the worst grade, never an average concentration.",
-              "utility_meter_start": "ISO date/time, e.g. 2026-01-15T00:00:00. Local HA time unless an offset is supplied. Day 31 clamps to month end.",
-              "utility_meter_days": "Calendar days from the start date; used for the N-day cycle.",
-              "utility_meter_offset": "Shift the calendar anchor by 0–40319 minutes. Ignored for cron.",
-              "utility_meter_cron": "Five-field cron in Home Assistant local time; used only for cron cycle.",
-              "utility_meter_delta_values": "Add each new source event as consumption rather than subtracting cumulative readings.",
-              "utility_meter_net_consumption": "Allow negative deltas for import/export meters; publishes total statistics.",
-              "utility_meter_periodically_resetting": "Discard the baseline across invalid source states. Disable for a lifetime counter to bridge outages.",
-              "utility_meter_always_available": "Retain the accumulated total when the source is unavailable.",
-              "utility_meter_tariff_entity": "Optional select/input_select entity; create one meter per tariff on this Device.",
-              "utility_meter_tariff": "Collect only while the tariff selector matches this exact option. Automations can switch the selector by time.",
-              "utility_meter_rate": "Price per source unit, also above the final tier. Editing prices recalculates the entire current-period estimate, not historical price segments.",
-              "utility_meter_base_charge": "Fixed charge per period. For multiple tariff meters, charge the base on one meter only.",
-              "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
-              "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
-              "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline."
+              "polygon_catalog_ids": "Select multiple documents from the shared catalog."
             }
           },
           "native_value_templates": {
@@ -3330,6 +3813,158 @@
         "data_description": {
           "action": "Create the reviewed batch, edit the name/selection, or choose another source device."
         }
+      },
+      "utility_meter": {
+        "title": "Utility meter settings",
+        "description": "Configure the schedule, billing and current usage correction. Nothing is saved before submission. Enable the option below to return to the entity form.",
+        "data": {
+          "utility_meter_enabled": "Utility Meter mode",
+          "back": "Back to entity settings",
+          "utility_meter_cycle": "Reset cycle",
+          "utility_meter_start": "Start date/time",
+          "utility_meter_days": "Repeat every N days",
+          "utility_meter_offset": "Offset (minutes)",
+          "utility_meter_cron": "Cron schedule",
+          "utility_meter_delta_values": "Source reports increments",
+          "utility_meter_net_consumption": "Allow net consumption",
+          "utility_meter_periodically_resetting": "Source periodically resets",
+          "utility_meter_always_available": "Keep total available",
+          "utility_meter_tariff_entity": "Tariff selector entity",
+          "utility_meter_tariff": "Collecting tariff",
+          "utility_meter_rate": "Unit price",
+          "utility_meter_base_charge": "Period base charge",
+          "utility_meter_currency": "Currency",
+          "utility_meter_tiers": "Progressive tiers",
+          "utility_meter_current_value": "Correct current-period total",
+          "utility_meter_compare_previous_month": "Create last-month comparison sensor"
+        },
+        "data_description": {
+          "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
+          "back": "Keep the draft and return without saving.",
+          "utility_meter_cycle": "Changing the cycle or dates retains the running total and schedules future resets from the edit onward. Use the reset action to start at zero.",
+          "utility_meter_start": "ISO date/time, e.g. 2026-01-15T00:00:00. Local HA time unless an offset is supplied. Day 31 clamps to month end.",
+          "utility_meter_days": "Calendar days from the start date; used for the N-day cycle.",
+          "utility_meter_offset": "Shift the calendar anchor by 0–40319 minutes. Ignored for cron.",
+          "utility_meter_cron": "Five-field cron in Home Assistant local time; used only for cron cycle.",
+          "utility_meter_delta_values": "Add each new source event as consumption rather than subtracting cumulative readings.",
+          "utility_meter_net_consumption": "Allow negative deltas for import/export meters; publishes total statistics.",
+          "utility_meter_periodically_resetting": "Discard the baseline across invalid source states. Disable for a lifetime counter to bridge outages.",
+          "utility_meter_always_available": "Retain the accumulated total when the source is unavailable.",
+          "utility_meter_tariff_entity": "Optional select/input_select entity; create one meter per tariff on this Device.",
+          "utility_meter_tariff": "Collect only while the tariff selector matches this exact option. Automations can switch the selector by time.",
+          "utility_meter_rate": "Price per source unit, also above the final tier. Editing prices recalculates the entire current-period estimate, not historical price segments.",
+          "utility_meter_base_charge": "Fixed charge per period. For multiple tariff meters, charge the base on one meter only.",
+          "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
+          "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
+          "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline.",
+          "utility_meter_compare_previous_month": "Reads the same local date and time one month earlier, refreshed every minute. Requires a month of Recorder state history (35-day retention recommended). Missing history or a changed unit reports unknown."
+        }
+      },
+      "edit_utility_meter": {
+        "title": "Utility meter settings",
+        "description": "Configure the schedule, billing and current usage correction. Nothing is saved before submission. Enable the option below to return to the entity form.",
+        "data": {
+          "utility_meter_enabled": "Utility Meter mode",
+          "back": "Back to entity settings",
+          "utility_meter_cycle": "Reset cycle",
+          "utility_meter_start": "Start date/time",
+          "utility_meter_days": "Repeat every N days",
+          "utility_meter_offset": "Offset (minutes)",
+          "utility_meter_cron": "Cron schedule",
+          "utility_meter_delta_values": "Source reports increments",
+          "utility_meter_net_consumption": "Allow net consumption",
+          "utility_meter_periodically_resetting": "Source periodically resets",
+          "utility_meter_always_available": "Keep total available",
+          "utility_meter_tariff_entity": "Tariff selector entity",
+          "utility_meter_tariff": "Collecting tariff",
+          "utility_meter_rate": "Unit price",
+          "utility_meter_base_charge": "Period base charge",
+          "utility_meter_currency": "Currency",
+          "utility_meter_tiers": "Progressive tiers",
+          "utility_meter_current_value": "Correct current-period total",
+          "utility_meter_compare_previous_month": "Create last-month comparison sensor"
+        },
+        "data_description": {
+          "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
+          "back": "Keep the draft and return without saving.",
+          "utility_meter_cycle": "Changing the cycle or dates retains the running total and schedules future resets from the edit onward. Use the reset action to start at zero.",
+          "utility_meter_start": "ISO date/time, e.g. 2026-01-15T00:00:00. Local HA time unless an offset is supplied. Day 31 clamps to month end.",
+          "utility_meter_days": "Calendar days from the start date; used for the N-day cycle.",
+          "utility_meter_offset": "Shift the calendar anchor by 0–40319 minutes. Ignored for cron.",
+          "utility_meter_cron": "Five-field cron in Home Assistant local time; used only for cron cycle.",
+          "utility_meter_delta_values": "Add each new source event as consumption rather than subtracting cumulative readings.",
+          "utility_meter_net_consumption": "Allow negative deltas for import/export meters; publishes total statistics.",
+          "utility_meter_periodically_resetting": "Discard the baseline across invalid source states. Disable for a lifetime counter to bridge outages.",
+          "utility_meter_always_available": "Retain the accumulated total when the source is unavailable.",
+          "utility_meter_tariff_entity": "Optional select/input_select entity; create one meter per tariff on this Device.",
+          "utility_meter_tariff": "Collect only while the tariff selector matches this exact option. Automations can switch the selector by time.",
+          "utility_meter_rate": "Price per source unit, also above the final tier. Editing prices recalculates the entire current-period estimate, not historical price segments.",
+          "utility_meter_base_charge": "Fixed charge per period. For multiple tariff meters, charge the base on one meter only.",
+          "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
+          "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
+          "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline.",
+          "utility_meter_compare_previous_month": "Reads the same local date and time one month earlier, refreshed every minute. Requires a month of Recorder state history (35-day retention recommended). Missing history or a changed unit reports unknown."
+        }
+      },
+      "geojson": {
+        "title": "Shared GeoJSON areas",
+        "description": "Documents: {count}. Saving a document immediately updates all consumers.",
+        "data": {
+          "action": "Action"
+        },
+        "data_description": {
+          "action": "Add, edit, delete or refresh external sources."
+        }
+      },
+      "geojson_choose": {
+        "title": "Choose document",
+        "description": "Select from the shared catalog.",
+        "data": {
+          "record": "Document"
+        },
+        "data_description": {
+          "record": "Document to edit or delete."
+        }
+      },
+      "geojson_delete": {
+        "title": "Delete shared document",
+        "description": "Applies immediately to all consumers. Deleting a Home boundary suspends GPS Home detection.",
+        "data": {
+          "confirm": "Confirm deletion"
+        },
+        "data_description": {
+          "confirm": "Remove this document from the shared catalog."
+        }
+      },
+      "geojson_record": {
+        "title": "GeoJSON document",
+        "description": "Named Polygon/MultiPolygon Features or FeatureCollection. Coordinates are longitude, latitude.",
+        "data": {
+          "name": "Management name",
+          "enabled": "Enabled",
+          "priority": "Priority",
+          "source": "File or URL",
+          "geojson": "Inline GeoJSON"
+        },
+        "data_description": {
+          "name": "Catalog label. Zone names use Feature properties.name.",
+          "enabled": "Enable or disable this document while retaining selections.",
+          "priority": "Lower integers win, then Feature priority, area and name.",
+          "source": "HA configuration file or HTTP(S) URL; refreshed every 5 minutes. Use this or inline JSON.",
+          "geojson": "Feature/FeatureCollection JSON. Leave blank when using a file or URL."
+        }
+      },
+      "fusion_zones": {
+        "title": "Presence Fusion areas",
+        "description": "Preserves GPS coordinates and adds a zone sensor and SVG map.",
+        "data": {
+          "catalog_ids": "Shared documents",
+          "home": "Home boundary"
+        },
+        "data_description": {
+          "catalog_ids": "Select multiple area documents.",
+          "home": "Choose an enabled selected document containing the zone.home center. Blank uses the HA circular boundary."
+        }
       }
     }
   },
@@ -3414,8 +4049,27 @@
         "first_available": "First available"
       }
     },
+    "patrol_position_action": {
+      "options": {
+        "left": "Move left",
+        "right": "Move right",
+        "up": "Move up",
+        "down": "Move down",
+        "stop": "Stop",
+        "capture": "Capture current position",
+        "replace": "Replace selected position",
+        "visit": "Visit selected position",
+        "remove": "Remove selected position",
+        "earlier": "Move earlier in route",
+        "later": "Move later in route",
+        "save": "Save route",
+        "legacy": "Use legacy relative patrol",
+        "cancel": "Cancel without saving"
+      }
+    },
     "options_action": {
       "options": {
+        "camera_patrol": "Configure camera patrol positions",
         "add_entity": "Add a virtual entity",
         "copy_entity": "Copy a virtual entity",
         "edit_entity": "Edit a virtual entity",
@@ -3424,7 +4078,8 @@
         "manage_devices": "Manage virtual devices",
         "delete_device": "Delete a virtual device",
         "finish": "Done",
-        "copy_device": "Create virtual Device from a device"
+        "copy_device": "Create virtual Device from a device",
+        "manage_geojson": "Manage shared GeoJSON areas"
       }
     },
     "polygon_strategy": {
@@ -3653,9 +4308,58 @@
         "edit": "Edit name and entity selection",
         "change_device": "Choose another source device"
       }
+    },
+    "geojson_action": {
+      "options": {
+        "add": "Add",
+        "edit": "Edit",
+        "delete": "Delete",
+        "refresh": "Refresh",
+        "done": "Back"
+      }
+    },
+    "fusion_action": {
+      "options": {
+        "add": "Add device",
+        "edit": "Edit device",
+        "delete": "Delete device",
+        "metadata": "Device metadata",
+        "settings": "Detection settings",
+        "manage_geojson": "Manage shared GeoJSON",
+        "zones": "Areas and Home boundary",
+        "save": "Save"
+      }
     }
   },
   "services": {
+    "presence_fusion_set_primary": {
+      "name": "Select Presence Fusion primary GPS",
+      "description": "Select an available physical GPS candidate for a limited duration.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "This person's Virtual Layer config entry ID."
+        },
+        "tracked_device_id": {
+          "name": "Physical device UUID",
+          "description": "UUID displayed in the physical-device selector."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "1–86400 seconds; omit to use the configured default."
+        }
+      }
+    },
+    "presence_fusion_clear_primary_override": {
+      "name": "Clear Presence Fusion override",
+      "description": "Resume automatic tracking from observations of the currently selected device.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "This person's Virtual Layer config entry ID."
+        }
+      }
+    },
     "turn_on": {
       "name": "Turn On",
       "description": "Turn on a binary sensor.",

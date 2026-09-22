@@ -114,6 +114,7 @@ _NATIVE_TEMPLATE_SAMPLES = {
     "source_list": ["TV", "Radio"],
     "state_class": "measurement",
     "stream_source": "rtsp://example.test/live",
+    "suggested_display_precision": 5,
     "supported_color_modes": ["hs", "color_temp"],
     "supported_formats": ["wav"],
     "supported_languages": ["en", "ko"],

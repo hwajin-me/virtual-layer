@@ -1,0 +1,6 @@
+# The existing HA fixture package pins HA 2026.2.3; Python 3.14 is required.
+-r requirements_test.txt
+homeassistant==2026.2.3
+ruff==0.16.1
+pytest-cov==7.0.0
+coverage==7.10.6

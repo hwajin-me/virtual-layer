@@ -97,6 +97,11 @@ async def async_setup_entry(
 ) -> None:
     _LOGGER.debug("setting up the entries...")
 
+    if entry.data.get("presence_fusion"):
+        from .presence_fusion.entities import entities as fusion_entities
+        async_add_entities(fusion_entities(entry, "binary_sensor"))
+        return
+
     entities = []
     for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN):
         entity = BINARY_SENSOR_SCHEMA(entity)

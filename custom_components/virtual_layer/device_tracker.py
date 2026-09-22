@@ -57,6 +57,7 @@ from .dawarich import (
     summary as dawarich_summary, valid_point as valid_dawarich_point,
 )
 from .local_presence import BLE_PREFIX, LocalPresence, normalize as normalize_local_presence
+from .geojson_catalog import CATALOG_IDS, async_get_catalog
 from .polygon import (
     find_polygon_zone,
     load_polygon_zones,
@@ -238,6 +239,7 @@ def validate_domain_options(config) -> None:
     if not isinstance(polygon, dict):
         raise vol.Invalid("polygonal_zone must be an object")
     allowed = {
+        CATALOG_IDS,
         CONF_POLYGON_AWAY_STATE,
         CONF_POLYGON_DISTANCE_METERS,
         CONF_POLYGON_FILES,
@@ -249,8 +251,11 @@ def validate_domain_options(config) -> None:
     }
     if set(polygon) - allowed:
         raise vol.Invalid("unknown polygonal_zone option")
-    if not polygon.get(CONF_POLYGON_GEOJSON) and not polygon.get(CONF_POLYGON_FILES):
+    if not polygon.get(CONF_POLYGON_GEOJSON) and not polygon.get(CONF_POLYGON_FILES) and not polygon.get(CATALOG_IDS):
         raise vol.Invalid("polygonal_zone needs GeoJSON or at least one file")
+    ids = polygon.get(CATALOG_IDS, [])
+    if not isinstance(ids, list) or len(ids) > 32 or any(not isinstance(key, str) or not key for key in ids):
+        raise vol.Invalid("invalid shared GeoJSON references")
     if polygon.get(CONF_POLYGON_GEOJSON):
         try:
             parse_geojson_zones(polygon[CONF_POLYGON_GEOJSON])
@@ -465,6 +470,11 @@ async def async_setup_entry(
 ) -> None:
     _LOGGER.debug("setting up the device_tracker entries...")
 
+    if entry.data.get("presence_fusion"):
+        from .presence_fusion.entities import entities as fusion_entities
+        async_add_entities(fusion_entities(entry, "device_tracker"))
+        return
+
     entities = []
     for entity in get_entity_configs(
         hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN
@@ -529,6 +539,9 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             config.get(CONF_SOURCE_ENTITIES),
         )
         self._polygon_zones = []
+        self._polygon_base_zones = []
+        self._polygon_catalog = None
+        self._polygon_base_error = None
         self._dawarich_config = self._normalize_dawarich_config(
             config.get(CONF_DAWARICH)
         )
@@ -902,6 +915,9 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
 
     async def _async_setup_polygon_tracking(self) -> None:
         """Load polygon definitions and start source aggregation."""
+        if self._polygon_config.get(CATALOG_IDS):
+            self._polygon_catalog = await async_get_catalog(self.hass)
+            self._refresh_remove_listeners.append(self._polygon_catalog.subscribe(self._catalog_changed))
         await self._async_reload_polygon_zones(keep_existing=False)
 
         source_entities = set(self._polygon_source_entities())
@@ -946,6 +962,8 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
         keep_existing=True,
     ) -> None:
         """Reload file-backed zones while preserving working data on failures."""
+        if self._polygon_catalog:
+            self._polygon_zones = self._polygon_base_zones
         try:
             zones, load_errors = await load_polygon_zones(
                 self.hass,
@@ -975,8 +993,24 @@ class VirtualDeviceTracker(TrackerEntity, VirtualEntity):
             if not keep_existing:
                 self._polygon_zones = []
             self._virtual_attributes[ATTR_POLYGON_LOAD_ERROR] = str(err)
+        if self._polygon_catalog:
+            self._polygon_base_zones = self._polygon_zones
+            self._polygon_base_error = self._virtual_attributes.get(ATTR_POLYGON_LOAD_ERROR)
+            self._merge_catalog()
         if _now is not None:
             self._update_polygon_from_sources()
+
+    def _merge_catalog(self):
+        ids = self._polygon_config.get(CATALOG_IDS, [])
+        self._polygon_zones = self._polygon_base_zones + self._polygon_catalog.selected(ids)
+        self._virtual_attributes[ATTR_POLYGON_LOAD_ERROR] = self._polygon_base_error or (
+            "shared_geojson_source_unavailable" if self._polygon_catalog.errors(ids) else None
+        )
+
+    @callback
+    def _catalog_changed(self):
+        self._merge_catalog()
+        self._update_polygon_from_sources()
 
     def _polygon_source_entities(self) -> list[str]:
         """Return explicit trackers, falling back to the configured person."""

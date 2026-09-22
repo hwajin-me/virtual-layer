@@ -57,6 +57,9 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
 from .binary_options import detection_minutes
+from .presence_fusion.flow import FusionFlow
+from .patrol_flow import PatrolFlow, camera_choices as patrol_camera_choices
+from .meter_flow import MeterFlow, meter_form
 from . import air_quality_options as aq_options
 from . import unit_history
 from . import meter
@@ -104,6 +107,7 @@ from .humidifier_options import (
     migrate_legacy_humidifier_attributes,
 )
 from .polygon import parse_geojson_zones
+from .geojson_catalog import CATALOG_IDS, async_get_catalog, catalog_choices
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -212,6 +216,7 @@ CONF_TEMPLATE_SOURCES_JSON = "template_sources_json"
 CONF_TARGET_DEVICE_NAME = "target_device_name"
 CONF_POLYGON_GEOJSON_JSON = "polygon_geojson_json"
 CONF_POLYGON_FILES_TEXT = "polygon_files_text"
+CONF_POLYGON_CATALOG_IDS = "polygon_catalog_ids"
 CONF_POLYGON_PERSON = "polygon_person"
 CONF_POLYGON_STRATEGY_INPUT = "polygon_strategy"
 CONF_POLYGON_DISTANCE_INPUT = "polygon_distance_meters"
@@ -438,7 +443,10 @@ DOMAIN_NATIVE_SOURCE_TEMPLATE_DEFAULT_VALUES = {
     },
     "sensor": {
         "options": None,
-        "suggested_display_precision": None,
+        # Home Assistant treats this as a display hint. Five decimal places is
+        # sufficiently precise for the virtual sensor domains while keeping
+        # newly-created entities readable by default.
+        "suggested_display_precision": 5,
     },
     "siren": {
         "support_volume": True,
@@ -1652,6 +1660,26 @@ def _boiler_feedback_schema(defaults: Mapping[str, Any] | None = None) -> dict:
             bc.FORMULA, defaults.get(bc.FORMULA, bc.DEFAULT_FORMULA)
         ): TEMPLATE_SELECTOR,
     }
+
+
+def _boiler_temperature_calibration_schema(default: bool = False) -> vol.Schema:
+    """Ask before generating boiler helpers that transform setpoints.
+
+    A boiler integration may already accept a room-temperature setpoint.  In
+    that case generating the historical room-to-water conversion would change
+    the requested temperature unexpectedly, so the safe new-entity default is
+    direct pass-through.
+    """
+    return _complete_form_schema(
+        vol.Schema(
+            {
+                vol.Required(
+                    bc.CALIBRATION_ENABLED,
+                    default=default,
+                ): selector.BooleanSelector(),
+            }
+        )
+    )
 
 
 def _submitted_boiler_feedback(user_input: Mapping[str, Any]) -> dict:
@@ -3086,17 +3114,24 @@ CALENDAR_EVENT_SOURCE_ATTRIBUTES = frozenset(
 
 
 def _options_schema(options: dict[str, Any]) -> vol.Schema:
-    actions = [ACTION_ADD_ENTITY, ACTION_COPY_DEVICE]
+    # Keep the primary management actions together.  The order is user-facing
+    # in Home Assistant's select control: virtual entities first, then virtual
+    # Devices, followed by supporting tools.
+    actions = [ACTION_ADD_ENTITY]
     if _entity_choices(options):
-        actions.append(ACTION_COPY_ENTITY)
         actions.append(ACTION_EDIT_ENTITY)
     if _entity_choices(options, include_invalid=True):
         actions.append(ACTION_DELETE_ENTITY)
-    if _entity_choices(options):
-        actions.append(ACTION_REGENERATE_ENTITY_IDS)
+    actions.append(ACTION_COPY_DEVICE)
     if _options_devices(options):
         actions.append(ACTION_MANAGE_DEVICES)
         actions.append(ACTION_DELETE_DEVICE)
+    if _entity_choices(options):
+        actions.append(ACTION_COPY_ENTITY)
+        actions.append(ACTION_REGENERATE_ENTITY_IDS)
+    if patrol_camera_choices(options):
+        actions.append("camera_patrol")
+    actions.append("manage_geojson")
     actions.append(ACTION_FINISH)
     return _complete_form_schema(
         vol.Schema(
@@ -3125,6 +3160,7 @@ def _setup_schema(
     }
     if include_entity_toggle:
         schema[vol.Optional(CONF_ADD_FIRST_ENTITY, default=False)] = cv.boolean
+        schema[vol.Optional("presence_fusion", default=False)] = cv.boolean
         schema[vol.Optional(CONF_SOURCE_DEVICE)] = selector.DeviceSelector()
     return _complete_form_schema(vol.Schema(schema))
 
@@ -3568,6 +3604,9 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
                     CONF_POLYGON_FILES_TEXT,
                     default=defaults.get(CONF_POLYGON_FILES_TEXT, ""),
                 ): MULTILINE_TEXT_SELECTOR,
+                vol.Optional(CONF_POLYGON_CATALOG_IDS, default=defaults.get(CONF_POLYGON_CATALOG_IDS, [])): selector.SelectSelector(
+                    selector.SelectSelectorConfig(options=catalog_choices(hass, defaults.get(CONF_POLYGON_CATALOG_IDS, [])), multiple=True, mode="dropdown")
+                ),
                 vol.Optional(
                     CONF_POLYGON_STRATEGY_INPUT,
                     default=defaults.get(CONF_POLYGON_STRATEGY_INPUT, "majority"),
@@ -3718,32 +3757,6 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
                 translation_key="sensor_unit", mode=selector.SelectSelectorMode.DROPDOWN)
         )
         domain_schema[vol.Optional("utility_meter_enabled", default=defaults.get("utility_meter_enabled", False))] = selector.BooleanSelector()
-        domain_schema[vol.Optional("utility_meter_cycle", default=defaults.get("utility_meter_cycle", "monthly"))] = selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=list(meter.CYCLES),
-                translation_key="utility_meter_cycle",
-                mode=selector.SelectSelectorMode.DROPDOWN,
-            )
-        )
-        for key, default in meter.DEFAULTS.items():
-            if key in {"enabled", "cycle"}:
-                continue
-            field = meter.PREFIX + key
-            marker = vol.Optional(field, default=defaults.get(field, default))
-            if isinstance(default, bool):
-                control = selector.BooleanSelector()
-            elif key == "tiers":
-                control = selector.ObjectSelector()
-            elif isinstance(default, int):
-                control = selector.NumberSelector(selector.NumberSelectorConfig(min=1 if key == "days" else 0, max=36600 if key == "days" else 40319 if key == "offset" else 1e12, mode=selector.NumberSelectorMode.BOX, step=1 if key in {"days", "offset"} else "any"))
-            elif key in {"start", "tariff_entity"}:
-                if not defaults.get(field):
-                    marker = vol.Optional(field)
-                control = selector.DateTimeSelector() if key == "start" else selector.EntitySelector(selector.EntitySelectorConfig(domain=["select", "input_select"]))
-            else:
-                control = selector.TextSelector()
-            domain_schema[marker] = control
-        domain_schema[vol.Optional("utility_meter_current_value", default="")] = selector.TextSelector()
     if platform == "device_tracker":
         person = defaults.get(CONF_DAWARICH_PERSON_INPUT, "")
         selected_person = person if isinstance(person, list) else ([person] if person else [])
@@ -4898,7 +4911,7 @@ def _build_entity_config(
     if platform == "climate":
         try:
             entity[bc.CALIBRATION_ENABLED] = cv.boolean(
-                user_input.get(bc.CALIBRATION_ENABLED, True)
+                user_input.get(bc.CALIBRATION_ENABLED, False)
             )
             entity[bc.ENABLED] = cv.boolean(user_input.get(bc.ENABLED, False))
             formula = user_input.get(bc.FORMULA, bc.DEFAULT_FORMULA)
@@ -5391,6 +5404,9 @@ def _build_entity_config(
             raise InvalidFieldValue(field, "invalid_local_presence") from err
 
     polygon_geojson_value = user_input.get(CONF_POLYGON_GEOJSON_JSON)
+    polygon_catalog_ids = user_input.get(CONF_POLYGON_CATALOG_IDS, [])
+    if not isinstance(polygon_catalog_ids, list) or any(not isinstance(key, str) or not key for key in polygon_catalog_ids):
+        raise InvalidFieldValue(CONF_POLYGON_CATALOG_IDS, "invalid_domain_options")
     polygon_files = [
         item.strip()
         for item in _multiline_list_default(
@@ -5411,6 +5427,7 @@ def _build_entity_config(
     if any(
         (
             polygon_geojson_value,
+            polygon_catalog_ids,
             polygon_files,
             polygon_person,
             polygon_rules_value,
@@ -5447,6 +5464,8 @@ def _build_entity_config(
                 )
             ),
         }
+        if polygon_catalog_ids:
+            polygon[CATALOG_IDS] = list(dict.fromkeys(polygon_catalog_ids))
         if polygon_geojson_value:
             polygon[CONF_POLYGON_GEOJSON] = _parse_json_object(
                 polygon_geojson_value,
@@ -9910,10 +9929,10 @@ def _reference_entity_defaults(
     )
     boiler_profile = None if mirror_source else _boiler_source_profile(entity_ids, states)
     boiler_air_conditioner_profile = _boiler_air_conditioner_profile(entity_ids, states)
-    # Preserve the established generated-helper behavior. The form exposes an
-    # explicit opt-out for boilers that already accept room setpoints.
+    # New boiler aliases pass setpoints through unless the user explicitly
+    # opts into the room-to-water conversion before helper generation.
     boiler_calibration_enabled = (
-        True
+        False
         if boiler_temperature_calibration_enabled is None
         else bool(boiler_temperature_calibration_enabled)
     )
@@ -10298,7 +10317,7 @@ def _reference_entity_defaults(
                 states[boiler_index],
                 states[air_conditioner_index],
                 (
-                    boiler_temperature_calibration_template
+                    boiler_calibration_template
                     if boiler_calibration_enabled
                     else None
                 ),
@@ -10483,18 +10502,21 @@ def _reference_entity_defaults(
             {
                 "hvac_modes": "{{ ['off', 'heat'] }}",
                 "hvac_mode": _boiler_mode_template(entity_ids[climate_index]),
-                # Never expose the raw boiler-water target as a room target.
-                # The outgoing command uses the forward formula; this template
-                # uses its nearest inverse for source updates and reloads.
-                "target_temperature": _boiler_target_temperature_template(
-                    entity_ids[climate_index], boiler_calibration_template
-                ),
-                # A boiler's water range must not become the UI's room range.
-                "min_temp": _literal_template(22),
-                "max_temp": _literal_template(40),
-                "target_temperature_step": _literal_template(1),
             }
         )
+        if boiler_calibration_enabled:
+            native_templates.update(
+                {
+                    # Invert the outgoing curve for source updates and reloads.
+                    "target_temperature": _boiler_target_temperature_template(
+                        entity_ids[climate_index], boiler_calibration_template
+                    ),
+                    # The calibrated UI exposes room temperatures.
+                    "min_temp": _literal_template(22),
+                    "max_temp": _literal_template(40),
+                    "target_temperature_step": _literal_template(1),
+                }
+            )
     elif boiler_air_conditioner_profile is not None:
         boiler_index, air_conditioner_index, _hot_water_switch_id = (
             boiler_air_conditioner_profile
@@ -10746,6 +10768,15 @@ def _refresh_add_reference_defaults(
         submitted_sources,
         CONF_SOURCE_ENTITIES_TEXT,
     )
+    boiler_options = {
+        "boiler_temperature_calibration_enabled": user_input.get(
+            bc.CALIBRATION_ENABLED, reference_defaults.get(bc.CALIBRATION_ENABLED, False)
+        ),
+        "boiler_temperature_calibration_template": user_input.get(
+            CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
+            reference_defaults.get(CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE),
+        ),
+    }
     try:
         if len(submitted_sources) == 1 and submitted_platform in VIRTUAL_ENTITY_DOMAINS:
             refreshed_reference_defaults = _reference_entity_defaults(
@@ -10754,11 +10785,13 @@ def _refresh_add_reference_defaults(
                 submitted_platform,
                 (submitted_platform,),
                 mirror_source=reference_defaults.get(CONF_SOURCE_DEVICE_COPY) is True,
+                **boiler_options,
             )
         else:
             refreshed_reference_defaults = _reference_entity_defaults(
                 hass,
                 submitted_sources,
+                **boiler_options,
             )
     except InvalidEntityReference:
         # A syntactically valid future/unloaded source can still be saved, but
@@ -11214,6 +11247,10 @@ def _existing_auto_helper_profile(
             reference_defaults = _reference_entity_defaults(
                 hass, source_entities,
                 mirror_source=bool((primary_profile or {}).get(CONF_SOURCE_DEVICE_COPY)),
+                boiler_temperature_calibration_enabled=entity.get(bc.CALIBRATION_ENABLED, True),
+                boiler_temperature_calibration_template=entity.get(
+                    CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+                ),
             )
         except InvalidEntityReference:
             continue
@@ -11351,6 +11388,7 @@ def _entity_form_defaults(
         ),
     }
     if platform == "climate":
+        defaults[bc.CALIBRATION_ENABLED] = entity.get(bc.CALIBRATION_ENABLED, True)
         defaults[bc.ENABLED] = entity.get(bc.ENABLED, False)
         defaults[bc.FORMULA] = entity.get(bc.FORMULA, bc.DEFAULT_FORMULA)
         if CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE in entity:
@@ -11368,6 +11406,7 @@ def _entity_form_defaults(
     defaults.update(
         {
             CONF_POLYGON_GEOJSON_JSON: _json_default(polygon.get(CONF_POLYGON_GEOJSON)),
+            CONF_POLYGON_CATALOG_IDS: polygon.get(CATALOG_IDS, []),
             CONF_POLYGON_FILES_TEXT: _multiline_list_default(
                 polygon.get(CONF_POLYGON_FILES),
             ),
@@ -12416,7 +12455,7 @@ class _CopyDeviceFlow:
 
 
 @_log_unhandled_flow_errors
-class VirtualFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogicFlow, config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
+class VirtualFlowHandler(MeterFlow, FusionFlow, _CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogicFlow, config_entries.ConfigFlow, domain=COMPONENT_DOMAIN):
     """Virtual Layer config flow."""
 
     VERSION = 1
@@ -12428,6 +12467,7 @@ class VirtualFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogic
         self._reference_defaults: dict[str, Any] = {}
         self._source_entities: list[str] = []
         self._add_use_template_helper = True
+        self._boiler_calibration_configured = False
         self._matter_fan_levels: tuple[int, ...] = ()
         self._matter_fan_level_sources: dict[str, tuple[int, ...]] = {}
         self._matter_fan_speed_source: str | None = None
@@ -12466,11 +12506,12 @@ class VirtualFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogic
         }
 
     async def async_step_user(self, user_input=None):
+        await async_get_catalog(self.hass)
         _LOGGER.debug("Starting Virtual Layer user configuration step")
 
         errors = _flow_errors(self, "user")
         if user_input is not None:
-            if user_input.get(CONF_SOURCE_DEVICE):
+            if user_input.get(CONF_SOURCE_DEVICE) and not user_input.get("presence_fusion"):
                 return await self.async_step_copy_device({
                     CONF_SOURCE_DEVICE: user_input[CONF_SOURCE_DEVICE],
                     CONF_DEVICE_NAME: user_input.get(ATTR_GROUP_NAME),
@@ -12481,6 +12522,8 @@ class VirtualFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogic
                 self._pending_data = {
                     ATTR_GROUP_NAME: info[ATTR_GROUP_NAME],
                 }
+                if user_input.get("presence_fusion"):
+                    return await self.async_step_fusion()
                 if user_input.get(CONF_ADD_FIRST_ENTITY):
                     return await self.async_step_entity_source()
 
@@ -12539,6 +12582,7 @@ class VirtualFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogic
         """Choose an existing entity to prefill a new virtual entity."""
         errors = _flow_errors(self, "entity_source")
         if user_input is not None:
+            self._boiler_calibration_configured = False
             try:
                 preset = _tracker_creation_defaults(user_input)
                 if preset is not None:
@@ -12687,6 +12731,14 @@ class VirtualFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogic
         if not self._reference_defaults:
             return await self.async_step_entity_source()
 
+        if (
+            user_input is None
+            and not self._boiler_calibration_configured
+            and CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+            in self._reference_defaults
+        ):
+            return await self.async_step_boiler_temperature_calibration()
+
         if user_input is not None:
             try:
                 _validate_entity_templates(self.hass, {
@@ -12768,6 +12820,25 @@ class VirtualFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogic
                 ),
                 self._reference_defaults,
             ),
+        )
+
+    async def async_step_boiler_temperature_calibration(self, user_input=None):
+        """Select direct or converted setpoints before generating helpers."""
+        if CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE not in self._reference_defaults:
+            return await self.async_step_entity_helper()
+        if user_input is not None:
+            enabled = cv.boolean(user_input[bc.CALIBRATION_ENABLED])
+            self._reference_defaults = _reference_entity_defaults(
+                self.hass,
+                self._source_entities,
+                self._reference_defaults.get(CONF_PLATFORM),
+                boiler_temperature_calibration_enabled=enabled,
+            )
+            self._boiler_calibration_configured = True
+            return await self.async_step_entity_helper()
+        return self.async_show_form(
+            step_id="boiler_temperature_calibration",
+            data_schema=_boiler_temperature_calibration_schema(),
         )
 
     async def async_step_fan_source_roles(self, user_input=None):
@@ -12889,6 +12960,7 @@ class VirtualFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogic
         """Configure the Matter aggregate air-quality value separately."""
         return await self._aq_mode_step(user_input)
 
+    @meter_form
     async def async_step_entity(self, user_input=None):
         """Add the first UI-managed virtual entity."""
         if user_input is None and self._tracker_needs_settings(self._entity_defaults):
@@ -13023,7 +13095,7 @@ class VirtualFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogic
 
 
 @_log_unhandled_flow_errors
-class VirtualOptionsFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogicFlow, config_entries.OptionsFlow):
+class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFlow, _TrackerSettingsFlow, _AirQualityLogicFlow, config_entries.OptionsFlow):
     """Virtual Layer options flow."""
 
     def __init__(self) -> None:
@@ -13037,6 +13109,7 @@ class VirtualOptionsFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQuali
         self._add_target_device_name: str | None = None
         self._add_source_entities: list[str] = []
         self._add_use_template_helper = True
+        self._add_boiler_calibration_configured = False
         self._copy_auto_helper_profile: dict[str, Any] | None = None
         self._add_matter_fan_levels: tuple[int, ...] = ()
         self._add_matter_fan_level_sources: dict[str, tuple[int, ...]] = {}
@@ -13062,8 +13135,16 @@ class VirtualOptionsFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQuali
         self._edit_motion_hold_configured = False
 
     async def async_step_init(self, user_input=None):
+        await async_get_catalog(self.hass)
+        if self.config_entry.data.get("presence_fusion"):
+            return await self.async_step_fusion(user_input)
         errors = _flow_errors(self, "init")
         if user_input is not None:
+            if user_input[CONF_ACTION] == "manage_geojson":
+                self._geo_return = "init"
+                return await self.async_step_geojson()
+            if user_input[CONF_ACTION] == "camera_patrol":
+                return await self.async_step_patrol_camera()
             if user_input[CONF_ACTION] == ACTION_COPY_DEVICE:
                 return await self.async_step_copy_device()
             if user_input[CONF_ACTION] == ACTION_FINISH:
@@ -13177,6 +13258,7 @@ class VirtualOptionsFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQuali
         """Choose an existing entity to prefill a new virtual entity."""
         errors = _flow_errors(self, "entity_source")
         if user_input is not None:
+            self._add_boiler_calibration_configured = False
             try:
                 preset = _tracker_creation_defaults(user_input)
                 if preset is not None:
@@ -13343,6 +13425,14 @@ class VirtualOptionsFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQuali
         if not self._reference_defaults:
             return await self.async_step_entity_source()
 
+        if (
+            user_input is None
+            and not self._add_boiler_calibration_configured
+            and CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE
+            in self._reference_defaults
+        ):
+            return await self.async_step_boiler_temperature_calibration()
+
         if user_input is not None:
             try:
                 _validate_entity_templates(self.hass, {
@@ -13430,6 +13520,25 @@ class VirtualOptionsFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQuali
                 ),
                 self._reference_defaults,
             ),
+        )
+
+    async def async_step_boiler_temperature_calibration(self, user_input=None):
+        """Select direct or converted setpoints before generating helpers."""
+        if CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE not in self._reference_defaults:
+            return await self.async_step_entity_helper()
+        if user_input is not None:
+            enabled = cv.boolean(user_input[bc.CALIBRATION_ENABLED])
+            self._reference_defaults = _reference_entity_defaults(
+                self.hass,
+                self._add_source_entities,
+                self._reference_defaults.get(CONF_PLATFORM),
+                boiler_temperature_calibration_enabled=enabled,
+            )
+            self._add_boiler_calibration_configured = True
+            return await self.async_step_entity_helper()
+        return self.async_show_form(
+            step_id="boiler_temperature_calibration",
+            data_schema=_boiler_temperature_calibration_schema(),
         )
 
     async def async_step_fan_source_roles(self, user_input=None):
@@ -13561,6 +13670,7 @@ class VirtualOptionsFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQuali
         """Configure Matter aggregate air quality for a new entity."""
         return await self._aq_mode_step(user_input)
 
+    @meter_form
     async def async_step_entity(self, user_input=None):
         """Add a UI-managed virtual entity."""
         if user_input is None and self._tracker_needs_settings(self._entity_defaults):
@@ -13821,6 +13931,15 @@ class VirtualOptionsFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQuali
     def _edit_reference_defaults(self, *args, **kwargs):
         """Retain direct-device helper semantics through every edit policy."""
         profile = (self._edit_entity_snapshot or {}).get(CONF_AUTO_HELPER)
+        current = self._edit_current_defaults or self._edit_entity_snapshot or {}
+        kwargs.setdefault(
+            "boiler_temperature_calibration_enabled",
+            current.get(bc.CALIBRATION_ENABLED, True),
+        )
+        kwargs.setdefault(
+            "boiler_temperature_calibration_template",
+            current.get(CONF_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE),
+        )
         return _reference_entity_defaults(
             self.hass, *args,
             mirror_source=isinstance(profile, Mapping) and profile.get(CONF_SOURCE_DEVICE_COPY) is True,
@@ -14397,6 +14516,7 @@ class VirtualOptionsFlowHandler(_CopyDeviceFlow, _TrackerSettingsFlow, _AirQuali
             description_placeholders={"source": choice[0][0]},
         )
 
+    @meter_form
     async def async_step_edit_entity(self, user_input=None):
         """Edit a UI-managed virtual entity."""
         errors = _flow_errors(self, "edit_entity")

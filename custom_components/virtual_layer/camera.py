@@ -44,6 +44,7 @@ from webrtc_models import RTCIceCandidateInit
 from . import get_entity_configs
 from .const import *
 from .patrol_recording import PatrolRecording
+from . import patrol_positions
 from .frigate_source import frigate_camera_switches
 from .entity import (
     MAX_LOCAL_MEDIA_BYTES,
@@ -184,6 +185,7 @@ BASE_SCHEMA = virtual_schema(DEFAULT_CAMERA_VALUE, {
     vol.Optional(CONF_FRIGATE_MOTION_SWITCH): cv.entity_id,
     vol.Optional(CONF_FRIGATE_RECORDING_DURING_PATROL, default="off"): vol.In({"keep", "on", "off"}),
     vol.Optional(CONF_FRIGATE_MOTION_DURING_PATROL): vol.In({"keep", "on", "off"}),
+    vol.Optional(patrol_positions.CONF_PATROL_ROUTE): patrol_positions.validate_route,
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
@@ -261,6 +263,7 @@ class VirtualCamera(VirtualEntity, Camera):
         self._patrol_origin = None
         self._patrol_enabled = config.get(CONF_ONVIF_PATROL_ENABLED, False)
         self._patrol_target = config.get(CONF_ONVIF_PATROL_TARGET)
+        self._patrol_route = config.get(patrol_positions.CONF_PATROL_ROUTE)
         self._patrol_mode = config.get(CONF_ONVIF_PATROL_MODE, "horizontal")
         self._patrol_interval = config.get(CONF_ONVIF_PATROL_INTERVAL, 30)
         self._patrol_distance = config.get(CONF_ONVIF_PATROL_DISTANCE, 0.1)
@@ -894,7 +897,11 @@ class VirtualCamera(VirtualEntity, Camera):
         """Start a bounded ONVIF PTZ patrol without replacing this camera's feed."""
         if not self._patrol_target:
             raise HomeAssistantError("Configure an ONVIF PTZ camera before starting patrol")
-        if not self._patrol_moves():
+        if self._patrol_route:
+            if self._patrol_route["target"] != self._patrol_target:
+                raise HomeAssistantError("Reconfigure patrol positions for the selected ONVIF camera")
+            await patrol_positions.client(self.hass, self._patrol_target)
+        if not self._patrol_route and not self._patrol_moves():
             raise HomeAssistantError("Configure a positive patrol movement range")
         async with self._patrol_lock:
             if self._patrol_task is None or self._patrol_task.done():
@@ -958,7 +965,20 @@ class VirtualCamera(VirtualEntity, Camera):
         cancelled = False
         try:
             while True:
-                for pan, tilt, distance in self._patrol_moves():
+                moves = self._patrol_route["points"] if self._patrol_route else self._patrol_moves()
+                for move in moves:
+                    if self._patrol_route:
+                        if self._patrol_recording_scope == "movement":
+                            await self._async_set_frigate_patrol_switches(restore=False)
+                        await patrol_positions.move_to(
+                            self.hass, self._patrol_target, move["position"], self._patrol_speed,
+                        )
+                        if self._patrol_recording_scope == "movement":
+                            await self._async_settle_patrol_move()
+                            await self._async_set_frigate_patrol_switches(restore=True)
+                        await asyncio.sleep(self._patrol_interval)
+                        continue
+                    pan, tilt, distance = move
                     data = {ATTR_ENTITY_ID: self._patrol_target, "move_mode": "RelativeMove", "distance": distance}
                     if pan:
                         data["pan"] = pan
@@ -1295,6 +1315,10 @@ class VirtualCamera(VirtualEntity, Camera):
 
 def validate_domain_options(config) -> None:
     """Require a target when a stored camera enables ONVIF patrol."""
+    if patrol_positions.CONF_PATROL_ROUTE in config:
+        route = patrol_positions.validate_route(config[patrol_positions.CONF_PATROL_ROUTE])
+        if route["target"] != config.get(CONF_ONVIF_PATROL_TARGET):
+            raise vol.Invalid("Saved patrol positions belong to a different ONVIF camera")
     if config.get(CONF_ONVIF_PATROL_ENABLED) and not config.get(CONF_ONVIF_PATROL_TARGET):
         raise vol.Invalid("ONVIF patrol needs an ONVIF camera target")
     if config.get("patrol_auto_cycle") and not config.get(CONF_ONVIF_PATROL_TARGET):

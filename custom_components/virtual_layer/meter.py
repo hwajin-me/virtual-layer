@@ -17,6 +17,7 @@ DEFAULTS = {
     "net_consumption": False, "periodically_resetting": True,
     "always_available": True, "tariff_entity": "", "tariff": "",
     "rate": 0, "base_charge": 0, "currency": "KRW", "tiers": [],
+    "compare_previous_month": False,
 }
 
 
@@ -47,7 +48,7 @@ def options(config):
         except vol.Invalid as err:
             raise invalid(key, str(err)) from err
 
-    for key in ("enabled", "delta_values", "net_consumption", "periodically_resetting", "always_available"):
+    for key in ("enabled", "delta_values", "net_consumption", "periodically_resetting", "always_available", "compare_previous_month"):
         if not isinstance(result[key], bool):
             raise invalid(key, key + " must be a boolean")
     if result["cycle"] not in CYCLES:
@@ -121,6 +122,26 @@ def collection_started(settings, now):
     if start.tzinfo is None:
         start = start.replace(tzinfo=dt_util.get_default_time_zone())
     return dt_util.as_utc(start) <= dt_util.as_utc(now)
+
+
+def previous_month_same_time(now):
+    """Return the local calendar instant one month ago, clamping month ends.
+
+    This is deliberately calendar based: 31 March maps to 28/29 February,
+    rather than subtracting an arbitrary number of days.  A nonexistent local
+    DST wall time is normalized by Home Assistant in the same way as resets;
+    an ambiguous historical wall time uses its first occurrence.
+    """
+    local = dt_util.as_local(now)
+    year, month = divmod(local.year * 12 + local.month - 2, 12)
+    month += 1
+    candidate = local.replace(
+        year=year,
+        month=month,
+        day=min(local.day, monthrange(year, month)[1]),
+        fold=0,
+    )
+    return dt_util.as_local(dt_util.as_utc(candidate))
 
 
 def next_reset(settings, after):

@@ -6,6 +6,7 @@ from datetime import timedelta
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.helpers import entity_registry as er
+from homeassistant.core import State
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 from freezegun import freeze_time
@@ -407,6 +408,9 @@ async def test_real_edit_flow_keeps_inputs_and_reports_meter_field(hass):
                  "utility_meter_cron": "bad cron", "utility_meter_rate": 123}
     result = await manager.async_configure(result["flow_id"], submitted)
     assert result["type"] == "form"
+    assert result["step_id"] == "edit_utility_meter"
+    assert entry.options["devices"]["Room"][0].get("utility_meter_enabled") is None
+    result = await manager.async_configure(result["flow_id"], suggested_form_values(result["data_schema"]))
     assert result["errors"]["utility_meter_cron"] == "invalid_domain_options"
     reopened = flow._flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
     assert reopened["utility_meter_rate"] == 123
@@ -416,9 +420,180 @@ async def test_real_edit_flow_keeps_inputs_and_reports_meter_field(hass):
     if result.get("step_id") == "edit_entity_helper":
         result = await manager.async_configure(result["flow_id"], {flow.CONF_HELPER_UPDATE_MODE: flow.HELPER_UPDATE_KEEP})
         values = flow._flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
-        assert values["utility_meter_rate"] == 123
         result = await manager.async_configure(result["flow_id"], values)
     assert result["type"] == "create_entry"
     saved = entry.options["devices"]["Room"][0]
     assert saved["initial_value"] == "0"
     assert saved["utility_meter_cron"] == "0 0 * * *"
+
+
+async def test_initial_setup_uses_meter_step_before_creating_entry(hass):
+    from custom_components.virtual_layer import config_flow as cf
+    from tests.flow_helpers import suggested_form_values
+    flow = cf.VirtualFlowHandler()
+    flow.hass = hass
+    flow._add_use_template_helper = False
+    hass.states.async_set("sensor.physical_energy", "100", {"device_class": "energy", "unit_of_measurement": "kWh"})
+    flow._pending_title = "Billing"
+    flow._pending_data = {"group_name": "Billing"}
+    values = cf._entity_form_defaults("Billing", {
+        "platform": "sensor", "name": "Billing", "entity_id": "sensor.billing",
+        "initial_value": "0", "source_entities": ["sensor.physical_energy"],
+        "utility_meter_enabled": True, "utility_meter_rate": 123,
+    })
+    values = cf._complete_domain_form_defaults(values)
+    flow._entity_defaults = values
+    result = await flow.async_step_entity(values)
+    assert result["step_id"] == "utility_meter"
+    assert not hass.config_entries.async_entries(COMPONENT_DOMAIN)
+    result = await flow.async_step_utility_meter(result["data_schema"]({}))
+    if result.get("step_id") == "entity":
+        result = await flow.async_step_entity(suggested_form_values(result["data_schema"]))
+    assert result["type"] == "create_entry", (result.get("step_id"), result.get("errors"))
+    assert result["options"]["devices"]["Billing"][0]["utility_meter_rate"] == 123
+
+
+async def test_options_add_routes_through_meter_settings(hass):
+    from custom_components.virtual_layer import config_flow as cf
+    from tests.flow_helpers import suggested_form_values
+    hass.states.async_set("sensor.physical_energy", "100", {"device_class": "energy", "unit_of_measurement": "kWh"})
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={"group_name": "Billing"}, options={"devices": {"Billing": []}})
+    entry.add_to_hass(hass)
+    manager = hass.config_entries.options
+    result = await manager.async_init(entry.entry_id, data={cf.CONF_ACTION: cf.ACTION_ADD_ENTITY})
+    result = await manager.async_configure(result["flow_id"], {cf.CONF_REFERENCE_ENTITY_ID: ["sensor.physical_energy"], cf.CONF_TARGET_DEVICE_NAME: "Billing"})
+    if result.get("step_id") == "entity_type":
+        result = await manager.async_configure(result["flow_id"], {cf.CONF_TARGET_ENTITY_TYPE: "sensor"})
+    assert result["step_id"] == "entity_helper"
+    result = await manager.async_configure(result["flow_id"], {cf.CONF_USE_TEMPLATE_HELPER: False})
+    values = cf._flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+    values["utility_meter_enabled"] = True
+    result = await manager.async_configure(result["flow_id"], values)
+    assert result["step_id"] == "utility_meter"
+    assert entry.options["devices"]["Billing"] == []
+    result = await manager.async_configure(result["flow_id"], {**result["data_schema"]({}), "utility_meter_current_value": "42"})
+    assert result["type"] == "create_entry", (result.get("step_id"), result.get("errors"))
+    saved = entry.options["devices"]["Billing"][0]
+    assert saved["utility_meter_correction"] == "42"
+
+
+async def test_previous_month_same_time_companion_reads_recorder(recorder_mock, hass, monkeypatch):
+    from custom_components.virtual_layer import sensor as sensor_module
+
+    calls = []
+    def history_at_same_time(_hass, start, end, entity_ids, **_kwargs):
+        calls.append((start, end, entity_ids))
+        return {"sensor.billing": [State("sensor.billing", "17.5", {"unit_of_measurement": "kWh"}, last_updated=start)]}
+
+    monkeypatch.setattr(sensor_module.recorder_history, "get_significant_states", history_at_same_time)
+    with freeze_time("2026-03-31T12:00:00Z") as clock:
+        entry = await setup_meter(hass, utility_meter_compare_previous_month=True)
+        await hass.async_block_till_done()
+        state = hass.states.get("sensor.billing")
+        assert state.attributes["last_month_same_time_usage"] == "17.5"
+        assert dt_util.parse_datetime(state.attributes["last_month_same_time"]).date().isoformat() == "2026-02-28"
+        comparison = hass.states.get("sensor.billing_last_month_same_time")
+        await hass.async_block_till_done()
+        assert Decimal(comparison.state) == Decimal("17.5")
+        assert calls and calls[0][2] == ["sensor.billing"]
+        registry = er.async_get(hass)
+        assert registry.async_get("sensor.billing").device_id == registry.async_get(comparison.entity_id).device_id
+        clock.tick(timedelta(minutes=1))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+        assert len(calls) >= 2
+        assert calls[-1][0] == calls[0][0] + timedelta(minutes=1)
+        assert await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def test_disable_comparison_removes_companion(hass):
+    entry = await setup_meter(hass, utility_meter_compare_previous_month=True)
+    comparison_id = "sensor.billing_last_month_same_time"
+    options = {**entry.options, "devices": {"Billing": [dict(entry.options["devices"]["Billing"][0])]}}
+    options["devices"]["Billing"][0]["utility_meter_compare_previous_month"] = False
+    hass.config_entries.async_update_entry(entry, options=options)
+    await hass.async_block_till_done()
+    assert hass.states.get(comparison_id) is None
+    assert er.async_get(hass).async_get(comparison_id) is None
+    assert hass.states.get("sensor.billing") is not None
+
+
+@pytest.fixture
+def recorder_db_url(tmp_path):
+    return f"sqlite:///{tmp_path / 'recorder.db'}"
+
+
+@pytest.mark.parametrize("historical_state,unit,expected", [
+    ("17.5", "kWh", "17.5"), ("unavailable", "kWh", None),
+    ("unknown", "kWh", None), ("17000", "Wh", None),
+])
+async def test_comparison_real_recorder_point_in_time(recorder_mock, hass, monkeypatch,
+                                                       historical_state, unit, expected):
+    from custom_components.virtual_layer import sensor as sensor_module
+    from pytest_homeassistant_custom_component.components.recorder.common import async_recorder_block_till_done
+
+    hass.states.async_set("sensor.billing", historical_state, {"unit_of_measurement": unit})
+    await hass.async_block_till_done()
+    await async_recorder_block_till_done(hass)
+    target = dt_util.utcnow()
+    hass.states.async_set("sensor.billing", "999", {"unit_of_measurement": "kWh"})
+    await hass.async_block_till_done()
+    await async_recorder_block_till_done(hass)
+    monkeypatch.setattr(sensor_module.meter, "previous_month_same_time", lambda now: target)
+    hass.states.async_remove("sensor.billing")
+    entry = await setup_meter(hass, utility_meter_compare_previous_month=True)
+    assert hass.states.get("sensor.billing").attributes["last_month_same_time_usage"] == expected
+    assert hass.states.get("sensor.billing_last_month_same_time").state == (expected or "unknown")
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_previous_month_companion_is_unavailable_without_history(hass, monkeypatch):
+    from custom_components.virtual_layer import sensor as sensor_module
+    monkeypatch.setattr(sensor_module.recorder_history, "get_significant_states", lambda *_args: {})
+    await setup_meter(hass, utility_meter_compare_previous_month=True)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.billing").attributes["last_month_same_time_usage"] is None
+    assert hass.states.get("sensor.billing_last_month_same_time").state == "unknown"
+
+
+async def test_comparison_cancels_inflight_lookup_on_unload(recorder_mock, hass, monkeypatch):
+    import asyncio
+    from custom_components.virtual_layer import sensor as sensor_module
+
+    entry = await setup_meter(hass, utility_meter_compare_previous_month=True)
+    entity = sensor_module.get_entity_from_domain(hass, "sensor", "sensor.billing")
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def blocked_lookup(*args):
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr(recorder_mock, "async_add_executor_job", blocked_lookup)
+    entity._start_previous_month_refresh()
+    task = entity._meter_compare_task
+    await entered.wait()
+    entity._start_previous_month_refresh()
+    assert entity._meter_compare_task is task
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert cancelled.is_set()
+    assert entity._meter_compare_cancel is None
+    assert entity._meter_compare_task is None
+
+
+@pytest.mark.parametrize("mode", ["future", "failure"])
+async def test_comparison_does_not_fabricate_missing_history(recorder_mock, hass, monkeypatch, mode):
+    from custom_components.virtual_layer import sensor as sensor_module
+
+    def read_history(_hass, target, *args, **kwargs):
+        if mode == "failure":
+            raise RuntimeError("Recorder temporarily unavailable")
+        return {"sensor.billing": [State("sensor.billing", "123", {"unit_of_measurement": "kWh"},
+                                         last_updated=target + timedelta(microseconds=1))]}
+
+    monkeypatch.setattr(sensor_module.recorder_history, "get_significant_states", read_history)
+    await setup_meter(hass, utility_meter_compare_previous_month=True)
+    assert hass.states.get("sensor.billing_last_month_same_time").state == "unknown"

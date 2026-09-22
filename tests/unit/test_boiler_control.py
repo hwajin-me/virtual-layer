@@ -277,11 +277,15 @@ def test_dynamic_configuration_requires_explicit_inputs(extra):
         validate_domain_options(config(**extra))
 
 
-def test_flow_round_trip_keeps_dynamic_formula_and_sensors():
+@pytest.mark.parametrize("enabled", [None, False, True])
+def test_flow_round_trip_keeps_dynamic_formula_and_sensors(enabled):
     stored = {**config(), "platform": "climate"}
+    if enabled is not None:
+        stored[bc.CALIBRATION_ENABLED] = enabled
     defaults = _entity_form_defaults("Boiler", stored)
     _, reopened = _build_entity_config(defaults)
     assert reopened[bc.ENABLED] is True
+    assert reopened[bc.CALIBRATION_ENABLED] is (True if enabled is None else enabled)
     assert reopened[bc.FORMULA] == bc.DEFAULT_FORMULA
     assert reopened["boiler_room_temperature_entity_id"] == [
         "sensor.room_a",

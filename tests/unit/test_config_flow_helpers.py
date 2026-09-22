@@ -37,6 +37,7 @@ from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
 from voluptuous_serialize import convert
 
+from custom_components.virtual_layer import boiler_control as bc
 from custom_components.virtual_layer.config_flow import (
     CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
     DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
@@ -99,6 +100,7 @@ from custom_components.virtual_layer.config_flow import (
     _async_build_entity_config,
     _auto_helper_profile,
     _boiler_calibration_form_default,
+    _boiler_temperature_calibration_schema,
     _boiler_target_temperature_template,
     _apply_fan_source_roles,
     _apply_media_player_source_priorities,
@@ -4443,6 +4445,42 @@ def test_boiler_calibration_keeps_room_target_when_source_reports_water_target(h
     assert target_template.async_render({"this": None}, parse_result=True) == 27.0
 
 
+def test_new_boiler_defaults_pass_through_temperature_until_conversion_is_selected(hass):
+    """A new boiler must not generate a room-to-water adjustment by default."""
+    hass.states.async_set(
+        "climate.boiler",
+        "heat",
+        {
+            "hvac_modes": ["off", "heat", "fan_only"],
+            "min_temp": 0,
+            "max_temp": 80,
+            "target_temp_step": 1,
+            "temperature": 48,
+        },
+    )
+
+    defaults = _reference_entity_defaults(hass, ["climate.boiler"])
+
+    assert defaults[bc.CALIBRATION_ENABLED] is False
+    assert _boiler_temperature_calibration_schema()({
+        bc.CALIBRATION_ENABLED: False
+    })[bc.CALIBRATION_ENABLED] is False
+    native_templates = defaults[CONF_NATIVE_VALUE_TEMPLATES]
+    assert Template(native_templates["target_temperature"], hass).async_render(
+        parse_result=True
+    ) == 48
+    assert Template(native_templates["min_temp"], hass).async_render(
+        parse_result=True
+    ) == 0
+    actions = _parse_command_actions(defaults[CONF_COMMAND_ACTIONS_JSON], "climate")
+    sequence = actions["set_temperature"][0]["choose"][0]["sequence"]
+    command_data = Template(sequence[0]["data"], hass).async_render(
+        {"temperature": 27, "command_data": {"temperature": 27}},
+        parse_result=True,
+    )
+    assert command_data["temperature"] == 27
+
+
 def test_boiler_calibration_edit_default_replaces_only_legacy_direct_formula():
     """Editing proposes recovery without replacing an explicit calibration."""
     assert (
@@ -7567,15 +7605,16 @@ def test_options_schema_allows_deleting_but_not_editing_invalid_stored_entity():
     assert action_selector.config["translation_key"] == "options_action"
     assert action_selector.config["options"] == [
         "add_entity",
-        "copy_device",
         "delete_entity",
+        "copy_device",
         "manage_devices",
         "delete_device",
+        "manage_geojson",
         "finish",
     ]
 
 
-def test_options_schema_places_copy_before_edit_for_valid_entities():
+def test_options_schema_groups_entity_and_device_management_actions_first():
     schema = _options_schema(
         {
             ATTR_DEVICES: {
@@ -7585,12 +7624,19 @@ def test_options_schema_places_copy_before_edit_for_valid_entities():
     )
     action_selector = next(iter(schema.schema.values()))
 
-    assert action_selector.config["options"][:5] == [
+    assert action_selector.config["options"][:6] == [
         "add_entity",
-        "copy_device",
-        "copy_entity",
         "edit_entity",
         "delete_entity",
+        "copy_device",
+        "manage_devices",
+        "delete_device",
+    ]
+    assert action_selector.config["options"][6:] == [
+        "copy_entity",
+        "regenerate_entity_ids",
+        "manage_geojson",
+        "finish",
     ]
 
 

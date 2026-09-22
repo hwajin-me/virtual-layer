@@ -3,10 +3,12 @@ This component provides support for a virtual sensor.
 
 """
 
+import asyncio
 import logging
 import math
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from functools import partial
 from decimal import Decimal, DecimalException
 
 import homeassistant.helpers.config_validation as cv
@@ -38,6 +40,8 @@ from homeassistant.helpers.event import async_track_state_change_event, async_tr
 from homeassistant.core import callback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import dt as dt_util
+from homeassistant.components.recorder import history as recorder_history
+from homeassistant.components.recorder import get_instance as get_recorder_instance
 
 from . import (
     _assert_managed_virtual_entities,
@@ -222,6 +226,11 @@ async def async_setup_entry(
 ) -> None:
     _LOGGER.debug("setting up the entries...")
 
+    if entry.data.get("presence_fusion"):
+        from .presence_fusion.entities import entities as fusion_entities
+        async_add_entities(fusion_entities(entry, "sensor"))
+        return
+
     entities = []
     for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN):
         if SOURCE_USAGE in entity and entity.get(ATTR_UNIQUE_ID, "").startswith(
@@ -268,6 +277,11 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         self._attr_icon = config.get(CONF_ICON)
         self._domain_options = generic_entity_options(config)
         self._attr_options = config.get("options")
+        # Keep sensor display precision bounded even for legacy records and
+        # source-generated templates.  This is deliberately an entity default
+        # as well as a config-flow default, so existing sensors without the
+        # native template get the same sensible limit.
+        self._attr_suggested_display_precision = 5
         self._utility_meter_enabled = bool(config.get("utility_meter_enabled", False))
         self._utility_meter_cycle = config.get("utility_meter_cycle", "monthly")
         self._utility_meter_last_source: Decimal | None = None
@@ -280,6 +294,10 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         self._meter_correction_id = None
         self._meter_schedule_profile = None
         self._meter_schedule_since = None
+        self._meter_previous_month_value: Decimal | None = None
+        self._meter_previous_month_at: datetime | None = None
+        self._meter_compare_cancel = None
+        self._meter_compare_task = None
         if self._utility_meter_enabled:
             self._attr_state_class = SensorStateClass.TOTAL_INCREASING
 
@@ -318,6 +336,16 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         """Whether this sensor accumulates source readings like Utility Meter."""
         return self._utility_meter_enabled
 
+    @property
+    def suggested_display_precision(self):
+        """Precision must not turn textual diagnostic sensors into numbers."""
+        if self._attr_device_class in NON_NUMERIC_DEVICE_CLASSES:
+            return None
+        if (not self._attr_native_unit_of_measurement and not self._attr_state_class
+                and self._utility_decimal(self._attr_native_value) is None):
+            return None
+        return self._attr_suggested_display_precision
+
     async def async_added_to_hass(self):
         """Recover a missing unit before publishing the first sensor state."""
         if self._attr_device_class not in NON_NUMERIC_DEVICE_CLASSES:
@@ -349,6 +377,9 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                 self.calibrate_utility_meter(meter.number(self._config["utility_meter_correction"]))
                 self._meter_correction_id = correction_id
             self._setup_utility_meter_reset()
+            if self._meter_settings["compare_previous_month"]:
+                self._start_previous_month_refresh()
+                self._setup_previous_month_refresh()
             @callback
             def timezone_changed(_event):
                 profile = meter.schedule_profile(self._meter_settings)
@@ -480,10 +511,71 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             self._meter_cancel_reset = async_track_point_in_time(self.hass, reset, self._meter_next_reset)
 
     async def async_will_remove_from_hass(self):
+        if self._meter_compare_task:
+            self._meter_compare_task.cancel()
+            try:
+                await self._meter_compare_task
+            except asyncio.CancelledError:
+                pass
+            self._meter_compare_task = None
         if self._meter_cancel_reset:
             self._meter_cancel_reset()
             self._meter_cancel_reset = None
+        if self._meter_compare_cancel:
+            self._meter_compare_cancel()
+            self._meter_compare_cancel = None
         await super().async_will_remove_from_hass()
+
+    def _setup_previous_month_refresh(self) -> None:
+        """Refresh the historical calendar reference even when sources are idle."""
+        if self._meter_compare_cancel:
+            self._meter_compare_cancel()
+        next_refresh = dt_util.utcnow() + timedelta(minutes=1)
+
+        @callback
+        def refresh(_now):
+            self._meter_compare_cancel = None
+            self._start_previous_month_refresh()
+            self._setup_previous_month_refresh()
+
+        self._meter_compare_cancel = async_track_point_in_time(self.hass, refresh, next_refresh)
+
+    @callback
+    def _start_previous_month_refresh(self) -> None:
+        """Allow only one Recorder lookup; cancel it when the entity unloads."""
+        if self._meter_compare_task is None or self._meter_compare_task.done():
+            self._meter_compare_task = self.hass.async_create_task(
+                self._async_refresh_previous_month_comparison()
+            )
+
+    async def _async_refresh_previous_month_comparison(self) -> None:
+        """Read the meter's recorded state at the same local instant last month."""
+        target = meter.previous_month_same_time(dt_util.utcnow())
+        try:
+            states = {}
+            if "recorder" in self.hass.config.components:
+                states = await get_recorder_instance(self.hass).async_add_executor_job(
+                    partial(recorder_history.get_significant_states,
+                            self.hass, dt_util.as_utc(target),
+                            dt_util.as_utc(target) + timedelta(microseconds=1),
+                            [self.entity_id], significant_changes_only=False)
+                )
+            records = states.get(self.entity_id, ())
+            # A query window may also contain a later change. Never use future
+            # data, nor skip an unknown/unavailable latest state for an older one.
+            state = max((record for record in records if record.last_updated <= target),
+                        key=lambda record: record.last_updated, default=None)
+            value = self._utility_decimal(state.state) if state is not None else None
+            if state is not None and state.attributes.get("unit_of_measurement") != self.native_unit_of_measurement:
+                value = None
+        except Exception:  # Recorder may be disabled or temporarily unavailable.
+            _LOGGER.debug("Unable to read last-month comparison for %s", self.entity_id, exc_info=True)
+            value = None
+        if self._meter_previous_month_at != target or self._meter_previous_month_value != value:
+            self._meter_previous_month_at = target
+            self._meter_previous_month_value = value
+            self._update_attributes()
+            self._schedule_state_update()
 
     @callback
     def _async_utility_meter_reset(self, _now) -> None:
@@ -633,7 +725,7 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         })
         self._attr_extra_state_attributes.update(self._domain_options)
         if self._utility_meter_enabled:
-            self._attr_extra_state_attributes.update({
+            meter_attributes = {
                 "meter_source": self._source_entities[0] if self._source_entities else None,
                 "meter_correction_id": self._meter_correction_id,
                 "meter_schedule": self._meter_schedule_profile,
@@ -647,7 +739,19 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                 "last_period": str(self._utility_meter_last_period),
                 "last_reset": self._utility_meter_last_reset.isoformat() if self._utility_meter_last_reset else None,
                 "last_valid_state": str(self._utility_meter_last_source) if self._utility_meter_last_source is not None else None,
-            })
+            }
+            if self._meter_settings["compare_previous_month"]:
+                meter_attributes.update({
+                    "last_month_same_time_usage": (
+                        str(self._meter_previous_month_value)
+                        if self._meter_previous_month_value is not None else None
+                    ),
+                    "last_month_same_time": (
+                        self._meter_previous_month_at.isoformat()
+                        if self._meter_previous_month_at is not None else None
+                    ),
+                })
+            self._attr_extra_state_attributes.update(meter_attributes)
 
     def set(self, value) -> None:
         _LOGGER.debug("Setting state for %s", self.entity_id)
@@ -712,9 +816,9 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                     raise ValueError(
                         "suggested_display_precision must be a non-negative integer"
                     ) from err
-                if value < 0:
+                if not 0 <= value <= 5:
                     raise ValueError(
-                        "suggested_display_precision must be a non-negative integer"
+                        "suggested_display_precision must be an integer from 0 to 5"
                     )
         elif name == "suggested_unit_of_measurement":
             value = None if value is None or value == "" else str(value)

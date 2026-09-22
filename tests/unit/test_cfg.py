@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_RESTORED, CONF_PLATFORM
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_RESTORED, CONF_PLATFORM, CONF_UNIT_OF_MEASUREMENT
 
 from custom_components.virtual_layer import cfg as cfg_module
 from custom_components.virtual_layer.cfg import (
@@ -50,6 +50,32 @@ from custom_components.virtual_layer.const import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+async def test_utility_meter_previous_month_companion_is_grouped(hass, tmp_path, monkeypatch):
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    monkeypatch.setattr(cfg_module, "default_meta_file", lambda hass: str(tmp_path / "meter.meta.json"))
+    entry = MockConfigEntry(domain="virtual_layer", data={ATTR_GROUP_NAME: "meter"})
+    entry.add_to_hass(hass)
+    cfg = BlendedCfg(hass, {ATTR_GROUP_NAME: "meter"}, {
+        ATTR_DEVICES: {"Energy": [{
+            CONF_PLATFORM: "sensor", CONF_NAME: "Billing", ATTR_ENTITY_ID: "sensor.billing",
+            ATTR_ENTITY_KEY: "billing", CONF_INITIAL_VALUE: "0", CONF_INITIAL_AVAILABILITY: True,
+            CONF_PERSISTENT: True, "utility_meter_enabled": True,
+            "utility_meter_compare_previous_month": True,
+            CONF_UNIT_OF_MEASUREMENT: "kWh", "class": "energy",
+            CONF_SOURCE_ENTITIES: ["sensor.energy"],
+        }]},
+    }, config_entry=entry)
+    await cfg.async_load()
+    parent = next(item for item in cfg.entities["sensor"] if item[ATTR_ENTITY_ID] == "sensor.billing")
+    companion = next(item for item in cfg.entities["sensor"]
+                     if item[ATTR_ENTITY_ID] == "sensor.billing_last_month_same_time")
+    assert companion[ATTR_DEVICE_ID] == parent[ATTR_DEVICE_ID]
+    assert companion[ATTR_UNIQUE_ID] == parent[ATTR_UNIQUE_ID] + ".virtual_layer_diagnostic.last_month_same_time"
+    assert companion[CONF_UNIT_OF_MEASUREMENT] == "kWh"
+    assert "last_month_same_time_usage" in companion[CONF_VALUE_TEMPLATE]
 
 
 async def test_air_quality_bridge_sensor_is_categorical_and_grouped(hass, tmp_path, monkeypatch):

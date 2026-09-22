@@ -19,6 +19,7 @@ FIELDS = {
     "currency": ("Currency", "통화", "Three-letter currency code such as KRW or USD.", "KRW, USD 등 세 글자 통화 코드입니다."),
     "tiers": ("Progressive tiers", "누진 구간", "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.", "누적 상한 up_to와 단가 rate 객체의 목록입니다. 상한은 오름차순이며 비우면 단일단가를 사용합니다."),
     "current_value": ("Correct current-period total", "현재 기간 사용량 보정", "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline.", "검침한 현재 기간 절대 합계를 저장 시 한 번 적용하고 소스 기준값도 갱신합니다. 일정만 바꾸고 합계를 유지하려면 비우세요. 소스 단절 시 복구 후 첫 측정값을 기준으로 삼습니다."),
+    "compare_previous_month": ("Create last-month comparison sensor", "지난달 동시간 비교 센서 생성", "Reads the same local date and time one month earlier, refreshed every minute. Requires a month of Recorder state history (35-day retention recommended). Missing history or a changed unit reports unknown.", "한 달 전 같은 현지 일자·시간의 값을 매분 갱신합니다. Recorder 상태 이력이 한 달 이상 필요합니다(35일 보관 권장). 이력이 없거나 단위가 달라지면 unknown을 표시합니다."),
 }
 
 if __name__ == "__main__":
@@ -28,9 +29,20 @@ if __name__ == "__main__":
         catalog = json.loads(path.read_text())
         for group, step in (("config", "entity"), ("options", "entity"), ("options", "edit_entity")):
             section = catalog[group]["step"][step]["sections"]["domain_settings"]
+            meter_step = "edit_utility_meter" if step == "edit_entity" else "utility_meter"
+            dedicated = {
+                "title": "유틸리티 미터 설정" if language == "ko" else "Utility meter settings",
+                "description": "주기·요금·현재 사용량 보정을 설정하세요. 제출 전에는 저장하지 않습니다. 이전 화면으로 돌아가려면 아래 옵션을 켜세요." if language == "ko" else "Configure the schedule, billing and current usage correction. Nothing is saved before submission. Enable the option below to return to the entity form.",
+                "data": {"utility_meter_enabled": section["data"]["utility_meter_enabled"], "back": "엔티티 설정으로 돌아가기" if language == "ko" else "Back to entity settings"},
+                "data_description": {"utility_meter_enabled": section["data_description"]["utility_meter_enabled"], "back": "저장하지 않고 입력값을 유지하여 이전 화면으로 돌아갑니다." if language == "ko" else "Keep the draft and return without saving."},
+            }
             for key, values in FIELDS.items():
-                section["data"]["utility_meter_" + key] = values[language == "ko"]
-                section["data_description"]["utility_meter_" + key] = values[2 + (language == "ko")]
+                field = "utility_meter_" + key
+                dedicated["data"][field] = values[language == "ko"]
+                dedicated["data_description"][field] = values[2 + (language == "ko")]
+                section["data"].pop(field, None)
+                section["data_description"].pop(field, None)
+            catalog[group]["step"][meter_step] = dedicated
         choices = catalog["selector"]["utility_meter_cycle"]["options"]
         for key, en, ko in (("none", "No automatic reset", "자동 초기화 없음"), ("quarter-hourly", "Every 15 minutes", "15분마다"), ("hourly", "Hourly", "매시간"), ("bimonthly", "Every two months", "두 달마다"), ("days", "Every N days", "N일마다"), ("cron", "Cron schedule", "Cron 일정")):
             choices[key] = ko if language == "ko" else en

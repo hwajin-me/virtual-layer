@@ -41,6 +41,7 @@ from .entity import (
     virtual_schema,
 )
 from .polygon import load_polygon_zones, render_polygon_map_svg
+from .geojson_catalog import CATALOG_IDS, async_get_catalog
 
 _LOGGER = logging.getLogger(__name__)
 _IMAGE_ALIAS_CHAIN: ContextVar[frozenset[int]] = ContextVar(
@@ -100,6 +101,10 @@ async def async_setup_entry(
     async_add_entities: Callable[[list], None],
 ) -> None:
     """Create virtual image entities from the UI config entry."""
+    if entry.data.get("presence_fusion"):
+        from .presence_fusion.entities import entities as fusion_entities
+        async_add_entities(fusion_entities(entry, "image"))
+        return
     entities = [
         VirtualImage(IMAGE_SCHEMA(entity), hass, False)
         for entity in get_entity_configs(hass, entry.data[ATTR_GROUP_NAME], PLATFORM_DOMAIN)
@@ -204,6 +209,9 @@ class VirtualImage(VirtualEntity, ImageEntity):
     async def async_added_to_hass(self) -> None:
         """Track image and polygon location sources for cache invalidation."""
         await super().async_added_to_hass()
+        if self._polygon_config and self._polygon_config.get(CATALOG_IDS):
+            catalog = await async_get_catalog(self.hass)
+            self._refresh_remove_listeners.append(catalog.subscribe(lambda: self._async_image_source_changed(None)))
         source_entities = set(self._source_entities)
         source_entities.discard(self.entity_id)
         if source_entities:
@@ -406,6 +414,12 @@ class VirtualImage(VirtualEntity, ImageEntity):
                 if not self._polygon_zones or (zones and not load_errors):
                     self._polygon_zones = zones
                 zones = self._polygon_zones
+                if self._polygon_config.get(CATALOG_IDS):
+                    catalog = await async_get_catalog(self.hass)
+                    ids = self._polygon_config[CATALOG_IDS]
+                    zones = zones + catalog.selected(ids)
+                    if catalog.errors(ids):
+                        load_errors.append("shared_geojson_source_unavailable")
                 if not zones:
                     error = "; ".join(load_errors) or "No polygon zones to render"
                     if self._virtual_attributes.get("polygon_map_error") != error:

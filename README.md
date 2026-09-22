@@ -3,6 +3,12 @@
 Virtual Layer is a Home Assistant custom integration for creating virtual
 devices and entities from the Home Assistant UI.
 
+**Presence Fusion** is an optional person-specific Virtual Layer Device profile.
+It maps GPS/Wi-Fi/BLE/room sources per physical device, excludes devices left
+behind, retains tracking at stops, and restores priority only after observed
+reunion. Start with **Create a Presence Fusion Device** in the initial setup.
+See [installation, source mapping, outputs, manual override and privacy](docs/PRESENCE_FUSION.md).
+
 ![Virtual Layer icon](images/virtual-icon.png)
 
 ## Breaking Changes
@@ -14,6 +20,27 @@ Do not add Virtual Layer entities to `configuration.yaml`. Create, edit, delete,
 and manage them from `Settings > Devices & services > Virtual Layer`.
 
 ## Contents
+
+### Teach camera patrol positions
+
+After creating a virtual camera, open Virtual Layer **Configure → Configure
+camera patrol positions**. Select the virtual camera and its existing ONVIF
+camera, then set the speed and interval. This pauses its running/automatic patrol.
+Watch the camera in a separate dashboard tab: jog left/right/up/down, wait for
+motion to stop, name the view, and choose **Capture current position**. Capture
+at least two different positions. You can visit, replace, delete, and reorder
+the points before choosing **Save route**. Nothing is persisted until save.
+
+Patrol visits the actual saved pan/tilt coordinates in order and repeats from
+the last point to the first; zoom stays unchanged. This route replaces relative
+range settings but is not a hard boundary on the path between points. It requires
+ONVIF GetStatus and AbsoluteMove support and reuses the existing integration’s
+authenticated client. Changing the ONVIF target clears the draft route. Choose
+**Use legacy relative patrol** to remove the route and reuse the old ranges.
+Normal entity edits preserve routes, media sources, and Frigate settings.
+Cancel discards draft edits, but does not reverse preview movement or restart
+patrol. Teaching movements use normal recording settings; patrol itself still
+uses the configured Frigate policies and return-to-start behavior.
 
 Cameras with an ONVIF patrol target automatically create
 `switch.<camera_object_id>_patrol` on the same Device. Turn this switch on or off
@@ -740,7 +767,10 @@ positions are reevaluated at most every five seconds, or sooner for shorter
 configured anchor lifetimes (with a one-second minimum refresh interval).
 
 A virtual `device_tracker` can combine multiple source trackers and resolve its
-GPS position against named GeoJSON polygons. Configure it entirely in the
+GPS position against named GeoJSON polygons. Multiple documents can now be
+[managed in a shared UI catalog](docs/GEOJSON_AREAS.md), reused by ordinary
+trackers and Presence Fusion, and selected as a Presence Fusion Home boundary.
+Configure it entirely in the
 Add/Edit Virtual Entity form:
 
 - **Source entities**: one or more `device_tracker` entities
@@ -1515,7 +1545,15 @@ Create a **sensor** on your virtual Device, choose one cumulative usage sensor
 enable the utility-meter options. Configure the same fields when editing it.
 The generated `<entity_id>_cost` monetary sensor belongs to the same Device.
 
-The meter settings expand when editing an enabled meter. Validation errors
+The general entity form contains only the utility-meter enable switch. On
+submission, enabled meters open a separate **Utility meter settings** step for
+the schedule, billing, source behavior and current-value correction. This works
+for initial setup, adding an entity and editing an existing entity. The Back
+option retains the draft without saving; canceling the flow also leaves the
+stored entity unchanged. Clearing the suggested start or tariff selector removes
+that optional setting rather than silently restoring its old value.
+
+Validation errors
 identify the affected input, and blank/unknown initial readings become zero
 when enabling this mode. Disabling a meter retains its schedule and billing
 settings for later editing, even if they need repair before re-enabling; it
@@ -1535,6 +1573,14 @@ clears the old one-time correction so re-enabling cannot replay that correction.
 - Billing supports a base charge, a unit rate, and ascending progressive tiers
   (`up_to` and `rate`). The unit rate applies above the final tier. This is a
   configurable estimate, not a jurisdiction-specific tax or utility-bill engine.
+- Enable **Create last-month comparison sensor** to add
+  `<entity_id>_last_month_same_time`. It reads this meter's Recorder history at
+  the same local calendar date and time one month earlier (month ends clamp to
+  the last day), refreshed every minute even when the source is idle.
+  Recorder must retain at least one month of state history (35 days is a safe
+  retention setting; its default retention is insufficient). Missing history,
+  an unavailable historical reading, or a changed unit produces `unknown`,
+  never an estimate from a full-month total. No Recorder settings are changed.
 
 **Current usage correction** replaces the current period's total when saved and
 is applied once, not again on every reload. In automation actions, use

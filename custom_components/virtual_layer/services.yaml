@@ -160,6 +160,43 @@ clear_attributes:
       selector:
         text:
 
+presence_fusion_set_primary:
+  name: Select Presence Fusion primary GPS
+  description: Select an available physical GPS candidate for a limited duration.
+  fields:
+    config_entry_id:
+      name: Config entry
+      description: This person's Virtual Layer config entry ID.
+      required: true
+      selector:
+        config_entry:
+          integration: virtual_layer
+    tracked_device_id:
+      name: Physical device UUID
+      required: true
+      description: UUID displayed in the physical-device selector.
+      selector:
+        text:
+    duration:
+      name: Duration
+      description: 1–86400 seconds; omit to use the configured default.
+      selector:
+        number:
+          min: 1
+          max: 86400
+          mode: box
+          unit_of_measurement: s
+presence_fusion_clear_primary_override:
+  name: Clear Presence Fusion override
+  description: Resume automatic tracking from observations of the currently selected device.
+  fields:
+    config_entry_id:
+      name: Config entry
+      description: This person's Virtual Layer config entry ID.
+      required: true
+      selector:
+        config_entry:
+          integration: virtual_layer
 move:
   name: Move
   description: Move a device tracker to a new location.

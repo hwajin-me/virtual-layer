@@ -219,6 +219,10 @@ async def _choose_add_template_helper(
                 or defaults[CONF_TARGET_ENTITY_TYPE],
             },
         )
+    if result["step_id"] == "boiler_temperature_calibration":
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], suggested_form_values(result["data_schema"])
+        )
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "entity_helper"
     result = await hass.config_entries.options.async_configure(
@@ -985,7 +989,8 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
         "{{ state_attr('sensor.energy_monitor', 'options') }}"
     )
     assert native_templates["suggested_display_precision"] == (
-        "{{ state_attr('sensor.energy_monitor', 'suggested_display_precision') }}"
+        "{{ state_attr('sensor.energy_monitor', 'suggested_display_precision') "
+        "if state_attr('sensor.energy_monitor', 'suggested_display_precision') is not none else 5 }}"
     )
 
     result = await hass.config_entries.options.async_configure(
@@ -1045,7 +1050,7 @@ async def test_options_flow_can_copy_standard_energy_sensor(hass):
     sensor._apply_templates()
     assert sensor.native_value == "14.0"
     assert sensor.options is None
-    assert sensor.suggested_display_precision is None
+    assert sensor.suggested_display_precision == 5
 
 
 async def test_options_flow_converts_single_switch_source_to_fan(hass):
@@ -1659,7 +1664,8 @@ async def test_boiler_helper_rejects_bad_formula_at_input_step(hass, step, field
 
 
 @pytest.mark.parametrize("policy", [HELPER_UPDATE_AUTO, HELPER_UPDATE_KEEP, HELPER_UPDATE_FORCE])
-async def test_boiler_feedback_helper_options_survive_next_form_and_save(hass, policy):
+@pytest.mark.parametrize("calibration_enabled", [False, True])
+async def test_boiler_feedback_helper_options_survive_next_form_and_save(hass, policy, calibration_enabled):
     from custom_components.virtual_layer import boiler_control as bc
     from custom_components.virtual_layer.config_flow import CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID
 
@@ -1676,6 +1682,11 @@ async def test_boiler_feedback_helper_options_survive_next_form_and_save(hass, p
     })
     if result["step_id"] == "entity_type":
         result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "climate"})
+    assert result["step_id"] == "boiler_temperature_calibration"
+    assert suggested_form_values(result["data_schema"])[bc.CALIBRATION_ENABLED] is False
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {bc.CALIBRATION_ENABLED: calibration_enabled}
+    )
     assert result["step_id"] == "entity_helper"
     helper = suggested_form_values(result["data_schema"])
     assert helper[bc.FORMULA] == bc.DEFAULT_FORMULA
@@ -1694,6 +1705,7 @@ async def test_boiler_feedback_helper_options_survive_next_form_and_save(hass, p
     assert result["type"] == FlowResultType.CREATE_ENTRY
     stored = _first_stored_entity(result)
     assert stored[bc.ENABLED] is True
+    assert stored[bc.CALIBRATION_ENABLED] is calibration_enabled
     assert stored[bc.FORMULA] == formula
     hass.config_entries.async_update_entry(entry, options=result["data"])
     result = await hass.config_entries.options.async_init(entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY})
@@ -1703,10 +1715,16 @@ async def test_boiler_feedback_helper_options_survive_next_form_and_save(hass, p
     result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_REFERENCE_ENTITY_ID: ["climate.boiler"]})
     if result["step_id"] == "edit_entity_type":
         result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "climate"})
+    if result["step_id"] == "boiler_temperature_calibration":
+        assert suggested_form_values(result["data_schema"])[bc.CALIBRATION_ENABLED] is False
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {bc.CALIBRATION_ENABLED: False}
+        )
     assert result["step_id"] == "edit_entity_helper"
     helper = suggested_form_values(result["data_schema"])
     assert helper[bc.FORMULA] == formula
     assert helper[bc.ENABLED] is True
+    assert helper[bc.CALIBRATION_ENABLED] is calibration_enabled
     changed_formula = "{{ base_water_temperature - heat_accumulation / 200 }}"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {
         **helper, CONF_HELPER_UPDATE_MODE: policy, bc.FORMULA: changed_formula,
@@ -1718,6 +1736,7 @@ async def test_boiler_feedback_helper_options_survive_next_form_and_save(hass, p
     result = await hass.config_entries.options.async_configure(result["flow_id"], defaults)
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert _first_stored_entity(result)[bc.FORMULA] == changed_formula
+    assert _first_stored_entity(result)[bc.CALIBRATION_ENABLED] is calibration_enabled
 
 
 async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass):
@@ -1826,10 +1845,8 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
     assert boiler.hvac_modes == [HVACMode.OFF, HVACMode.HEAT]
     assert boiler.hvac_mode is HVACMode.HEAT
     assert boiler.current_temperature == 29.0
-    # Source target temperatures are boiler-water temperatures. The virtual
-    # climate converts them back to room temperatures instead of showing the
-    # raw source value.
-    assert boiler.target_temperature == 22.0
+    # Conversion defaults off, so source and requested targets pass through.
+    assert boiler.target_temperature == 26.0
 
     calls = []
 
@@ -1872,8 +1889,7 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
         ("switch", "turn_on"),
         ("climate", "set_temperature"),
     ]
-    # The 44°C calibration must respect the source's 35°C maximum.
-    assert calls[1][2]["temperature"] == 35
+    assert calls[1][2]["temperature"] == 27
 
     calls.clear()
     with pytest.raises(ValueError, match="Unsupported HVAC mode"):
@@ -1882,8 +1898,7 @@ async def test_options_flow_builds_and_runs_climate_hot_water_boiler_helper(hass
 
     with pytest.raises(ValueError, match="configured minimum and maximum"):
         await boiler.async_set_temperature(temperature=100)
-    # Validate against the room-temperature range before invoking a physical
-    # boiler action. The boiler-water range is deliberately not the UI range.
+    # Out-of-range requests must be rejected before invoking a boiler action.
     assert calls == []
 
 
@@ -2480,6 +2495,7 @@ async def test_boiler_air_conditioner_helper_routes_runtime_commands_and_values(
 
 
 @pytest.mark.parametrize("formula, expected_temperature", [
+    (None, 39),
     ("{{ 35 + ((temperature | float(0) - 18) * 2.5) }}", 50),
     ("{{ command_data.temperature + 5 }}", 29),
 ])
@@ -2518,6 +2534,7 @@ async def test_combined_boiler_calibration_renders_service_data_as_mapping(
         hass,
         [boiler_entity_id, "switch.hot_water", air_conditioner_entity_id],
         boiler_temperature_calibration_template=formula,
+        boiler_temperature_calibration_enabled=True,
     )
     climate = VirtualClimate(
         CLIMATE_SCHEMA(

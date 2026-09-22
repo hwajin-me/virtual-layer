@@ -876,6 +876,60 @@ async def test_image_camera_encoding(hass):
             await process.wait()
 
 
+async def test_patrol_teaching(hass):
+    """Real options flow and camera platform, with mocked ONVIF transport."""
+    from types import SimpleNamespace
+    from custom_components.virtual_layer import patrol_positions as positions
+    from custom_components.virtual_layer.config_flow import _entity_choices
+    result = await hass.config_entries.flow.async_init(
+        COMPONENT_DOMAIN, context={"source": SOURCE_USER},
+        data={ATTR_GROUP_NAME: "Patrol teaching", CONF_ADD_FIRST_ENTITY: False},
+    )
+    entry = result["result"]
+    hass.config_entries.async_update_entry(entry, options={"devices": {"Patrol teaching": [{
+        "platform": "camera", "name": "Teach camera", "entity_id": "camera.teach_camera",
+        "onvif_patrol_target": "camera.onvif_teach",
+    }]}})
+    await hass.async_block_till_done()
+    manager = hass.config_entries.options
+    result = await manager.async_init(entry.entry_id, data={CONF_ACTION: "camera_patrol"})
+    result = await configure_flow(manager, result, {CONF_ENTITY_KEY: next(iter(_entity_choices(entry.options)))})
+    coordinates = SimpleNamespace(x=-0.3, y=0.1, space="urn:space")
+    service = SimpleNamespace(GetStatus=AsyncMock(return_value=SimpleNamespace(Position=SimpleNamespace(PanTilt=coordinates))),
+                              AbsoluteMove=AsyncMock())
+    with patch.object(positions, "client", AsyncMock(return_value=(service, "profile"))):
+        result = await configure_flow(manager, result, {
+            "onvif_patrol_target": "camera.onvif_teach", "onvif_patrol_interval": 120,
+            "onvif_patrol_speed": 0.2,
+        })
+        result = await configure_flow(manager, result, {"action": "capture", "point_name": "Left"})
+        coordinates.x = 0.4
+        result = await configure_flow(manager, result, {"action": "capture", "point_name": "Right"})
+        result = await configure_flow(manager, result, {"action": "visit", "point": "0"})
+        assert service.AbsoluteMove.call_args.args[0]["Position"]["PanTilt"]["x"] == -0.3
+        result = await configure_flow(manager, result, {"action": "save"})
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        await hass.async_block_till_done()
+        entity = hass.data["camera"].get_entity("camera.teach_camera")
+        assert entity is not None
+        assert len(entity._patrol_route["points"]) == 2
+        entity._async_capture_patrol_origin = AsyncMock()
+        entity._async_call_onvif_ptz = AsyncMock()
+        moved = asyncio.Event()
+        async def absolute(request):
+            moved.set()
+        service.AbsoluteMove.side_effect = absolute
+        await entity.async_start_patrol()
+        async with asyncio.timeout(5):
+            await moved.wait()
+        assert entity.state_attributes["patrol_running"]
+        await entity.async_stop_patrol()
+        assert not entity.state_attributes["patrol_running"]
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    print("Patrol teaching Docker passed: options flow, capture, visit, save, reload, absolute route, stop (mocked ONVIF)")
+
+
 async def test_config_flow_create_modify_runtime():
     """Create, load, edit, reload, and live-update through real HA flows."""
     config_dir = Path(tempfile.mkdtemp())
@@ -1005,6 +1059,7 @@ async def test_config_flow_create_modify_runtime():
         await test_dawarich_http_tracking(hass)
         await test_source_startup_grace(hass)
         await test_image_camera_encoding(hass)
+        await test_patrol_teaching(hass)
 
         source_ids = ["sensor.docker_flow_pm25_a", "sensor.docker_flow_pm25_b"]
         hass.states.async_set(
@@ -1575,6 +1630,7 @@ async def test_config_flow_create_modify_runtime():
             "source_entities": ["sensor.docker_energy_source"],
             "utility_meter_enabled": True, "utility_meter_cycle": "monthly",
             "utility_meter_start": "2026-01-15T00:00:00", "utility_meter_rate": 100,
+            "utility_meter_compare_previous_month": True,
         })
         hass.config_entries.async_update_entry(entry, options=options)
         await hass.async_block_till_done()
@@ -1583,6 +1639,7 @@ async def test_config_flow_create_modify_runtime():
         await hass.async_block_till_done()
         assert float(hass.states.get("sensor.docker_meter").state) == 2
         assert float(hass.states.get("sensor.docker_meter_cost").state) == 200
+        assert hass.states.get("sensor.docker_meter_last_month_same_time") is not None
         for action, payload, expected in [("adjust_utility_meter", {"amount": 3}, 5), ("calibrate_utility_meter", {"value": 42}, 42), ("reset_utility_meter", {}, 0)]:
             await hass.services.async_call("virtual_layer", action, {"entity_id": "sensor.docker_meter", **payload}, blocking=True)
             await hass.async_block_till_done()

@@ -280,7 +280,25 @@ def find_polygon_zone(latitude, longitude, accuracy, zones):
     ]
     if not matches:
         return None
-    return min(matches, key=lambda zone: (zone["priority"], zone["area"], zone["name"]))
+    return min(matches, key=lambda zone: (zone.get("catalog_priority", 0), zone["priority"], zone["area"], zone["name"], zone.get("catalog_id", "")))
+
+
+def polygon_clearance(latitude, longitude, zones):
+    """Signed metres to a boundary: positive inside, negative outside/holes.
+
+    At overlaps this is conservative for accuracy-circle containment: one
+    polygon must contain the complete circle. It never fills an interior hole.
+    """
+    values = []
+    for zone in zones:
+        for polygon in zone["polygons"]:
+            margin = min(
+                _distance_to_segment_meters(latitude, longitude, first, second)
+                for ring in [polygon["outer"], *polygon["holes"]]
+                for first, second in pairwise(ring)
+            )
+            values.append(margin if _polygon_contains(latitude, longitude, 0, polygon) else -margin)
+    return max(values) if values else float("-inf")
 
 
 def _svg_path(rings, project) -> str:

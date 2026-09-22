@@ -363,6 +363,9 @@ async def async_setup(hass, config):
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, *, incremental=False
 ) -> bool:
+    if entry.data.get("presence_fusion"):
+        from .presence_fusion.lifecycle import setup
+        return await setup(hass, entry)
     _LOGGER.debug("Setting up Virtual Layer config entry %s", entry.entry_id)
 
     _async_ensure_runtime_data(hass)
@@ -553,6 +556,9 @@ async def async_setup_entry(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    if entry.data.get("presence_fusion"):
+        from .presence_fusion.lifecycle import unload
+        return await unload(hass, entry)
     _LOGGER.debug("unloading virtual group %s", entry.data.get(ATTR_GROUP_NAME))
     # _LOGGER.debug(f"before hass={hass.data[COMPONENT_DOMAIN]}")
     _runtime_group_name, group_data = _runtime_group_for_entry(hass, entry)
@@ -577,6 +583,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Clean up Virtual Layer data when a config entry is removed."""
+    if entry.data.get("presence_fusion"):
+        from .presence_fusion.lifecycle import remove
+        await remove(hass, entry)
+        return
     group_name = entry.data.get(ATTR_GROUP_NAME)
     _LOGGER.debug("removing virtual group %s", group_name)
 

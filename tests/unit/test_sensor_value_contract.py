@@ -36,11 +36,25 @@ def test_date_never_returns_datetime_subclass():
     assert sensor.native_value == date(2026, 9, 11)
 
 
-@pytest.mark.parametrize("value", [1.5, "2.5", float("nan"), float("inf"), True, -1])
+@pytest.mark.parametrize(
+    "value", [1.5, "2.5", float("nan"), float("inf"), True, -1, 6]
+)
 def test_display_precision_does_not_silently_truncate(value):
     sensor = VirtualSensor({"name": "PM", "class": "pm25"}, False)
     with pytest.raises(ValueError):
         sensor._apply_native_template_value("suggested_display_precision", value)
+
+
+def test_display_precision_defaults_to_five_decimal_places():
+    sensor = make_sensor({"name": "PM", "class": "pm25"})
+
+    assert sensor.suggested_display_precision == 5
+
+
+def test_text_information_sensor_is_not_forced_to_numeric_by_precision():
+    sensor = make_sensor({"name": "Info", "initial_value": "configured"})
+    assert sensor.suggested_display_precision is None
+    assert sensor.state == "configured"
 
 
 @pytest.mark.parametrize("native", [True, False])
