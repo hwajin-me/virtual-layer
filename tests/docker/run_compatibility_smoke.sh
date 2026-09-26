@@ -180,6 +180,157 @@ async def test_sensor_conversion_runtime():
     try:
         from homeassistant.helpers.template import Template
         from custom_components.virtual_layer.air_quality_options import LEVELS, generate
+        from custom_components.virtual_layer.fan import FAN_SCHEMA, VirtualFan
+        from custom_components.virtual_layer.humidifier import HUMIDIFIER_SCHEMA, VirtualHumidifier
+
+        for domain, cls, schema, extra in (
+            ("fan", VirtualFan, FAN_SCHEMA, {"speed_count": 5}),
+            ("climate", VirtualClimate, CLIMATE_SCHEMA, {"hvac_modes": ["off", "heat"]}),
+            ("humidifier", VirtualHumidifier, HUMIDIFIER_SCHEMA, {}),
+        ):
+            source = f"{domain}.fast_reply_source"
+            on_state = "heat" if domain == "climate" else "on"
+            hass.states.async_set(source, on_state, {"percentage": 60})
+            entity = cls(schema({
+                "name": "Fast reply", "entity_id": f"{domain}.fast_reply_target",
+                "initial_value": "off", "persistent": False, **extra,
+                "source_entities": [source],
+                "value_template": "{{ states('" + source + "') }}",
+                "command_actions": {"turn_off": [{"action": "virtual_test.fast_reply"}]},
+            }), False)
+            entity.hass = hass
+            entity._create_state(entity._config)
+            entity._setup_templates()
+            entity.async_write_ha_state = Mock()
+            entity._schedule_state_update = Mock()
+
+            async def fast_reply(call):
+                hass.states.async_set(source, "off", {"percentage": 0})
+                await asyncio.sleep(0)
+                hass.states.async_set(source, on_state, {"percentage": 40})
+                await asyncio.sleep(0)
+
+            hass.services.async_register("virtual_test", "fast_reply", fast_reply)
+            await entity.async_turn_off()
+            assert (entity.hvac_mode == HVACMode.HEAT if domain == "climate" else entity.is_on)
+            await entity.async_will_remove_from_hass()
+        print("Command response Docker passed: fan, climate and humidifier preserve fast replies (simulated sources)")
+
+        from custom_components.virtual_layer.cover import COVER_SCHEMA, VirtualCover
+        from custom_components.virtual_layer.valve import VALVE_SCHEMA, VirtualValve
+        from custom_components.virtual_layer.lock import LOCK_SCHEMA, VirtualLock
+        from custom_components.virtual_layer.water_heater import ENTITY_CLASS, ENTITY_SCHEMA
+
+        heater = ENTITY_CLASS(ENTITY_SCHEMA({
+            "name": "Native heater", "entity_id": "water_heater.native_regression",
+            "initial_value": "Eco", "operation_list": ["off", "Eco"],
+            "min_temp": 35, "max_temp": 85, "current_temperature": 20,
+        }), False)
+        heater.hass = hass
+        heater._create_state(heater._config)
+        assert heater.current_operation == "Eco" and heater.current_temperature == 20
+        heater._restore_state(State(heater.entity_id, "Eco", {"current_temperature": 95}), heater._config)
+        heater._native_templates_applied()
+        assert heater.current_operation == "Eco" and heater.current_temperature == 95
+        for domain, cls, schema in (("cover", VirtualCover, COVER_SCHEMA), ("valve", VirtualValve, VALVE_SCHEMA)):
+            moving = cls(schema({
+                "name": "Moving", "entity_id": f"{domain}.native_regression",
+                "initial_value": "open",
+                "native_templates": {"is_closing": "{{ true }}", "current_position": "{{ 25 }}"},
+            }), False)
+            moving.hass = hass
+            moving._create_state(moving._config)
+            moving._schedule_state_update = Mock()
+            moving._apply_templates()
+            assert moving.state == "closing" and moving._current_position == 25
+        lock = VirtualLock(hass, LOCK_SCHEMA({
+            "name": "Lock", "entity_id": "lock.native_regression", "locking_time": 5,
+        }), False)
+        lock.hass = hass
+        lock._create_state(lock._config)
+        lock.async_write_ha_state = Mock()
+        await lock.async_unlock()
+        assert lock.is_unlocking and lock._timer_handle is not None
+        lock.set_state("locking")
+        assert lock.is_locking and lock._timer_handle is None
+        lock._apply_native_template_value("is_locked", True)
+        lock._native_templates_applied()
+        assert lock.is_locked and not lock.is_locking
+        await lock.async_will_remove_from_hass()
+        print("Native state Docker passed: heater measurements and mode case, cover/valve motion, lock timer replacement")
+
+        from importlib import import_module
+        from custom_components.virtual_layer.config_flow import InvalidJson, _parse_json_object, _platform_schema
+
+        for optimistic in (False, True):
+            for domain, command, invalid, valid, extra in (
+                ("select", "select_option", {"option": "bad"}, {"option": "boost"}, {"options": ["eco", "boost"]}),
+                ("text", "set_value", {"value": "bad"}, {"value": "123"}, {"pattern": "[0-9]+"}),
+                ("number", "set_native_value", {"value": float("nan")}, {"value": 50}, {"min": 0, "max": 100}),
+                ("valve", "set_valve_position", {"position": True}, {"position": 50}, {}),
+            ):
+                module = import_module(f"custom_components.virtual_layer.{domain}")
+                cls = getattr(module, "ENTITY_CLASS", None) or getattr(module, "Virtual" + domain.title())
+                entity = cls(_platform_schema(domain)({
+                    "name": "Validated command", "entity_id": f"{domain}.validated_command",
+                    "initial_value": "0" if domain == "number" else "off",
+                    "command_actions": {command: {
+                        "sequence": [{"action": "virtual_test.capture_validated"}],
+                        "optimistic": optimistic,
+                    }}, **extra,
+                }), False)
+                entity.hass = hass
+                entity._create_state(entity._config)
+                entity.async_write_ha_state = Mock()
+                entity._schedule_state_update = Mock()
+                capture = AsyncMock()
+                hass.services.async_register("virtual_test", "capture_validated", capture)
+                before = entity.state
+                try:
+                    await getattr(entity, f"async_{command}")(**invalid)
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    raise AssertionError(f"Invalid {domain}.{command} was accepted")
+                capture.assert_not_awaited()
+                assert entity.state == before
+                await getattr(entity, f"async_{command}")(**valid)
+                capture.assert_awaited_once()
+                if not optimistic:
+                    assert entity.state == before
+                await entity.async_will_remove_from_hass()
+        for payload in ({"nested": [float("inf")]}, "nested: .nan", "nested:\n  1: wrong", '{"nested": 1e999}', '{"key": 1, "key": 2}'):
+            try:
+                _parse_json_object(payload, "attributes_json")
+            except InvalidJson:
+                pass
+            else:
+                raise AssertionError("Lossy structured configuration was accepted")
+        print("Command validation Docker passed: invalid inputs block HA actions; valid retries and both optimistic modes work; lossy structured values rejected")
+
+        from custom_components.virtual_layer.media_player import ENTITY_CLASS as MediaPlayer, ENTITY_SCHEMA as MEDIA_SCHEMA
+        player = MediaPlayer(MEDIA_SCHEMA({
+            "name": "Dynamic choices", "sound_mode_list": ["movie", "music"],
+            "sound_mode": "movie",
+        }), False)
+        assert player.sound_mode == "movie" and player.sound_mode_list == ["movie", "music"]
+        for choices, selected, value in (("source_list", "source", "TV"), ("sound_mode_list", "sound_mode", "music")):
+            player._apply_native_template_value(choices, [value])
+            player._apply_native_template_value(selected, value)
+            player._native_templates_applied()
+            assert getattr(player, selected) == value
+            player._apply_native_template_value(choices, [])
+            player._apply_native_template_value(selected, value)
+            player._native_templates_applied()
+            assert getattr(player, selected) is None
+        vacuum = VirtualVacuum(VACUUM_SCHEMA({"name": "Dynamic vacuum", "fan_speed_list": ["quiet"]}), False)
+        vacuum._apply_native_template_value("fan_speed", "quiet")
+        vacuum._native_templates_applied()
+        assert vacuum.fan_speed == "quiet"
+        vacuum._apply_native_template_value("fan_speed_list", [])
+        vacuum._native_templates_applied()
+        assert vacuum.fan_speed is None
+        print("Dynamic choices Docker passed: empty media source/sound-mode and vacuum fan-speed lists clear stale selections")
 
         from custom_components.virtual_layer import boiler_control as bc
         hass.states.async_set("climate.dynamic_source", "heat", {
@@ -1451,7 +1602,8 @@ async def test_config_flow_create_modify_runtime():
         for quantity in ("pm4", "nitrous_oxide"):
             assert hass.states.get(f"air_quality.docker_{quantity}_aqi").state == "good"
         assert hass.states.get("sensor.docker_formaldehyde").state == "0.003"
-        assert hass.states.get("sensor.docker_formaldehyde").attributes["unit_of_measurement"] == "mg/m3"
+        # Legacy ASCII units are normalized before HA validates sensor state.
+        assert hass.states.get("sensor.docker_formaldehyde").attributes["unit_of_measurement"] == "mg/m³"
         assert hass.states.get("air_quality.docker_formaldehyde_aqi").state == "good"
         assert hass.states.get("sensor.docker_formaldehyde_aqim").state == "good"
         assert await hass.config_entries.async_reload(entry.entry_id)

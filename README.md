@@ -180,6 +180,9 @@ history attributes expose the controller state.
   selected
 - Optional Home Assistant Jinja templates for custom state, availability, and
   attributes
+- Fan, climate and humidifier off commands reapply source updates received
+  during their actions, so fast replies are not lost. Without a new response,
+  they retain their immediate local off state until the source updates.
 - Periodic pull refresh for composite entities
 - Light-to-percentage sensor helpers show 0% while a source light is off and
   its reported brightness percentage when on. Unknown/unavailable sources are
@@ -194,8 +197,11 @@ history attributes expose the controller state.
   After default group actions finish, response-delay/retry settings trigger
   device updates and bounded command retries for members that still differ
   from the requested power, brightness or color. New commands cancel old
-  retries; successful members are not resent commands. Transitions receive
-  their requested duration before checking. The ignore-unresponsive option
+  retries; successful members are not resent commands. When all members
+  report the requested state, the pending check is cancelled immediately,
+  including replies received before the service returns. A single-source light
+  then immediately resumes following physical state changes. Transitions receive
+  their requested duration before polling or retrying. The ignore-unresponsive option
   skips command retries to unknown/unavailable members. A device update request
   depends on the physical integration's polling support and does not guarantee
   that an offline bulb can be reached.
@@ -507,7 +513,20 @@ property templates should exclusively reflect the real device state:
 ```
 
 Command actions use Home Assistant's action engine, so conditions, `choose`,
-delays, and templated action data are supported.
+delays, and templated action data are supported. Native command arguments are
+validated before source actions run, including when `optimistic` is `false`.
+Invalid selections, malformed dates, and invalid numeric inputs cannot trigger
+an action before being rejected.
+
+When a source explicitly removes all media input, sound-mode, or vacuum
+fan-speed options, the virtual entity clears the previous selection and updates
+its supported controls. A source that only supplies a current value without an
+option list can still expose that value. Legacy saved sound-mode lists also
+initialize the native media player's selection controls.
+
+Structured configuration editors reject non-finite numbers, recursive values,
+duplicate keys, and non-string mapping keys before saving. Invalid input leaves
+the form open for correction and preserves the existing configuration.
 
 Set `pull_interval` to a positive number of seconds to periodically refresh
 source values and templates. Leave it empty or set it to `0` to update from
@@ -1023,6 +1042,15 @@ media players include playback metadata, sound modes, grouping, and progress;
 and covers include tilt position and tilt actions. For example, a vacuum can
 template its activity, battery level, fan speed list, current fan speed, and
 supported feature set without editing JSON.
+
+Water-heater measurements retain their actual temperature even outside the
+target setting range; target temperatures still obey that range. Operation
+values such as `Eco` and `HEAT` retain their original case through templates
+and restoration. Cover and valve position templates apply before movement
+flags, so field order does not change the reported direction. An authoritative
+position report also publishes a stop when the position itself is unchanged.
+Lock state reports cancel an older simulated completion timer and do not run
+the optional jam simulation; lock commands retain that simulation behavior.
 
 New air-quality entities default to **Automatic**, skipping the rule wizard.
 The config flow uses `mdi:air-filter` as the default icon for Air Quality

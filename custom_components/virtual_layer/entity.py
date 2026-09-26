@@ -282,6 +282,10 @@ class VirtualEntity(RestoreEntity):
             async def _with_command_action(
                 self, *args, __method=method, __command=command, **kwargs
             ):
+                source_states = {
+                    source: self.hass.states.get(source)
+                    for source in self._source_entities
+                }
                 action_result = await self._async_run_command_action(
                     __command,
                     __method,
@@ -306,8 +310,18 @@ class VirtualEntity(RestoreEntity):
                 # the next state event.
                 if (
                     self._source_entities
-                    and not self._preserve_optimistic_command_state(
-                        __command, args, kwargs
+                    and (
+                        not self._preserve_optimistic_command_state(
+                            __command, args, kwargs
+                        )
+                        # A listener can already have consumed a fast reply
+                        # while the action was running. Do not overwrite it
+                        # with the native method's optimistic value and wait
+                        # for a second event which may never arrive.
+                        or any(
+                            self.hass.states.get(source) is not state
+                            for source, state in source_states.items()
+                        )
                     )
                 ):
                     self._apply_templates()
@@ -1892,19 +1906,24 @@ class VirtualOpenableEntity(VirtualEntity):
 
         self.async_write_ha_state()
 
-    def _set_position(self, position: int) -> None:
-        _LOGGER.debug(f"setting {self.name} position {position}")
-
-        # Validate before changing an active transition. The generic
-        # virtual-layer.set_state service accepts text values, so a bad value
-        # must not inadvertently stop a cover or valve that is already moving.
+    @staticmethod
+    def _validate_position(position):
         if isinstance(position, bool):
             raise ValueError("position must be an integer")
         try:
             position = int(position)
         except (TypeError, ValueError, OverflowError) as err:
             raise ValueError("position must be an integer") from err
-        position = max(0, min(100, position))
+        return max(0, min(100, position))
+
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        if command in {"set_cover_position", "set_valve_position"}:
+            self._validate_position(args[0] if args else kwargs.get("position"))
+
+    def _set_position(self, position: int) -> None:
+        _LOGGER.debug(f"setting {self.name} position {position}")
+        # Validate before cancelling an active transition or dispatching actions.
+        position = self._validate_position(position)
 
         self._cancel_timer()
 
@@ -1965,13 +1984,19 @@ class VirtualOpenableEntity(VirtualEntity):
             "current_valve_position",
             "position",
         }:
+            if isinstance(value, bool):
+                raise ValueError("position must be between 0 and 100")
             try:
                 position = float(value)
             except (TypeError, ValueError, OverflowError) as err:
                 raise ValueError("position must be between 0 and 100") from err
             if not isfinite(position) or not 0 <= position <= 100:
                 raise ValueError("position must be between 0 and 100")
-            changed = self._current_position != position
+            changed = (
+                self._current_position != position
+                or self._attr_is_closed != (position == 0)
+                or bool(self._attr_is_opening or self._attr_is_closing)
+            )
             self._cancel_timer()
             self._current_position = position
             self._target_position = None
@@ -1983,6 +2008,13 @@ class VirtualOpenableEntity(VirtualEntity):
         if name in {"is_opening", "is_closing", "is_closed"}:
             value = value if isinstance(value, bool) else self._template_to_bool(value)
         return super()._apply_native_template_value(name, value)
+
+    def _native_template_priority(self, name: str) -> int:
+        # A position report clears simulated movement. Apply the source's
+        # explicit motion flags afterwards, regardless of JSON field order.
+        if name in {"is_opening", "is_closing", "is_closed"}:
+            return 4
+        return super()._native_template_priority(name)
 
     def _native_templates_applied(self) -> None:
         if self._attr_is_opening and self._attr_is_closing:

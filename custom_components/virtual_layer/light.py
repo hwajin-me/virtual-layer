@@ -732,6 +732,7 @@ class VirtualLight(VirtualEntity, LightEntity):
             # the lock, after the cancellation above has already happened.
             self._cancel_group_refresh()
             self._response_pending = False
+            self._group_target = None
             spec = self._command_action_spec(command)
             if spec is not None and not spec[1]:
                 self._group_authoritative = False
@@ -781,7 +782,10 @@ class VirtualLight(VirtualEntity, LightEntity):
             if revision == self._group_revision and self._has_stock_group_action(command):
                 data = self._command_service_data(command, method, args, kwargs)
                 self._group_target = (command, method, copy.deepcopy(data))
-                self._schedule_group_refresh(revision, self._response_retries)
+                # A device can report before its service call returns. Check
+                # the current state as well as subsequent source events.
+                if not self._acknowledge_group_target():
+                    self._schedule_group_refresh(revision, self._response_retries)
             return False  # The native method has already published the target.
 
     def _cancel_group_refresh(self):
@@ -790,6 +794,26 @@ class VirtualLight(VirtualEntity, LightEntity):
             self._response_refresh_cancel = None
         if self._group_refresh_task is not None:
             self._group_refresh_task.cancel()
+
+    def _acknowledge_group_target(self):
+        """Release confirmed single bulbs without waiting for the retry timer."""
+        if self._group_dispatching or self._group_target is None:
+            return False
+        command, _method, data = self._group_target
+        sources = self._group_sources()
+        if not sources or not all(
+            self._group_source_matches(source, command, data) for source in sources
+        ):
+            return False
+        if self._response_refresh_cancel is not None:
+            self._response_refresh_cancel()
+            self._response_refresh_cancel = None
+        # Do not cancel a running refresh: it may be awaiting the very service
+        # which emitted this acknowledgement. It rechecks before retrying.
+        self._response_pending = False
+        if len(sources) == 1:
+            self._group_authoritative = False
+        return True
 
     def _group_source_matches(self, source, command, data):
         state = self.hass.states.get(source)
@@ -959,6 +983,8 @@ class VirtualLight(VirtualEntity, LightEntity):
 
     def _apply_templates(self):
         """Defer source events as well as immediate post-command rendering."""
+        if self._group_authoritative:
+            self._acknowledge_group_target()
         if self._response_pending:
             return
         if not self._group_authoritative:

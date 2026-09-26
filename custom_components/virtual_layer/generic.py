@@ -549,6 +549,12 @@ class VirtualSelect(_NativeGenericMixin, VirtualEntity, SelectEntity):
         self._attr_current_option = option
         self.async_write_ha_state()
 
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        if command == "select_option":
+            option = args[0] if args else kwargs.get("option")
+            if option not in self._attr_options:
+                raise ValueError(f"Invalid select option: {option}")
+
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name == "options":
             value = _template_string_list(value, name)
@@ -624,7 +630,7 @@ class VirtualText(_NativeGenericMixin, VirtualEntity, TextEntity):
             or self._pattern_regex.fullmatch(value) is not None
         )
 
-    async def async_set_value(self, value: str) -> None:
+    def _validate_text_value(self, value) -> None:
         if not isinstance(value, str):
             raise TypeError("Text value must be a string")
         if not self._attr_native_min <= len(value) <= self._attr_native_max:
@@ -634,6 +640,13 @@ class VirtualText(_NativeGenericMixin, VirtualEntity, TextEntity):
             and self._pattern_regex.fullmatch(value) is None
         ):
             raise ValueError("Text value does not match the configured pattern")
+
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        if command == "set_value":
+            self._validate_text_value(args[0] if args else kwargs.get("value"))
+
+    async def async_set_value(self, value: str) -> None:
+        self._validate_text_value(value)
         self._attr_native_value = value
         self.async_write_ha_state()
 
@@ -713,6 +726,12 @@ class _TemporalEntityMixin(_NativeGenericMixin):
             raise ValueError(f"Invalid {self.PLATFORM_DOMAIN} value: {value}")
         self._attr_native_value = parsed
         self.async_write_ha_state()
+
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        if command == "set_value":
+            value = args[0] if args else kwargs.get("value")
+            if self._parse_value(value) is None:
+                raise ValueError(f"Invalid {self.PLATFORM_DOMAIN} value: {value}")
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name in {"state", "value", "native_value"}:
@@ -838,7 +857,9 @@ class VirtualSiren(_NativeGenericMixin, VirtualEntity, SirenEntity):
     def set_state(self, value) -> None:
         self._attr_is_on = self._template_to_bool(value)
 
-    async def async_turn_on(self, **kwargs) -> None:
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        if command != "turn_on":
+            return
         tone = kwargs.get("tone")
         if (
             tone is not None
@@ -846,6 +867,9 @@ class VirtualSiren(_NativeGenericMixin, VirtualEntity, SirenEntity):
             and tone not in self._attr_available_tones
         ):
             raise ValueError(f"Invalid siren tone: {tone}")
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self._validate_command_action("turn_on", (), kwargs)
         for key in ("tone", "volume_level", "duration"):
             if key in kwargs:
                 self._virtual_attributes[key] = kwargs[key]
@@ -983,6 +1007,12 @@ class VirtualRemote(_NativeGenericMixin, VirtualEntity, RemoteEntity):
     def set_state(self, value) -> None:
         self._attr_is_on = self._template_to_bool(value)
 
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        if command == "turn_on":
+            activity = kwargs.get("activity")
+            if activity is not None and self._attr_activity_list and activity not in self._attr_activity_list:
+                raise ValueError(f"Invalid remote activity: {activity}")
+
     async def async_turn_on(self, **kwargs) -> None:
         activity = kwargs.get("activity")
         if activity is not None:
@@ -1031,6 +1061,8 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
     NATIVE_OPTION_KEYS = frozenset(
         {
             "is_volume_muted",
+            "sound_mode",
+            "sound_mode_list",
             "source",
             "source_list",
             "volume_level",
@@ -1040,8 +1072,14 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
         self._configured_supported_features = None
+        self._known_choice_lists = set()
         self._attr_source_list = _string_list(config.get("source_list"))
         self._attr_source = config.get("source")
+        self._attr_sound_mode_list = _string_list(config.get("sound_mode_list"))
+        sound_mode = config.get("sound_mode")
+        self._attr_sound_mode = (
+            sound_mode if sound_mode in self._attr_sound_mode_list else None
+        )
         self._attr_volume_level = self._bounded_volume(config.get("volume_level", 0.5))
         self._attr_is_volume_muted = _safe_bool(config.get("is_volume_muted", False))
         self._refresh_supported_features()
@@ -1062,8 +1100,20 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             | MediaPlayerEntityFeature.PREVIOUS_TRACK
             | MediaPlayerEntityFeature.NEXT_TRACK
         )
-        if self._attr_source_list:
+        if self._attr_source_list or "select_source" in self._command_actions:
             features |= MediaPlayerEntityFeature.SELECT_SOURCE
+        if self._attr_sound_mode_list or "select_sound_mode" in self._command_actions:
+            features |= MediaPlayerEntityFeature.SELECT_SOUND_MODE
+        if (
+            getattr(self, "_attr_shuffle", None) is not None
+            or "set_shuffle" in self._command_actions
+        ):
+            features |= MediaPlayerEntityFeature.SHUFFLE_SET
+        if (
+            getattr(self, "_attr_repeat", None) is not None
+            or "set_repeat" in self._command_actions
+        ):
+            features |= MediaPlayerEntityFeature.REPEAT_SET
         self._attr_supported_features = features
 
     @staticmethod
@@ -1268,6 +1318,29 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         self._attr_repeat = repeat
         self.async_write_ha_state()
 
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        choices = {
+            "select_source": ("source", self._attr_source_list),
+            "select_sound_mode": ("sound_mode", getattr(self, "_attr_sound_mode_list", None) or []),
+        }
+        if command in choices:
+            name, values = choices[command]
+            value = args[0] if args else kwargs.get(name)
+            if value not in values:
+                raise ValueError(f"Invalid media {name}: {value}")
+        elif command == "set_volume_level":
+            value = args[0] if args else kwargs.get("volume")
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+                raise ValueError("Media player volume must be between 0 and 1")
+        elif command in {"set_shuffle", "mute_volume"}:
+            name = "shuffle" if command == "set_shuffle" else "mute"
+            value = args[0] if args else kwargs.get(name)
+            if not isinstance(value, bool):
+                raise TypeError(f"Media {name} must be a boolean")
+        elif command == "set_repeat":
+            value = args[0] if args else kwargs.get("repeat")
+            RepeatMode(str(value).strip().lower())
+
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name == "supported_features":
             value = _supported_feature_mask(value, MediaPlayerEntityFeature)
@@ -1278,6 +1351,10 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
             return super()._apply_native_template_value(name, None)
         if name in {"source_list", "sound_mode_list", "group_members"}:
             value = _template_string_list(value, name)
+            if name != "group_members":
+                was_known = name in self._known_choice_lists
+                self._known_choice_lists.add(name)
+                return super()._apply_native_template_value(name, value) or not was_known
         elif name == "source":
             value = None if not _has_value(value) else str(value).strip()
             if value is not None and self._attr_source_list and value not in self._attr_source_list:
@@ -1341,41 +1418,14 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:
-        if self._attr_source_list and self._attr_source not in self._attr_source_list:
+        if ((self._attr_source_list or "source_list" in self._known_choice_lists)
+                and self._attr_source not in self._attr_source_list):
             self._attr_source = None
         sound_modes = getattr(self, "_attr_sound_mode_list", None) or []
-        if sound_modes and getattr(self, "_attr_sound_mode", None) not in sound_modes:
+        if ((sound_modes or "sound_mode_list" in self._known_choice_lists)
+                and getattr(self, "_attr_sound_mode", None) not in sound_modes):
             self._attr_sound_mode = None
-        if self._configured_supported_features is not None:
-            self._attr_supported_features = self._configured_supported_features
-            return
-        features = (
-            MediaPlayerEntityFeature.TURN_ON
-            | MediaPlayerEntityFeature.TURN_OFF
-            | MediaPlayerEntityFeature.PLAY
-            | MediaPlayerEntityFeature.PAUSE
-            | MediaPlayerEntityFeature.STOP
-            | MediaPlayerEntityFeature.VOLUME_SET
-            | MediaPlayerEntityFeature.VOLUME_MUTE
-            | MediaPlayerEntityFeature.VOLUME_STEP
-            | MediaPlayerEntityFeature.PREVIOUS_TRACK
-            | MediaPlayerEntityFeature.NEXT_TRACK
-        )
-        if self._attr_source_list or "select_source" in self._command_actions:
-            features |= MediaPlayerEntityFeature.SELECT_SOURCE
-        if sound_modes or "select_sound_mode" in self._command_actions:
-            features |= MediaPlayerEntityFeature.SELECT_SOUND_MODE
-        if (
-            getattr(self, "_attr_shuffle", None) is not None
-            or "set_shuffle" in self._command_actions
-        ):
-            features |= MediaPlayerEntityFeature.SHUFFLE_SET
-        if (
-            getattr(self, "_attr_repeat", None) is not None
-            or "set_repeat" in self._command_actions
-        ):
-            features |= MediaPlayerEntityFeature.REPEAT_SET
-        self._attr_supported_features = features
+        self._refresh_supported_features()
 
 
 class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
@@ -1415,7 +1465,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
         )
         if self._attr_target_temperature_step <= 0:
             self._attr_target_temperature_step = 1
-        self._attr_current_temperature = self._bounded_temperature(
+        self._attr_current_temperature = self._measured_temperature(
             config.get("current_temperature")
         )
         self._attr_target_temperature = self._bounded_temperature(
@@ -1460,7 +1510,8 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
         ):
             self._attr_supported_features |= WaterHeaterEntityFeature.AWAY_MODE
 
-    def _bounded_temperature(self, value):
+    @staticmethod
+    def _measured_temperature(value):
         if value is None or isinstance(value, bool):
             return None
         try:
@@ -1469,19 +1520,31 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             return None
         if not math.isfinite(parsed):
             return None
+        return parsed
+
+    def _bounded_temperature(self, value):
+        if (parsed := self._measured_temperature(value)) is None:
+            return None
         return max(self._attr_min_temp, min(self._attr_max_temp, parsed))
+
+    def _normalize_operation(self, value):
+        """Preserve advertised mode values, including their original case."""
+        operation = str(value)
+        # Retain the old uppercase-to-lowercase fallback for legacy callers
+        # only when it does not replace an exact advertised mode.
+        return operation if operation in self._attr_operation_list else operation.lower()
 
     def _create_state(self, config):
         super()._create_state(config)
-        operation = str(config.get(CONF_INITIAL_VALUE, STATE_OFF)).lower()
+        operation = self._normalize_operation(config.get(CONF_INITIAL_VALUE, STATE_OFF))
         self._attr_current_operation = (
             operation if operation in self._attr_operation_list else STATE_OFF
         )
 
     def _restore_state(self, state, config):
         super()._restore_state(state, config)
-        restored_operation = str(state.state).lower()
-        configured_operation = str(config.get(CONF_INITIAL_VALUE, STATE_OFF)).lower()
+        restored_operation = self._normalize_operation(state.state)
+        configured_operation = self._normalize_operation(config.get(CONF_INITIAL_VALUE, STATE_OFF))
         self._attr_current_operation = (
             restored_operation
             if restored_operation in self._attr_operation_list
@@ -1489,7 +1552,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             if configured_operation in self._attr_operation_list
             else STATE_OFF
         )
-        self._attr_current_temperature = self._bounded_temperature(
+        self._attr_current_temperature = self._measured_temperature(
             state.attributes.get(
                 "current_temperature",
                 self._attr_current_temperature,
@@ -1515,7 +1578,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             )
 
     def set_state(self, value) -> None:
-        operation = str(value).lower()
+        operation = self._normalize_operation(value)
         if operation not in self._attr_operation_list:
             if not _has_value(value):
                 operation = STATE_OFF
@@ -1523,8 +1586,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
                 raise ValueError(f"Invalid water heater operation mode: {operation}")
         self._attr_current_operation = operation
 
-    async def async_set_temperature(self, **kwargs) -> None:
-        requested_temperature = kwargs[ATTR_TEMPERATURE]
+    def _validate_target_temperature(self, requested_temperature):
         if isinstance(requested_temperature, bool):
             raise ValueError("Water heater temperature must be a finite number")
         try:
@@ -1537,6 +1599,18 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             raise ValueError("Water heater temperature must be a finite number")
         if not self._attr_min_temp <= temperature <= self._attr_max_temp:
             raise ValueError("Water heater temperature is outside its configured range")
+        return temperature
+
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        if command == "set_temperature":
+            self._validate_target_temperature(kwargs.get(ATTR_TEMPERATURE))
+        elif command == "set_operation_mode":
+            mode = args[0] if args else kwargs.get("operation_mode")
+            if mode not in self._attr_operation_list:
+                raise ValueError(f"Invalid water heater operation mode: {mode}")
+
+    async def async_set_temperature(self, **kwargs) -> None:
+        temperature = self._validate_target_temperature(kwargs[ATTR_TEMPERATURE])
         self._attr_target_temperature = nearest_step_value(
             temperature,
             self._attr_min_temp,
@@ -1587,7 +1661,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
             if STATE_OFF not in value:
                 value.insert(0, STATE_OFF)
         elif name == "current_operation":
-            value = str(value).lower()
+            value = self._normalize_operation(value)
             if value not in self._attr_operation_list:
                 raise ValueError(f"Invalid water heater operation mode: {value}")
         elif name in {"min_temp", "max_temp"}:
@@ -1606,7 +1680,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
                 parsed = _safe_float(value, float("nan"))
                 if not math.isfinite(parsed):
                     raise ValueError(f"{name} must be a finite number")
-                value = self._bounded_temperature(parsed)
+                value = parsed if name == "current_temperature" else self._bounded_temperature(parsed)
         elif name == "target_temperature_step":
             value = _safe_float(value, float("nan"))
             if not math.isfinite(value) or value <= 0:
@@ -1627,7 +1701,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
                 raise ValueError("precision must be a positive number")
         elif name == "state":
             name = "current_operation"
-            value = str(value).lower()
+            value = self._normalize_operation(value)
             if value not in self._attr_operation_list:
                 raise ValueError(f"Invalid water heater operation mode: {value}")
         return super()._apply_native_template_value(name, value)
@@ -1638,7 +1712,7 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
                 self._attr_max_temp,
                 self._attr_min_temp,
             )
-        self._attr_current_temperature = self._bounded_temperature(
+        self._attr_current_temperature = self._measured_temperature(
             self._attr_current_temperature
         )
         self._attr_target_temperature = self._bounded_temperature(
@@ -1767,6 +1841,12 @@ class VirtualUpdate(_NativeGenericMixin, VirtualEntity, UpdateEntity):
         self._virtual_attributes["last_install_backup"] = backup
         self._update_attributes()
         self.async_write_ha_state()
+
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        if command == "install":
+            version = (args[0] if args else kwargs.get("version")) or self._attr_latest_version
+            if self._versions and str(version) not in self._versions:
+                raise ValueError(f"Invalid update version: {version}")
 
     async def async_release_notes(self) -> str | None:
         return self._release_notes

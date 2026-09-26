@@ -116,6 +116,45 @@ async def test_single_source_ignores_stale_off_event_while_turning_on(hass):
     assert light.is_on
 
 
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_single_bulb_fast_reply_restores_live_source_tracking(hass, synchronous):
+    """Real HA listeners must follow a second report before the retry timer."""
+    assert await async_setup_component(hass, "light", {})
+    component = hass.data[DATA_COMPONENT]
+    bulb = RecordingBulb("Fast reply", ColorMode.BRIGHTNESS)
+    if not synchronous:
+        bulb.async_turn_on = AsyncMock()
+    await component.async_add_entities([bulb])
+    light = VirtualLight(LIGHT_SCHEMA({
+        "name": "Fast virtual", "entity_id": "light.fast_virtual",
+        "initial_value": "off", "matter_light_type": "dimmable",
+        "source_entities": [bulb.entity_id], "persistent": False,
+        "native_templates": {
+            "is_on": "{{ is_state(" + repr(bulb.entity_id) + ", 'on') }}",
+        },
+    }), False)
+    await component.async_add_entities([light])
+    with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()) as later:
+        await hass.services.async_call("light", "turn_on", {
+            "entity_id": light.entity_id, "brightness": 180,
+        }, blocking=True)
+        if not synchronous:
+            bulb._attr_is_on = True
+            bulb._attr_brightness = 180
+            bulb.async_write_ha_state()
+        await hass.async_block_till_done()
+        assert light.is_on
+        assert light._response_refresh_cancel is None
+        if synchronous:
+            later.assert_not_called()
+        else:
+            later.return_value.assert_called_once()
+        bulb._attr_is_on = False
+        bulb.async_write_ha_state()
+        await hass.async_block_till_done()
+        assert not light.is_on
+
+
 @pytest.mark.parametrize("responds", [False, True])
 @pytest.mark.parametrize("custom_off", [False, True])
 async def test_single_slow_bulb_retries_then_resumes_source_state(hass, responds, custom_off):
@@ -181,6 +220,7 @@ async def test_transition_reaches_sources_through_ha_service(hass, command, sour
     component = hass.data[DATA_COMPONENT]
     bulbs = [RecordingBulb(f"Transition {i}", ColorMode.BRIGHTNESS) for i in range(source_count)]
     for bulb in bulbs:
+        bulb._attr_is_on = command == "turn_off"
         bulb._attr_supported_features = LightEntityFeature.TRANSITION
         bulb.async_turn_on = AsyncMock()
         bulb.async_turn_off = AsyncMock()

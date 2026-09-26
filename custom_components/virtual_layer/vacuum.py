@@ -201,6 +201,7 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
         self._battery_level = _as_battery_level(config.get(CONF_BATTERY_LEVEL))
         self._attr_fan_speed = config.get(CONF_FAN_SPEED)
         self._attr_fan_speed_list = list(config.get(CONF_FAN_SPEED_LIST, []))
+        self._fan_speed_list_known = bool(self._attr_fan_speed_list)
         self._base_supported_features = config.get(
             CONF_SUPPORTED_FEATURES, DEFAULT_SUPPORTED_FEATURES
         )
@@ -308,6 +309,12 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
         self._attr_fan_speed = fan_speed
         self._write_state()
 
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        if command == "set_fan_speed":
+            speed = args[0] if args else kwargs.get("fan_speed")
+            if self._attr_fan_speed_list and speed not in self._attr_fan_speed_list:
+                raise ValueError(f"Unsupported vacuum fan speed: {speed}")
+
     async def async_send_command(
         self,
         command: str,
@@ -355,6 +362,9 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
             value = [str(item).strip() for item in value if str(item).strip()]
             if len(set(value)) != len(value):
                 raise ValueError("fan_speed_list contains duplicate values")
+            was_known = self._fan_speed_list_known
+            self._fan_speed_list_known = True
+            return super()._apply_native_template_value(name, value) or not was_known
         elif name == CONF_FAN_SPEED:
             value = None if value is None or value == "" else str(value)
             if value is not None and self._attr_fan_speed_list and value not in self._attr_fan_speed_list:
@@ -368,7 +378,7 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
 
     def _native_templates_applied(self) -> None:
         if (
-            self._attr_fan_speed_list
+            self._fan_speed_list_known
             and self._attr_fan_speed not in self._attr_fan_speed_list
         ):
             self._attr_fan_speed = None

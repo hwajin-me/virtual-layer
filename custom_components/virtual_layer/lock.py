@@ -43,6 +43,10 @@ DEFAULT_CHANGE_TIME = timedelta(seconds=0)
 DEFAULT_SUPPORT_OPEN = False
 DEFAULT_TEST_JAMMING = 0
 
+_STATE_FLAG_PRIORITY = (
+    "is_locked", "is_unlocking", "is_locking", "is_opening", "is_open", "is_jammed",
+)
+
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(virtual_schema(DEFAULT_LOCK_VALUE, {
     vol.Optional(CONF_CHANGE_TIME, default=DEFAULT_CHANGE_TIME): vol.All(cv.time_period, cv.positive_timedelta),
     vol.Optional(CONF_SUPPORT_OPEN, default=DEFAULT_SUPPORT_OPEN): cv.boolean,
@@ -126,14 +130,7 @@ class VirtualLock(VirtualEntity, LockEntity):
         if state not in state_flags:
             return False
         active_flag = state_flags[state]
-        for flag in (
-            "is_jammed",
-            "is_open",
-            "is_opening",
-            "is_locking",
-            "is_unlocking",
-            "is_locked",
-        ):
+        for flag in _STATE_FLAG_PRIORITY:
             setattr(self, f"_attr_{flag}", flag == active_flag)
         return True
 
@@ -239,6 +236,7 @@ class VirtualLock(VirtualEntity, LockEntity):
 
     async def async_open(self, **kwargs: Any) -> None:
         _LOGGER.debug(f"opening {self.name}")
+        self._cancel_timer()
         if self._support_open:
             self._open()
         else:
@@ -247,18 +245,16 @@ class VirtualLock(VirtualEntity, LockEntity):
 
     def set_state(self, value) -> None:
         value = str(value).lower()
-        if value in ["locked", "lock", "on", "true", "1"]:
-            self._lock()
-        elif value in ["open", "opened"]:
-            self._open()
-        elif value in ["jammed"]:
-            self._jam()
-        elif value in ["locking", "unlocking", "opening"]:
-            self._set_lock_state_flags(value)
-        elif value in ["unlocked", "unlock", "off", "false", "0"]:
-            self._unlock()
-        else:
+        value = {
+            "lock": "locked", "on": "locked", "true": "locked", "1": "locked",
+            "opened": "open", "unlock": "unlocked", "off": "unlocked",
+            "false": "unlocked", "0": "unlocked",
+        }.get(value, value)
+        if not self._set_lock_state_flags(value):
             raise ValueError(f"Invalid lock state: {value}")
+        # A reported state is authoritative; it must not run the simulated
+        # jamming logic or inherit a previous command's completion timer.
+        self._cancel_timer()
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name == CONF_SUPPORT_OPEN:
@@ -266,41 +262,37 @@ class VirtualLock(VirtualEntity, LockEntity):
             changed = self._support_open != value
             self._support_open = value
             return changed
-        if name in {
-            "is_locked",
-            "is_open",
-            "is_locking",
-            "is_unlocking",
-            "is_jammed",
-            "is_opening",
-        } and not isinstance(value, bool):
-            value = self._template_to_bool(value)
+        if name in _STATE_FLAG_PRIORITY:
+            if not isinstance(value, bool):
+                value = self._template_to_bool(value)
+            if value or name == "is_locked":
+                previous = tuple(
+                    getattr(self, f"_attr_{flag}", False) for flag in _STATE_FLAG_PRIORITY
+                )
+                self._cancel_timer()
+                self._set_lock_state_flags(name.removeprefix("is_") if value else "unlocked")
+                return previous != tuple(
+                    getattr(self, f"_attr_{flag}", False) for flag in _STATE_FLAG_PRIORITY
+                )
         return super()._apply_native_template_value(name, value)
+
+    def _native_template_priority(self, name: str) -> int:
+        # Explicit source flags replace older local states. Apply the existing
+        # jam/open/moving/locked precedence independently of JSON field order.
+        if name in _STATE_FLAG_PRIORITY:
+            return 10 + _STATE_FLAG_PRIORITY.index(name)
+        return super()._native_template_priority(name)
 
     def _native_templates_applied(self) -> None:
         active = next(
             (
                 name
-                for name in (
-                    "is_jammed",
-                    "is_open",
-                    "is_opening",
-                    "is_locking",
-                    "is_unlocking",
-                    "is_locked",
-                )
+                for name in reversed(_STATE_FLAG_PRIORITY)
                 if getattr(self, f"_attr_{name}", False)
             ),
             None,
         )
-        for name in (
-            "is_jammed",
-            "is_open",
-            "is_opening",
-            "is_locking",
-            "is_unlocking",
-            "is_locked",
-        ):
+        for name in _STATE_FLAG_PRIORITY:
             setattr(self, f"_attr_{name}", name == active)
         self._attr_supported_features = LockEntityFeature(0)
         if self._support_open or "open" in self._command_actions:

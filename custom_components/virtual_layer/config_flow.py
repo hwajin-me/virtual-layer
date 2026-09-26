@@ -4234,6 +4234,16 @@ def _reject_json_constant(value: str):
     raise ValueError(f"Invalid JSON constant: {value}")
 
 
+def _unique_json_object(pairs):
+    """Match the YAML editor's rejection of silently overwritten keys."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate configuration key")
+        result[key] = value
+    return result
+
+
 def _parse_yaml_value(value: Any, field_name: str):
     """Parse a native YAML-editor value or legacy JSON/YAML text."""
     if value in (None, ""):
@@ -4241,7 +4251,11 @@ def _parse_yaml_value(value: Any, field_name: str):
     if isinstance(value, str):
         try:
             try:
-                value = json.loads(value, parse_constant=_reject_json_constant)
+                value = json.loads(
+                    value,
+                    parse_constant=_reject_json_constant,
+                    object_pairs_hook=_unique_json_object,
+                )
             except json.JSONDecodeError:
                 value = yaml.load(value, Loader=_StrictYamlLoader)
         except (RecursionError, TypeError, ValueError, yaml.YAMLError) as err:
@@ -4266,7 +4280,36 @@ def _parse_json_value(value: Any, field_name: str):
 
 def _validate_ha_json_value(value, field_name: str):
     """Reject JSON values that Home Assistant cannot persist."""
+    active_containers = set()
+
+    def validate_nested(item, depth=0):
+        # HA's encoder accepts NaN/Infinity as null and coerces non-string
+        # keys. Validate before encoding so saving cannot silently change
+        # native YAML-editor payloads or JSON exponent-overflow values.
+        if depth > 100:
+            raise ValueError("Configuration nesting exceeds the editable limit")
+        if isinstance(item, float) and not math.isfinite(item):
+            raise ValueError("Configuration numbers must be finite")
+        if not isinstance(item, (Mapping, list, tuple, set, frozenset)):
+            return
+        identity = id(item)
+        if identity in active_containers:
+            raise ValueError("Recursive configuration is not supported")
+        active_containers.add(identity)
+        try:
+            if isinstance(item, Mapping):
+                if any(not isinstance(key, str) for key in item):
+                    raise ValueError("Configuration keys must be strings")
+                children = item.values()
+            else:
+                children = item
+            for child in children:
+                validate_nested(child, depth + 1)
+        finally:
+            active_containers.remove(identity)
+
     try:
+        validate_nested(value)
         json_bytes(value)
     except (OverflowError, RecursionError, TypeError, ValueError) as err:
         raise InvalidJson(field_name) from err
@@ -9260,12 +9303,22 @@ def _source_command_actions(
             continue
         required_features = _SOURCE_COMMAND_FEATURES.get(key)
         capability_attributes = _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES.get(key, ())
+        # A fan's power services are usable independently of its optional
+        # speed/preset capabilities.  Some Xiaomi Home devices publish those
+        # optional feature bits while their TURN_ON/TURN_OFF bits are absent
+        # or only arrive after the entity has initialized.  Do not create a
+        # virtual fan that advertises power control but has no source action
+        # to carry it out.  The source must still be a same-domain fan; this
+        # does not loosen feature checks for optional fan commands.
+        power_command = platform == "fan" and command in {"turn_off", "turn_on"}
         source_entities = list(
             dict.fromkeys(
                 entity_id
                 for entity_id, state in zip(entity_ids, states, strict=True)
                 if entity_id.startswith(f"{platform}.")
                 and (
+                    power_command
+                    or
                     required_features is None
                     or _source_supports_command(
                         state,

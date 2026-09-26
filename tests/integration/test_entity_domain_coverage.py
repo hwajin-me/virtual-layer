@@ -18,6 +18,8 @@ from homeassistant.const import (
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.virtual_layer.config_flow import (
+    _async_build_entity_config,
+    _entity_form_defaults,
     DOMAIN_NATIVE_TEMPLATE_PROPERTIES,
     NATIVE_TEMPLATE_ATOMIC_LIST_PROPERTIES,
     NATIVE_TEMPLATE_BITMASK_PROPERTIES,
@@ -40,6 +42,7 @@ from custom_components.virtual_layer.const import (
     CONF_PERSISTENT,
     STATE_ONLY_ENTITY_DOMAINS,
     VIRTUAL_ENTITY_DOMAINS,
+    VIRTUAL_ENTITY_COMMANDS,
 )
 from custom_components.virtual_layer.generic import GenericVirtualEntity
 
@@ -302,6 +305,34 @@ def test_every_supported_domain_has_a_platform_module():
         assert (component_dir / f"{domain}.py").is_file()
         module = importlib.import_module(f"custom_components.virtual_layer.{domain}")
         assert hasattr(module, "async_setup_entry")
+
+
+@pytest.mark.parametrize("domain", VIRTUAL_ENTITY_COMMANDS)
+def test_every_advertised_command_has_a_native_method(domain):
+    module = importlib.import_module(f"custom_components.virtual_layer.{domain}")
+    entity_class = getattr(module, "ENTITY_CLASS", None)
+    if entity_class is None:
+        entity_class = getattr(module, "Virtual" + "".join(part.title() for part in domain.split("_")))
+    for command in VIRTUAL_ENTITY_COMMANDS[domain]:
+        assert callable(getattr(entity_class, f"async_{command}", None)), (domain, command)
+
+
+@pytest.mark.parametrize("domain", VIRTUAL_ENTITY_DOMAINS)
+async def test_every_domain_form_can_save_and_reopen_without_losing_templates(hass, domain):
+    """Exercise the shared create/edit pipeline with every domain's properties."""
+    raw = _raw_ui_entity(domain)
+    raw[ATTR_ENTITY_ID] = f"{domain}.form_audit"
+    raw["attributes"] = {"vendor_data": {"nested": [1, "kept", False]}}
+    form = _entity_form_defaults("Audit Device", raw)
+    device, saved = await _async_build_entity_config(hass, form)
+    assert device == "Audit Device"
+    assert saved[CONF_PLATFORM] == domain
+    assert saved[ATTR_ENTITY_ID] == raw[ATTR_ENTITY_ID]
+    assert saved.get(CONF_NATIVE_TEMPLATES, {}) == raw.get(CONF_NATIVE_TEMPLATES, {})
+    assert saved["attributes"]["vendor_data"] == raw["attributes"]["vendor_data"]
+    reopened = _entity_form_defaults(device, saved)
+    _, resaved = await _async_build_entity_config(hass, reopened, saved[ATTR_ENTITY_ID])
+    assert resaved == saved
 
 
 async def test_real_config_entry_loads_every_supported_domain(

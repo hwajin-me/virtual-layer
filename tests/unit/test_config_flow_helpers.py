@@ -18,6 +18,7 @@ from homeassistant.components.camera import CameraEntityFeature
 from homeassistant.components.alarm_control_panel import AlarmControlPanelEntityFeature
 from homeassistant.components.climate import ClimateEntityFeature
 from homeassistant.components.climate.const import HVACAction
+from homeassistant.components.fan import FanEntityFeature
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.components.vacuum import VacuumActivity
 from homeassistant.const import (
@@ -1344,6 +1345,32 @@ def test_cross_domain_command_helper_is_limited_to_supported_power_commands(hass
         "turn_off",
         "turn_on",
     }
+
+
+def test_fan_power_actions_do_not_depend_on_delayed_xiaomi_feature_bits(hass):
+    """Keep generated power control when a Xiaomi fan reports features late."""
+    source = "fan.xiaomi_ha1_c6e5_air_purifier"
+    hass.states.async_set(
+        source,
+        "on",
+        {
+            "percentage": 33,
+            "preset_modes": ["auto", "sleep", "favorite"],
+            # Xiaomi Home can briefly expose its native attributes before the
+            # complete supported_features mask reaches Home Assistant.
+            "supported_features": int(FanEntityFeature.SET_SPEED),
+        },
+    )
+    state = hass.states.get(source)
+    assert state is not None
+
+    actions = _source_command_actions("fan", [source], [state])
+
+    assert actions["turn_off"] == [
+        {"action": "fan.turn_off", "target": {ATTR_ENTITY_ID: source}, "data": "{{ command_data }}"}
+    ]
+    assert actions["turn_on"][-1]["action"] == "fan.turn_on"
+    assert actions["turn_on"][-1]["target"] == {ATTR_ENTITY_ID: source}
 
 
 def test_edit_type_schema_preserves_an_existing_nonconversion_domain(hass):
@@ -4976,6 +5003,8 @@ def test_reference_fan_promotes_native_speed_preset_and_motion_options(hass):
         "set_direction",
         "set_percentage",
         "set_preset_mode",
+        "turn_off",
+        "turn_on",
     }
     percentage_action = command_actions["set_percentage"][0]
     assert percentage_action["action"] == "fan.set_percentage"

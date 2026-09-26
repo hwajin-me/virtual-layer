@@ -293,8 +293,8 @@ class VirtualNumber(VirtualEntity, NumberEntity):
         """Set new value."""
         self.set(value)
 
-    def set(self, value) -> None:
-        _LOGGER.debug("Setting native value for %s", self.entity_id)
+    @staticmethod
+    def _validate_numeric_value(value):
         if isinstance(value, bool):
             raise ValueError("Number value must be numeric")
         try:
@@ -303,6 +303,15 @@ class VirtualNumber(VirtualEntity, NumberEntity):
             raise ValueError("Number value must be numeric") from err
         if not math.isfinite(value):
             raise ValueError("Number value must be finite")
+        return value
+
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        if command == "set_native_value":
+            self._validate_numeric_value(args[0] if args else kwargs.get("value"))
+
+    def set(self, value) -> None:
+        _LOGGER.debug("Setting native value for %s", self.entity_id)
+        value = self._validate_numeric_value(value)
         self._attr_native_value = self._normalize_value(value, self.native_value)
         self._schedule_state_update()
 

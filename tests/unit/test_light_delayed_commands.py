@@ -134,3 +134,73 @@ async def test_onoff_member_is_not_retried_for_unsupported_brightness(hass):
         calls.assert_not_awaited()
         refresh.assert_not_awaited()
         entity._cancel_group_refresh()
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("command", ["turn_on", "turn_off"])
+async def test_acknowledgement_resumes_source_without_timer(hass, synchronous, command):
+    """Both in-service and later replies release the hold before its deadline."""
+    entity = make_light(hass)
+    expected = "on" if command == "turn_on" else "off"
+    previous = "off" if expected == "on" else "on"
+    hass.states.async_set("light.slow", previous)
+
+    async def handle(call):
+        if synchronous:
+            hass.states.async_set("light.slow", expected)
+            entity._apply_templates()
+
+    hass.services.async_register("light", command, handle)
+    with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()) as later:
+        await getattr(entity, f"async_{command}")()
+        if synchronous:
+            later.assert_not_called()
+        else:
+            assert entity._group_authoritative
+            entity._apply_templates()  # Old reports still cannot undo the target.
+            assert entity.is_on == (expected == "on")
+            hass.states.async_set("light.slow", expected)
+            entity._apply_templates()
+            later.return_value.assert_called_once()
+        assert not entity._group_authoritative
+        assert entity._response_refresh_cancel is None
+        # A physical switch changes again before the original retry deadline.
+        hass.states.async_set("light.slow", previous)
+        entity._apply_templates()
+        assert entity.is_on == (previous == "on")
+
+
+async def test_partial_brightness_response_keeps_retry_window(hass):
+    entity = make_light(hass)
+    hass.states.async_set("light.slow", "off")
+    hass.services.async_register("light", "turn_on", AsyncMock())
+    with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()) as later:
+        await entity.async_turn_on(brightness=180)
+        hass.states.async_set("light.slow", "on", {"brightness": 80})
+        entity._apply_templates()
+        assert entity._group_authoritative
+        later.return_value.assert_not_called()
+        hass.states.async_set("light.slow", "on", {"brightness": 180})
+        entity._apply_templates()
+        assert not entity._group_authoritative
+        later.return_value.assert_called_once()
+
+
+async def test_group_waits_for_all_members_and_keeps_requested_target(hass):
+    entity = make_light(hass)
+    entity._source_entities = ["light.slow", "light.other"]
+    for source in entity._source_entities:
+        hass.states.async_set(source, "off")
+    hass.services.async_register("light", "turn_on", AsyncMock())
+    with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()) as later:
+        await entity.async_turn_on(brightness=180)
+        hass.states.async_set("light.slow", "on", {"brightness": 180})
+        entity._apply_templates()
+        later.return_value.assert_not_called()
+        hass.states.async_set("light.other", "on", {"brightness": 180})
+        entity._apply_templates()
+        later.return_value.assert_called_once()
+        assert entity._response_refresh_cancel is None
+        hass.states.async_set("light.slow", "off")
+        entity._apply_templates()
+        assert entity.is_on and entity.brightness == 180

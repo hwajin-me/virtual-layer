@@ -2086,6 +2086,58 @@ async def test_climate_and_humidifier_turn_off_stay_immediate_until_source_updat
     assert humidifier.is_on is False
 
 
+@pytest.mark.parametrize("domain,command,kwargs", [
+    ("fan", "turn_off", {}),
+    ("fan", "set_percentage", {"percentage": 0}),
+    ("climate", "turn_off", {}),
+    ("climate", "set_hvac_mode", {"hvac_mode": "off"}),
+    ("climate", "set_temperature", {"temperature": 22, "hvac_mode": "off"}),
+    ("humidifier", "turn_off", {}),
+])
+@pytest.mark.parametrize("reply_timing", ["during", "after", "none"])
+async def test_power_command_does_not_overwrite_consumed_source_reply(
+    hass, domain, command, kwargs, reply_timing,
+):
+    """A fast source reply is as authoritative as one arriving after return."""
+    source = f"{domain}.reply_source"
+    on_state = "heat" if domain == "climate" else "on"
+    hass.states.async_set(source, on_state, {"percentage": 60})
+    cls, schema, extra = {
+        "fan": (VirtualFan, FAN_SCHEMA, {"speed_count": 5}),
+        "climate": (VirtualClimate, CLIMATE_SCHEMA, {"hvac_modes": ["off", "heat"]}),
+        "humidifier": (VirtualHumidifier, HUMIDIFIER_SCHEMA, {}),
+    }[domain]
+    entity = cls(schema(_base(
+        f"{domain}.reply_target", "off", **extra,
+        source_entities=[source], value_template="{{ states('" + source + "') }}",
+        command_actions={command: [{"action": "virtual_test.reply"}]},
+    )), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._setup_templates()
+    entity._apply_templates()
+    entity.async_write_ha_state = Mock()
+
+    def reply():
+        # The device reports off then returns to on (e.g. a physical control).
+        # The latest report has already been rendered before the action ends.
+        hass.states.async_set(source, "off", {"percentage": 0})
+        entity._apply_templates()
+        hass.states.async_set(source, on_state, {"percentage": 40})
+        entity._apply_templates()
+
+    async def handle(call):
+        if reply_timing == "during":
+            reply()
+
+    hass.services.async_register("virtual_test", "reply", handle)
+    await getattr(entity, f"async_{command}")(**kwargs)
+    if reply_timing == "after":
+        reply()
+    is_on = entity.hvac_mode != HVACMode.OFF if domain == "climate" else entity.is_on
+    assert is_on == (reply_timing != "none")
+
+
 async def test_source_state_wins_over_optimistic_switch_command(hass):
     """A switch source may reject a local power command."""
     hass.states.async_set("switch.source", "off")
@@ -2886,7 +2938,7 @@ def test_water_heater_and_update_templates_reconcile_ranges_and_features(hass):
 
     assert heater.operation_list == ["off", "eco"]
     assert heater.current_operation == "eco"
-    assert heater.current_temperature == 60
+    assert heater.current_temperature == 80  # Measured water can exceed the target range.
     assert heater.target_temperature == 45
     assert heater.target_temperature_low == 48
     assert heater.target_temperature_high == 58

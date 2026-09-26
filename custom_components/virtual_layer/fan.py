@@ -325,7 +325,15 @@ class VirtualFan(VirtualEntity, FanEntity):
         return data
 
     def _validate_command_action(self, command, args, kwargs) -> None:
-        """Reject invalid speeds before a preset or source value is changed."""
+        """Reject invalid arguments before changing a preset or source value."""
+        if command == "set_direction":
+            value = args[0] if args else kwargs.get("direction")
+            if value not in {"forward", "reverse"}:
+                raise ValueError(f"Invalid fan direction: {value}")
+        elif command == "oscillate":
+            value = args[0] if args else kwargs.get("oscillating")
+            if not isinstance(value, bool):
+                raise TypeError("Oscillating must be a boolean")
         if command in {"set_percentage", "turn_on"}:
             value = kwargs.get("percentage", args[0] if args else None)
             if (value is not None or command == "set_percentage") and self._safe_percentage(value) is None:

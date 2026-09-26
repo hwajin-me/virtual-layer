@@ -173,6 +173,23 @@ async def main():
                     "entity_id": single.entity_id, "brightness_step": 30,
                 }, blocking=True)
                 assert single.brightness == expected
+            assert single._response_refresh_cancel is None
+            await fast.async_turn_off()
+            await hass.async_block_till_done()
+            assert not single.is_on
+            # A push arriving after service completion must also release the
+            # hold immediately, without sleeping through the retry interval.
+            fast.drop_remaining = 1
+            await hass.services.async_call("light", "turn_on", {
+                "entity_id": single.entity_id, "brightness": 160,
+            }, blocking=True)
+            assert single._response_refresh_cancel is not None
+            await fast.async_turn_on(brightness=160)
+            await hass.async_block_till_done()
+            assert single._response_refresh_cancel is None
+            await fast.async_turn_off()
+            await hass.async_block_till_done()
+            assert not single.is_on
             await hass.services.async_call("light", "turn_off", {
                 "entity_id": single.entity_id, "transition": 2,
             }, blocking=True)
@@ -189,6 +206,7 @@ async def main():
             "delayed_bulb_retry": "passed", "healthy_bulb_not_resent": "passed",
             "timer_cleanup": "passed", "error_logs": errors.errors,
             "single_bulb_retry_and_external_change": "passed",
+            "fast_reply_and_immediate_external_change": "passed",
             "service_transitions_and_brightness_steps": "passed",
             "source_devices": "simulated LightEntity instances",
         }, indent=2))

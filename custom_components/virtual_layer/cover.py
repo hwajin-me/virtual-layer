@@ -165,12 +165,22 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
     async def async_stop_cover_tilt(self, **kwargs: Any) -> None:
         self.async_write_ha_state()
 
-    async def async_set_cover_tilt_position(self, **kwargs: Any) -> None:
-        if isinstance(kwargs["tilt_position"], bool):
+    @staticmethod
+    def _validate_tilt_position(value):
+        if isinstance(value, bool):
             raise ValueError("tilt_position must be between 0 and 100")
-        position = int(kwargs["tilt_position"])
+        position = int(value)
         if not 0 <= position <= 100:
             raise ValueError("tilt_position must be between 0 and 100")
+        return position
+
+    def _validate_command_action(self, command, args, kwargs) -> None:
+        super()._validate_command_action(command, args, kwargs)
+        if command == "set_cover_tilt_position":
+            self._validate_tilt_position(kwargs.get("tilt_position"))
+
+    async def async_set_cover_tilt_position(self, **kwargs: Any) -> None:
+        position = self._validate_tilt_position(kwargs["tilt_position"])
         self._attr_current_cover_tilt_position = position
         self._refresh_supported_features()
         self.async_write_ha_state()
@@ -180,13 +190,14 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
             if isinstance(value, bool):
                 raise ValueError("supported_features must be a non-negative integer")
             try:
-                value = CoverEntityFeature(int(value))
+                value = int(value)
             except (TypeError, ValueError, OverflowError) as err:
                 raise ValueError(
                     "supported_features must be a non-negative integer"
                 ) from err
-            if int(value) < 0:
+            if value < 0:
                 raise ValueError("supported_features must be a non-negative integer")
+            value = CoverEntityFeature(value)
             changed = self._configured_supported_features != value
             self._configured_supported_features = value
             return changed
@@ -210,4 +221,5 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
         return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:
+        super()._native_templates_applied()
         self._refresh_supported_features()
