@@ -90,6 +90,7 @@ async def main():
         hass = HomeAssistant(directory)
         loader.async_setup(hass)
         results = []
+        dispatch_latency_ms = []
         try:
             assert await bootstrap.async_from_config_dict({}, hass) is hass
             assert await async_setup_component(hass, "light", {})
@@ -197,6 +198,43 @@ async def main():
             assert not single.is_on
             await hass.data[DATA_COMPONENT].async_remove_entity(single.entity_id)
             assert single._response_refresh_cancel is None
+
+            # A slow physical service must not hold the UI or another bulb.
+            release = asyncio.Event()
+
+            class BlockingBulb(Bulb):
+                async def async_turn_on(self, **kwargs):
+                    await release.wait()
+                    await super().async_turn_on(**kwargs)
+
+            blocked = BlockingBulb("Blocked transport", ColorMode.BRIGHTNESS)
+            responsive = Bulb("Responsive transport", ColorMode.BRIGHTNESS)
+            component = hass.data[DATA_COMPONENT]
+            await component.async_add_entities([blocked, responsive])
+            responsive_group = VirtualLight(LIGHT_SCHEMA({
+                "name": "Responsive controls", "entity_id": "light.responsive_controls",
+                "initial_value": "off", "matter_light_type": "dimmable",
+                "source_entities": [blocked.entity_id, responsive.entity_id],
+                "persistent": False,
+            }), False)
+            await component.async_add_entities([responsive_group])
+            try:
+                for command in ("turn_on", "turn_off"):
+                    start = hass.loop.time()
+                    await asyncio.wait_for(hass.services.async_call("light", command, {
+                        "entity_id": responsive_group.entity_id,
+                    }, blocking=True), 0.5)
+                    dispatch_latency_ms.append(round((hass.loop.time() - start) * 1000, 2))
+                    expected = command == "turn_on"
+                    assert responsive_group.is_on == expected
+                    assert responsive.is_on == expected
+                release.set()
+                await hass.async_block_till_done()
+                assert not blocked.is_on and not responsive_group.is_on
+            finally:
+                release.set()
+                await component.async_remove_entity(responsive_group.entity_id)
+            assert not responsive_group._source_command_tasks
         finally:
             await hass.async_stop()
             logging.getLogger().removeHandler(errors)
@@ -208,6 +246,8 @@ async def main():
             "single_bulb_retry_and_external_change": "passed",
             "fast_reply_and_immediate_external_change": "passed",
             "service_transitions_and_brightness_steps": "passed",
+            "slow_transport_does_not_block_controls": "passed",
+            "control_return_latency_ms_with_blocked_source": dispatch_latency_ms,
             "source_devices": "simulated LightEntity instances",
         }, indent=2))
 

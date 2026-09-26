@@ -1,5 +1,6 @@
 """Run mixed RGB/CCT groups through the real HA light service conversions."""
 
+import asyncio
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -33,6 +34,42 @@ class RecordingBulb(LightEntity):
     async def async_turn_off(self, **kwargs):
         self._attr_is_on = False
         self.async_write_ha_state()
+
+
+async def test_slow_native_light_service_does_not_stall_virtual_controls(hass):
+    assert await async_setup_component(hass, "light", {})
+    component = hass.data[DATA_COMPONENT]
+    release = asyncio.Event()
+
+    class SlowBulb(RecordingBulb):
+        async def async_turn_on(self, **kwargs):
+            await release.wait()
+            await super().async_turn_on(**kwargs)
+
+    slow = SlowBulb("Blocked source", ColorMode.BRIGHTNESS)
+    fast = RecordingBulb("Responsive source", ColorMode.BRIGHTNESS)
+    await component.async_add_entities([slow, fast])
+    group = VirtualLight(LIGHT_SCHEMA({
+        "name": "Responsive group", "entity_id": "light.responsive_group",
+        "initial_value": "off", "matter_light_type": "dimmable",
+        "source_entities": [slow.entity_id, fast.entity_id], "persistent": False,
+    }), False)
+    await component.async_add_entities([group])
+    try:
+        for command in ("turn_on", "turn_off"):
+            await asyncio.wait_for(hass.services.async_call("light", command, {
+                "entity_id": group.entity_id,
+            }, blocking=True), 0.5)
+            expected = "on" if command == "turn_on" else "off"
+            assert hass.states.get(group.entity_id).state == expected
+            assert hass.states.get(fast.entity_id).state == expected
+        release.set()
+        await hass.async_block_till_done()
+        assert hass.states.get(slow.entity_id).state == "off"
+        assert hass.states.get(group.entity_id).state == "off"
+    finally:
+        release.set()
+        await component.async_remove_entity(group.entity_id)
 
 
 @pytest.mark.parametrize("mode", [ColorMode.HS, ColorMode.RGB, ColorMode.RGBW,

@@ -191,8 +191,14 @@ history attributes expose the controller state.
 - Light groups with two or more light sources dispatch default commands to
   each bulb in parallel. After a group command, the virtual light retains its
   requested power, brightness and color; delayed member reports update
-  diagnostics and availability without replacing that target. Consecutive
-  group commands are dispatched in order. Custom action sequences remain
+  diagnostics and availability without replacing that target. When both power
+  actions use default forwarding, commands use HA light services directly and
+  publish the virtual target immediately.
+  Slow service calls continue in the background after at most 50 ms of waiting
+  by the control. Each bulb preserves dispatch order independently; a busy bulb
+  keeps only the latest pending target instead of replaying an old command queue.
+  Pending brightness changes retain unconfirmed colour changes. A slow member
+  cannot hold up the next command to healthy members. Custom action sequences remain
   supported, including `optimistic: false` for source-authoritative behavior.
   After default group actions finish, response-delay/retry settings trigger
   device updates and bounded command retries for members that still differ
@@ -220,7 +226,7 @@ history attributes expose the controller state.
   Only mismatched bulbs receive retries, and a new command cancels older retries.
   After acknowledgement or retry exhaustion, the virtual light follows its
   source again. A zero response delay disables retries. Single-source custom
-  actions share command ordering with default actions and are never retried;
+  actions retain their existing command ordering and are never retried;
   `optimistic: false` still follows source reports. Cancelled custom actions
   release the temporary state hold. Transitions are exposed when a light source
   advertises support, forwarded through HA services, and included in the initial
