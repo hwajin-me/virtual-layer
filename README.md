@@ -523,6 +523,9 @@ delays, and templated action data are supported. Native command arguments are
 validated before source actions run, including when `optimistic` is `false`.
 Invalid selections, malformed dates, and invalid numeric inputs cannot trigger
 an action before being rejected.
+Custom mapping templates are evaluated when their action runs, so script-local
+variables and skipped branches work normally. Reloading or removing an entity
+stops its running command scripts and prevents late optimistic state writes.
 
 When a source explicitly removes all media input, sound-mode, or vacuum
 fan-speed options, the virtual entity clears the previous selection and updates
@@ -1478,6 +1481,14 @@ and `weather`.
 
 Generic state-backed virtual entities support state, availability, persistence,
 device attachment, attributes, source entities, templates, and pull refresh.
+Calendar event state also refreshes at its start and end times without requiring
+a source update or a polling interval. Editing or removing the event replaces
+its pending refresh; unloading the entity cancels it.
+
+When UI edits change static attributes, the edited fields replace their old
+restored values immediately. Unchanged attributes retain values set by services,
+and runtime-only attributes remain persistent. Removed configured attributes
+are removed on reload.
 The virtual vacuum additionally exposes native HA activity states and start,
 pause, stop, return-to-base, spot-clean, locate, fan-speed, and send-command
 services.

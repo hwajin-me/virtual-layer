@@ -282,6 +282,8 @@ class VirtualEntity(RestoreEntity):
             async def _with_command_action(
                 self, *args, __method=method, __command=command, **kwargs
             ):
+                if self._virtual_removing:
+                    return None
                 source_states = {
                     source: self.hass.states.get(source)
                     for source in self._source_entities
@@ -292,6 +294,10 @@ class VirtualEntity(RestoreEntity):
                     args,
                     kwargs,
                 )
+                # Stopping a Script completes its waiting caller normally. Do
+                # not publish an optimistic state after unload has begun.
+                if self._virtual_removing:
+                    return None
                 if action_result is False:
                     # A non-optimistic action may have updated a source before
                     # it returned. Apply its authoritative state immediately
@@ -382,6 +388,8 @@ class VirtualEntity(RestoreEntity):
             dict(config.get(CONF_COMMAND_ACTIONS, {}))
         )
         self._command_scripts = {}
+        self._active_command_scripts = {}
+        self._virtual_removing = False
         self._pull_interval = config.get(CONF_PULL_INTERVAL, 0)
         self._source_entities = config.get(CONF_SOURCE_ENTITIES, [])
         # A restored entity must not let a partially started source set replace
@@ -613,7 +621,10 @@ class VirtualEntity(RestoreEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Call when entity is being removed from hass."""
-        for script in self._command_scripts.values():
+        self._virtual_removing = True
+        # Whole-data templates create an uncached Script per invocation. Those
+        # runs must be stopped too, including concurrent runs of one command.
+        for script in set(self._command_scripts.values()) | set(self._active_command_scripts):
             await script.async_stop()
         self._command_scripts = {}
         for remove_listener in self._refresh_remove_listeners:
@@ -1027,6 +1038,8 @@ class VirtualEntity(RestoreEntity):
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         """Apply a rendered value to a Home Assistant native property."""
+        if name == "supported_features":
+            value = native_feature_mask(value)
         if name == "state":
             self.set_state(value)
             return True
@@ -1203,9 +1216,15 @@ class VirtualEntity(RestoreEntity):
         run_variables = ScriptRunVariables.create_top_level(variables)
         run_variables["context"] = context
         token = _COMMAND_ACTION_CHAIN.set(active_actions | {action_key})
+        self._active_command_scripts[script] = self._active_command_scripts.get(script, 0) + 1
         try:
             await script.async_run(run_variables, context=context)
         finally:
+            remaining = self._active_command_scripts[script] - 1
+            if remaining:
+                self._active_command_scripts[script] = remaining
+            else:
+                self._active_command_scripts.pop(script)
             _COMMAND_ACTION_CHAIN.reset(token)
         return optimistic
 
@@ -1230,26 +1249,15 @@ class VirtualEntity(RestoreEntity):
             result = {key: await _walk(item) for key, item in value.items()}
             data = result.get("data")
             data_source = data.template if isinstance(data, Template) else data
-            # ``data`` is a whole service-data mapping when it is a Template
-            # object. Core validates that its result is a dict, but only after
-            # nested choose sequences have begun. Render it here so generated
-            # and user-authored mapping templates have the same safe path.
-            needs_mapping_render = isinstance(data, Template) or (
-                isinstance(data_source, str) and "command_data" in data_source
+            # Only the generated bare payload can be resolved before execution.
+            # Other templates may depend on variables, responses, repeat items
+            # or conditions inside the script; let HA render those at their step.
+            needs_mapping_render = (
+                isinstance(data_source, str)
+                and data_source.strip() == "{{ command_data }}"
             )
             if needs_mapping_render:
-                if data_source.strip() == "{{ command_data }}":
-                    rendered = copy.deepcopy(variables["command_data"])
-                else:
-                    rendered = Template(data_source, self.hass).async_render(
-                        variables=variables,
-                        parse_result=True,
-                    )
-                if not isinstance(rendered, dict):
-                    raise HomeAssistantError(
-                        "Command action data template must render a dictionary"
-                    )
-                result["data"] = rendered
+                result["data"] = copy.deepcopy(variables["command_data"])
                 changed = True
             return result
 

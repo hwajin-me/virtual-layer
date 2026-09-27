@@ -5810,7 +5810,8 @@ def _ensure_entity_key(
 
 
 def _build_device_config(
-    user_input: dict[str, Any], device_name: str, hass: HomeAssistant | None = None
+    user_input: dict[str, Any], device_name: str, hass: HomeAssistant | None = None,
+    *, config_entry_id: str | None = None,
 ) -> dict[str, Any]:
     """Build Home Assistant device metadata from the UI form."""
     device_id = _text_default(user_input.get(CONF_DEVICE_ID)).strip() or str(
@@ -5837,7 +5838,7 @@ def _build_device_config(
             if configuration_url_or_none(value) is None:
                 raise InvalidConfigurationUrl
         if form_field == CONF_DEVICE_VIA_DEVICE_ID and value and hass is not None:
-            if not valid_parent_device(hass, value, device_id):
+            if not valid_parent_device(hass, value, device_id, config_entry_id=config_entry_id):
                 raise InvalidFieldValue(CONF_DEVICE_VIA_DEVICE_ID)
         if value:
             device[config_field] = value
@@ -6124,6 +6125,7 @@ def _with_existing_device_defaults(
     options: dict[str, Any],
     device_name: str | None,
     hass: HomeAssistant | None = None,
+    *, config_entry_id: str | None = None,
 ) -> dict[str, Any]:
     """Overlay an existing Device's stable identity onto entity-form defaults."""
     if not device_name or device_name == NEW_DEVICE_TARGET:
@@ -6156,7 +6158,7 @@ def _with_existing_device_defaults(
         elif config_field == CONF_VIA_DEVICE_ID and hass is not None:
             parent = _text_default(device.get(config_field))
             updated_defaults[form_field] = parent if parent and valid_parent_device(
-                hass, parent, updated_defaults[CONF_DEVICE_ID]
+                hass, parent, updated_defaults[CONF_DEVICE_ID], config_entry_id=config_entry_id
             ) else ""
         else:
             updated_defaults[form_field] = _text_default(device.get(config_field))
@@ -13298,7 +13300,9 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
                 new_device_name = _make_device_name(
                     user_input[CONF_DEVICE_NAME],
                 ).strip()
-                device_config = _build_device_config(user_input, new_device_name, self.hass)
+                device_config = _build_device_config(
+                    user_input, new_device_name, self.hass, config_entry_id=self.config_entry.entry_id
+                )
                 options = _replace_ui_device(
                     self.config_entry.options,
                     self._managed_device_name,
@@ -13338,7 +13342,8 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
                     self._add_source_entities = _stored_entity_ids(preset.get(CONF_SOURCE_ENTITIES_TEXT))
                     self._add_target_device_name = user_input.get(CONF_TARGET_DEVICE_NAME)
                     self._entity_defaults = _with_existing_device_defaults(
-                        preset, self.config_entry.options, self._add_target_device_name, self.hass
+                        preset, self.config_entry.options, self._add_target_device_name, self.hass,
+                        config_entry_id=self.config_entry.entry_id,
                     )
                     return await self.async_step_entity()
                 self._add_source_entities = _normalize_reference_entity_ids(
@@ -13388,6 +13393,7 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
                     self.config_entry.options,
                     self._add_target_device_name,
                     self.hass,
+                    config_entry_id=self.config_entry.entry_id,
                 )
                 return await self.async_step_entity()
             except (
@@ -13554,6 +13560,7 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
                 self.config_entry.options,
                 self._add_target_device_name,
                 self.hass,
+                config_entry_id=self.config_entry.entry_id,
             )
             self._add_fan_source_role_choices = (
                 _fan_source_role_choices(
@@ -13810,7 +13817,9 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
                     entity[CONF_AUTO_HELPER] = copy.deepcopy(
                         self._copy_auto_helper_profile
                     )
-                device_config = _build_device_config(user_input, device_name, self.hass)
+                device_config = _build_device_config(
+                    user_input, device_name, self.hass, config_entry_id=self.config_entry.entry_id
+                )
                 options = _append_ui_entity(
                     self.config_entry.options,
                     device_name,
@@ -14208,7 +14217,10 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
             result["errors"] = {"base": "source_unavailable"}
             return result
         self._reference_defaults = defaults
-        defaults = _with_existing_device_defaults(defaults, self.config_entry.options, self._edit_device_name, self.hass)
+        defaults = _with_existing_device_defaults(
+            defaults, self.config_entry.options, self._edit_device_name, self.hass,
+            config_entry_id=self.config_entry.entry_id,
+        )
         defaults[CONF_ENTITY_NAME] = f"{entity.get(CONF_NAME, source_id)} - Air Quality"
         defaults[ATTR_ENTITY_ID] = "air_quality." + source_id.split(".", 1)[1]
         self._entity_defaults = _complete_domain_form_defaults(defaults)
@@ -14313,6 +14325,7 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
             self.config_entry.options,
             self._edit_target_device_name,
             self.hass,
+            config_entry_id=self.config_entry.entry_id,
         )
 
     async def async_step_edit_entity_helper(self, user_input=None):
@@ -14413,6 +14426,7 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
                     self.config_entry.options,
                     self._edit_target_device_name,
                     self.hass,
+                    config_entry_id=self.config_entry.entry_id,
                 )
                 target_platform = self._reference_defaults.get(CONF_PLATFORM)
                 if target_platform in VIRTUAL_ENTITY_DOMAINS:
@@ -14747,7 +14761,9 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
                         )
                     ),
                 )
-                device_config = _build_device_config(user_input, device_name, self.hass)
+                device_config = _build_device_config(
+                    user_input, device_name, self.hass, config_entry_id=self.config_entry.entry_id
+                )
                 self._resolve_edit_selection()
                 options = _replace_ui_entity(
                     self.config_entry.options,

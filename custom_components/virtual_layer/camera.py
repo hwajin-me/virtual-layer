@@ -1261,17 +1261,7 @@ class VirtualCamera(VirtualEntity, Camera):
                             self.hass.async_create_task(current_stream.stop())
             return changed
         if name == "supported_features":
-            if isinstance(value, bool):
-                raise ValueError("supported_features must be a non-negative integer")
-            try:
-                parsed = int(value)
-            except (TypeError, ValueError, OverflowError) as err:
-                raise ValueError(
-                    "supported_features must be a non-negative integer"
-                ) from err
-            if parsed < 0:
-                raise ValueError("supported_features must be a non-negative integer")
-            value = CameraEntityFeature(parsed)
+            value = CameraEntityFeature(native_feature_mask(value))
             changed = self._configured_supported_features != value
             self._configured_supported_features = value
             return changed

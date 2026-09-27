@@ -10,6 +10,8 @@ from .const import COMPONENT_DOMAIN
 from .generic import (
     GENERIC_SCHEMA,
     GenericVirtualEntity,
+    _safe_bool,
+    _supported_feature_mask,
     async_setup_generic_entry,
     async_setup_generic_platform,
 )
@@ -35,7 +37,15 @@ class VirtualAlarmControlPanel(GenericVirtualEntity, AlarmControlPanelEntity):
     def __init__(self, config, old_style: bool):
         super().__init__(config, PLATFORM_DOMAIN, old_style)
         self._attr_changed_by = config.get("changed_by")
-        self._attr_code_arm_required = config.get("code_arm_required", True)
+        self._attr_code_arm_required = _safe_bool(config.get("code_arm_required", True), True)
+        try:
+            self._configured_supported_features = _supported_feature_mask(
+                config.get("supported_features", 0), AlarmControlPanelEntityFeature
+            )
+        except ValueError:
+            self._configured_supported_features = AlarmControlPanelEntityFeature(0)
+        for name in ("changed_by", "code_arm_required", "code_format", "supported_features"):
+            self._domain_options.pop(name, None)
         code_format = config.get("code_format")
         try:
             self._attr_code_format = CodeFormat(code_format) if code_format else None
@@ -45,12 +55,7 @@ class VirtualAlarmControlPanel(GenericVirtualEntity, AlarmControlPanelEntity):
 
     def _refresh_supported_features(self) -> None:
         """Expose only the arm and trigger commands configured for this entity."""
-        try:
-            features = AlarmControlPanelEntityFeature(
-                int(self._domain_options.get("supported_features", 0))
-            )
-        except (TypeError, ValueError, OverflowError):
-            features = AlarmControlPanelEntityFeature(0)
+        features = self._configured_supported_features
         for command, feature in self._COMMAND_FEATURES.items():
             if command in self._command_actions:
                 features |= feature
@@ -112,6 +117,16 @@ class VirtualAlarmControlPanel(GenericVirtualEntity, AlarmControlPanelEntity):
     async def async_alarm_trigger(self, code: str | None = None) -> None:
         """Trigger the virtual alarm."""
         await self._async_set_alarm_state("triggered")
+
+    def _apply_native_template_value(self, name: str, value) -> bool:
+        if name == "supported_features":
+            value = _supported_feature_mask(value, AlarmControlPanelEntityFeature)
+            changed = self._configured_supported_features != value
+            self._configured_supported_features = value
+            return changed
+        if name == "code_format":
+            value = CodeFormat(value) if value is not None and value != "" else None
+        return super()._apply_native_template_value(name, value)
 
     def _native_templates_applied(self) -> None:
         """Recompute advertised features after native templates update them."""

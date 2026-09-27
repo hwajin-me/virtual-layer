@@ -1081,6 +1081,131 @@ async def test_patrol_teaching(hass):
     print("Patrol teaching Docker passed: options flow, capture, visit, save, reload, absolute route, stop (mocked ONVIF)")
 
 
+async def test_audit_regressions(hass, entry):
+    """Exercise the audit fixes with the installed container's real HA APIs."""
+    from custom_components.virtual_layer.switch import SWITCH_SCHEMA, VirtualSwitch
+    from custom_components.virtual_layer.alarm_control_panel import ENTITY_SCHEMA as ALARM_SCHEMA, VirtualAlarmControlPanel
+    from custom_components.virtual_layer.generic import ENTITY_SCHEMA as GENERIC_SCHEMA, GenericVirtualEntity
+    from custom_components.virtual_layer.media_player import ENTITY_SCHEMA as MEDIA_SCHEMA, ENTITY_CLASS as VirtualMediaPlayer
+    from custom_components.virtual_layer.config_flow import _build_device_config, InvalidFieldValue
+    from homeassistant.helpers import device_registry as dr
+
+    calls = []
+    started = asyncio.Event()
+
+    async def capture(call):
+        calls.append(dict(call.data))
+        started.set()
+
+    hass.services.async_register("audit", "capture", capture)
+    for pending in (False, True):
+        sequence = [
+            {"variables": {"local_value": 42}},
+            {"if": "{{ false }}", "then": [{"action": "audit.capture", "data": "{{ dict(command_data, value=missing_variable) }}"}]},
+            {"action": "audit.capture", "data": "{{ dict(command_data, value=local_value) }}"},
+        ] if not pending else [
+            {"action": "audit.capture", "data": "{{ command_data }}"},
+            {"delay": 30}, {"action": "audit.capture"},
+        ]
+        entity = VirtualSwitch(SWITCH_SCHEMA({
+            "name": "Audit", "entity_id": "switch.docker_audit", "initial_value": "off",
+            "command_actions": {"turn_on": sequence},
+        }), False)
+        entity.hass = hass
+        entity._create_state(entity._config)
+        entity.async_write_ha_state = Mock()
+        started.clear()
+        if pending:
+            task = asyncio.create_task(entity.async_turn_on())
+            await asyncio.wait_for(started.wait(), 2)
+            await entity.async_will_remove_from_hass()
+            await asyncio.wait_for(task, 2)
+            assert not entity.is_on
+            entity.async_write_ha_state.assert_not_called()
+        else:
+            await entity.async_turn_on()
+            assert calls == [{"value": 42}]
+            await entity.async_will_remove_from_hass()
+
+    alarm = VirtualAlarmControlPanel(ALARM_SCHEMA({"name": "Audit alarm"}), False)
+    alarm._create_state(alarm._config)
+    for mask in (1, 2, 0):
+        alarm._apply_native_template_value("supported_features", mask)
+        alarm._native_templates_applied()
+        assert alarm.supported_features == mask
+    for mask in (-1, True, 1.5):
+        try:
+            alarm._apply_native_template_value("supported_features", mask)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Invalid feature mask accepted: {mask}")
+        legacy_alarm = VirtualAlarmControlPanel(ALARM_SCHEMA({
+            "name": "Legacy audit", "supported_features": mask, "code_arm_required": "false",
+        }), False)
+        assert legacy_alarm.supported_features == 0 and legacy_alarm.code_arm_required is False
+    media = VirtualMediaPlayer(MEDIA_SCHEMA({
+        "name": "Audit media", "entity_id": "media_player.docker_audit",
+        "sound_mode_list": ["music"], "sound_mode": "music",
+    }), False)
+    media._restore_state(State(media.entity_id, "playing", {"sound_mode": "removed"}), media._config)
+    assert media.sound_mode == "music"
+
+    now = dt_util.utcnow()
+    calendar = GenericVirtualEntity(GENERIC_SCHEMA({
+        "name": "Audit calendar", "entity_id": "calendar.docker_audit",
+        "event": {"start": (now + timedelta(seconds=0.1)).isoformat(),
+                  "end": (now + timedelta(seconds=0.5)).isoformat()},
+    }), "calendar", False)
+    calendar.hass = hass
+    calendar._create_state(calendar._config)
+    calendar._schedule_state_update = Mock()
+    calendar._update_attributes()
+    assert calendar.state == "off"
+    await asyncio.sleep(0.25)
+    assert calendar.state == "on"
+    await asyncio.sleep(0.4)
+    assert calendar.state == "off"
+    calendar._apply_native_template_value("event", {
+        "start": "2026-09-27T12:30:00+25:00", "end": "2026-09-28T12:30:00+09:00",
+    })
+    calendar._update_attributes()
+    assert calendar.state == "off"
+    await calendar.async_will_remove_from_hass()
+
+    options = copy.deepcopy(dict(entry.options))
+    options["devices"]["Attribute audit"] = [{
+        "platform": domain, "name": f"Audit {domain}", "entity_id": f"{domain}.docker_attribute_{domain}",
+        "persistent": True, "initial_value": "off", "attributes": {"changed": "old", "unchanged": "initial"},
+    } for domain in ("switch", "tag")]
+    hass.config_entries.async_update_entry(entry, options=options)
+    await hass.async_block_till_done()
+    entity_ids = [f"{domain}.docker_attribute_{domain}" for domain in ("switch", "tag")]
+    await hass.services.async_call(COMPONENT_DOMAIN, "set_attributes", {
+        "entity_id": entity_ids, "attributes": {"unchanged": "runtime"},
+    }, blocking=True)
+    await hass.async_block_till_done()
+    options = copy.deepcopy(dict(entry.options))
+    for configured in options["devices"]["Attribute audit"]:
+        configured["attributes"].update(changed="new", added=42)
+    hass.config_entries.async_update_entry(entry, options=options)
+    await hass.async_block_till_done()
+    for entity_id in entity_ids:
+        attributes = hass.states.get(entity_id).attributes
+        assert (attributes["changed"], attributes["added"], attributes["unchanged"]) == ("new", 42, "runtime")
+
+    registry = dr.async_get(hass)
+    child = registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(COMPONENT_DOMAIN, "audit-child")})
+    try:
+        _build_device_config({"device_id": "audit-child", "device_via_device_id": child.id},
+                             "Child", hass, config_entry_id=entry.entry_id)
+    except InvalidFieldValue:
+        pass
+    else:
+        raise AssertionError("Self-parent accepted by device form")
+    print("Audit Docker passed: script branches/variables, unload cancellation, alarm features, calendar boundaries, attribute edits, scoped parent validation")
+
+
 async def test_config_flow_create_modify_runtime():
     """Create, load, edit, reload, and live-update through real HA flows."""
     config_dir = Path(tempfile.mkdtemp())
@@ -1816,6 +1941,7 @@ async def test_config_flow_create_modify_runtime():
                 assert float(hass.states.get("sensor.docker_meter_cost").state) == 11800
         assert registry.async_get("sensor.docker_meter").device_id == registry.async_get("sensor.docker_meter_cost").device_id
         print("Utility Meter Docker passed: anchored monthly setup, usage, cost, adjustment, calibration, reset and Device grouping")
+        await test_audit_regressions(hass, entry)
     finally:
         await hass.async_stop()
 

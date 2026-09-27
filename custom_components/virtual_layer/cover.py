@@ -187,17 +187,7 @@ class VirtualCover(VirtualOpenableEntity, CoverEntity):
 
     def _apply_native_template_value(self, name: str, value) -> bool:
         if name == "supported_features":
-            if isinstance(value, bool):
-                raise ValueError("supported_features must be a non-negative integer")
-            try:
-                value = int(value)
-            except (TypeError, ValueError, OverflowError) as err:
-                raise ValueError(
-                    "supported_features must be a non-negative integer"
-                ) from err
-            if value < 0:
-                raise ValueError("supported_features must be a non-negative integer")
-            value = CoverEntityFeature(value)
+            value = CoverEntityFeature(native_feature_mask(value))
             changed = self._configured_supported_features != value
             self._configured_supported_features = value
             return changed

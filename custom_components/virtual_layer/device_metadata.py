@@ -29,13 +29,17 @@ def async_get_virtual_device(registry, device_id, config_entry_id=None):
     return registry.async_get_device(identifiers={identifier})
 
 
-def valid_parent_device(hass, parent_id, device_id) -> bool:
+def valid_parent_device(
+    hass, parent_id, device_id, *, config_entry_id=None, child_registry_id=None
+) -> bool:
     """Require an existing parent whose ancestry does not loop to this Device."""
     if not isinstance(parent_id, str) or not parent_id:
         return False
     registry = dr.async_get(hass)
-    child = async_get_virtual_device(registry, device_id)
-    seen = {child.id} if child else set()
+    if child_registry_id is None:
+        child = async_get_virtual_device(registry, device_id, config_entry_id)
+        child_registry_id = child.id if child else None
+    seen = {child_registry_id} if child_registry_id else set()
     while parent_id:
         if parent_id in seen:
             return False

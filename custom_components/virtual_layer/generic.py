@@ -47,7 +47,9 @@ from homeassistant.const import (
     CONF_ICON,
     STATE_OFF,
 )
+from homeassistant.core import callback
 from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.util import dt as dt_util
 
 from . import get_entity_configs
@@ -158,6 +160,8 @@ class GenericVirtualEntity(VirtualEntity, Entity):
         self._attr_icon = config.get(CONF_ICON)
         self._attr_state_class = config.get(CONF_STATE_CLASS)
         self._domain_options = generic_entity_options(config)
+        self._calendar_refresh_cancel = None
+        self._calendar_refresh_at = None
         _LOGGER.debug(f"GenericVirtualEntity: {self.name} ({domain}) created")
 
     @property
@@ -210,6 +214,8 @@ class GenericVirtualEntity(VirtualEntity, Entity):
                     and name != "event_type"
                 })
         self._attr_extra_state_attributes.update(domain_options)
+        if self._domain == "calendar":
+            self._schedule_calendar_boundary()
         if self._domain == "air_quality":
             # Missing measurements are not readings. Remove stale output too,
             # while retaining a real zero and allowing later values to return.
@@ -221,6 +227,49 @@ class GenericVirtualEntity(VirtualEntity, Entity):
                 for name in ("unit_of_measurement", ATTR_DEVICE_CLASS, CONF_STATE_CLASS):
                     self._attr_extra_state_attributes.pop(name, None)
                 self._attr_unit_of_measurement = None
+
+    def _schedule_calendar_boundary(self) -> None:
+        """Advance an unchanged calendar event at its start and end times."""
+        if self.hass is None or self._virtual_removing:
+            return
+        event = self._domain_options.get("event")
+        boundaries = []
+        now = dt_util.utcnow()
+        if isinstance(event, dict):
+            for names in (("start", "start_time"), ("end", "end_time")):
+                value = _calendar_event_datetime(_calendar_event_value(event, *names))
+                if value is not None:
+                    if value.tzinfo is None:
+                        value = value.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+                    if value > now:
+                        boundaries.append(value)
+        next_boundary = min(boundaries) if boundaries else None
+        if next_boundary == self._calendar_refresh_at:
+            return
+        if self._calendar_refresh_cancel is not None:
+            self._calendar_refresh_cancel()
+            self._calendar_refresh_cancel = None
+        self._calendar_refresh_at = next_boundary
+        if next_boundary is None:
+            return
+
+        @callback
+        def refresh(_now):
+            self._calendar_refresh_cancel = None
+            self._calendar_refresh_at = None
+            self._update_attributes()
+            self._schedule_state_update()
+
+        self._calendar_refresh_cancel = async_track_point_in_utc_time(
+            self.hass, refresh, dt_util.as_utc(next_boundary)
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._calendar_refresh_cancel is not None:
+            self._calendar_refresh_cancel()
+            self._calendar_refresh_cancel = None
+        self._calendar_refresh_at = None
+        await super().async_will_remove_from_hass()
 
     def set_state(self, value) -> None:
         self._attr_state = value
@@ -259,9 +308,7 @@ class GenericVirtualEntity(VirtualEntity, Entity):
         elif name in GENERIC_BOOLEAN_TEMPLATE_PROPERTIES:
             value = value if isinstance(value, bool) else self._template_to_bool(value)
         elif name == "supported_features":
-            value = _safe_int(value, -1, -1)
-            if value < 0:
-                raise ValueError("supported_features must be a non-negative integer")
+            value = native_feature_mask(value)
         elif name in {"latitude", "longitude"}:
             value = _safe_float(value, float("nan"))
             limit = 90 if name == "latitude" else 180
@@ -356,8 +403,13 @@ def _calendar_event_datetime(value) -> datetime | None:
         return datetime.combine(value, time.min, tzinfo=dt_util.DEFAULT_TIME_ZONE)
     if not isinstance(value, str) or not value.strip():
         return None
-    if parsed := dt_util.parse_datetime(value):
-        return parsed
+    try:
+        if parsed := dt_util.parse_datetime(value):
+            return parsed
+    except (ValueError, OverflowError):
+        # Invalid timezone offsets can raise instead of returning None. A bad
+        # legacy/source event must not prevent the entity from publishing.
+        return None
     if parsed_date := dt_util.parse_date(value):
         return datetime.combine(
             parsed_date,
@@ -471,15 +523,7 @@ def _safe_bool(value, default: bool = False) -> bool:
 
 def _supported_feature_mask(value, feature_type, field_name="supported_features"):
     """Return a validated Home Assistant feature bitmask."""
-    if isinstance(value, bool):
-        raise ValueError(f"{field_name} must be a non-negative integer")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError, OverflowError) as err:
-        raise ValueError(f"{field_name} must be a non-negative integer") from err
-    if parsed < 0:
-        raise ValueError(f"{field_name} must be a non-negative integer")
-    return feature_type(parsed)
+    return feature_type(native_feature_mask(value))
 
 
 class _NativeGenericMixin:
@@ -1214,7 +1258,13 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
         )
         restored_sound_mode = state.attributes.get("sound_mode")
         if _has_value(restored_sound_mode):
-            self._attr_sound_mode = str(restored_sound_mode).strip()
+            restored_sound_mode = str(restored_sound_mode).strip()
+            if restored_sound_mode in self._attr_sound_mode_list or (
+                not self._attr_sound_mode_list
+                and "sound_mode_list" not in self._config
+                and "sound_mode_list" not in self._known_choice_lists
+            ):
+                self._attr_sound_mode = restored_sound_mode
         if "shuffle" in state.attributes:
             self._attr_shuffle = _safe_bool(state.attributes["shuffle"])
         restored_repeat = state.attributes.get("repeat")

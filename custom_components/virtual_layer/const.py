@@ -218,6 +218,19 @@ DEFAULT_PERSISTENT = True
 STARTUP_SOURCE_GRACE_SECONDS = 180
 DIAGNOSTIC_UNIQUE_ID_MARKER = ".virtual_layer_diagnostic."
 
+
+def native_feature_mask(value) -> int:
+    """Parse capability bits without silently truncating or enabling all bits."""
+    if isinstance(value, bool):
+        raise ValueError("supported_features must be a non-negative integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError) as err:
+        raise ValueError("supported_features must be a non-negative integer") from err
+    if parsed < 0 or isinstance(value, float) and value != parsed:
+        raise ValueError("supported_features must be a non-negative integer")
+    return parsed
+
 VIRTUAL_ENTITY_DOMAINS = [
     "ai_task",
     "air_quality",

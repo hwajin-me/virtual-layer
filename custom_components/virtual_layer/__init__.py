@@ -27,7 +27,7 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STARTED,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import CoreState, HomeAssistant, callback
+from homeassistant.core import CoreState, HomeAssistant, State, callback
 from homeassistant.exceptions import HomeAssistantError, Unauthorized, UnknownUser
 from homeassistant.helpers.entity import async_generate_entity_id
 from homeassistant.helpers.entity_platform import async_get_platforms
@@ -76,6 +76,45 @@ async def _async_update_options(hass, entry):
     async with entry.setup_lock:
         if entry.state is ConfigEntryState.LOADED:
             await async_setup_entry(hass, entry, incremental=True)
+
+
+@callback
+def _async_update_restored_attributes(hass, previous, current) -> None:
+    """Apply explicit UI attribute edits to the snapshot about to be restored.
+
+    Unchanged configured attributes may have legitimate service-set values.
+    Keep those and runtime-only attributes; replace only fields the user edited.
+    """
+    old_attributes = previous.get(CONF_ATTRIBUTES, {})
+    new_attributes = current.get(CONF_ATTRIBUTES, {})
+    missing = object()
+    edited = {
+        name for name in old_attributes.keys() | new_attributes.keys()
+        if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
+        and old_attributes.get(name, missing) != new_attributes.get(name, missing)
+    }
+    if not edited:
+        return
+    stored = async_get_restore_state(hass).last_states.get(current.get(ATTR_ENTITY_ID))
+    if stored is None:
+        return
+    attributes = dict(stored.state.attributes)
+    names = attributes.get(ATTR_VIRTUAL_ATTRIBUTES, [])
+    names = {name for name in names if isinstance(name, str)} if isinstance(names, (list, tuple, set)) else set()
+    for name in edited:
+        if name in new_attributes:
+            attributes[name] = copy.deepcopy(new_attributes[name])
+            names.add(name)
+        else:
+            attributes.pop(name, None)
+            names.discard(name)
+    attributes[ATTR_VIRTUAL_ATTRIBUTES] = sorted(names)
+    state = stored.state
+    stored.state = State(
+        state.entity_id, state.state, attributes,
+        last_changed=state.last_changed, last_updated=state.last_updated,
+        context=state.context,
+    )
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(COMPONENT_DOMAIN)
 
@@ -460,6 +499,10 @@ async def async_setup_entry(
                 for entity in list(platform.entities.values()):
                     if entity.unique_id == config[ATTR_UNIQUE_ID]:
                         await platform.async_remove_entity(entity.entity_id)
+        # Removal records the latest runtime state. Reconcile edited defaults
+        # now, before either native or state-only entities restore that state.
+        for uid in changed & old_by_id.keys() & new_by_id.keys():
+            _async_update_restored_attributes(hass, old_by_id[uid], new_by_id[uid])
 
     # create the devices.
     _LOGGER.debug("creating the devices")
@@ -1038,7 +1081,8 @@ def _device_registry_updates_for_config(
         device.get(CONF_CONFIGURATION_URL)
     )
     if not valid_parent_device(
-        hass, desired["via_device_id"], device.get(ATTR_DEVICE_ID)
+        hass, desired["via_device_id"], device.get(ATTR_DEVICE_ID),
+        child_registry_id=registry_entry.id if registry_entry else None,
     ):
         desired["via_device_id"] = None
 
@@ -1434,17 +1478,7 @@ def _state_only_native_template_value(name: str, value):
     if name in _STATE_ONLY_BOOLEAN_NATIVE_PROPERTIES:
         return cv.boolean(value)
     if name == "supported_features":
-        if isinstance(value, bool):
-            raise ValueError("supported_features must be a non-negative integer")
-        try:
-            value = int(value)
-        except (TypeError, ValueError, OverflowError) as err:
-            raise ValueError(
-                "supported_features must be a non-negative integer"
-            ) from err
-        if value < 0:
-            raise ValueError("supported_features must be a non-negative integer")
-        return value
+        return native_feature_mask(value)
     if name in {"latitude", "longitude"}:
         if isinstance(value, bool):
             raise ValueError(f"{name} is outside its valid range")
