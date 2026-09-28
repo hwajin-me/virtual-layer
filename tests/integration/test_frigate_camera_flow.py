@@ -49,11 +49,14 @@ async def test_frigate_camera_add_blank_and_edit_keep(hass, helper_enabled, subm
     assert Template(form[CONF_NATIVE_VALUE_TEMPLATES]["stream_source"], hass).async_render() == expected
     form[CONF_NATIVE_VALUE_TEMPLATES]["stream_source"] = submitted
     form["entity_id"] = "camera.bedroom_virtual"
+    assert form["frigate_mode_select"] is False
+    form["frigate_mode_select"] = True
     result = await manager.async_configure(result["flow_id"], form)
     assert result["type"] == "create_entry", result
     options = result["data"]
     device_name = next(iter(options[ATTR_DEVICES]))
     configured = options[ATTR_DEVICES][device_name][0]
+    assert configured["frigate_mode_select"] is True
     expected = "rtsp://custom.example/live" if submitted else expected
     assert Template(configured[CONF_NATIVE_TEMPLATES]["stream_source"], hass).async_render() == expected
 
@@ -72,6 +75,7 @@ async def test_frigate_camera_add_blank_and_edit_keep(hass, helper_enabled, subm
         result = await manager.async_configure(result["flow_id"], {CONF_HELPER_UPDATE_MODE: HELPER_UPDATE_KEEP})
     assert result["step_id"] == "edit_entity"
     form = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+    assert form["frigate_mode_select"] is True
     assert Template(form[CONF_NATIVE_VALUE_TEMPLATES]["stream_source"], hass).async_render() == expected
     result = await manager.async_configure(result["flow_id"], form)
     assert result["type"] == "create_entry", result

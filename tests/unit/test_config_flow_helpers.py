@@ -2941,12 +2941,15 @@ def test_multiple_media_players_with_on_off_snapshots_use_state_helper(hass):
     )
 
 
-def test_media_player_helpers_only_advertise_matterbridge_commands(hass):
+@pytest.mark.parametrize("source_count", [1, 2])
+def test_media_player_helpers_only_advertise_matterbridge_commands(hass, source_count):
     """Do not copy HA-only media capabilities into a Matter player helper."""
     source = "media_player.rich_source"
     source_features = int(
         MediaPlayerEntityFeature.TURN_ON
         | MediaPlayerEntityFeature.PLAY
+        | MediaPlayerEntityFeature.VOLUME_MUTE
+        | MediaPlayerEntityFeature.VOLUME_STEP
         | MediaPlayerEntityFeature.SEEK
         | MediaPlayerEntityFeature.PLAY_MEDIA
         | MediaPlayerEntityFeature.SELECT_SOURCE
@@ -2957,14 +2960,24 @@ def test_media_player_helpers_only_advertise_matterbridge_commands(hass):
     state = hass.states.get(source)
     assert state is not None
 
+    sources = [source]
+    states = [state]
+    if source_count == 2:
+        sources.append("media_player.second_source")
+        hass.states.async_set(sources[-1], "idle", {"supported_features": 0})
+        states.append(hass.states.get(sources[-1]))
     template = _native_reference_templates(
-        "media_player", [source], [state]
+        "media_player", sources, states
     )["supported_features"]
     rendered = Template(template, hass).async_render(parse_result=True)
 
     assert rendered == int(
         MediaPlayerEntityFeature.TURN_ON | MediaPlayerEntityFeature.PLAY
+        | MediaPlayerEntityFeature.VOLUME_MUTE | MediaPlayerEntityFeature.VOLUME_STEP
     )
+
+    hass.states.async_set(source, "playing", {"supported_features": 0})
+    assert Template(template, hass).async_render(parse_result=True) == 0
 
 
 def test_media_player_property_priority_prefers_active_source_then_falls_back(hass):

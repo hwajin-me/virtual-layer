@@ -2308,6 +2308,23 @@ def _render_native_templates(entity, hass):
     entity._apply_templates()
 
 
+@pytest.mark.parametrize("value", ['{"enabled":true,"ids":[1,2]}', "0012", "True", "[1, 2]"])
+def test_text_alias_preserves_literal_native_value(hass, value):
+    hass.states.async_set("input_text.source", value)
+    entity = VirtualText(
+        GENERIC_ENTITY_SCHEMA(_base(
+            "text.alias", "", **{CONF_NATIVE_TEMPLATES: {
+                "native_value": "{{ states('input_text.source') }}",
+            }},
+        )), False,
+    )
+    _render_native_templates(entity, hass)
+    assert entity.native_value == value
+    hass.states.async_set("input_text.source", "changed")
+    entity._apply_templates()
+    assert entity.native_value == "changed"
+
+
 @pytest.mark.parametrize(
     ("factory", "entity_id", "initial_value", "feature"),
     [

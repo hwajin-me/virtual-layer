@@ -36,6 +36,7 @@ from .entity import (
     virtual_schema,
 )
 from .sensor_units import UNITS_OF_MEASUREMENT
+from .frigate_source import frigate_mode_select_config
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1078,8 +1079,8 @@ class BlendedCfg:
         )
         return entity_entry.entity_id
 
-    def _append_diagnostic_sensors(self, entity, platform):
-        """Add runtime-only information and source-state sensors to its device."""
+    def _append_companion_entities(self, entity, platform):
+        """Add functional companions such as battery, map, cost and controls."""
         if self._config_entry is None:
             return
 
@@ -1127,43 +1128,28 @@ class BlendedCfg:
                 CONF_ATTRIBUTES: {"virtual_entity_id": entity_id},
             })
         source_entities = _diagnostic_source_entities(entity)
-        configuration = _diagnostic_configuration(entity, platform)
-        diagnostics = [(
-            "info",
-            entity_id,
-            f"[Source] - {entity[CONF_NAME]} - Configuration",
-            "mdi:information-outline",
-            {
-                "diagnostic_type": "configuration",
-                "virtual_entity_id": entity_id,
-                "virtual_entity_platform": platform,
-                "configured_source_entities": source_entities,
-                "configuration": configuration,
-            },
-        )]
-        diagnostics.extend(
-            (
-                f"debug{index}",
-                source_entity_id,
-                (
-                    f"[Source] - {entity[CONF_NAME]} - Source {index}: "
-                    f"{_diagnostic_source_name(self._hass, source_entity_id)}"
-                ),
-                "mdi:bug-outline",
-                {
-                    "diagnostic_type": "source_state",
-                    "virtual_entity_id": entity_id,
-                    "source_entity_id": source_entity_id,
-                    "source_entity_name": _diagnostic_source_name(
-                        self._hass,
-                        source_entity_id,
+        if platform == "camera" and entity.get(CONF_FRIGATE_MODE_SELECT):
+            mode_config = frigate_mode_select_config(self._hass, source_entities)
+            if mode_config is not None:
+                mode_uid = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}frigate_mode"
+                self.entities.setdefault("select", []).append({
+                    **_entity_device_info({
+                        key: entity[key] for key in (
+                            ATTR_DEVICE_ID, CONF_MANUFACTURER, CONF_MODEL,
+                            CONF_SW_VERSION, CONF_HW_VERSION, CONF_SERIAL_NUMBER,
+                            CONF_CONFIGURATION_URL, CONF_SUGGESTED_AREA, CONF_VIA_DEVICE_ID,
+                        ) if key in entity
+                    }),
+                    **mode_config,
+                    CONF_NAME: f"{entity[CONF_NAME]} - Frigate mode",
+                    ATTR_ENTITY_ID: self._reserve_entity_id(
+                        "select", f"select.{object_id}_frigate_mode", mode_uid,
                     ),
-                    "source_index": index,
-                },
-            )
-            for index, source_entity_id in enumerate(source_entities, start=1)
-        )
-
+                    ATTR_UNIQUE_ID: mode_uid,
+                    ATTR_DEVICE_ID: device_id,
+                    CONF_ICON: "mdi:cctv",
+                    CONF_ATTRIBUTES: {"virtual_entity_id": entity_id},
+                })
         sensor_entities = self._entities.setdefault("sensor", [])
         if platform == "sensor" and entity.get("utility_meter_enabled"):
             cost_uid = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}cost"
@@ -1514,53 +1500,6 @@ class BlendedCfg:
                 }),
             })
 
-        for suffix, source_entity_id, diagnostic_name, icon, attributes in diagnostics:
-            diagnostic_unique_id = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}{suffix}"
-            diagnostic_entity_id = self._reserve_entity_id(
-                "sensor",
-                f"sensor.src_{object_id}_{suffix}",
-                diagnostic_unique_id,
-            )
-            diagnostic_entity = {
-                CONF_NAME: diagnostic_name,
-                ATTR_ENTITY_ID: diagnostic_entity_id,
-                ATTR_UNIQUE_ID: diagnostic_unique_id,
-                ATTR_DEVICE_ID: device_id,
-                CONF_INITIAL_VALUE: "configured" if suffix == "info" else "unknown",
-                CONF_INITIAL_AVAILABILITY: True,
-                CONF_PERSISTENT: False,
-                CONF_ATTRIBUTES: attributes,
-                CONF_ICON: icon,
-                **_entity_device_info({
-                    key: entity[key]
-                    for key in (
-                        ATTR_DEVICE_ID,
-                        CONF_MANUFACTURER,
-                        CONF_MODEL,
-                        CONF_SW_VERSION,
-                        CONF_HW_VERSION,
-                        CONF_SERIAL_NUMBER,
-                        CONF_CONFIGURATION_URL,
-                        CONF_SUGGESTED_AREA,
-                        CONF_VIA_DEVICE_ID,
-                    )
-                    if key in entity
-                }),
-            }
-            if suffix != "info":
-                diagnostic_entity.update({
-                    CONF_SOURCE_ENTITIES: [source_entity_id],
-                    CONF_TEMPLATE_SOURCES: {
-                        "source": {
-                            ATTR_ENTITY_ID: source_entity_id,
-                            CONF_ATTRIBUTE: "state",
-                        },
-                    },
-                    CONF_VALUE_TEMPLATE: "{{ source }}",
-                    CONF_DIAGNOSTIC_SOURCE_ENTITY: source_entity_id,
-                })
-            sensor_entities.append(diagnostic_entity)
-
     async def async_load(self):
         meta_data = await _load_meta_data(self._hass, self._group_name)
         devices = _as_dict(copy.deepcopy(self._options.get(ATTR_DEVICES, {})), "entry devices")
@@ -1803,7 +1742,8 @@ class BlendedCfg:
         # Reserve every configured entity before generated companions so a
         # companion can never steal a later configured entity's explicit ID.
         for entity, platform in diagnostic_parents:
-            self._append_diagnostic_sensors(entity, platform)
+            entity[CONF_SOURCE_DIAGNOSTICS] = _diagnostic_configuration(entity, platform)
+            self._append_companion_entities(entity, platform)
 
         # Create orphaned list. If we have anything here we need to update
         # the saved meta data.

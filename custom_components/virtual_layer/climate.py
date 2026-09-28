@@ -1082,6 +1082,16 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
         self._refresh_supported_features()
 
     @property
+    def hvac_action(self) -> HVACAction | None:
+        """Keep a stale action from contradicting the selected operating mode."""
+        if self.hvac_mode == HVACMode.OFF:
+            return HVACAction.OFF
+        if self._attr_hvac_action == HVACAction.OFF:
+            # An enabled mode does not establish heating/cooling or idle activity.
+            return None
+        return self._attr_hvac_action
+
+    @property
     def target_temperature(self):
         if self._boiler_dynamic:
             return self._boiler_room_target

@@ -7,6 +7,7 @@ Domain-specific files can use this when Home Assistant exposes a building block
 domain but the virtual layer does not need a rich service API yet.
 """
 
+import asyncio
 import logging
 import math
 import re
@@ -48,6 +49,7 @@ from homeassistant.const import (
     STATE_OFF,
 )
 from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.util import dt as dt_util
@@ -556,10 +558,50 @@ class VirtualSelect(_NativeGenericMixin, VirtualEntity, SelectEntity):
 
     def __init__(self, config, old_style: bool):
         super().__init__(config, old_style)
+        self._frigate_mode_lock = None
+        if str(config.get(ATTR_UNIQUE_ID, "")).endswith(
+            f"{DIAGNOSTIC_UNIQUE_ID_MARKER}frigate_mode"
+        ):
+            self._attr_translation_key = "frigate_mode"
+            self._frigate_mode_lock = asyncio.Lock()
+            self._attr_has_entity_name = True
+            self.set_generated_name(config[CONF_NAME])
         self._attr_options = _string_list(config.get("options"))
         initial = str(config.get(CONF_INITIAL_VALUE, ""))
         if _has_value(initial) and initial not in self._attr_options:
             self._attr_options.append(initial)
+
+    def set_generated_name(self, name):
+        """Keep the Frigate label translated when its camera is renamed."""
+        if self._frigate_mode_lock is None:
+            self._attr_name = name
+            return
+        self._attr_translation_placeholders = {
+            "camera_name": name.removesuffix(" - Frigate mode"),
+        }
+        if hasattr(self, "_attr_name"):
+            del self._attr_name
+        self.__dict__.pop("name", None)
+
+    async def _async_run_command_action(self, command, method, args, kwargs):
+        if self._frigate_mode_lock is None:
+            return await super()._async_run_command_action(command, method, args, kwargs)
+        # Each mode sets several switches. Do not interleave two mode requests
+        # while Frigate is still acknowledging the first one.
+        async with self._frigate_mode_lock:
+            if self._virtual_removing:
+                return False
+            try:
+                return await super()._async_run_command_action(command, method, args, kwargs)
+            except Exception as err:
+                # HA's script engine wraps a wait timeout in an internal abort
+                # exception. Preserve other errors; present this one in the UI.
+                if isinstance(err.__cause__, TimeoutError):
+                    raise HomeAssistantError(
+                        translation_domain=COMPONENT_DOMAIN,
+                        translation_key="frigate_mode_timeout",
+                    ) from err
+                raise
 
     def _create_state(self, config):
         super()._create_state(config)
@@ -1102,6 +1144,13 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
     """Virtual media player with common playback and volume services."""
 
     PLATFORM_DOMAIN = "media_player"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        from .matterbridge_controls import async_sync_control_label
+
+        async_sync_control_label(self.hass, self.entity_id, self._config)
+
     NATIVE_OPTION_KEYS = frozenset(
         {
             "is_volume_muted",

@@ -7,6 +7,8 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.template import Template, TemplateError
 from homeassistant.util import slugify
 
+FRIGATE_SWITCH_TIMEOUT = 10
+
 
 def _mapping(value):
     return value if isinstance(value, Mapping) else {}
@@ -45,6 +47,49 @@ def _filtered_rtsp(value):
         return urlunsplit((url.scheme, url.netloc, url.path, urlencode(query), ""))
     except ValueError:
         return None
+
+
+def frigate_mode_select_config(hass, sources):
+    """Build a feedback-driven control for exactly one Frigate camera."""
+    cameras = list(dict.fromkeys(source for source in sources if source.startswith("camera.")))
+    if len(cameras) != 1:
+        return None
+    controls = frigate_camera_switches(hass, cameras[0])
+    if not {"recordings", "detect"} <= controls.keys():
+        return None
+    recording, detecting = controls["recordings"], controls["detect"]
+    options = ["recording", "detecting", "recording/detecting", "do nothing"]
+    sequence = []
+    def confirm(target, desired):
+        return {
+            "wait_template": "{{ states(" + repr(target) + ") == (" + desired + ") }}",
+            "timeout": {"seconds": FRIGATE_SWITCH_TIMEOUT},
+            "continue_on_timeout": False,
+        }
+    # Frigate requires motion enabled before object detection can be enabled.
+    if motion := controls.get("motion"):
+        sequence.append({"if": "{{ option in ['detecting', 'recording/detecting'] }}", "then": [{
+            "action": "switch.turn_on", "target": {"entity_id": motion},
+        }, confirm(motion, "'on'")]})
+    for kind, target in (("detecting", detecting), ("recording", recording)):
+        sequence.append({
+            "action": "{{ 'switch.turn_on' if option in [" + repr(kind) + ", 'recording/detecting'] else 'switch.turn_off' }}",
+            "target": {"entity_id": target},
+        })
+        sequence.append(confirm(target, "'on' if option in [" + repr(kind) + ", 'recording/detecting'] else 'off'"))
+    return {
+        "options": options,
+        "initial_value": "do nothing",
+        "persistent": False,
+        "source_entities": list(controls.values()),
+        "value_template": (
+            "{% set r = is_state(" + repr(recording) + ", 'on') %}"
+            "{% set d = is_state(" + repr(detecting) + ", 'on') %}"
+            "{{ 'recording/detecting' if r and d else 'recording' if r else 'detecting' if d else 'do nothing' }}"
+        ),
+        "availability_template": "{{ states(" + repr(recording) + ") in ['on', 'off'] and states(" + repr(detecting) + ") in ['on', 'off'] }}",
+        "command_actions": {"select_option": {"optimistic": False, "sequence": sequence}},
+    }
 
 
 def frigate_camera_stream_url(hass, entity_id: str) -> str | None:

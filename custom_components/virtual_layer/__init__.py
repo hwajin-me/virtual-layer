@@ -691,7 +691,10 @@ def _async_update_generated_entity_name(
         else None
     )
     if loaded_entity is not None:
-        loaded_entity._attr_name = name
+        if callable(set_generated_name := getattr(loaded_entity, "set_generated_name", None)):
+            set_generated_name(name)
+        else:
+            loaded_entity._attr_name = name
         loaded_entity.async_write_ha_state()
         return
     registry_entry = entity_registry.async_get(entity_id)
@@ -1637,6 +1640,9 @@ def _state_only_restore_waiting_for_sources(hass, entity) -> bool:
                 _STATE_ONLY_RESTORE_WAITING_SOURCES_DATA, set()
             ).add(entity_id)
             return True
+        # Recovery ends startup protection; subsequent outages must render
+        # current availability instead of reactivating the restored snapshot.
+        hass.data[_STATE_ONLY_SOURCE_GRACE_DATA].discard(entity_id)
     waiting = hass.data.get(_STATE_ONLY_RESTORE_WAITING_SOURCES_DATA)
     if not entity_id or not isinstance(waiting, set) or entity_id not in waiting:
         return False
@@ -1796,6 +1802,15 @@ def _async_apply_state_only_templates(hass, entity) -> None:
             changed = attributes.get(name, _MISSING) != source_value or changed
             attributes[name] = source_value
 
+    if (
+        availability_rendered
+        and not attributes.get(ATTR_AVAILABLE, True)
+        and _state_only_restore_sources_pending(hass, entity)
+    ):
+        # State-only domains have no Entity.available serializer. Match their
+        # expired-startup behavior immediately for outages after recovery.
+        changed = value != "unknown" or changed
+        value = "unknown"
     if changed:
         hass.states.async_set(entity_id, value, attributes)
 
@@ -2005,6 +2020,21 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
         _STATE_ONLY_TEMPLATE_LISTENERS_DATA, {}
     ).setdefault(entry.entry_id, {}).setdefault(entity_id, [])
 
+    from .source_diagnostics import async_setup, attributes as diagnostic_attributes
+
+    @callback
+    def refresh_source_diagnostics():
+        state = hass.states.get(entity_id)
+        if state is not None:
+            attributes = dict(state.attributes)
+            for key in ("source_configuration", "source_diagnostics", "source_diagnostics_truncated"):
+                attributes.pop(key, None)
+            attributes.update(diagnostic_attributes(hass, entity, attributes))
+            hass.states.async_set(entity_id, state.state, attributes)
+
+    listeners.append(async_setup(hass, entity, refresh_source_diagnostics))
+    refresh_source_diagnostics()
+
     if entity_id in hass.data.get(_STATE_ONLY_SOURCE_GRACE_DATA, set()):
         @callback
         def _expire_source_grace(_now):
@@ -2032,12 +2062,18 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
 
     if source_entities:
         from .zigbee_refresh import async_watch_sources
+        from .source_diagnostics import meaningful_change
+
+        @callback
+        def source_changed(event):
+            if meaningful_change(event):
+                _async_apply_state_only_templates(hass, entity)
 
         listeners.append(async_watch_sources(hass, source_entities))
         listeners.append(async_track_state_change_event(
             hass,
             source_entities,
-            lambda _event: _async_apply_state_only_templates(hass, entity),
+            source_changed,
         ))
 
     attribute_templates = entity.get(CONF_ATTRIBUTE_TEMPLATES, {})
@@ -2360,6 +2396,26 @@ def _async_register_virtual_services(hass) -> None:
             await method()
 
     _LOGGER.debug("installing virtual layer handlers")
+    async def refresh_source_networkmap(call):
+        await _async_verify_target_entity_control(hass, call)
+        targets = set(call.data[ATTR_ENTITY_ID])
+        _assert_managed_virtual_entities(hass, targets)
+        sources = set()
+        for group in hass.data.get(COMPONENT_DOMAIN, {}).values():
+            if not isinstance(group, Mapping):
+                continue
+            for records in group.get(ATTR_ENTITIES, {}).values():
+                for entity in records:
+                    if entity.get(ATTR_ENTITY_ID) in targets:
+                        sources.update(entity.get(CONF_SOURCE_DIAGNOSTICS, {}).get("source_entities", []))
+        from .zigbee_refresh import async_request_networkmap
+
+        await async_request_networkmap(hass, sources)
+
+    hass.services.async_register(
+        COMPONENT_DOMAIN, "refresh_source_networkmap", refresh_source_networkmap,
+        schema=vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_ids}),
+    )
     hass.data[COMPONENT_SERVICES][COMPONENT_DOMAIN] = "installed"
     hass.services.async_register(
         COMPONENT_DOMAIN,

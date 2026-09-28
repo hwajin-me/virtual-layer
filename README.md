@@ -50,6 +50,21 @@ a stale on state after restart. The camera's configured automatic-start setting
 still applies. Removing the camera or its ONVIF patrol target removes the generated
 control when the entry reloads.
 
+For a single Frigate camera source, enable **Create Frigate mode select** in
+the camera Domain settings to create `select.<camera_object_id>_frigate_mode`
+on the same Device. This requires Frigate recording and detection switches.
+Options are `recording`, `detecting`, `recording/detecting`, and `do nothing`
+(both off). Detection also enables the motion switch when present. The select
+follows actual switch feedback, including external changes and temporary patrol
+policies, and becomes unavailable when recording/detection state is unknown.
+Creation/reload does not send commands. Disable the option or remove the camera
+to remove the generated select on reload.
+The select name and mode labels are translated into English and Korean; stored
+option values remain unchanged for automations. Mode requests run in order and
+wait up to ten seconds for each switch to confirm its state. Detection waits
+for motion to turn on first. Missing feedback stops the remaining commands and
+shows a translated error; the select continues to display actual switch states.
+
 Patrol captures the initial ONVIF pan/tilt position when the camera supports
 `GetStatus` and requests an `AbsoluteMove` back on stop (including patrol errors).
 Zoom is unchanged. Unsupported position queries or return moves are logged;
@@ -145,6 +160,14 @@ history attributes expose the controller state.
 
 ## Features
 
+For a text/JSON-valued sensor alias, select the source and keep **Sensor** as
+the target type. Non-numeric states skip numeric conversion and retain their
+source value through the generated helper. For editable text aliases, select
+a `text` or `input_text` source; the **Text** target follows source updates and
+forwards `set_value` commands to the original entity. A sensor alias is read-only
+with respect to its source. Home Assistant's state length limit still applies;
+store longer structured payloads in attributes.
+
 - UI-only config flow and options flow
 - Create and edit virtual devices
 - Set device metadata such as device ID, manufacturer, model, software version,
@@ -156,6 +179,50 @@ history attributes expose the controller state.
 - Create a virtual entity from one or more existing Home Assistant entities
 - Inspect each virtual entity's `source_entities` state attribute for its
   configured source entity IDs in order (an empty list when no sources are set).
+- Open a virtual entity's `source_diagnostics` attribute to inspect each source,
+  keyed by its exact source entity ID. `source_configuration` contains the
+  configuration summary. The former `[Source]` Configuration/Debug sensors are
+  no longer created; their integration-owned registry entries are removed on
+  setup/reload, including renamed or disabled entries. Ordinary user entities
+  with similar names are preserved.
+  For a Zigbee2MQTT source, the same record contains Zigbee communication details.
+  Device registry identity and MQTT discovery identify the source automatically;
+  ordinary MQTT entities are not assumed to be Zigbee devices. Shared passive
+  subscriptions collect only that device's diagnostic fields, including when
+  its linkquality/last-seen entities are disabled in Home Assistant.
+  Attributes include `zigbee_linkquality` (raw LQI, 0–255), `zigbee_battery`
+  (percent), `zigbee_last_seen` (UTC), `zigbee_last_seen_seconds_ago`, IEEE address,
+  friendly name, device type, power source, model, and vendor when reported.
+  `zigbee_device_availability` and `zigbee_bridge_availability` show the separately
+  reported online/offline states; `zigbee_mqtt_connected` shows HA's broker
+  connection. An offline bridge can coexist with the device's last reported
+  online state. A broker disconnect makes both availability reports unknown
+  until fresh availability messages arrive. Measurements remain last reported
+  values, not proof that a device is currently reachable.
+  Enable Availability and Last seen in Zigbee2MQTT to receive those fields;
+  absent values remain unknown/null, never inferred from HA's `last_updated`.
+  Sleeping battery devices are not marked offline merely because reports are
+  infrequent. LQI is not RSSI in dBm or a percentage of overall network health.
+  `zigbee_rssi` is present only as a reported value (otherwise null); LQI is
+  never converted into RSSI. `zigbee_hub` identifies the Coordinator adapter,
+  and `zigbee_channel` reports the network channel from bridge info.
+  Use **Virtual Layer: Refresh source Zigbee network map** with a virtual entity
+  target to update `zigbee_parent`, `zigbee_parent_candidates`, and
+  `zigbee_neighbors` (per-link LQI and the reporting device). A unique parent
+  is reported only from explicit parent/child relationships; mesh peers are
+  not assumed to be the current routing path. The last snapshot's receipt time
+  and status are in `zigbee_networkmap_updated` and `zigbee_networkmap_status`.
+  Scans are manual, deduplicated per bridge and limited to once per two minutes;
+  [Zigbee2MQTT warns that scans can slow network traffic](https://www.zigbee2mqtt.io/guide/usage/mqtt_topics_and_messages.html#zigbee2mqtt-bridge-request-networkmap).
+  An absent map remains unknown; an error retains the last successful snapshot
+  with its original timestamp. Existing raw network-map responses are also read.
+  Diagnostics are bounded to leave room for normal attributes; omitted details
+  set `source_diagnostics_truncated`. Transient media credentials and nested
+  Virtual Layer diagnostic attributes are excluded. Home Assistant hides extra
+  attributes on unavailable native entities; their diagnostics remain live in
+  memory and reappear when availability recovers, without falsifying availability.
+  Restart Home Assistant after updating the integration;
+  existing entries receive the diagnostics without editing or saving them again.
 - Each referenced source gets a diagnostic sensor per virtual target, attached to
   the source's existing device when available (otherwise a standalone sensor).
   Its name shows the virtual target's display name and exact entity ID. Its
@@ -378,11 +445,12 @@ If no device ID is provided, Virtual Layer generates a stable ID.
 
 ## Entities
 
-Source diagnostic sensors on the virtual Device, including the configuration
-summary, use names beginning with `[Source] - ` and IDs such as
-`sensor.src_<parent_object_id>_info` and `sensor.src_<parent_object_id>_debug1`.
-Existing source diagnostics migrate automatically on reload, retaining their
-unique IDs and customized display names.
+Source diagnostics live directly on each configured virtual entity as
+`source_configuration` and `source_diagnostics` attributes. The old `[Source]`
+Configuration/Debug entities are removed automatically; dashboards and
+automations referencing those old sensor IDs must use the parent's attributes.
+Other functional companions (such as battery, polygon map, and utility-meter
+sensors) retain their existing behavior.
 
 Every entity supports:
 
@@ -1396,12 +1464,31 @@ Only information reported by the source can be displayed.
 
 MatterBridge maps `media_player` entities to Matter's Basic Video Player and
 Keypad Input clusters. Apple Home currently shows that direct endpoint as
-**Unsupported**. Use its **Virtual Control Label** fallback: add the selected
-label to the virtual media player in Home Assistant, then re-pair/reload
-MatterBridge and ignore the direct unsupported endpoint in Apple Home. It exposes
+**Unsupported**. With the companion local `matterbridge-hass` enhancement,
+enable **Apple Home Media Command Switches** in the plugin and restart
+Matterbridge. It exposes eligible players as command switches without creating
+the unsupported direct media endpoint. No per-player control label is needed;
+the plugin's existing selection and filters still apply. This setting also
+affects other Matter controllers sharing that bridge.
+
+For plugin versions without that option, use **Virtual Control Label**: set it
+to `matterbridge-virtual` once. In the Virtual Layer player editor, enable
+**Apple Home command switches (Matterbridge)**; the default matching label is
+created and assigned automatically. Enter a different **Matterbridge control
+label** only if the plugin uses another name. Turn the option off to remove
+only label assignments Virtual Layer made; pre-existing user labels and shared
+label definitions remain intact. Then restart Matterbridge.
+Keep that entity eligible under the plugin's filters so its controls can be
+created. In label mode the direct unsupported endpoint remains exposed. The fallback exposes
 Apple-Home-compatible command switches for power, playback, previous/next,
 mute, and volume up/down. This is command-only; it cannot provide an Apple Home
 Now Playing tile, media browsing, or AirPlay routing.
+
+For existing Virtual Layer players missing mute or volume up/down controls,
+edit the player and regenerate its source helpers. Use **automatic** to preserve
+custom templates; **force_helper** replaces customized helpers too. The source
+must advertise the corresponding mute/volume-step features. See the
+[plugin's Virtual Control Label instructions](https://github.com/Luligu/matterbridge-hass#virtual-control-label).
 
 #### Battery readings in Apple Home
 

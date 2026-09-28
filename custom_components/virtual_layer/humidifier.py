@@ -386,6 +386,17 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             self._attr_supported_features |= HumidifierEntityFeature.MODES
 
     @property
+    def action(self) -> HumidifierAction | None:
+        """Do not publish activity that contradicts the current power state."""
+        if not self.is_on:
+            return HumidifierAction.OFF
+        if self._attr_action == HumidifierAction.OFF:
+            # Older helpers can retain an off snapshot after power changes.
+            # Power alone cannot tell us whether the device is working or idle.
+            return None
+        return self._attr_action
+
+    @property
     def state_attributes(self):
         data = dict(super().state_attributes or {})
         data.update(self._attr_extra_state_attributes or {})

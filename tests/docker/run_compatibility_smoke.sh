@@ -556,6 +556,38 @@ async def configure_flow(manager, result, user_input):
     return result
 
 
+async def test_media_control_labels(hass, entry):
+    """Exercise real HA registry ownership and reload for bridge labels."""
+    from homeassistant.helpers import label_registry as lr
+    registry = er.async_get(hass)
+    labels = lr.async_get(hass)
+    options = copy.deepcopy(dict(entry.options))
+    group = next(iter(options["devices"]))
+    player = {"platform": "media_player", "name": "Docker media controls",
+              "entity_id": "media_player.docker_controls", "initial_value": "off",
+              "matterbridge_controls_enabled": True,
+              "matterbridge_control_label": "docker-media-controls"}
+    options["devices"][group].append(player)
+    hass.config_entries.async_update_entry(entry, options=options)
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    label = labels.async_get_label_by_name("docker-media-controls")
+    assert label is not None
+    assert registry.async_get("media_player.docker_controls").labels == {label.label_id}
+    user_label = labels.async_create("Docker user label")
+    registry.async_update_entity("media_player.docker_controls", labels={label.label_id, user_label.label_id})
+    options = copy.deepcopy(dict(entry.options))
+    for configured in options["devices"][group]:
+        if configured.get("entity_id") == "media_player.docker_controls":
+            configured["matterbridge_controls_enabled"] = False
+    hass.config_entries.async_update_entry(entry, options=options)
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert registry.async_get("media_player.docker_controls").labels == {user_label.label_id}
+    assert labels.async_get_label(label.label_id) is not None
+    print("Media controls Docker passed: automatic label, reload, disable, preserved user label")
+
+
 async def test_tracker_timer_dispatch(hass):
     """Exercise HA's real timer-job dispatch for both tracker helper modes."""
     periodic_sensor = VirtualSensor({
@@ -813,7 +845,8 @@ async def test_tracker_creation_flows(hass):
                 assert state.attributes["latitude"] == (37.5 if kind == "dawarich" else hass.config.latitude), state
                 assert "flow-test-key" not in str(state.attributes)
                 primary = registry.async_get(entity_id)
-                assert registry.async_get(f"sensor.src_{entity_id.split('.')[1]}_info").device_id == primary.device_id
+                assert registry.async_get(f"sensor.src_{entity_id.split('.')[1]}_info") is None
+                assert "source_configuration" in state.attributes
                 if not initial:
                     assert primary.device_id == registry.async_get(created_ids[0]).device_id
                 if kind == "wifi":
@@ -1025,6 +1058,43 @@ async def test_image_camera_encoding(hass):
         if process.returncode is None:
             process.kill()
             await process.wait()
+
+
+async def test_frigate_mode(hass):
+    """Exercise generated select with real HA scripts and simulated Frigate switches."""
+    controls = {kind: f"switch.docker_frigate_{kind}" for kind in ("recordings", "detect", "motion")}
+    for target in controls.values():
+        hass.states.async_set(target, "off")
+    async def change(call):
+        targets = call.data["entity_id"]
+        for target in targets if isinstance(targets, list) else [targets]:
+            hass.states.async_set(target, call.service.removeprefix("turn_"))
+    for service in ("turn_on", "turn_off"):
+        hass.services.async_register("switch", service, change)
+    result = await hass.config_entries.flow.async_init(
+        COMPONENT_DOMAIN, context={"source": SOURCE_USER},
+        data={ATTR_GROUP_NAME: "Frigate mode", CONF_ADD_FIRST_ENTITY: False},
+    )
+    entry = result["result"]
+    with patch("custom_components.virtual_layer.frigate_source.frigate_camera_switches", return_value=controls):
+        hass.config_entries.async_update_entry(entry, options={"devices": {"Frigate mode": [{
+            "platform": "camera", "name": "Frigate virtual", "entity_id": "camera.docker_frigate",
+            "source_entities": ["camera.docker_frigate_source"], "frigate_mode_select": True,
+        }]}})
+        await hass.async_block_till_done()
+    select_id = "select.docker_frigate_frigate_mode"
+    for mode in ("recording", "detecting", "recording/detecting", "do nothing"):
+        await hass.services.async_call("select", "select_option", {"entity_id": select_id, "option": mode}, blocking=True)
+        await hass.async_block_till_done()
+        assert hass.states.get(select_id).state == mode
+        assert hass.states.is_state(controls["recordings"], "on" if "recording" in mode else "off")
+        assert hass.states.is_state(controls["detect"], "on" if "detecting" in mode else "off")
+    registry = er.async_get(hass)
+    assert registry.async_get(select_id).device_id == registry.async_get("camera.docker_frigate").device_id
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert registry.async_get(select_id) is None
+    print("Frigate mode smoke passed: four modes, switch feedback, device grouping, removal")
 
 
 async def test_patrol_teaching(hass):
@@ -1305,6 +1375,21 @@ async def test_config_flow_create_modify_runtime():
         )
         cv.SCRIPT_SCHEMA(sequence)
         print("Fan preset smoke passed: normal/favourite detection, RPM telemetry, bounded levels, native speed, action schema")
+        for power, speed in (("on", None), ("on", 0), ("off", 75)):
+            power_fan = VirtualFan(FAN_SCHEMA({
+                "name": "Docker power telemetry", "speed_count": 100,
+                "value_template": "{{ '" + power + "' }}",
+                "native_templates": {
+                    "percentage": "{{ " + (str(speed) if speed is not None else "none") + " }}",
+                },
+            }), False)
+            power_fan.hass = hass
+            power_fan._create_state(power_fan._config)
+            power_fan._schedule_state_update = Mock()
+            power_fan._apply_templates()
+            assert power_fan.state == power
+            assert power_fan.percentage == (speed if power == "on" else 0)
+        print("Fan power smoke passed: value-template power overrides missing, zero and stale speed")
         from custom_components.virtual_layer import unit_history
         from homeassistant.components.recorder import get_instance
         from homeassistant.components.recorder.statistics import async_import_statistics, statistics_during_period
@@ -1336,6 +1421,7 @@ async def test_config_flow_create_modify_runtime():
         await test_source_startup_grace(hass)
         await test_image_camera_encoding(hass)
         await test_patrol_teaching(hass)
+        await test_frigate_mode(hass)
 
         source_ids = ["sensor.docker_flow_pm25_a", "sensor.docker_flow_pm25_b"]
         hass.states.async_set(
@@ -1480,7 +1566,9 @@ async def test_config_flow_create_modify_runtime():
         original_unique_id = created_registry_entry.unique_id
         device_id = created_registry_entry.device_id
         aqi_unique_id = registry.async_get("air_quality.docker_flow_pm25_aqi").unique_id
-        for suffix in ("info", "debug1", "debug2", "aqi"):
+        assert "source_configuration" in hass.states.get("sensor.docker_flow_pm25").attributes
+        assert len(hass.states.get("sensor.docker_flow_pm25").attributes["source_diagnostics"]) == 2
+        for suffix in ("aqi",):
             companion_id = f"sensor.docker_flow_pm25_{suffix}"
             if suffix != "aqi":
                 companion_id = companion_id.replace("sensor.", "sensor.src_", 1)
@@ -1566,7 +1654,8 @@ async def test_config_flow_create_modify_runtime():
         assert modified_registry_entry.device_id == device_id
         assert registry.async_get("sensor.docker_flow_pm25") is None
         assert registry.async_get(f"{modified_id.replace('sensor.', 'air_quality.', 1)}_aqi").unique_id == aqi_unique_id
-        for suffix in ("info", "debug1", "debug2", "aqi"):
+        assert "source_configuration" in modified_state.attributes
+        for suffix in ("aqi",):
             old_domain = "air_quality" if suffix == "aqi" else "sensor"
             prefix = "src_" if suffix != "aqi" else ""
             assert registry.async_get(f"{old_domain}.{prefix}docker_flow_pm25_{suffix}") is None
@@ -1942,6 +2031,7 @@ async def test_config_flow_create_modify_runtime():
         assert registry.async_get("sensor.docker_meter").device_id == registry.async_get("sensor.docker_meter_cost").device_id
         print("Utility Meter Docker passed: anchored monthly setup, usage, cost, adjustment, calibration, reset and Device grouping")
         await test_audit_regressions(hass, entry)
+        await test_media_control_labels(hass, entry)
     finally:
         await hass.async_stop()
 
@@ -1956,14 +2046,17 @@ async def test_zigbee_refresh_runtime():
     address = "0x00124b0012345678"
     source = "light.docker_zigbee_source"
     inventory = [{"ieee_address": address, "supported": True, "type": "Router",
+                  "friendly_name": "docker_light",
                   "power_source": "Mains (single phase)", "definition": {"exposes": [
                       {"type": "binary", "property": "state", "access": 7},
                   ]}}]
     hass.states.async_set(source, "unavailable")
     hass.data[mqtt.DATA_MQTT] = SimpleNamespace(client=SimpleNamespace(connected=True))
     unsubs = []
+    callbacks = {}
 
     async def subscribe(_hass, topic, callback, _qos):
+        callbacks[topic] = callback
         callback(SimpleNamespace(topic=topic, payload=json.dumps(
             inventory if topic.endswith("/devices") else {"state": "online"},
         )))
@@ -1981,8 +2074,39 @@ async def test_zigbee_refresh_runtime():
                 hass, f"custom/zigbee/{address}/get", '{"state": ""}', qos=0, retain=False,
             )
             assert hass.states.get(source).state == "unavailable"
+            topic = "custom/zigbee/docker_light"
+            callbacks[topic](SimpleNamespace(topic=topic, payload=json.dumps({
+                "linkquality": 101, "battery": 90,
+                "last_seen": "2026-01-01T00:00:00Z",
+            })))
+            diagnostics = refresh.diagnostic_attributes(hass, source)
+            assert diagnostics["zigbee_linkquality"] == 101
+            assert diagnostics["zigbee_battery"] == 90
+            assert diagnostics["zigbee_last_seen"] == "2026-01-01T00:00:00+00:00"
+            assert diagnostics["zigbee_bridge_availability"] == "online"
+            await refresh.async_request_networkmap(hass, [source, source])
+            topic = "custom/zigbee/bridge/info"
+            callbacks[topic](SimpleNamespace(topic=topic, payload=json.dumps({
+                "coordinator": {"ieee_address": "0x0000000000000001", "type": "zStack"},
+                "network": {"channel": 20}, "config": {"password": "not exposed"},
+            })))
+            topic = "custom/zigbee/bridge/response/networkmap"
+            callbacks[topic](SimpleNamespace(topic=topic, payload=json.dumps({
+                "status": "ok", "data": {"type": "raw", "value": {
+                    "nodes": [{"ieeeAddr": address, "type": "EndDevice"},
+                              {"ieeeAddr": "0x0000000000000002", "type": "Router", "friendlyName": "Hall router"}],
+                    "links": [{"source": {"ieeeAddr": address}, "target": {"ieeeAddr": "0x0000000000000002"},
+                              "relationship": 1, "lqi": 180}],
+                }},
+            })))
+            diagnostics = refresh.diagnostic_attributes(hass, source)
+            assert diagnostics["zigbee_hub"]["role"] == "Coordinator"
+            assert diagnostics["zigbee_channel"] == 20
+            assert diagnostics["zigbee_parent"]["name"] == "Hall router"
+            assert diagnostics["zigbee_neighbors"][0]["linkquality"] == 180
+            assert "password" not in str(diagnostics)
             await hass.data[refresh._DATA]._refresh()
-            assert publish.await_count == 1
+            assert publish.await_count == 2
         finally:
             remove()
             await hass.async_block_till_done()
@@ -1990,7 +2114,7 @@ async def test_zigbee_refresh_runtime():
         assert all(unsubscribe.call_count == 1 for unsubscribe in unsubs)
     hass.data.pop(mqtt.DATA_MQTT)
     await hass.async_stop()
-    print("Zigbee refresh Docker passed: native MQTT API, bounded GET, truthful availability, cleanup (mocked broker)")
+    print("Zigbee refresh Docker passed: native MQTT API, bounded GET, passive diagnostics, truthful availability, cleanup (mocked broker)")
 
 
 asyncio.run(test_config_flow_create_modify_runtime())

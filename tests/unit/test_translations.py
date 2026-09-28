@@ -259,6 +259,8 @@ def test_entity_forms_have_descriptions_for_every_dynamic_field_in_both_language
         expected_section_fields = {}
         for platform in VIRTUAL_ENTITY_DOMAINS:
             defaults = {CONF_PLATFORM: platform}
+            if platform == "camera":
+                defaults["frigate_mode_select"] = True
             if platform == "air_quality":
                 defaults["air_quality_logic"] = {"mode": "automatic"}
             schema = _entity_schema(defaults)

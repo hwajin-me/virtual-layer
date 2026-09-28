@@ -141,6 +141,7 @@ def _image_as_jpeg(payload: bytes) -> bytes:
 
 
 BASE_SCHEMA = virtual_schema(DEFAULT_CAMERA_VALUE, {
+    vol.Optional("frigate_mode_select", default=False): cv.boolean,
     vol.Optional("patrol_auto_cycle", default=False): cv.boolean,
     vol.Optional("patrol_on_seconds", default=300): vol.All(vol.Coerce(float), vol.Range(min=5, max=86400)),
     vol.Optional("patrol_off_seconds", default=1800): vol.All(vol.Coerce(float), vol.Range(min=5, max=86400)),

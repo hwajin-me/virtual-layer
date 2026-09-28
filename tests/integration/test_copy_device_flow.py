@@ -231,7 +231,8 @@ async def test_appliance_native_properties_commands_and_availability(hass, appli
         entity.entity_id
         for entity in er.async_entries_for_device(er.async_get(hass), virtual_device)
     }
-    assert len(companions) > len(appliance[1])
+    assert len(companions) == len(appliance[1])
+    assert "source_diagnostics" in hass.states.get("number.oven_virtual").attributes
     result = await manager.async_init(entry.entry_id, data={"action": "delete_device"})
     result = await manager.async_configure(
         result["flow_id"], {"managed_device_name": device_key}

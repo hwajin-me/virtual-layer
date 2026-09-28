@@ -109,11 +109,17 @@ from .humidifier_options import (
 )
 from .polygon import parse_geojson_zones
 from .geojson_catalog import CATALOG_IDS, async_get_catalog, catalog_choices
+from .matterbridge_controls import (
+    CONF_MATTERBRIDGE_CONTROL_LABEL,
+    CONF_MATTERBRIDGE_CONTROLS_ENABLED,
+    DEFAULT_CONTROL_LABEL,
+    control_label,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 # matterbridge-hass maps media players to Basic Video Player/Keypad Input. It
-# does not consume Home Assistant's richer media capabilities.
+# also consumes mute/volume-step features for Virtual Control Label switches.
 MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK = int(
     MediaPlayerEntityFeature.TURN_ON
     | MediaPlayerEntityFeature.TURN_OFF
@@ -122,6 +128,8 @@ MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK = int(
     | MediaPlayerEntityFeature.STOP
     | MediaPlayerEntityFeature.PREVIOUS_TRACK
     | MediaPlayerEntityFeature.NEXT_TRACK
+    | MediaPlayerEntityFeature.VOLUME_MUTE
+    | MediaPlayerEntityFeature.VOLUME_STEP
 )
 
 
@@ -1271,6 +1279,8 @@ def _lowest_light_capability(states: Collection) -> str:
     )
 
 _DOMAIN_OPTION_RESERVED_KEYS = {
+    CONF_MATTERBRIDGE_CONTROL_LABEL,
+    CONF_MATTERBRIDGE_CONTROLS_ENABLED,
     bc.ENABLED,
     bc.FORMULA,
     CONF_BOILER_ROOM_TEMPERATURE_ENTITY_ID,
@@ -1850,6 +1860,7 @@ def _fan_source_role_schema(
 
 
 _SINGLE_SOURCE_TARGET_DOMAINS = {
+    "input_text": ("text",),
     "image": ("image", "camera"),
     "climate": ("climate",),
     "fan": ("fan", "switch", "light"),
@@ -3693,6 +3704,14 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
             selector.EntitySelectorConfig(domain="sensor", multiple=True, reorder=True),
         )
     elif platform == "media_player":
+        domain_schema[vol.Optional(
+            CONF_MATTERBRIDGE_CONTROLS_ENABLED,
+            default=defaults.get(CONF_MATTERBRIDGE_CONTROLS_ENABLED, False),
+        )] = selector.BooleanSelector()
+        domain_schema[vol.Optional(
+            CONF_MATTERBRIDGE_CONTROL_LABEL,
+            default=defaults.get(CONF_MATTERBRIDGE_CONTROL_LABEL, DEFAULT_CONTROL_LABEL),
+        )] = selector.TextSelector()
         source_entities = [
             entity_id
             for entity_id in _stored_entity_ids(
@@ -3715,6 +3734,15 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
         )
     elif platform == "camera":
         patrol_target = defaults.get(CONF_ONVIF_PATROL_TARGET)
+        sources = _stored_entity_ids(defaults.get(CONF_SOURCE_ENTITIES_TEXT))
+        has_frigate_source = hass is not None and any(
+            source.startswith("camera.")
+            and (registered := er.async_get(hass).async_get(source)) is not None
+            and registered.platform == "frigate"
+            for source in sources
+        )
+        if has_frigate_source or defaults.get(CONF_FRIGATE_MODE_SELECT):
+            domain_schema[vol.Optional(CONF_FRIGATE_MODE_SELECT, default=defaults.get(CONF_FRIGATE_MODE_SELECT, False))] = selector.BooleanSelector()
         domain_schema[vol.Optional("patrol_auto_cycle", default=defaults.get("patrol_auto_cycle", False))] = selector.BooleanSelector()
         for field, default, minimum, maximum in (
             ("patrol_on_seconds", 300, 5, 86400),
@@ -5139,6 +5167,15 @@ def _build_entity_config(
             recipe["generated_template"] = aq_options.generate(recipe)
             entity[CONF_AIR_QUALITY_LOGIC] = recipe
     if platform == "media_player":
+        try:
+            entity[CONF_MATTERBRIDGE_CONTROLS_ENABLED] = cv.boolean(
+                user_input.get(CONF_MATTERBRIDGE_CONTROLS_ENABLED, False)
+            )
+            entity[CONF_MATTERBRIDGE_CONTROL_LABEL] = control_label(
+                user_input.get(CONF_MATTERBRIDGE_CONTROL_LABEL, DEFAULT_CONTROL_LABEL)
+            ) or DEFAULT_CONTROL_LABEL
+        except (ValueError, vol.Invalid) as err:
+            raise InvalidDomainOptions from err
         priority = user_input.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITY)
         if priority is not None:
             if not isinstance(priority, list):
@@ -9281,6 +9318,16 @@ def _source_command_actions(
 ) -> dict[str, Any]:
     """Build editable pass-through actions for compatible source entities."""
     actions = {}
+    if platform == "text" and entity_ids and all(
+        entity_id.split(".", 1)[0] in {"text", "input_text"}
+        for entity_id in entity_ids
+    ):
+        return {"set_value": [
+            {"action": f"{entity_id.split('.', 1)[0]}.set_value",
+             "target": {ATTR_ENTITY_ID: entity_id},
+             "data": {"value": "{{ value }}"}}
+            for entity_id in entity_ids
+        ]}
     if len(entity_ids) == 1:
         source_entity_id = entity_ids[0]
         source_platform = source_entity_id.split(".", 1)[0]
@@ -10020,6 +10067,8 @@ def _reference_entity_defaults(
         platform = source_domains[0]
     elif all_location or mixed_location_presence or all_presence_distance:
         platform = "device_tracker"
+    elif _all_source_domains(entity_ids, {"text", "input_text"}):
+        platform = "text"
     elif all_boolean:
         platform = "binary_sensor"
     elif all_datetime:
@@ -10073,7 +10122,7 @@ def _reference_entity_defaults(
         CONF_AVAILABILITY_TEMPLATE: (
             "{{ "
             # A virtual entity remains usable while at least one source is
-            # responding. Per-source debug entities retain individual errors.
+            # responding. Per-source diagnostic attributes retain individual errors.
             + " or ".join(
                 f"states({entity_id!r}) not in ['unknown', 'unavailable']"
                 for entity_id in entity_ids
@@ -10090,7 +10139,7 @@ def _reference_entity_defaults(
         if len(states) > 1:
             # Do not mark the entire virtual bulb unavailable because one
             # member is asleep, delayed, or temporarily disconnected. The
-            # per-source debug entities retain the individual diagnosis.
+            # per-source diagnostic attributes retain the individual diagnosis.
             defaults[CONF_AVAILABILITY_TEMPLATE] = (
                 "{{ "
                 + " or ".join(
@@ -11447,6 +11496,12 @@ def _entity_form_defaults(
             entity.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITIES)
         ),
         CONF_MEDIA_PLAYER_SOURCE_PRIORITY: _media_player_common_priority(entity),
+        CONF_MATTERBRIDGE_CONTROL_LABEL: _text_default(
+            entity.get(CONF_MATTERBRIDGE_CONTROL_LABEL), DEFAULT_CONTROL_LABEL
+        ),
+        CONF_MATTERBRIDGE_CONTROLS_ENABLED: _boolean_default(
+            entity.get(CONF_MATTERBRIDGE_CONTROLS_ENABLED), False
+        ),
         CONF_COMMAND_ACTIONS_JSON: _json_default(
             repair_legacy_template_data(entity.get(CONF_COMMAND_ACTIONS))
         ),
@@ -12747,6 +12802,10 @@ class VirtualFlowHandler(MeterFlow, FusionFlow, _CopyDeviceFlow, _TrackerSetting
                         self._source_entities, self.hass
                     )
                     if not choices:
+                        if not _sensor_state_sources_support_numeric_conversion(
+                            self._source_entities, self.hass
+                        ) and all(e.startswith("sensor.") for e in self._source_entities):
+                            return await self.async_step_entity_helper()
                         errors["base"] = "incompatible_sensor_sources"
                     else:
                         return await self.async_step_sensor_conversion()
@@ -13447,6 +13506,10 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
                         self._add_source_entities, self.hass
                     )
                     if not choices:
+                        if not _sensor_state_sources_support_numeric_conversion(
+                            self._add_source_entities, self.hass
+                        ) and all(e.startswith("sensor.") for e in self._add_source_entities):
+                            return await self.async_step_entity_helper()
                         errors["base"] = "incompatible_sensor_sources"
                     else:
                         return await self.async_step_sensor_conversion()
@@ -14174,6 +14237,10 @@ class VirtualOptionsFlowHandler(MeterFlow, FusionFlow, PatrolFlow, _CopyDeviceFl
                         self._edit_source_entities, self.hass
                     )
                     if not choices:
+                        if not _sensor_state_sources_support_numeric_conversion(
+                            self._edit_source_entities, self.hass
+                        ) and all(e.startswith("sensor.") for e in self._edit_source_entities):
+                            return await self.async_step_edit_entity_helper()
                         errors["base"] = "incompatible_sensor_sources"
                     else:
                         return await self.async_step_edit_sensor_conversion()

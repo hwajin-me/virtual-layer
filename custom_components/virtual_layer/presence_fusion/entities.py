@@ -93,7 +93,11 @@ class FusionSensor(FusionEntity, SensorEntity):
         if self.key == "primary_gps":
             return {"tracked_device_id": data.primary, "reason": data.reason}
         if self.key == "presence":
-            return {"held": data.held, "missing_since": data.missing_since}
+            return {
+                "held": data.held, "missing_since": data.missing_since,
+                "boundary_distance_m": data.boundary_distance,
+                "boundary_motion": data.boundary_motion,
+            }
         if self.key == "room":
             return {"room_source": data.room_source, "conflict": data.room_conflict}
         if self.key == "zone":

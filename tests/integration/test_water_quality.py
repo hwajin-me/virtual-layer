@@ -37,7 +37,8 @@ async def test_water_conversion_ui_setup_reload_and_device_grouping(hass):
     parent = registry.async_get(entity_id)
     companions = [item for item in er.async_entries_for_config_entry(registry, entry.entry_id)
                   if item.entity_id.endswith(("_info", "_debug1", "_debug2"))]
-    assert len(companions) == 3
+    assert len(companions) == 0
+    assert set(state.attributes["source_diagnostics"]) == {"sensor.ec_a", "sensor.ec_b"}
     assert parent.device_id and all(item.device_id == parent.device_id for item in companions)
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()

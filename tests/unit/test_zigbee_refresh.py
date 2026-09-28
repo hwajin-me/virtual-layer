@@ -51,9 +51,10 @@ def broker(hass, monkeypatch):
 
     async def subscribe(_hass, topic, callback, _qos):
         callbacks[topic] = callback
-        callback(SimpleNamespace(topic=topic, payload=json.dumps(
-            inventory if topic.endswith("/devices") else {"state": "online"},
-        )))
+        if topic.endswith("/devices") or topic.endswith("/availability") or topic == f"{BASE}/bridge/state":
+            callback(SimpleNamespace(topic=topic, payload=json.dumps(
+                inventory if topic.endswith("/devices") else {"state": "online"},
+            )))
         remove = Mock()
         unsubs.append(remove)
         return remove

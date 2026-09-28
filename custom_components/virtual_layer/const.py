@@ -39,6 +39,9 @@ RESERVED_VIRTUAL_ATTRIBUTE_NAMES = frozenset({
     ATTR_UNIQUE_ID,
     ATTR_VIRTUAL_ATTRIBUTES,
     "source_entities",
+    "source_configuration",
+    "source_diagnostics",
+    "source_diagnostics_truncated",
 })
 
 # Home Assistant owns these state attributes. Camera/image access metadata is
@@ -74,6 +77,7 @@ CONF_ATTRIBUTE_TEMPLATES = "attribute_templates"
 CONF_COMMAND_ACTIONS = "command_actions"
 CONF_AVAILABILITY_TEMPLATE = "availability_template"
 CONF_DIAGNOSTIC_SOURCE_ENTITY = "diagnostic_source_entity"
+CONF_SOURCE_DIAGNOSTICS = "_source_diagnostics"
 CONF_EVENT_HOOKS = "event_hooks"
 CONF_ICON_TEMPLATE = "icon_template"
 CONF_INITIAL_VALUE = "initial_value"
@@ -91,8 +95,10 @@ CONF_ONVIF_PATROL_PAN_MAX = "onvif_patrol_pan_max"
 CONF_ONVIF_PATROL_TILT_MIN = "onvif_patrol_tilt_min"
 CONF_ONVIF_PATROL_TILT_MAX = "onvif_patrol_tilt_max"
 CONF_FRIGATE_RECORDING_SWITCH = "frigate_recording_switch"
+CONF_FRIGATE_MODE_SELECT = "frigate_mode_select"
 CONF_FRIGATE_MQTT_RECORDINGS_TOPIC = "frigate_mqtt_recordings_topic"
 CAMERA_PATROL_FORM_FIELDS = (
+    CONF_FRIGATE_MODE_SELECT,
     "patrol_auto_cycle", "patrol_on_seconds", "patrol_off_seconds",
     "patrol_recording_scope", "patrol_settle_seconds",
     CONF_ONVIF_PATROL_ENABLED, CONF_ONVIF_PATROL_TARGET,
@@ -176,6 +182,7 @@ GENERIC_ENTITY_OPTION_EXCLUDED_KEYS = frozenset({
     CONF_AVAILABILITY_TEMPLATE,
     CONF_CLASS,
     CONF_DIAGNOSTIC_SOURCE_ENTITY,
+    CONF_SOURCE_DIAGNOSTICS,
     CONF_EVENT_HOOKS,
     CONF_HW_VERSION,
     CONF_ICON,

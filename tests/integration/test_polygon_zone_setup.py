@@ -104,7 +104,8 @@ async def test_adaptive_trip_stop_reload_and_delete_in_hass(hass, freezer, polyg
     registry = er.async_get(hass)
     device_id = registry.async_get("device_tracker.trip").device_id
     for suffix in ("info", "debug1", "debug2", "debug3"):
-        assert registry.async_get(f"sensor.src_trip_{suffix}").device_id == device_id
+        assert registry.async_get(f"sensor.src_trip_{suffix}") is None
+    assert list(state.attributes["source_diagnostics"]) == sources
     if polygon:
         assert state.state == "not_home"
         assert registry.async_get("sensor.trip_zone").device_id == device_id
@@ -358,18 +359,18 @@ async def test_polygon_tracker_triangulates_espresense_anchors_into_geojson_zone
     assert state.attributes[ATTR_LONGITUDE] == pytest.approx(127.0, abs=0.00003)
     assert state.attributes["espresense_sources"] == list(anchors)
     assert state.attributes["espresense_accuracy"] >= 1
-    info = hass.states.get("sensor.src_room_position_info")
-    assert info.attributes["configuration"]["source_entities"] == list(anchors)
+    info = hass.states.get("device_tracker.room_position")
+    assert info.attributes["source_configuration"]["source_entities"] == list(anchors)
     assert (
-        info.attributes["configuration"]["polygonal_zone"][
+        info.attributes["source_configuration"]["polygonal_zone"][
             CONF_POLYGON_ESPRESENSE_ANCHORS
         ]
         == anchors
     )
     for index, entity_id in enumerate(anchors, start=1):
-        debug = hass.states.get(f"sensor.src_room_position_debug{index}")
+        debug = info.attributes["source_diagnostics"][entity_id]
         assert debug is not None
-        assert debug.attributes["source_entity_id"] == entity_id
+        assert debug["source_entity_id"] == entity_id
 
     # A silent device must stop claiming a room without another state event.
     freezer.tick(timedelta(seconds=31))
@@ -486,8 +487,8 @@ async def test_polygon_tracker_zone_sensor_and_map_image_share_one_virtual_devic
     assert b'data-entity-id="device_tracker.family_polygon"' in rendered
     assert b"<circle " in rendered
 
-    info_state = hass.states.get("sensor.src_family_polygon_info")
-    polygon_summary = info_state.attributes["configuration"]["polygonal_zone"]
+    info_state = hass.states.get("device_tracker.family_polygon")
+    polygon_summary = info_state.attributes["source_configuration"]["polygonal_zone"]
     assert polygon_summary["inline_geojson"] is True
     assert polygon_summary["person_entity_id"] == "person.family"
     assert "geojson" not in polygon_summary

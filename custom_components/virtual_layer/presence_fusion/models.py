@@ -6,6 +6,9 @@ from math import isfinite
 
 @dataclass(frozen=True)
 class Settings:
+    boundary_motion_mode: str = "attributes"
+    entering_hold_s: float = 0
+    leaving_hold_s: float = 0
     movement_window_s: float = 600
     movement_bucket_s: float = 30
     minimum_movement_m: float = 100
@@ -47,11 +50,17 @@ class Settings:
         errors = {
             f.name: "positive_number"
             for f in fields(self)
-            if isinstance(getattr(self, f.name), bool)
+            if f.name != "boundary_motion_mode" and (isinstance(getattr(self, f.name), bool)
             or not isinstance(getattr(self, f.name), (float, int))
             or not isfinite(getattr(self, f.name))
-            or not 0 < getattr(self, f.name) <= 1000000
+            or not (
+                0 <= getattr(self, f.name) <= 86400
+                if f.name in {"entering_hold_s", "leaving_hold_s"}
+                else 0 < getattr(self, f.name) <= 1000000
+            ))
         }
+        if self.boundary_motion_mode not in ("off", "attributes", "presence"):
+            errors["boundary_motion_mode"] = "invalid_mode"
         if errors:
             return errors
         for lower, upper in [
@@ -64,6 +73,10 @@ class Settings:
                 errors[upper] = "invalid_order"
         if self.nearby_enter_m <= radius:
             errors["nearby_enter_m"] = "home_radius"
+        if self.direction_min_span_s > self.direction_window_s:
+            errors["direction_min_span_s"] = "invalid_order"
+        if self.movement_bucket_s * 2 > self.direction_window_s:
+            errors["direction_window_s"] = "invalid_order"
         if self.minimum_movement_segments != int(self.minimum_movement_segments):
             errors["minimum_movement_segments"] = "integer_required"
         if not 1 <= self.manual_override_default_s <= 86400:
@@ -120,3 +133,5 @@ class Snapshot:
     zone_id: str | None = None
     zone_error: bool = False
     map_revision: int = 0
+    boundary_distance: float | None = None
+    boundary_motion: str | None = None

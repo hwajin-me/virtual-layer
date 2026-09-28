@@ -511,8 +511,12 @@ class VirtualFan(VirtualEntity, FanEntity):
     def set_state(self, value) -> None:
         value = str(value).lower()
         if value in ["y", "yes", "t", "true", "on", "1"]:
+            # Legacy value templates report power separately from speed/preset
+            # telemetry, just like the dedicated native is_on template.
+            self._reported_is_on = True
             self._set_percentage(67)
         elif value in ["n", "no", "f", "false", "off", "0"]:
+            self._reported_is_on = False
             self._set_percentage(0)
         else:
             self._set_percentage(int(value))

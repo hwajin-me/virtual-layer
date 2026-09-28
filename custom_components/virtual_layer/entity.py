@@ -209,6 +209,7 @@ def virtual_schema(default_initial_value: str, extra_attrs):
             CONF_INITIAL_AVAILABILITY, default=DEFAULT_AVAILABILITY
         ): cv.boolean,
         vol.Optional(CONF_ATTRIBUTES, default=dict): dict,
+        vol.Optional(CONF_SOURCE_DIAGNOSTICS): dict,
         vol.Optional(CONF_ICON): cv.string,
         vol.Optional(CONF_ICON_TEMPLATE): cv.string,
         vol.Optional(CONF_AUTO_HELPER): object,
@@ -536,6 +537,12 @@ class VirtualEntity(RestoreEntity):
         self._attr_extra_state_attributes[ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES] = sorted(
             self._configured_virtual_attribute_names
         )
+        if self.hass is not None and CONF_SOURCE_DIAGNOSTICS in self._config:
+            from .source_diagnostics import attributes
+
+            self._attr_extra_state_attributes.update(attributes(
+                self.hass, self._config, self._attr_extra_state_attributes,
+            ))
         if _LOGGER.isEnabledFor(logging.DEBUG):
             self._attr_extra_state_attributes.update(
                 {
@@ -546,6 +553,15 @@ class VirtualEntity(RestoreEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        from .source_diagnostics import async_setup
+
+        @callback
+        def refresh_source_diagnostics():
+            if not self._virtual_removing:
+                self._update_attributes()
+                self.async_write_ha_state()
+
+        self.async_on_remove(async_setup(self.hass, self._config, refresh_source_diagnostics))
         state = await self.async_get_last_state()
         if state is None and self._config.get("_aq_previous_entity_id"):
             from homeassistant.helpers.restore_state import async_get
@@ -617,6 +633,10 @@ class VirtualEntity(RestoreEntity):
                 STATE_UNAVAILABLE,
             }:
                 return True
+        # Once sources have provided a live snapshot, later outages are not
+        # startup. Otherwise a restored entity can freeze its last on state
+        # instead of applying availability until the startup timer expires.
+        self._startup_source_grace = False
         return False
 
     async def async_will_remove_from_hass(self) -> None:
@@ -708,7 +728,10 @@ class VirtualEntity(RestoreEntity):
 
         @callback
         def _async_source_entity_changed(_event):
-            self._apply_templates()
+            from .source_diagnostics import meaningful_change
+
+            if meaningful_change(_event):
+                self._apply_templates()
 
         if source_entities:
             from .zigbee_refresh import async_watch_sources
@@ -1667,7 +1690,13 @@ class VirtualEntity(RestoreEntity):
                     native_changed = (
                         self._apply_native_template_value(
                             name,
-                            self._render_template(template, parse_result=True),
+                            self._render_template(
+                                template,
+                                parse_result=not (
+                                    getattr(self, "PLATFORM_DOMAIN", None) == "text"
+                                    and name in {"native_value", "value", "state"}
+                                ),
+                            ),
                         )
                         or native_changed
                     )

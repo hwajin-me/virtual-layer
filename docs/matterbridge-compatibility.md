@@ -1,5 +1,8 @@
 # Matterbridge compatibility audit
 
+For delayed control or stale Apple Home values, see the
+[latency investigation guide (Korean)](apple-home-latency.md).
+
 Audited on 2026-09-09 against Matterbridge **3.10.8** and the user's
 **matterbridge-hass 1.5.0**. Plugin source snapshot:
 `4117b96b8a0a073d6756ad2df2386401a9cea4aa`.
@@ -49,7 +52,14 @@ endpoint as **Unsupported**. This is a controller/device-type limitation in
 Matterbridge, not a malformed Virtual Layer state or a setting that can be
 corrected by changing media metadata.
 
-For Apple Home, use Matterbridge's **Virtual Control Label** fallback. Assign
+The companion local `matterbridge-hass` enhancement adds **Apple Home Media
+Command Switches** (`mediaPlayerControlsOnly`). Enable it and restart the
+plugin to generate command switches without labels and omit the direct media
+endpoint. It applies to eligible individual, grouped and split players, while
+retaining the plugin's normal filters. This local option is not assumed to be
+available in the upstream 1.5.0 release. It affects every controller on that bridge.
+
+For upstream plugin versions, use Matterbridge's **Virtual Control Label** fallback. Assign
 the configured label to the virtual media-player entity in Home Assistant. The
 plugin then exposes Apple Home-compatible momentary switches for supported
 commands (power, play/pause/stop, previous/next, mute, and volume up/down).
@@ -59,9 +69,21 @@ media-player sources. Keep the player eligible while Matterbridge creates the
 labelled controls; then ignore the unsupported direct endpoint in Apple Home.
 
 This fallback supplies command switches, not a Now Playing tile, media
-metadata, queue browsing, or AirPlay routing. Re-pair/reload Matterbridge after
-changing its entity filters or virtual-control label, because endpoint
-composition is cached by Matter controllers.
+metadata, queue browsing, or AirPlay routing. Set the plugin's Virtual Control
+Label option (for example, `matterbridge-virtual`). Enable **Apple Home command
+switches (Matterbridge)** in the Virtual Layer player editor to create and assign
+that label automatically; change **Matterbridge control label** if necessary.
+Disabling the option removes only assignments added by Virtual Layer, preserving
+user-assigned labels and shared label definitions. Restart Matterbridge after changing it.
+Do not exclude the player with a domain/entity filter before creating controls.
+Re-pairing is not the first troubleshooting step and cannot add Apple Home
+support for the direct media-player device type.
+
+The source helper feature mask includes `VOLUME_MUTE` and `VOLUME_STEP` for
+these virtual controls. Existing players created with an older mask need their
+source helpers regenerated in the entity editor. Automatic helper updates
+preserve customized fields; force-helper updates replace customized helpers.
+Sources that do not advertise these features do not receive those controls.
 
 ### Battery readings in Apple Home
 

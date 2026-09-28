@@ -45,6 +45,7 @@ class Engine:
         self.room_pending = None
         self.room_missing = None
         self.history = deque(maxlen=32)
+        self.pending_motion = None
         self.conflicts = {}
 
     def transition(self, reason):
@@ -378,7 +379,9 @@ class Engine:
         p = self.paths.get(self.primary)
         gps = p.latest if p and p.fresh(now) else None
         dist = distance((gps.latitude, gps.longitude), self.home[:2]) if gps else None
-        direction = p.direction(now, self.home, self.direction_since) if gps else None
+        direction = p.direction(
+            now, self.home, self.direction_since, self.home_boundary
+        ) if gps else None
         eligible = {
             i
             for i in self.active
@@ -388,6 +391,7 @@ class Engine:
         local = {i for i in eligible if self.local_home(i, now)}
         conflict = any(self._far(i, now) for i in local)
         geometry_ok = self.home_shape_valid and not self.s.errors(self.home[2])
+        motion = self._confirmed_motion(gps, direction, geometry_ok and not conflict, mono)
         far_ids = {i for i in local if self._far(i, now)}
         self.conflicts = {
             i: evidence for i, evidence in self.conflicts.items() if i in far_ids
@@ -422,10 +426,14 @@ class Engine:
                         "gps_home_evidence",
                     )
                 elif self.home_margin(gps) <= -gps.accuracy - self.s.home_exit_margin_m:
+                    proximity = (
+                        max(0, -self.home_margin(gps))
+                        if self.home_boundary is not None else dist
+                    )
                     if self.nearby:
-                        self.nearby = dist <= self.s.nearby_exit_m
+                        self.nearby = proximity <= self.s.nearby_exit_m
                     else:
-                        self.nearby = dist <= self.s.nearby_enter_m
+                        self.nearby = proximity <= self.s.nearby_enter_m
                     target = (
                         "arriving"
                         if self.nearby and direction == "towards"
@@ -433,6 +441,13 @@ class Engine:
                         if self.nearby
                         else "away"
                     )
+                    if self.s.boundary_motion_mode == "presence" and not gps.assumed:
+                        if self.nearby and motion == "entering":
+                            target = "entering"
+                        elif self.nearby and motion == "leaving":
+                            target = "leaving"
+                        elif target == "arriving":
+                            target = "nearby"
                     hold = self.s.home_exit_hold_s if self.presence == "home" else 0
                     if any(
                         self.locals[i]
@@ -476,7 +491,31 @@ class Engine:
             self.missing_since is not None and self.presence is not None,
             self.missing_since,
             room_conflict,
+            boundary_distance=round(self.home_margin(gps), 1)
+            if gps and geometry_ok else None,
+            boundary_motion=motion,
         )
+
+    def _confirmed_motion(self, gps, direction, valid, mono):
+        """Confirm continuous movement with a new measured fix after the hold."""
+        if not (
+            gps and not gps.assumed and valid
+            and self.s.boundary_motion_mode != "off"
+            and direction in {"towards", "away_from"}
+            and abs(self.home_margin(gps)) <= self.s.nearby_enter_m
+        ):
+            self.pending_motion = None
+            return None
+        motion = "entering" if direction == "towards" else "leaving"
+        path = self.paths[self.primary]
+        key = (self.primary, path.generation, self.direction_since, motion)
+        if self.pending_motion is None or self.pending_motion[0] != key:
+            self.pending_motion = (key, mono, gps.observed)
+        _, started, observed = self.pending_motion
+        hold = self.s.entering_hold_s if motion == "entering" else self.s.leaving_hold_s
+        if hold == 0 or (mono - started >= hold and gps.observed - observed >= hold):
+            return motion
+        return None
 
     def _room(self, eligible, now, mono):
         if self.room_source is not None and self.room_source not in eligible:

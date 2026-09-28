@@ -523,8 +523,8 @@ def render_polygon_map_svg(
             math.tan(math.radians(max(-85.05112878, min(85.05112878, latitude))))
         )
 
-    mercator_top = mercator(max_latitude) if background_image else None
-    mercator_bottom = mercator(min_latitude) if background_image else None
+    mercator_top = mercator(max_latitude)
+    mercator_bottom = mercator(min_latitude)
 
     def project(longitude, latitude):
         if mercator_top is not None and mercator_bottom != mercator_top:
@@ -548,8 +548,10 @@ def render_polygon_map_svg(
             path = _svg_path((outer, *holes), project)
             if path:
                 paths.append(
-                    f'<path d="{path}" fill="{color}" fill-opacity="0.22" '
-                    f'stroke="{color}" stroke-width="3" stroke-linejoin="round" '
+                    f'<path d="{path}" fill="none" stroke="#ffffff" '
+                    'stroke-opacity="0.85" stroke-width="5" stroke-linejoin="round"/>'
+                    f'<path d="{path}" fill="{color}" fill-opacity="0.10" '
+                    f'stroke="{color}" stroke-width="2.5" stroke-linejoin="round" '
                     'fill-rule="evenodd"/>'
                 )
             label_x = sum(point[0] for point in outer[:-1]) / max(len(outer) - 1, 1)
@@ -586,7 +588,7 @@ def render_polygon_map_svg(
         else ""
     )
     attribution = (
-        '<text x="708" y="468" text-anchor="end" font-family="Arial, sans-serif" '
+        f'<text x="{width - 12}" y="{height - 12}" text-anchor="end" font-family="Arial, sans-serif" '
         'font-size="11" fill="#111827" stroke="#ffffff" stroke-width="3" '
         'paint-order="stroke">© Naver Corp.</text>'
         if background_image
@@ -600,10 +602,6 @@ def render_polygon_map_svg(
             ),
             '<rect width="100%" height="100%" fill="#f8fafc"/>',
             background,
-            '<g opacity="0.35" stroke="#cbd5e1" stroke-width="1">',
-            f'<path d="M 0 {height / 2:.2f} H {width}"/>',
-            f'<path d="M {width / 2:.2f} 0 V {height}"/>',
-            "</g>",
             f"<g>{''.join(paths)}</g>",
             f"<g>{''.join(labels)}</g>",
             f"<g>{''.join(marker_elements)}</g>",

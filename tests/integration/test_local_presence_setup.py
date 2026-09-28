@@ -92,10 +92,8 @@ async def test_ab_gateway_wifi_ui_reload_and_absence(hass, freezer):
         assert state.attributes["latitude"] == 37.5
         assert state.attributes["location_presence_sources"] == ["ble:" + MAC]
         registry = er.async_get(hass)
-        assert (
-            registry.async_get("sensor.src_local_phone_debug1").device_id
-            == registry.async_get("device_tracker.local_phone").device_id
-        )
+        assert registry.async_get("sensor.src_local_phone_debug1") is None
+        assert "binary_sensor.phone_wifi" in state.attributes["source_diagnostics"]
         freezer.tick(timedelta(seconds=31))
         async_fire_time_changed(hass, dt_util.utcnow())
         await hass.async_block_till_done()

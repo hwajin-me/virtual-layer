@@ -6,6 +6,30 @@ from homeassistant.helpers.translation import async_get_translations
 from tests.integration.test_presence_fusion_ha import setup
 
 
+async def test_motion_mode_options_save_and_reopen(hass):
+    entry, _ = await setup(hass)
+    manager = hass.config_entries.options
+    result = await manager.async_init(entry.entry_id)
+    result = await manager.async_configure(result["flow_id"], {"action": "settings"})
+    result = await manager.async_configure(result["flow_id"], {
+        "boundary_motion_mode": "presence", "entering_hold_s": 30,
+        "leaving_hold_s": 60, "gps_max_accuracy_m": 40,
+    })
+    assert not result.get("errors")
+    result = await manager.async_configure(result["flow_id"], {"action": "save"})
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+    result = await manager.async_init(entry.entry_id)
+    result = await manager.async_configure(result["flow_id"], {"action": "settings"})
+    marker = next(k for k in result["data_schema"].schema if k.schema == "boundary_motion_mode")
+    assert marker.default() == "presence"
+    for key, expected in {"entering_hold_s": 30, "leaving_hold_s": 60, "gps_max_accuracy_m": 40}.items():
+        marker = next(k for k in result["data_schema"].schema if k.schema == key)
+        assert marker.default() == expected
+    manager.async_abort(result["flow_id"])
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
 @pytest.mark.parametrize("language", ["en", "ko"])
 async def test_presence_and_area_forms_are_localized(hass, language):
     hass.config.language = language

@@ -199,11 +199,14 @@ class Path:
         ]
         return meters(points[0], points[-1]) if len(points) >= 2 else 0.0
 
-    def direction(self, now, home, since):
+    def direction(self, now, home, since, boundary=None):
+        if not self.fresh(now):
+            return None
         ps = [
             p
             for p in self.samples
             if p.observed >= max(since, now - self.s.direction_window_s)
+            and not p.assumed
         ]
         if (
             len(ps) < 3
@@ -212,7 +215,15 @@ class Path:
             return None
         # Raw accepted-observation gaps reset samples during reacquisition.
         # Bucket spacing itself is not a source observation gap.
-        ds = [distance((p.latitude, p.longitude), home[:2]) for p in ps]
+        # Negated clearance decreases as we move deeper into a polygon, just
+        # like distance to Home decreases on approach to a circular zone.
+        ds = [
+            -boundary(p.latitude, p.longitude) if boundary is not None
+            else distance((p.latitude, p.longitude), home[:2])
+            for p in ps
+        ]
+        if not all(isfinite(d) for d in ds):
+            return None
         ts = [p.observed - ps[0].observed for p in ps]
         mt, md = sum(ts) / len(ts), sum(ds) / len(ds)
         slope = sum((t - mt) * (d - md) for t, d in zip(ts, ds)) / sum(
@@ -221,6 +232,14 @@ class Path:
         threshold = max(self.s.direction_min_change_m, ps[0].accuracy + ps[-1].accuracy)
         if abs(ds[-1] - ds[0]) <= threshold:
             return "stationary"
+        # A reversal at the end of the window must not retain the earlier
+        # direction simply because it dominates the regression.
+        recent_change = ds[-1] - ds[-2]
+        if (
+            recent_change * (ds[-1] - ds[0]) < 0
+            and abs(recent_change) > ps[-1].accuracy + ps[-2].accuracy
+        ):
+            return None
         if slope < -self.s.direction_slope_m_s:
             return "towards"
         if slope > self.s.direction_slope_m_s:

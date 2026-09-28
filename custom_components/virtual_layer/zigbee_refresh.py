@@ -7,6 +7,7 @@ bridge topic; its device inventory supplies identity, power and GET capability.
 import asyncio
 import json
 import logging
+import math
 import re
 from collections import Counter
 from collections.abc import Mapping
@@ -19,6 +20,8 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
 _DATA = "virtual_layer_zigbee_refresh"
@@ -29,6 +32,170 @@ _READ_PROPERTIES = (
     "voltage", "current", "illuminance", "co2",
 )
 _MISSING = {"unknown", "unavailable"}
+DIAGNOSTICS_UPDATED = "virtual_layer_zigbee_diagnostics_updated"
+
+
+def _availability(payload):
+    """Accept both legacy plain and current JSON availability messages."""
+    try:
+        value = json.loads(payload)
+    except (ValueError, TypeError, RecursionError):
+        value = payload
+    if isinstance(value, Mapping):
+        value = value.get("state")
+    return value if value in ("online", "offline") else "unknown"
+
+
+def _measurement(value, maximum):
+    if type(value) in (int, float) and 0 <= value <= maximum and math.isfinite(value):
+        return value
+    return None
+
+
+def _last_seen(value):
+    try:
+        if type(value) in (int, float):
+            # Zigbee2MQTT's epoch format is milliseconds.
+            parsed = dt_util.utc_from_timestamp(value / 1000)
+        elif isinstance(value, str) and len(value) <= 64:
+            parsed = dt_util.parse_datetime(value)
+        else:
+            return None
+        if parsed is not None and parsed.tzinfo is not None:
+            return dt_util.as_utc(parsed).isoformat()
+    except (ValueError, TypeError, OverflowError, OSError):
+        pass
+    return None
+
+
+def _address(value):
+    return value.lower() if isinstance(value, str) and re.fullmatch(r"0x[0-9a-fA-F]{16}", value) else None
+
+
+def _text(value):
+    return value[:256] if isinstance(value, str) else None
+
+
+def _networkmap(data):
+    """Parse only identity/link fields; source is the neighbor, target its reporter."""
+    if not isinstance(data, Mapping) or not isinstance(data.get("nodes"), list) or not isinstance(data.get("links"), list):
+        return None
+    if len(data["nodes"]) > 4096 or len(data["links"]) > 32768:
+        return None
+    nodes = {}
+    for node in data["nodes"]:
+        if isinstance(node, Mapping) and (address := _address(node.get("ieeeAddr"))):
+            nodes[address] = {"ieee_address": address, "name": _text(node.get("friendlyName")),
+                              "type": _text(node.get("type"))}
+    links = []
+    for link in data["links"]:
+        if not isinstance(link, Mapping):
+            continue
+        source, target = link.get("source"), link.get("target")
+        source = _address(source.get("ieeeAddr")) if isinstance(source, Mapping) else None
+        target = _address(target.get("ieeeAddr")) if isinstance(target, Mapping) else None
+        relation = link.get("relationship")
+        if source in nodes and target in nodes and source != target and type(relation) is int and 0 <= relation <= 3:
+            links.append((source, target, relation, _measurement(link.get("lqi", link.get("linkquality")), 255)))
+    return nodes, links
+
+
+def _routing_attributes(bridge, address):
+    nodes, links = bridge.get("networkmap", ({}, []))
+    parents, neighbors = {}, []
+    for source, target, relation, quality in links:
+        if address not in (source, target):
+            continue
+        peer = target if source == address else source
+        neighbor = {**nodes[peer], "linkquality": quality, "reporter": target,
+                    "neighbor_relationship": ("parent", "child", "sibling", "none")[relation]}
+        if len(neighbors) < 16:
+            neighbors.append(neighbor)
+        # LQI tables describe the neighbor's relationship to their reporter.
+        if (source == address and relation == 1) or (target == address and relation == 0):
+            if nodes[peer]["type"] in ("Router", "Coordinator"):
+                parents[peer] = nodes[peer]
+    return {
+        "zigbee_parent": next(iter(parents.values())) if len(parents) == 1 else None,
+        "zigbee_parent_candidates": list(parents.values())[:16],
+        "zigbee_neighbors": neighbors,
+        "zigbee_networkmap_updated": bridge.get("networkmap_updated"),
+        "zigbee_networkmap_status": bridge.get("networkmap_status", "unknown"),
+    }
+
+
+async def async_request_networkmap(hass, source_entities):
+    """Explicit user request only: topology scans can disrupt Zigbee traffic."""
+    manager = hass.data.get(_DATA)
+    bases = {target[0] for source in source_entities if (target := _source_target(hass, source))}
+    if manager is None or not bases or not mqtt.is_connected(hass):
+        raise HomeAssistantError("No connected Zigbee2MQTT source is available")
+    now = hass.loop.time()
+    for base in bases:
+        bridge = manager.bridges.get(base, {})
+        if not bridge.get("online"):
+            raise HomeAssistantError("The Zigbee2MQTT bridge is not online")
+        if now < bridge.get("next_networkmap", 0):
+            raise HomeAssistantError("Wait two minutes before requesting another network map")
+    for base in sorted(bases):
+        bridge = manager.bridges[base]
+        bridge["next_networkmap"] = now + 120
+        bridge["networkmap_status"] = "pending"
+        try:
+            await mqtt.async_publish(hass, f"{base}/bridge/request/networkmap",
+                                     '{"type":"raw","routes":false}', qos=0, retain=False)
+        except HomeAssistantError:
+            bridge["networkmap_status"] = "error"
+            raise
+        finally:
+            async_dispatcher_send(hass, DIAGNOSTICS_UPDATED)
+
+
+@callback
+def diagnostic_attributes(hass, entity_id):
+    """Return only allowlisted data for a positively identified source device."""
+    target = _source_target(hass, entity_id)
+    if target is None:
+        return {}
+    base, address = target
+    manager = hass.data.get(_DATA)
+    bridge = manager.bridges.get(base, {}) if manager else {}
+    device = bridge.get("devices", {}).get(address, {})
+    sample = manager.diagnostics.get(target, {}) if manager else {}
+    # A renamed/removed inventory entry must never expose its old topic's data.
+    if sample.get("name") != device.get("friendly_name"):
+        sample = {}
+    connected = mqtt.is_connected(hass) if mqtt.DATA_MQTT in hass.data else False
+    seen = sample.get("last_seen")
+    definition = device.get("definition")
+    definition = definition if isinstance(definition, Mapping) else {}
+
+    def text(value):
+        return value[:256] if isinstance(value, str) else None
+
+    return {
+        "source_protocol": "zigbee",
+        "source_integration": "zigbee2mqtt",
+        "zigbee_ieee_address": address,
+        "zigbee_friendly_name": text(device.get("friendly_name")),
+        "zigbee_device_type": text(device.get("type")),
+        "zigbee_power_source": text(device.get("power_source")),
+        "zigbee_model": text(definition.get("model")),
+        "zigbee_vendor": text(definition.get("vendor")),
+        "zigbee_linkquality": sample.get("linkquality"),
+        "zigbee_battery": sample.get("battery"),
+        "zigbee_last_seen": seen,
+        "zigbee_last_seen_seconds_ago": max(0, int(
+            (dt_util.utcnow() - dt_util.parse_datetime(seen)).total_seconds()
+        )) if seen else None,
+        "zigbee_device_availability": sample.get("availability", "unknown") if connected else "unknown",
+        "zigbee_bridge_availability": bridge.get("availability", "unknown") if connected else "unknown",
+        "zigbee_mqtt_connected": connected,
+        "zigbee_rssi": sample.get("rssi"),
+        "zigbee_hub": bridge.get("hub"),
+        "zigbee_channel": bridge.get("channel"),
+        **_routing_attributes(bridge, address),
+    }
 
 
 def _topic(value):
@@ -119,15 +286,17 @@ def async_watch_sources(hass, sources):
 
 
 class ZigbeeRefresh:
-    """One serialized refresh queue for all Virtual Layer source references."""
+    """Shared passive diagnostics and bounded refresh for source references."""
 
     def __init__(self, hass):
         self.hass = hass
         self.sources = Counter()
         self.bridges = {}
+        self.diagnostics = {}
         self.retry = {}
         self.offline = {}
         self.task = None
+        self.refresh_lock = asyncio.Lock()
         self.closed = False
         self.next_publish = 0
         self.remove_connection_listener = None
@@ -161,6 +330,10 @@ class ZigbeeRefresh:
                     while bridge["unsubscribe"]:
                         bridge["unsubscribe"].pop()()
                 self.bridges.clear()
+                for sample in self.diagnostics.values():
+                    while sample["unsubscribe"]:
+                        sample["unsubscribe"].pop()()
+                self.diagnostics.clear()
                 self.hass.data.pop(_DATA, None)
 
         return remove
@@ -184,6 +357,10 @@ class ZigbeeRefresh:
                 if not connected:
                     for current in self.bridges.values():
                         current["online"] = False
+                        current["availability"] = "unknown"
+                    for sample in self.diagnostics.values():
+                        sample["availability"] = "unknown"
+                async_dispatcher_send(self.hass, DIAGNOSTICS_UPDATED)
                 self._tick(None)
 
             self.remove_connection_listener = mqtt.async_subscribe_connection_status(
@@ -194,26 +371,66 @@ class ZigbeeRefresh:
 
         @callback
         def receive(message):
+            if message.topic == f"{base}/bridge/state":
+                bridge["availability"] = _availability(message.payload)
+                bridge["online"] = bridge["availability"] == "online"
+                async_dispatcher_send(self.hass, DIAGNOSTICS_UPDATED)
+                return
+            if message.topic in (f"{base}/bridge/info", f"{base}/bridge/response/networkmap"):
+                try:
+                    if len(message.payload) > 2 * 1024 * 1024:
+                        raise ValueError
+                    data = json.loads(message.payload)
+                    if not isinstance(data, Mapping):
+                        raise ValueError
+                    if message.topic.endswith("/info"):
+                        coordinator = data.get("coordinator", {})
+                        network = data.get("network", {})
+                        bridge["hub"] = {
+                            "ieee_address": _address(coordinator.get("ieee_address")),
+                            "role": "Coordinator",
+                            "type": _text(coordinator.get("type")),
+                        } if isinstance(coordinator, Mapping) else None
+                        channel = network.get("channel") if isinstance(network, Mapping) else None
+                        bridge["channel"] = channel if type(channel) is int and 11 <= channel <= 26 else None
+                    else:
+                        response = data.get("data")
+                        if data.get("status") != "ok" or not isinstance(response, Mapping):
+                            raise ValueError
+                        if response.get("type") != "raw":
+                            return
+                        topology = _networkmap(response.get("value"))
+                        if topology is None:
+                            raise ValueError
+                        bridge["networkmap"] = topology
+                        bridge["networkmap_updated"] = dt_util.utcnow().isoformat()
+                        bridge["networkmap_status"] = "ok"
+                except (ValueError, TypeError, RecursionError):
+                    if message.topic.endswith("/networkmap"):
+                        bridge["networkmap_status"] = "error"
+                    else:
+                        bridge["hub"], bridge["channel"] = None, None
+                async_dispatcher_send(self.hass, DIAGNOSTICS_UPDATED)
+                return
             try:
                 data = json.loads(message.payload)
             except (ValueError, TypeError, RecursionError):
-                if message.topic.endswith("/state"):
-                    bridge["online"] = message.payload == "online"
-                else:
-                    bridge["devices"] = {}
+                bridge["devices"] = {}
+                self._tick(None)
+                async_dispatcher_send(self.hass, DIAGNOSTICS_UPDATED)
                 return
-            if message.topic == f"{base}/bridge/state":
-                bridge["online"] = isinstance(data, Mapping) and data.get("state") == "online"
-            elif isinstance(data, list):
+            if isinstance(data, list):
                 bridge["devices"] = {
                     item["ieee_address"].lower(): item for item in data
                     if isinstance(item, Mapping) and isinstance(item.get("ieee_address"), str)
                 }
             else:
                 bridge["devices"] = {}
+            self._tick(None)
+            async_dispatcher_send(self.hass, DIAGNOSTICS_UPDATED)
 
         try:
-            for suffix in ("state", "devices"):
+            for suffix in ("state", "devices", "info", "response/networkmap"):
                 unsubscribe = await mqtt.async_subscribe(
                     self.hass, f"{base}/bridge/{suffix}", receive, 0,
                 )
@@ -224,11 +441,79 @@ class ZigbeeRefresh:
             self.bridges.pop(base, None)
             raise
 
+    async def _sync_diagnostics(self, targets):
+        """Share exact-topic passive subscriptions by bridge and IEEE address."""
+        desired = {}
+        for target in targets:
+            base, address = target
+            device = self.bridges[base]["devices"].get(address, {})
+            name = device.get("friendly_name")
+            if _topic(name) and len(name) <= 512 and _topic(f"{base}/{name}/availability"):
+                desired[target] = name
+        for target, sample in list(self.diagnostics.items()):
+            if desired.get(target) != sample["name"]:
+                for unsubscribe in sample["unsubscribe"]:
+                    unsubscribe()
+                del self.diagnostics[target]
+        for target, name in desired.items():
+            if target in self.diagnostics:
+                continue
+            base, _address = target
+            topic = f"{base}/{name}"
+            sample = {"name": name, "unsubscribe": [], "availability": "unknown"}
+            self.diagnostics[target] = sample
+
+            @callback
+            def receive(message, sample=sample, topic=topic):
+                if message.topic == f"{topic}/availability":
+                    sample["availability"] = _availability(message.payload)
+                else:
+                    if len(message.payload) > 65536:
+                        return
+                    try:
+                        data = json.loads(message.payload)
+                    except (ValueError, TypeError, RecursionError):
+                        return
+                    if not isinstance(data, Mapping):
+                        return
+                    # Partial device messages do not erase the last reported values.
+                    for key, maximum in (("linkquality", 255), ("battery", 100)):
+                        if key in data:
+                            sample[key] = _measurement(data[key], maximum)
+                    if "last_seen" in data:
+                        sample["last_seen"] = _last_seen(data["last_seen"])
+                    if "rssi" in data:
+                        rssi = data["rssi"]
+                        sample["rssi"] = rssi if type(rssi) in (int, float) and -200 <= rssi <= 0 else None
+                async_dispatcher_send(self.hass, DIAGNOSTICS_UPDATED)
+
+            try:
+                for subscribed_topic in (topic, f"{topic}/availability"):
+                    sample["unsubscribe"].append(await mqtt.async_subscribe(
+                        self.hass, subscribed_topic, receive, 0,
+                    ))
+            except BaseException:
+                while sample["unsubscribe"]:
+                    sample["unsubscribe"].pop()()
+                self.diagnostics.pop(target, None)
+                async_dispatcher_send(self.hass, DIAGNOSTICS_UPDATED)
+                raise
+        async_dispatcher_send(self.hass, DIAGNOSTICS_UPDATED)
+
     async def _refresh(self):
+        async with self.refresh_lock:
+            if not self.closed:
+                await self._refresh_locked()
+
+    async def _refresh_locked(self):
         try:
             if mqtt.DATA_MQTT not in self.hass.data or not mqtt.is_connected(self.hass):
                 for bridge in self.bridges.values():
                     bridge["online"] = False
+                    bridge["availability"] = "unknown"
+                for sample in self.diagnostics.values():
+                    sample["availability"] = "unknown"
+                async_dispatcher_send(self.hass, DIAGNOSTICS_UPDATED)
                 return
             targets = {}
             for entity_id in self.sources:
@@ -241,7 +526,16 @@ class ZigbeeRefresh:
             self.retry = {key: value for key, value in self.retry.items() if key in targets}
             for base in bases - self.bridges.keys():
                 await self._subscribe(base)
+            try:
+                await self._sync_diagnostics(targets)
+            except (HomeAssistantError, ValueError, TypeError, KeyError, AttributeError, OSError):
+                # Optional diagnostics must not block the existing refresh queue.
+                _LOGGER.debug("Zigbee2MQTT diagnostic subscription deferred")
             now = self.hass.loop.time()
+            for bridge in self.bridges.values():
+                if bridge.get("networkmap_status") == "pending" and now >= bridge.get("next_networkmap", 0):
+                    bridge["networkmap_status"] = "timeout"
+                    async_dispatcher_send(self.hass, DIAGNOSTICS_UPDATED)
             offline = {
                 target: any(
                     (state := self.hass.states.get(entity_id)) is None or state.state in _MISSING

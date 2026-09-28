@@ -180,3 +180,42 @@ HA containers, not a custom Dockerfile. Exact measured versions, commands,
 coverage and limitations are in [TEST_REPORT.md](TEST_REPORT.md), requirements
 are mapped in [TEST_MATRIX.md](TEST_MATRIX.md), and implementation choices in
 [DECISIONS.md](DECISIONS.md).
+# Polygon entry and departure motion
+
+Open the Presence Fusion Device's Configure menu, then Settings → Boundary
+movement usage. Choose Off, Attributes only (the compatible default), or Use in
+Presence state. The last option exposes `entering` and `leaving` as Presence
+states only after GPS confirms the device is outside and the existing exit hold
+has elapsed. Local Home evidence and confirmed Home remain authoritative; an
+early outward movement attribute alone does not turn the Home binary sensor off.
+Direction history, minimum observation time, distance change and slope are
+adjustable on the same screen.
+
+Entering and leaving confirmation times are independently adjustable from 0 to
+86400 seconds. They add a continuous-direction hold after the direction history
+requirements are met, for both attributes and Presence-state mode. Each requires
+new measured GPS observations spanning the hold; timer ticks alone cannot confirm
+motion. Missing evidence, reversal, source changes or reacquisition reset the hold.
+The compatible default is 0 (no additional delay). These settings do not replace
+GPS Home entry/exit confirmation times. Maximum GPS error, assumed error when
+accuracy is missing, and GPS validity remain separately configurable.
+
+When a shared GeoJSON area is selected as Home, movement direction uses signed
+distance to its boundary instead of distance to the Home centre. Positive
+`boundary_distance_m` means inside; negative means outside or inside a hole.
+Polygon and MultiPolygon components use the same containment geometry as Home
+recognition. At overlapping polygons, clearance is conservative per component.
+
+The Presence sensor exposes `boundary_motion`: `entering` for movement toward
+the boundary from outside or deeper inside, and `leaving` for outward movement
+(an early departure signal). Automations can trigger on this attribute without
+waiting for the confirmed Home/Away state to change. It is a movement estimate,
+not confirmation that a boundary crossing has occurred.
+
+The estimate uses the selected physical device's accepted GPS history: at least
+three samples spanning 60 seconds by default, over a 180-second window. Change
+must exceed both the configured 50-metre minimum and endpoint accuracy bounds,
+with a slope above 0.3 m/s. Stale data, assumed positions, conflicting evidence,
+insufficient history and a final direction reversal do not produce a motion
+signal. Motion is exposed within the configured nearby distance of the boundary.
+Existing confirmation delays and Home presence remain authoritative.

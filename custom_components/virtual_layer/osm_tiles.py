@@ -126,7 +126,8 @@ async def _fetch_tile(hass, version, zoom, x, y):
     x %= scale
     path = _tile_path(hass, version, zoom, x, y)
     if cached := await _read_fresh(path):
-        return cached
+        if await hass.async_add_executor_job(_valid_png, cached):
+            return cached
     try:
         session = async_get_clientsession(hass)
         async with session.get(
@@ -143,7 +144,16 @@ async def _fetch_tile(hass, version, zoom, x, y):
                 and response.content_length > MAX_TILE_BYTES
             ):
                 return None
-            data = await response.content.read(MAX_TILE_BYTES + 1)
+            # StreamReader.read(n) may return only the first network chunk.
+            # Drain the bounded response before decoding the PNG.
+            chunks = []
+            size = 0
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                size += len(chunk)
+                if size > MAX_TILE_BYTES:
+                    return None
+                chunks.append(chunk)
+            data = b"".join(chunks)
             if len(data) > MAX_TILE_BYTES or not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 return None
         if not await hass.async_add_executor_job(_valid_png, data):
@@ -170,7 +180,9 @@ def _compose(tiles, plan, width, height):
             try:
                 with Image.open(io.BytesIO(data)) as tile:
                     canvas.paste(
-                        tile.convert("RGB"),
+                        tile.convert("RGB").resize(
+                            (TILE_SIZE, TILE_SIZE), Image.Resampling.LANCZOS
+                        ),
                         ((x - left) * TILE_SIZE, (y - top) * TILE_SIZE),
                     )
             except (OSError, SyntaxError, ValueError):
@@ -185,14 +197,16 @@ def _compose(tiles, plan, width, height):
         _mercator_y(north) * scale * TILE_SIZE,
         _mercator_y(south) * scale * TILE_SIZE,
     )
-    crop = canvas.crop(
-        (
-            round(x0 - left * TILE_SIZE),
-            round(y0 - top * TILE_SIZE),
-            round(x1 - left * TILE_SIZE),
-            round(y1 - top * TILE_SIZE),
-        )
-    ).resize((width, height), Image.Resampling.LANCZOS)
+    crop = canvas.resize(
+        (width, height),
+        Image.Resampling.LANCZOS,
+        box=(
+            x0 - left * TILE_SIZE,
+            y0 - top * TILE_SIZE,
+            x1 - left * TILE_SIZE,
+            y1 - top * TILE_SIZE,
+        ),
+    )
     output = io.BytesIO()
     crop.save(output, format="PNG", optimize=True)
     return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode()
@@ -204,8 +218,10 @@ async def async_map_background(hass, zones, width=720, height=480):
         plan = _tile_plan(list(zones), width, height)
     except (IndexError, KeyError, TypeError, ValueError):
         return None
+    previous = hass.data.setdefault("virtual_layer_map_backgrounds", {})
+    cache_key = (plan, width, height)
     if not (version := await _naver_version(hass)):
-        return None
+        return previous.get(cache_key)
     _, _, _, _, zoom, left, right, top, bottom = plan
     jobs = {
         (x, y): _fetch_tile(hass, version, zoom, x, y)
@@ -217,9 +233,29 @@ async def async_map_background(hass, zones, width=720, height=480):
         key: value if isinstance(value, bytes) else None
         for key, value in zip(jobs, results, strict=True)
     }
-    if not any(tiles.values()):
-        return None
-    return await hass.async_add_executor_job(_compose, tiles, plan, width, height)
+    # Retry missing/corrupt tiles once; never publish a mosaic with blank holes.
+    valid = await hass.async_add_executor_job(
+        lambda: {key: data for key, data in tiles.items() if data and _valid_png(data)}
+    )
+    missing = [key for key in tiles if key not in valid]
+    if missing:
+        retried = await asyncio.gather(
+            *(_fetch_tile(hass, version, zoom, x, y) for x, y in missing),
+            return_exceptions=True,
+        )
+        valid.update(await hass.async_add_executor_job(
+            lambda: {
+                key: data for key, data in zip(missing, retried, strict=True)
+                if isinstance(data, bytes) and _valid_png(data)
+            }
+        ))
+    if len(valid) != len(tiles):
+        return previous.get(cache_key)
+    background = await hass.async_add_executor_job(_compose, valid, plan, width, height)
+    if cache_key not in previous and len(previous) >= 8:
+        previous.pop(next(iter(previous)))
+    previous[cache_key] = background
+    return background
 
 
 # Compatibility alias for callers from releases which exposed this helper under

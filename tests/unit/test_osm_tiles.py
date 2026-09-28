@@ -86,7 +86,48 @@ async def test_naver_background_ignores_a_truncated_cached_tile(hass, monkeypatc
     monkeypatch.setattr(osm_tiles, "_fetch_tile", tiles)
     monkeypatch.setattr(osm_tiles, "_naver_version", version)
     background = await osm_tiles.async_map_background(hass, _zones(), 320, 180)
-    assert background and background.startswith("data:image/png;base64,")
+    assert background is None
+
+
+async def test_missing_tile_retries_and_preserves_complete_background(hass, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    tile = AsyncMock(return_value=_png())
+    monkeypatch.setattr(osm_tiles, "_fetch_tile", tile)
+    monkeypatch.setattr(osm_tiles, "_naver_version", AsyncMock(return_value="123"))
+    first = await osm_tiles.async_map_background(hass, _zones(), 320, 180)
+    assert first
+    tile.return_value = None
+    assert await osm_tiles.async_map_background(hass, _zones(), 320, 180) == first
+    # A different geographic viewport must never reuse the previous image.
+    assert await osm_tiles.async_map_background(hass, _zones(), 400, 400) is None
+
+
+async def test_fetch_tile_reads_all_network_chunks(hass, monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock, Mock
+
+    data = _png()
+
+    class Response:
+        status = 200
+        content_length = None
+        content = None
+
+        async def __aenter__(self):
+            self.content = self
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def iter_chunked(self, _size):
+            for offset in range(0, len(data), 17):
+                yield data[offset:offset + 17]
+
+    monkeypatch.setattr(osm_tiles, "_read_fresh", AsyncMock(return_value=None))
+    monkeypatch.setattr(osm_tiles, "_tile_path", lambda *_args: tmp_path / "tile.png")
+    monkeypatch.setattr(osm_tiles, "async_get_clientsession", lambda _: Mock(get=Mock(return_value=Response())))
+    assert await osm_tiles._fetch_tile(hass, "123", 15, 27947, 12710) == data
 
 
 async def test_naver_map_version_is_cached_then_refreshed(hass, monkeypatch):

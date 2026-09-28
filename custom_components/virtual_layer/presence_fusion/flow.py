@@ -621,6 +621,11 @@ class FusionFlow(GeoJSONFlow):
             errors=errors,
             data_schema=form_schema(
                 values,
-                [(k, v, vol.Coerce(float)) for k, v in asdict(Settings()).items()],
+                [(k, v, choice(["off", "attributes", "presence"], "boundary_motion_mode")
+                  if k == "boundary_motion_mode" else
+                  selector.NumberSelector(selector.NumberSelectorConfig(
+                      min=0, max=86400, step=1, mode="box", unit_of_measurement="s"
+                  )) if k in {"entering_hold_s", "leaving_hold_s"} else vol.Coerce(float))
+                 for k, v in asdict(Settings()).items()],
             ),
         )

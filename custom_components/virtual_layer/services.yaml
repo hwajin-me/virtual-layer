@@ -1,5 +1,12 @@
 # Describes the format for available virtual services
 
+refresh_source_networkmap:
+  name: Refresh source Zigbee network map
+  description: Refresh parent Router and neighbor link quality for the selected virtual entities' Zigbee2MQTT sources. A scan can slow Zigbee traffic for up to two minutes. Runs only when requested, at most once per bridge every two minutes.
+  target:
+    entity:
+      integration: virtual_layer
+
 turn_on:
   name: Turn On
   description: Turn on a binary sensor.
