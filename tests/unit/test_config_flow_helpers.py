@@ -2980,6 +2980,23 @@ def test_media_player_helpers_only_advertise_matterbridge_commands(hass, source_
     assert Template(template, hass).async_render(parse_result=True) == 0
 
 
+@pytest.mark.parametrize("label", [None, [], "bad\nlabel", "x" * 256])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_media_controls_can_be_disabled_despite_a_damaged_label(label, enabled):
+    submitted = _entity_input({
+        CONF_PLATFORM: "media_player", CONF_INITIAL_VALUE: "off",
+        "matterbridge_controls_enabled": enabled,
+        "matterbridge_control_label": label,
+    })
+    if enabled:
+        with pytest.raises(InvalidDomainOptions):
+            _build_entity_config(submitted)
+    else:
+        _, entity = _build_entity_config(submitted)
+        assert entity["matterbridge_controls_enabled"] is False
+        assert entity["matterbridge_control_label"] == "matterbridge-virtual"
+
+
 def test_media_player_property_priority_prefers_active_source_then_falls_back(hass):
     hass.states.async_set("media_player.samsung_tv", "on", {"media_title": "TV"})
     hass.states.async_set("media_player.apple_tv", "playing", {"media_title": "Apple"})

@@ -1011,6 +1011,20 @@ class VirtualEntity(RestoreEntity):
             parse_result=parse_result,
         )
 
+    def _render_native_template(self, name, template):
+        """Keep text output literal, including leading/trailing whitespace."""
+        if self._platform_domain == "text" and name in {"native_value", "value", "state"}:
+            source = template.template if isinstance(template, Template) else str(template)
+            # HA strips the outer rendered string even with parse_result=False.
+            # A captured string inside a mapping preserves whitespace and avoids
+            # reparsing numeric/JSON-looking text as another native type.
+            wrapped = (
+                "{% set virtual_layer_text_value %}" + source
+                + "{% endset %}{{ {'value': virtual_layer_text_value} }}"
+            )
+            return self._render_template(wrapped, parse_result=True)["value"]
+        return self._render_template(template, parse_result=True)
+
     @classmethod
     def _valid_native_template_name(cls, name) -> bool:
         """Return whether a native template can safely target this name."""
@@ -1271,6 +1285,24 @@ class VirtualEntity(RestoreEntity):
                 return value
             result = {key: await _walk(item) for key, item in value.items()}
             data = result.get("data")
+            if (
+                self._platform_domain == "text"
+                and result.get("action", result.get("service"))
+                in ("text.set_value", "input_text.set_value")
+                and isinstance(data, dict)
+                and set(data) == {"value"}
+            ):
+                value_template = data["value"]
+                if isinstance(value_template, Template):
+                    value_template = value_template.template
+                if isinstance(value_template, str) and value_template.strip() == "{{ value }}":
+                    # Render the mapping in one pass: HA otherwise parses a
+                    # numeric/boolean/list-looking string as a native value.
+                    # Keep evaluation inside the script so local variables and
+                    # literal Jinja in the user's text retain their meaning.
+                    result["data"] = "{{ {'value': value} }}"
+                    changed = True
+                    return result
             data_source = data.template if isinstance(data, Template) else data
             # Only the generated bare payload can be resolved before execution.
             # Other templates may depend on variables, responses, repeat items
@@ -1280,7 +1312,14 @@ class VirtualEntity(RestoreEntity):
                 and data_source.strip() == "{{ command_data }}"
             )
             if needs_mapping_render:
-                result["data"] = copy.deepcopy(variables["command_data"])
+                # Legacy text helpers must also render at execution time;
+                # inserting raw text before schema validation would compile
+                # any literal Jinja in that text as a second template.
+                result["data"] = (
+                    "{{ dict(command_data) }}"
+                    if self._platform_domain == "text"
+                    else copy.deepcopy(variables["command_data"])
+                )
                 changed = True
             return result
 
@@ -1690,13 +1729,7 @@ class VirtualEntity(RestoreEntity):
                     native_changed = (
                         self._apply_native_template_value(
                             name,
-                            self._render_template(
-                                template,
-                                parse_result=not (
-                                    getattr(self, "PLATFORM_DOMAIN", None) == "text"
-                                    and name in {"native_value", "value", "state"}
-                                ),
-                            ),
+                            self._render_native_template(name, template),
                         )
                         or native_changed
                     )

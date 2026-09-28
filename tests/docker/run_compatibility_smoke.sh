@@ -1288,7 +1288,9 @@ async def test_config_flow_create_modify_runtime():
     hass = HomeAssistant(str(config_dir))
     loader.async_setup(hass)
     try:
-        assert await bootstrap.async_from_config_dict({"recorder": {
+        assert await bootstrap.async_from_config_dict({
+            "input_text": {"alias_source": {"initial": "old", "max": 255}},
+            "recorder": {
             "db_url": f"sqlite:///{config_dir / 'unit-history.db'}",
         }}, hass) is hass
         assert "recorder" in hass.config.components
@@ -2032,8 +2034,39 @@ async def test_config_flow_create_modify_runtime():
         print("Utility Meter Docker passed: anchored monthly setup, usage, cost, adjustment, calibration, reset and Device grouping")
         await test_audit_regressions(hass, entry)
         await test_media_control_labels(hass, entry)
+        await test_text_alias_runtime(hass, entry)
     finally:
         await hass.async_stop()
+
+
+async def test_text_alias_runtime(hass, entry):
+    from custom_components.virtual_layer.config_flow import _source_command_actions
+
+    source = "input_text.alias_source"
+    assert hass.states.get(source) is not None
+    options = copy.deepcopy(dict(entry.options))
+    next(iter(options["devices"].values())).append({
+        "platform": "text", "name": "Docker Text Alias",
+        "entity_id": "text.docker_alias", "initial_value": "old",
+        "source_entities": [source],
+        "native_templates": {"native_value": "{{ states('input_text.alias_source') }}"},
+        "command_actions": _source_command_actions("text", [source], [hass.states.get(source)]),
+    })
+    hass.config_entries.async_update_entry(entry, options=options)
+    await hass.async_block_till_done()
+    for value in ("123", "True", "[1, 2]", '{"a":1}', "  hello\n", "{{ 1 + 1 }}", ""):
+        await hass.services.async_call("text", "set_value", {
+            "entity_id": "text.docker_alias", "value": value,
+        }, blocking=True)
+        await hass.async_block_till_done()
+        assert hass.states.get(source).state == value
+        assert hass.states.get("text.docker_alias").state == value
+    await hass.services.async_call("input_text", "set_value", {
+        "entity_id": source, "value": "  external\n",
+    }, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get("text.docker_alias").state == "  external\n"
+    print("Text alias Docker passed: native services, literal payloads, whitespace, source feedback")
 
 
 async def test_zigbee_refresh_runtime():

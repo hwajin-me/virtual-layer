@@ -2308,7 +2308,36 @@ def _render_native_templates(entity, hass):
     entity._apply_templates()
 
 
-@pytest.mark.parametrize("value", ['{"enabled":true,"ids":[1,2]}', "0012", "True", "[1, 2]"])
+@pytest.mark.parametrize("source_domain", ["text", "input_text"])
+@pytest.mark.parametrize("legacy_data", [False, True])
+@pytest.mark.parametrize("value", ['{"enabled":true,"ids":[1,2]}', "123", "True", "[1, 2]", "hello", "  hello\n", "{{ 1 + 1 }}", ""])
+async def test_text_alias_command_preserves_source_payload(hass, source_domain, value, legacy_data):
+    from custom_components.virtual_layer.config_flow import _source_command_actions
+
+    source = f"{source_domain}.source"
+    hass.states.async_set(source, "old")
+    calls = []
+
+    async def capture(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register(source_domain, "set_value", capture)
+    actions = _source_command_actions("text", [source], [hass.states.get(source)])
+    if legacy_data:
+        actions["set_value"][0]["data"] = "{{ command_data }}"
+    entity = VirtualText(GENERIC_ENTITY_SCHEMA(_base(
+        "text.alias", "old", **{CONF_COMMAND_ACTIONS: actions},
+    )), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    await entity.async_set_value(value)
+    assert calls == [{"entity_id": [source], "value": value}]
+    await entity.async_set_value("next")
+    assert calls[-1] == {"entity_id": [source], "value": "next"}
+
+
+@pytest.mark.parametrize("value", ['{"enabled":true,"ids":[1,2]}', "0012", "True", "[1, 2]", "  hello\n", "\n  "])
 def test_text_alias_preserves_literal_native_value(hass, value):
     hass.states.async_set("input_text.source", value)
     entity = VirtualText(

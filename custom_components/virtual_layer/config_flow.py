@@ -5171,11 +5171,17 @@ def _build_entity_config(
             entity[CONF_MATTERBRIDGE_CONTROLS_ENABLED] = cv.boolean(
                 user_input.get(CONF_MATTERBRIDGE_CONTROLS_ENABLED, False)
             )
+        except vol.Invalid as err:
+            raise InvalidDomainOptions from err
+        try:
             entity[CONF_MATTERBRIDGE_CONTROL_LABEL] = control_label(
                 user_input.get(CONF_MATTERBRIDGE_CONTROL_LABEL, DEFAULT_CONTROL_LABEL)
             ) or DEFAULT_CONTROL_LABEL
-        except (ValueError, vol.Invalid) as err:
-            raise InvalidDomainOptions from err
+        except ValueError as err:
+            if entity[CONF_MATTERBRIDGE_CONTROLS_ENABLED]:
+                raise InvalidDomainOptions from err
+            # A damaged optional label must not block turning controls off.
+            entity[CONF_MATTERBRIDGE_CONTROL_LABEL] = DEFAULT_CONTROL_LABEL
         priority = user_input.get(CONF_MEDIA_PLAYER_SOURCE_PRIORITY)
         if priority is not None:
             if not isinstance(priority, list):
