@@ -939,6 +939,13 @@ files and the last working polygon set remain active, and the error is reported
 in the tracker's `polygon_load_error` attribute. Editing or deleting the
 virtual tracker updates or cleans up both generated entities normally.
 
+GeoJSON sources load with bounded concurrency while retaining their configured
+order and overlap priority. Shared-catalog refreshes allow editing and deletion
+while a source is slow; late responses cannot restore deleted or edited records.
+Map backgrounds share simultaneous requests and reuse completed renders for an
+hour. An unavailable map provider has a six-second request budget and a one-minute
+retry cooldown, retaining the last complete background for that viewport.
+
 ## Dawarich Location Source
 
 Create or edit a `device_tracker` from the integration UI and use the **Dawarich**
@@ -1027,6 +1034,11 @@ automatically selects the `camera` domain, copies its state through a template,
 and sets the camera-specific `source_entity` option. The virtual camera proxies
 the source image and stream while keeping its own entity name, id, device, and
 other virtual-layer settings.
+
+Changing a camera or image source rejects responses still arriving from the
+previous source. Retargeting a camera alias also releases its old HLS worker so
+the next stream request uses the selected camera. Explicit stream URLs remain
+independent of the snapshot source.
 
 Camera creation also supports dedicated **Native values** inputs. A camera can
 use a local image, an H.264 stream URL, or both without an original entity.

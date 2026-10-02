@@ -3,6 +3,8 @@
 import json
 import base64
 import gzip
+import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.helpers import entity_registry as er
@@ -41,6 +43,51 @@ def record(name="Home", size=0.002, priority=0):
         "priority": priority,
         "geojson": document(name, size),
     }
+
+
+@pytest.mark.parametrize("action", ["delete", "edit"])
+async def test_catalog_slow_refresh_does_not_block_edits_or_restore_old_data(
+    hass, monkeypatch, action
+):
+    catalog = await async_get_catalog(hass)
+    await catalog.save("remote", record(), catalog.revision)
+    catalog.records["remote"]["source"] = "https://example.test/slow.json"
+    original_prepare = catalog.prepare
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_prepare(value):
+        if value.get("source"):
+            started.set()
+            await release.wait()
+            return await original_prepare(record("Old remote response"))
+        return await original_prepare(value)
+
+    monkeypatch.setattr(catalog, "prepare", slow_prepare)
+    refresh = asyncio.create_task(catalog.refresh())
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        await asyncio.wait_for(catalog.save(
+            "remote", None if action == "delete" else record("Edited"), catalog.revision
+        ), 1)
+    finally:
+        release.set()
+        await refresh
+    if action == "delete":
+        assert "remote" not in catalog.records
+        assert not catalog.selected(["remote"])
+    else:
+        assert catalog.selected(["remote"])[0]["name"] == "Edited"
+
+
+async def test_catalog_unsubscribe_prevents_queued_refresh(hass, monkeypatch):
+    catalog = await async_get_catalog(hass)
+    refresh = AsyncMock()
+    monkeypatch.setattr(catalog, "refresh", refresh)
+    remove = catalog.subscribe(lambda: None)
+    remove()
+    await hass.async_block_till_done()
+    refresh.assert_not_awaited()
+    assert catalog.task is None
 
 
 async def test_catalog_persistence_priority_disable_delete_conflict(hass):

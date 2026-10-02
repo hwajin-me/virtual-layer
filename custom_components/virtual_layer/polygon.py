@@ -641,20 +641,24 @@ async def load_polygon_zones(
     errors = []
     if inline_geojson:
         try:
-            zones.extend(parse_geojson_zones(inline_geojson, 0))
-        except (json.JSONDecodeError, TypeError, ValueError) as err:
+            zones.extend(await hass.async_add_executor_job(
+                parse_geojson_zones, inline_geojson, 0
+            ))
+        except (TypeError, ValueError, RecursionError) as err:
             if not return_errors:
                 raise
             errors.append(f"inline GeoJSON: {err}")
-    session = None
-    for file_index, file_name in enumerate(files or [], start=1):
-        if not isinstance(file_name, str) or not file_name.strip():
-            continue
-        file_name = file_name.strip()
+    semaphore = asyncio.Semaphore(4)
+
+    async def load_file(file_index, file_name):
+        async with semaphore:
+            return await read_file(file_index, file_name)
+
+    async def read_file(file_index, file_name):
         try:
-            document = _geojson_io_document(file_name)
+            document = await hass.async_add_executor_job(_geojson_io_document, file_name)
             if document is None and file_name.startswith(("http://", "https://")):
-                session = session or async_get_clientsession(hass)
+                session = async_get_clientsession(hass)
                 async with session.get(file_name, timeout=20) as response:
                     response.raise_for_status()
                     if (
@@ -678,8 +682,10 @@ async def load_polygon_zones(
                     document = await geojson_file.read(MAX_GEOJSON_BYTES + 1)
             if len(document) > MAX_GEOJSON_BYTES:
                 raise InvalidGeoJson("GeoJSON document is too large")
-            payload = json.loads(document)
-            zones.extend(parse_geojson_zones(payload, file_index))
+            def parse_document():
+                return parse_geojson_zones(json.loads(document), file_index)
+
+            return await hass.async_add_executor_job(parse_document), None
         except (
             asyncio.TimeoutError,
             ClientError,
@@ -687,10 +693,32 @@ async def load_polygon_zones(
             OSError,
             TypeError,
             ValueError,
+            RecursionError,
         ) as err:
+            return [], err
+
+    sources = [
+        (index, name.strip())
+        for index, name in enumerate(files or [], start=1)
+        if isinstance(name, str) and name.strip()
+    ]
+    # Concurrent I/O avoids adding every source's timeout together; gather keeps
+    # configured order (including default overlap priority) deterministic.
+    tasks = [asyncio.create_task(load_file(index, name)) for index, name in sources]
+    try:
+        results = await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    for (_, file_name), (loaded, error) in zip(sources, results, strict=True):
+        if error is not None:
             if not return_errors:
-                raise
-            errors.append(f"{file_name}: {err}")
+                raise error
+            errors.append(f"{file_name}: {error}")
+        else:
+            zones.extend(loaded)
     return (zones, errors) if return_errors else zones
 
 

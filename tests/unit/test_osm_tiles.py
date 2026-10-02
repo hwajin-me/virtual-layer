@@ -1,7 +1,9 @@
 """Naver Map raster backgrounds remain embedded beneath polygon SVG layers."""
 
 import base64
+import asyncio
 import io
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from PIL import Image
@@ -97,6 +99,7 @@ async def test_missing_tile_retries_and_preserves_complete_background(hass, monk
     monkeypatch.setattr(osm_tiles, "_naver_version", AsyncMock(return_value="123"))
     first = await osm_tiles.async_map_background(hass, _zones(), 320, 180)
     assert first
+    hass.data["virtual_layer_map_background_deadlines"].clear()
     tile.return_value = None
     assert await osm_tiles.async_map_background(hass, _zones(), 320, 180) == first
     # A different geographic viewport must never reuse the previous image.
@@ -162,3 +165,99 @@ async def test_naver_map_version_is_cached_then_refreshed(hass, monkeypatch):
         lambda: 100.0 + osm_tiles.NAVER_VERSION_REFRESH_SECONDS,
     )
     assert await osm_tiles._naver_version(hass) == "200"
+
+
+async def test_background_shares_requests_and_reuses_composed_image(hass, monkeypatch):
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def tile(*_args):
+        started.set()
+        await release.wait()
+        return _png()
+
+    fetch = AsyncMock(side_effect=tile)
+    monkeypatch.setattr(osm_tiles, "_fetch_tile", fetch)
+    monkeypatch.setattr(osm_tiles, "_naver_version", AsyncMock(return_value="123"))
+    first = asyncio.create_task(osm_tiles.async_map_background(hass, _zones()))
+    await asyncio.wait_for(started.wait(), 1)
+    second = asyncio.create_task(osm_tiles.async_map_background(hass, _zones()))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    release.set()
+    background = await second
+    count = fetch.await_count
+    assert background
+    assert await osm_tiles.async_map_background(hass, _zones()) == background
+    assert fetch.await_count == count <= osm_tiles.MAX_TILES
+    assert not hass.data["virtual_layer_map_background_pending"]
+
+
+async def test_background_timeout_backs_off_and_preserves_last_image(hass, monkeypatch):
+    fetch = AsyncMock(return_value=_png())
+    monkeypatch.setattr(osm_tiles, "_fetch_tile", fetch)
+    monkeypatch.setattr(osm_tiles, "_naver_version", AsyncMock(return_value="123"))
+    first = await osm_tiles.async_map_background(hass, _zones())
+    hass.data["virtual_layer_map_background_deadlines"].clear()
+
+    async def slow(*_args):
+        await asyncio.Event().wait()
+
+    fetch.side_effect = slow
+    monkeypatch.setattr(osm_tiles, "BACKGROUND_TIMEOUT", 0.01)
+    assert await osm_tiles.async_map_background(hass, _zones()) == first
+    count = fetch.await_count
+    assert await osm_tiles.async_map_background(hass, _zones()) == first
+    assert fetch.await_count == count
+    assert not hass.data["virtual_layer_map_background_pending"]
+
+
+async def test_metadata_failure_uses_stale_version_with_backoff(hass, monkeypatch):
+    hass.data[osm_tiles._NAVER_VERSION_DATA] = ("123", -100000)
+    session = Mock(get=Mock(side_effect=TimeoutError))
+    monkeypatch.setattr(osm_tiles, "async_get_clientsession", lambda _: session)
+    assert await osm_tiles._naver_version(hass) == "123"
+    assert await osm_tiles._naver_version(hass) == "123"
+    session.get.assert_called_once()
+
+
+async def test_map_recovers_after_immediate_metadata_failure(hass, monkeypatch):
+    version = AsyncMock(return_value=None)
+    monkeypatch.setattr(osm_tiles, "_naver_version", version)
+    monkeypatch.setattr(osm_tiles, "_fetch_tile", AsyncMock(return_value=_png()))
+    assert await osm_tiles.async_map_background(hass, _zones()) is None
+    assert not hass.data["virtual_layer_map_background_pending"]
+    hass.data["virtual_layer_map_background_deadlines"].clear()
+    version.return_value = "123"
+    assert await osm_tiles.async_map_background(hass, _zones())
+
+
+async def test_tile_cache_stat_runs_off_event_loop(hass, tmp_path, monkeypatch):
+    from pathlib import Path
+    from threading import get_ident
+
+    path = tmp_path / "tile.png"
+    path.write_bytes(_png())
+    original = Path.stat
+    loop_thread = get_ident()
+
+    def stat(self, *args, **kwargs):
+        if self == path:
+            assert get_ident() != loop_thread
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    assert await osm_tiles._read_fresh(path) == _png()
+
+
+async def test_tile_cache_read_is_bounded(tmp_path):
+    path = tmp_path / "tile.png"
+    path.write_bytes(b"x" * (osm_tiles.MAX_TILE_BYTES + 1))
+    assert await osm_tiles._read_fresh(path) is None
+
+
+def test_tile_decode_rejects_unexpected_dimensions():
+    output = io.BytesIO()
+    Image.new("RGB", (2048, 2048)).save(output, "PNG")
+    assert not osm_tiles._valid_png(output.getvalue())

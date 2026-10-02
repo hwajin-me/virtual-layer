@@ -2150,8 +2150,74 @@ async def test_zigbee_refresh_runtime():
     print("Zigbee refresh Docker passed: native MQTT API, bounded GET, passive diagnostics, truthful availability, cleanup (mocked broker)")
 
 
+async def test_media_geojson_latency_runtime():
+    import json
+    from custom_components.virtual_layer import osm_tiles
+    from custom_components.virtual_layer.image import IMAGE_SCHEMA, VirtualImage
+    from custom_components.virtual_layer.polygon import load_polygon_zones
+    from custom_components.virtual_layer.geojson_catalog import GeoJSONCatalog
+
+    hass = HomeAssistant(tempfile.mkdtemp())
+    document = {
+        "type": "Feature", "properties": {"name": "Smoke"},
+        "geometry": {"type": "Polygon", "coordinates": [
+            [[127, 37], [127.01, 37], [127.01, 37.01], [127, 37]],
+        ]},
+    }
+    path = Path(hass.config.path("nested.json"))
+    await hass.async_add_executor_job(path.write_text, "[" * 2000 + "0" + "]" * 2000)
+    zones, errors = await load_polygon_zones(
+        hass, inline_geojson=document, files=[str(path)], return_errors=True,
+    )
+    assert len(zones) == len(errors) == 1
+    output = BytesIO()
+    Image.new("RGB", (512, 512), "blue").save(output, "PNG")
+    with patch.object(osm_tiles, "_naver_version", AsyncMock(return_value="123")), \
+         patch.object(osm_tiles, "_fetch_tile", AsyncMock(return_value=output.getvalue())) as fetch:
+        first, second = await asyncio.gather(
+            osm_tiles.async_map_background(hass, zones),
+            osm_tiles.async_map_background(hass, zones),
+        )
+        assert first == second and first
+        calls = fetch.await_count
+        assert 1 <= calls <= osm_tiles.MAX_TILES
+        assert await osm_tiles.async_map_background(hass, zones) == first
+        assert fetch.await_count == calls
+        assert not hass.data["virtual_layer_map_background_pending"]
+
+    image = VirtualImage(IMAGE_SCHEMA({
+        "name": "Retarget", "entity_id": "image.retarget",
+        "image_url": "https://example.test/old.png",
+    }), hass, False)
+    image.hass = hass
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def download(_url):
+        started.set()
+        await release.wait()
+        return Mock(content=b"old", content_type="image/png")
+
+    image._async_load_image_from_url = download
+    pending = asyncio.create_task(image.async_image())
+    await asyncio.wait_for(started.wait(), 1)
+    image._apply_native_template_value("image_url", "https://example.test/new.png")
+    release.set()
+    assert await pending is None
+    assert image._cached_image is None and image._last_image is None
+
+    catalog = GeoJSONCatalog(hass)
+    catalog.refresh = AsyncMock()
+    remove = catalog.subscribe(lambda: None)
+    remove()
+    await hass.async_block_till_done()
+    catalog.refresh.assert_not_awaited()
+    await hass.async_stop()
+    print("Media/GeoJSON Docker passed: shared map cache, malformed-file isolation, late-image rejection, refresh cleanup (simulated HTTP)")
+
+
 asyncio.run(test_config_flow_create_modify_runtime())
 asyncio.run(test_zigbee_refresh_runtime())
+asyncio.run(test_media_geojson_latency_runtime())
 print(
     "Virtual Layer Docker compatibility smoke passed "
     f"on Home Assistant {HA_VERSION}"

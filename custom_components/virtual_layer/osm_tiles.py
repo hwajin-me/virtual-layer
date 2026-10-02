@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 import aiofiles
+import aiofiles.os
 from aiohttp import ClientError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -29,6 +30,10 @@ NAVER_TILE_URL = (
 )
 NAVER_VERSION_REFRESH_SECONDS = 60 * 60
 _NAVER_VERSION_DATA = "virtual_layer_naver_map_version"
+_NAVER_RETRY_DATA = "virtual_layer_naver_map_retry"
+BACKGROUND_REFRESH_SECONDS = 60 * 60
+BACKGROUND_RETRY_SECONDS = 60
+BACKGROUND_TIMEOUT = 6
 
 
 def _valid_png(data: bytes) -> bool:
@@ -37,9 +42,11 @@ def _valid_png(data: bytes) -> bool:
         from PIL import Image
 
         with Image.open(io.BytesIO(data)) as image:
+            if image.format != "PNG" or image.size != (TILE_SIZE, TILE_SIZE):
+                return False
             image.load()
         return True
-    except (OSError, SyntaxError, ValueError):
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError):
         return False
 
 
@@ -84,18 +91,28 @@ def _tile_path(hass, version, zoom, x, y):
 
 async def _read_fresh(path):
     try:
-        if time.time() - path.stat().st_mtime > MIN_CACHE_SECONDS:
+        if time.time() - (await aiofiles.os.stat(path)).st_mtime > MIN_CACHE_SECONDS:
             return None
         async with aiofiles.open(path, "rb") as file:
-            return await file.read()
+            data = await file.read(MAX_TILE_BYTES + 1)
+            return data if len(data) <= MAX_TILE_BYTES else None
     except OSError:
         return None
 
 
 async def _naver_version(hass):
     """Fetch and cache Naver's active raster style version."""
+    lock = hass.data.setdefault(_NAVER_VERSION_DATA + "_lock", asyncio.Lock())
+    async with lock:
+        return await _fetch_naver_version(hass)
+
+
+async def _fetch_naver_version(hass):
     now = time.monotonic()
     cached = hass.data.get(_NAVER_VERSION_DATA)
+    fallback = cached[0] if isinstance(cached, tuple) and len(cached) == 2 else None
+    if now < hass.data.get(_NAVER_RETRY_DATA, 0):
+        return fallback
     if (
         isinstance(cached, tuple)
         and len(cached) == 2
@@ -110,13 +127,10 @@ async def _naver_version(hass):
             metadata = await response.json(content_type=None)
         version = metadata.get("version") if isinstance(metadata, dict) else None
         if not isinstance(version, str) or not version.isdecimal():
-            return None
+            raise ValueError("Invalid map style version")
     except (asyncio.TimeoutError, ClientError, TypeError, ValueError):
-        return (
-            cached[0]
-            if isinstance(cached, tuple) and isinstance(cached[0], str)
-            else None
-        )
+        hass.data[_NAVER_RETRY_DATA] = time.monotonic() + BACKGROUND_RETRY_SECONDS
+        return fallback
     hass.data[_NAVER_VERSION_DATA] = (version, now)
     return version
 
@@ -158,9 +172,13 @@ async def _fetch_tile(hass, version, zoom, x, y):
                 return None
         if not await hass.async_add_executor_job(_valid_png, data):
             return None
-        await hass.async_add_executor_job(path.parent.mkdir, 0o755, True, True)
-        async with aiofiles.open(path, "wb") as file:
-            await file.write(data)
+        try:
+            await hass.async_add_executor_job(path.parent.mkdir, 0o755, True, True)
+            async with aiofiles.open(path, "wb") as file:
+                await file.write(data)
+        except OSError:
+            # A read-only/full cache must not discard successfully fetched media.
+            pass
         return data
     except (asyncio.TimeoutError, ClientError, OSError):
         return None
@@ -220,8 +238,38 @@ async def async_map_background(hass, zones, width=720, height=480):
         return None
     previous = hass.data.setdefault("virtual_layer_map_backgrounds", {})
     cache_key = (plan, width, height)
-    if not (version := await _naver_version(hass)):
+    deadlines = hass.data.setdefault("virtual_layer_map_background_deadlines", {})
+    if time.monotonic() < deadlines.get(cache_key, 0):
         return previous.get(cache_key)
+    pending = hass.data.setdefault("virtual_layer_map_background_pending", {})
+
+    async def refresh():
+        try:
+            try:
+                async with asyncio.timeout(BACKGROUND_TIMEOUT):
+                    result = await _build_background(hass, plan, width, height)
+            except TimeoutError:
+                result = None
+            delay = BACKGROUND_REFRESH_SECONDS if result else BACKGROUND_RETRY_SECONDS
+            if cache_key not in deadlines and len(deadlines) >= 8:
+                deadlines.pop(next(iter(deadlines)))
+            deadlines[cache_key] = time.monotonic() + delay
+            return result or previous.get(cache_key)
+        finally:
+            pending.pop(cache_key, None)
+
+    if cache_key not in pending:
+        pending[cache_key] = hass.async_create_background_task(
+            refresh(), "Virtual Layer map background", eager_start=False
+        )
+    return await asyncio.shield(pending[cache_key])
+
+
+async def _build_background(hass, plan, width, height):
+    previous = hass.data.setdefault("virtual_layer_map_backgrounds", {})
+    cache_key = (plan, width, height)
+    if not (version := await _naver_version(hass)):
+        return None
     _, _, _, _, zoom, left, right, top, bottom = plan
     jobs = {
         (x, y): _fetch_tile(hass, version, zoom, x, y)
@@ -250,10 +298,12 @@ async def async_map_background(hass, zones, width=720, height=480):
             }
         ))
     if len(valid) != len(tiles):
-        return previous.get(cache_key)
+        return None
     background = await hass.async_add_executor_job(_compose, valid, plan, width, height)
     if cache_key not in previous and len(previous) >= 8:
-        previous.pop(next(iter(previous)))
+        evicted = next(iter(previous))
+        previous.pop(evicted)
+        hass.data.get("virtual_layer_map_background_deadlines", {}).pop(evicted, None)
     previous[cache_key] = background
     return background
 

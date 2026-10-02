@@ -244,6 +244,8 @@ class VirtualCamera(VirtualEntity, Camera):
         self._last_source_image: bytes | None = None
         self._image_fetch_task: asyncio.Task[bytes | None] | None = None
         self._image_generation = 0
+        self._stream_generation = 0
+        self._webrtc_alias_sessions: dict[str, Camera] = {}
         self._last_stream_source: str | None = self._stream_source
         # Camera.__init__ sees the WebRTC proxy methods on this class. The
         # actual capability is source-dependent and is synchronized once the
@@ -376,6 +378,7 @@ class VirtualCamera(VirtualEntity, Camera):
     ) -> bytes | None:
         if not self._attr_is_on:
             return None
+        generation = self._image_generation
         if self._is_image_source and not self._image_path:
             task = self._image_fetch_task
             if task is None or task.done():
@@ -403,6 +406,8 @@ class VirtualCamera(VirtualEntity, Camera):
                         width=width,
                         height=height,
                     )
+                if generation != self._image_generation or self._media_removed:
+                    return None
                 if image is not None:
                     if not isinstance(image, (bytes, bytearray, memoryview)):
                         raise TypeError("camera image must be bytes-like")
@@ -452,6 +457,8 @@ class VirtualCamera(VirtualEntity, Camera):
         if len(image) > MAX_LOCAL_MEDIA_BYTES:
             _LOGGER.warning("Local image is too large for %s", self.entity_id)
             return self._last_camera_image
+        if generation != self._image_generation or self._media_removed:
+            return None
         self._last_camera_image = bytes(image)
         return self._last_camera_image
 
@@ -502,6 +509,7 @@ class VirtualCamera(VirtualEntity, Camera):
         self._last_source_image = None
 
     async def stream_source(self) -> str | None:
+        generation = self._stream_generation
         if self._is_image_source and not self._stream_source and not self._image_path:
             # Use HA's authenticated camera endpoint. HomeKit's FFmpeg worker
             # encodes this MJPEG input as H.264 on demand.
@@ -520,6 +528,8 @@ class VirtualCamera(VirtualEntity, Camera):
             try:
                 async with asyncio.timeout(MEDIA_ALIAS_TIMEOUT):
                     stream_source = await source.stream_source()
+                if generation != self._stream_generation or self._media_removed:
+                    return None
                 if isinstance(stream_source, str) and stream_source.strip():
                     self._last_stream_source = stream_source.strip()
                 return self._last_stream_source
@@ -618,17 +628,28 @@ class VirtualCamera(VirtualEntity, Camera):
         if marker in active_aliases:
             raise HomeAssistantError("Circular virtual camera WebRTC alias")
         token = _CAMERA_WEBRTC_ALIAS_CHAIN.set(active_aliases | {marker})
+        self._webrtc_alias_sessions[session_id] = source
+        generation = self._stream_generation
+
+        @callback
+        def forward_message(message):
+            if (
+                self._webrtc_alias_sessions.get(session_id) is source
+                and generation == self._stream_generation
+            ):
+                send_message(message)
+
         try:
             await source.async_handle_async_webrtc_offer(
                 offer_sdp,
                 session_id,
-                send_message,
+                forward_message,
             )
-        except Exception:
-            _LOGGER.exception(
-                "Unable to start virtual camera WebRTC stream from %s",
-                self._source_entity,
-            )
+            if generation != self._stream_generation or self._media_removed:
+                source.close_webrtc_session(session_id)
+        except (Exception, asyncio.CancelledError):
+            if self._webrtc_alias_sessions.get(session_id) is source:
+                self.close_webrtc_session(session_id)
             raise
         finally:
             _CAMERA_WEBRTC_ALIAS_CHAIN.reset(token)
@@ -639,12 +660,8 @@ class VirtualCamera(VirtualEntity, Camera):
         candidate: RTCIceCandidateInit,
     ) -> None:
         """Forward a WebRTC ICE candidate to an aliased source camera."""
-        source = self._source_camera()
-        if (
-            source is None
-            or self._stream_source
-            or StreamType.WEB_RTC not in self._source_stream_types(source)
-        ):
+        source = self._webrtc_alias_sessions.get(session_id)
+        if source is None:
             await super().async_on_webrtc_candidate(session_id, candidate)
             return
 
@@ -667,12 +684,8 @@ class VirtualCamera(VirtualEntity, Camera):
     @callback
     def close_webrtc_session(self, session_id: str) -> None:
         """Close a WebRTC session on an aliased source camera."""
-        source = self._source_camera()
-        if (
-            source is None
-            or self._stream_source
-            or StreamType.WEB_RTC not in self._source_stream_types(source)
-        ):
+        source = self._webrtc_alias_sessions.pop(session_id, None)
+        if source is None:
             super().close_webrtc_session(session_id)
             return
 
@@ -733,6 +746,8 @@ class VirtualCamera(VirtualEntity, Camera):
     async def async_will_remove_from_hass(self) -> None:
         """Remove the independently managed source-camera listener."""
         self._media_removed = True
+        for session_id in tuple(self._webrtc_alias_sessions):
+            self.close_webrtc_session(session_id)
         task = self._image_fetch_task
         self._invalidate_image_source()
         if task is not None:
@@ -1242,15 +1257,28 @@ class VirtualCamera(VirtualEntity, Camera):
             attribute = backing_fields[name]
             changed = getattr(self, attribute) != value
             setattr(self, attribute, value)
+            if changed and name in {CONF_SOURCE_ENTITY, CONF_STREAM_SOURCE}:
+                for session_id in tuple(self._webrtc_alias_sessions):
+                    self.close_webrtc_session(session_id)
             if name == CONF_SOURCE_ENTITY and changed:
+                self._stream_generation += 1
                 self._invalidate_image_source()
                 self._last_stream_source = self._stream_source
+                # Camera.async_create_stream returns an existing worker without
+                # asking stream_source again. Retargeting an alias must release
+                # that worker or viewers continue seeing the previous camera.
+                if not self._stream_source and self.stream is not None:
+                    current_stream = self.stream
+                    self.stream = None
+                    if self.hass is not None:
+                        self.hass.async_create_task(current_stream.stop())
             if name == CONF_IMAGE_PATH and changed:
                 self._invalidate_image_source()
                 self.content_type = (
                     mimetypes.guess_type(value or "")[0] or "image/jpeg"
                 )
             elif name == CONF_STREAM_SOURCE and changed:
+                self._stream_generation += 1
                 self._last_stream_source = value
                 current_stream = self.stream
                 if current_stream is not None:

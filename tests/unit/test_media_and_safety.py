@@ -43,6 +43,120 @@ from custom_components.virtual_layer.image import IMAGE_SCHEMA, VirtualImage
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("operation", ["snapshot", "stream", "image", "url"])
+async def test_retarget_rejects_late_media_from_previous_source(hass, operation):
+    started, release = asyncio.Event(), asyncio.Event()
+    old = (Mock(content=b"old", content_type="image/png") if operation == "url"
+           else "rtsp://old/live" if operation == "stream" else b"old")
+
+    async def fetch(*_args, **_kwargs):
+        started.set()
+        await release.wait()
+        return old
+
+    is_camera = operation in {"snapshot", "stream"}
+    domain = "camera" if is_camera else "image"
+    source = Mock(content_type="image/png")
+    source.async_camera_image = source.async_image = source.stream_source = fetch
+    hass.data[domain] = Mock(get_entity=Mock(return_value=source))
+    config = {
+        CONF_NAME: "Retarget", ATTR_ENTITY_ID: f"{domain}.retarget",
+        ATTR_UNIQUE_ID: "retarget", "source_entity": f"{domain}.old",
+        CONF_INITIAL_VALUE: "on" if is_camera else "unknown",
+    }
+    if operation == "url":
+        config["image_url"] = "https://example.test/old.png"
+    entity = (VirtualCamera(CAMERA_SCHEMA(config), False) if is_camera
+              else VirtualImage(IMAGE_SCHEMA(config), hass, False))
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity.async_write_ha_state = Mock()
+    if operation == "url":
+        entity._async_load_image_from_url = fetch
+    method = (entity.async_camera_image if operation == "snapshot" else
+              entity.stream_source if operation == "stream" else entity.async_image)
+    pending = asyncio.create_task(method())
+    await asyncio.wait_for(started.wait(), 1)
+    entity._apply_native_template_value(
+        "image_url" if operation == "url" else "source_entity",
+        "https://example.test/new.png" if operation == "url" else f"{domain}.new",
+    )
+    release.set()
+    assert await pending is None
+    if is_camera:
+        assert entity._last_camera_image is None
+        assert entity._last_stream_source is None
+    else:
+        assert entity._last_image is None
+        assert entity._cached_image is None
+
+
+@pytest.mark.parametrize("direct_stream", [None, "rtsp://direct/live"])
+async def test_camera_retarget_releases_only_aliased_stream(hass, direct_stream):
+    config = {
+        CONF_NAME: "Retarget", ATTR_ENTITY_ID: "camera.retarget",
+        ATTR_UNIQUE_ID: "retarget", "source_entity": "camera.old",
+    }
+    if direct_stream:
+        config["stream_source"] = direct_stream
+    entity = VirtualCamera(CAMERA_SCHEMA(config), False)
+    entity.hass = hass
+    stream = Mock(stop=AsyncMock())
+    entity.stream = stream
+    entity._apply_native_template_value("source_entity", "camera.new")
+    await hass.async_block_till_done()
+    if direct_stream:
+        assert entity.stream is stream
+        stream.stop.assert_not_awaited()
+    else:
+        assert entity.stream is None
+        stream.stop.assert_awaited_once()
+
+
+@pytest.mark.parametrize("change", ["source_entity", "stream_source", "reload"])
+async def test_webrtc_session_cleanup_uses_original_camera(hass, change):
+    class Source(Camera):
+        _attr_supported_features = CameraEntityFeature.STREAM
+
+        def __init__(self):
+            super().__init__()
+            self.close_webrtc_session = Mock()
+            self.async_on_webrtc_candidate = AsyncMock()
+
+        async def async_handle_async_webrtc_offer(self, offer, session, send):
+            self.send = send
+            send("answer")
+
+    source, replacement = Source(), Source()
+    component = Mock(get_entity=Mock(return_value=source))
+    hass.data["camera"] = component
+    camera = VirtualCamera(CAMERA_SCHEMA({
+        CONF_NAME: "WebRTC", ATTR_ENTITY_ID: "camera.proxy",
+        "source_entity": "camera.source",
+    }), False)
+    camera.hass = hass
+    send = Mock()
+    await camera.async_handle_async_webrtc_offer("offer", "session", send)
+    send.assert_called_once_with("answer")
+    send.reset_mock()
+    component.get_entity.return_value = replacement
+    if change == "reload":
+        candidate = Mock()
+        await camera.async_on_webrtc_candidate("session", candidate)
+        source.async_on_webrtc_candidate.assert_awaited_once_with("session", candidate)
+    else:
+        camera._apply_native_template_value(
+            change, "camera.other" if change == "source_entity" else "rtsp://direct/live"
+        )
+    camera.close_webrtc_session("session")
+    source.send("late answer")
+    send.assert_not_called()
+    source.close_webrtc_session.assert_called_once_with("session")
+    replacement.close_webrtc_session.assert_not_called()
+    replacement.async_on_webrtc_candidate.assert_not_awaited()
+    assert not camera._webrtc_alias_sessions
+
+
 def _map_png(color="red"):
     output = BytesIO()
     Image.new("RGBA", (33, 31), color).save(output, "PNG")

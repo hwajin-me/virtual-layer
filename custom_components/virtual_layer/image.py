@@ -140,6 +140,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
         self._attr_image_last_updated: datetime | None = None
         self._image_digest: bytes | None = None
         self._last_image: bytes | None = None
+        self._image_generation = 0
         self._image_refresh_pending = False
         self._tracked_source_image: str | None = None
         self._source_image_remove_listener: Callable[[], None] | None = None
@@ -227,6 +228,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Remove the independently managed aliased-image listener."""
+        self._image_generation += 1
         if self._source_image_remove_listener is not None:
             self._source_image_remove_listener()
             self._source_image_remove_listener = None
@@ -260,6 +262,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
         # state change is the integration's signal that the bytes behind the
         # same URL may have changed, so the inherited cache must be cleared.
         self._cached_image = None
+        self._image_generation += 1
         self._image_refresh_pending = True
         self._attr_image_last_updated = dt_util.utcnow()
         self._update_attributes()
@@ -336,6 +339,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
 
     async def async_image(self) -> bytes | None:
         """Return bytes from the configured source."""
+        generation = self._image_generation
         # Explicit media configured after copying an image is authoritative.
         # The alias remains a fallback only when no direct source is present.
         direct_media = bool(
@@ -371,6 +375,8 @@ class VirtualImage(VirtualEntity, ImageEntity):
                 return self._last_image
             finally:
                 _IMAGE_ALIAS_CHAIN.reset(token)
+            if generation != self._image_generation:
+                return None
             if image is not None:
                 if (
                     not isinstance(image, (bytes, bytearray, memoryview))
@@ -411,6 +417,8 @@ class VirtualImage(VirtualEntity, ImageEntity):
                     self._polygon_config.get(CONF_POLYGON_FILES),
                     return_errors=True,
                 )
+                if generation != self._image_generation:
+                    return None
                 # A partially unreadable file set must not make an otherwise
                 # working map jump to a different set of zones.  This mirrors
                 # the tracker reload policy and keeps the previous complete map.
@@ -431,10 +439,12 @@ class VirtualImage(VirtualEntity, ImageEntity):
                         self._update_attributes()
                         self.async_write_ha_state()
                     return None
-                image = render_polygon_map_svg(
-                    zones,
-                    markers=self._polygon_markers(),
-                ).encode()
+                markers = self._polygon_markers()
+                image = (await self.hass.async_add_executor_job(
+                    lambda: render_polygon_map_svg(zones, markers=markers)
+                )).encode()
+                if generation != self._image_generation:
+                    return None
             except (
                 asyncio.TimeoutError,
                 ClientError,
@@ -487,12 +497,19 @@ class VirtualImage(VirtualEntity, ImageEntity):
             if len(image) > MAX_LOCAL_MEDIA_BYTES:
                 _LOGGER.warning("Local image is too large for %s", self.entity_id)
                 return self._last_image
+            if generation != self._image_generation:
+                return None
             self._mark_updated(image)
             return image
 
         if self._image_url:
             try:
-                image = await ImageEntity.async_image(self)
+                cached = self._cached_image
+                if cached is None:
+                    cached = await self._async_load_image_from_url(self._image_url)
+                if generation != self._image_generation:
+                    return None
+                image = cached.content if cached is not None else None
             except (
                 asyncio.TimeoutError,
                 ClientError,
@@ -507,6 +524,9 @@ class VirtualImage(VirtualEntity, ImageEntity):
                     _LOGGER.warning("Fetched image is too large for %s", self.entity_id)
                     self._cached_image = None
                     return self._last_image
+                self._cached_image = cached
+                if not self._content_type_explicit:
+                    self._attr_content_type = cached.content_type
                 self._mark_updated(image)
                 self.__dict__.pop("content_type", None)
             return self._last_image
@@ -526,6 +546,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
             changed = getattr(self, attribute) != value
             setattr(self, attribute, value)
             if changed:
+                self._image_generation += 1
                 self._cached_image = None
                 self._image_digest = None
                 self._last_image = None
@@ -538,6 +559,7 @@ class VirtualImage(VirtualEntity, ImageEntity):
             self._image_url = value
             self._attr_image_url = value
             if changed:
+                self._image_generation += 1
                 self.__dict__.pop("image_url", None)
                 self._cached_image = None
                 self._image_digest = None

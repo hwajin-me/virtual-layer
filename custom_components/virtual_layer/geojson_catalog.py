@@ -91,12 +91,15 @@ class GeoJSONCatalog:
         self.revision = 0
         self.listeners = set()
         self.lock = asyncio.Lock()
+        self.refresh_lock = asyncio.Lock()
+        self.stopped = False
         self.timer = None
         self.task = None
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self._on_hass_stop)
 
     def _on_hass_stop(self, _event) -> None:
         """Stop a background refresh before Home Assistant closes its loop."""
+        self.stopped = True
         if self.timer:
             self.timer()
             self.timer = None
@@ -184,6 +187,8 @@ class GeoJSONCatalog:
         self.hass.loop.call_soon_threadsafe(self._async_schedule_refresh)
 
     def _async_schedule_refresh(self):
+        if self.stopped or not self.listeners:
+            return
         if self.task is None or self.task.done():
             self.task = self.hass.async_create_background_task(
                 self.refresh(), "Virtual Layer GeoJSON refresh"
@@ -271,19 +276,45 @@ class GeoJSONCatalog:
             self._notify()
 
     async def refresh(self):
+        async with self.refresh_lock:
+            await self._refresh_sources()
+
+    async def _refresh_sources(self):
+        # Network I/O must not hold the UI save/delete lock. Keep a snapshot so
+        # results for documents edited or deleted during a fetch are discarded.
+        originals = {
+            key: record for key, record in self.records.items()
+            if isinstance(record, dict) and record.get("source")
+            and record.get("enabled", True)
+        }
+        semaphore = asyncio.Semaphore(4)
+
+        async def prepare(record):
+            async with semaphore:
+                try:
+                    return await self.prepare(record)
+                except (ValueError, TypeError, OSError, RecursionError):
+                    return None
+
+        tasks = [asyncio.create_task(prepare(record)) for record in originals.values()]
+        try:
+            results = await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         async with self.lock:
             changed = False
             records = dict(self.records)
             geometries = dict(self.zones)
-            for key, record in self.records.items():
-                if (
-                    not isinstance(record, dict)
-                    or not record.get("source")
-                    or not record.get("enabled", True)
-                ):
+            for (key, record), result in zip(originals.items(), results, strict=True):
+                if self.records.get(key) != record:
                     continue
                 try:
-                    prepared, zones = await self.prepare(record)
+                    if result is None:
+                        raise ValueError("geojson_source")
+                    prepared, zones = result
                     candidate_records = {**records, key: prepared}
                     candidate_zones = {**geometries, key: zones}
                     await self.hass.async_add_executor_job(

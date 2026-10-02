@@ -1,6 +1,7 @@
 """Unit tests for polygon zones and multi-tracker aggregation."""
 
 import json
+import asyncio
 import re
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock
@@ -587,7 +588,9 @@ async def test_one_broken_geojson_file_does_not_discard_valid_zones(
     geojson_file = tmp_path / "valid.geojson"
     geojson_file.write_text(json.dumps(GEOJSON), encoding="utf-8")
     missing_file = tmp_path / "missing.geojson"
-    resolve = AsyncMock(side_effect=[str(geojson_file), str(missing_file)])
+    resolve = AsyncMock(side_effect=lambda _hass, name: str(
+        geojson_file if name == "valid.geojson" else missing_file
+    ))
     monkeypatch.setattr(
         "custom_components.virtual_layer.polygon._local_geojson_path",
         resolve,
@@ -693,6 +696,72 @@ async def test_remote_geojson_reads_all_network_chunks(hass, monkeypatch):
     )
 
     assert [zone["name"] for zone in zones] == ["Seoul", "Office", "Remote"]
+
+
+async def test_geojson_downloads_overlap_but_preserve_order_and_priority(hass, monkeypatch):
+    from custom_components.virtual_layer import polygon
+
+    started = set()
+    together = asyncio.Event()
+    threads = []
+    from threading import get_ident
+    loop_thread = get_ident()
+    original = polygon.parse_geojson_zones
+
+    def parse(*args):
+        threads.append(get_ident())
+        return original(*args)
+
+    class Response:
+        content_length = None
+
+        def __init__(self, name):
+            self.name = name
+            self.content = self
+
+        async def __aenter__(self):
+            started.add(self.name)
+            if len(started) == 2:
+                together.set()
+            await asyncio.wait_for(together.wait(), 1)
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        def raise_for_status(self):
+            pass
+
+        async def iter_chunked(self, _size):
+            data = json.loads(json.dumps(GEOJSON))
+            for feature in data["features"]:
+                feature["properties"].pop("priority", None)
+                feature["properties"]["name"] = self.name
+            yield json.dumps(data).encode()
+
+    monkeypatch.setattr(polygon, "parse_geojson_zones", parse)
+    monkeypatch.setattr(polygon, "async_get_clientsession", lambda _: Mock(
+        get=lambda url, **kwargs: Response(url.rsplit("/", 1)[-1])
+    ))
+    zones = await load_polygon_zones(hass, files=["https://test/first", "https://test/second"])
+    assert [zone["name"] for zone in zones] == ["first"] * 3 + ["second"] * 3
+    assert [zone["priority"] for zone in zones] == [1] * 3 + [2] * 3
+    assert threads and all(thread != loop_thread for thread in threads)
+
+
+async def test_deeply_nested_geojson_is_isolated(hass, tmp_path, monkeypatch):
+    path = tmp_path / "nested.geojson"
+    path.write_text("[" * 2000 + "0" + "]" * 2000)
+    monkeypatch.setattr(
+        "custom_components.virtual_layer.polygon._local_geojson_path",
+        AsyncMock(return_value=str(path)),
+    )
+    zones, errors = await load_polygon_zones(
+        hass, inline_geojson=GEOJSON, files=["nested.geojson"], return_errors=True
+    )
+    assert len(zones) == 3
+    assert len(errors) == 1
+    assert errors[0].startswith("nested.geojson:")
 
 
 def test_geojson_complexity_budget_rejects_excessive_coordinates(monkeypatch):
