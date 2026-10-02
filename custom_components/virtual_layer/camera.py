@@ -719,7 +719,15 @@ class VirtualCamera(VirtualEntity, Camera):
                 None,
             )
             if callable(get_configuration):
-                return get_configuration()
+                marker = id(self)
+                active_aliases = _CAMERA_WEBRTC_ALIAS_CHAIN.get()
+                if marker in active_aliases:
+                    return super()._async_get_webrtc_client_configuration()
+                token = _CAMERA_WEBRTC_ALIAS_CHAIN.set(active_aliases | {marker})
+                try:
+                    return get_configuration()
+                finally:
+                    _CAMERA_WEBRTC_ALIAS_CHAIN.reset(token)
         return super()._async_get_webrtc_client_configuration()
 
     async def async_internal_added_to_hass(self) -> None:

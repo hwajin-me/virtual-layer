@@ -1038,7 +1038,8 @@ other virtual-layer settings.
 Changing a camera or image source rejects responses still arriving from the
 previous source. Retargeting a camera alias also releases its old HLS worker so
 the next stream request uses the selected camera. Explicit stream URLs remain
-independent of the snapshot source.
+independent of the snapshot source. WebRTC sessions close on their original
+camera when retargeted, and late signaling from that camera is ignored.
 
 Camera creation also supports dedicated **Native values** inputs. A camera can
 use a local image, an H.264 stream URL, or both without an original entity.

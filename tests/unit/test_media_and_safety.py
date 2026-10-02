@@ -411,6 +411,15 @@ async def test_virtual_media_alias_cycles_terminate_without_recursion(hass):
     assert await images["image.first"].async_image() is None
     assert await cameras["camera.first"].async_camera_image() is None
     assert await cameras["camera.first"].stream_source() is None
+    # Capability changes must not make the synchronous WebRTC configuration
+    # proxy recurse indefinitely through an otherwise guarded alias cycle.
+    for camera in cameras.values():
+        camera._supports_native_async_webrtc = True
+        camera._invalidate_camera_capabilities_cache()
+    assert isinstance(
+        cameras["camera.first"]._async_get_webrtc_client_configuration(),
+        WebRTCClientConfiguration,
+    )
 
 
 async def test_virtual_media_allows_independent_concurrent_alias_requests(hass):

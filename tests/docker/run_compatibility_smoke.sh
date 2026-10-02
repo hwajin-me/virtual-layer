@@ -2205,6 +2205,36 @@ async def test_media_geojson_latency_runtime():
     assert await pending is None
     assert image._cached_image is None and image._last_image is None
 
+    from homeassistant.components.camera import Camera
+
+    class SourceCamera(Camera):
+        _attr_supported_features = CameraEntityFeature.STREAM
+
+        async def async_handle_async_webrtc_offer(self, offer, session, send):
+            self.send = send
+            send("answer")
+
+    source, replacement = SourceCamera(), SourceCamera()
+    source.close_webrtc_session = Mock()
+    replacement.close_webrtc_session = Mock()
+    component = Mock(get_entity=Mock(return_value=source))
+    hass.data["camera"] = component
+    camera = VirtualCamera(CAMERA_SCHEMA({
+        "name": "Alias", "entity_id": "camera.alias", "source_entity": "camera.old",
+    }), False)
+    camera.hass = hass
+    send = Mock()
+    await camera.async_handle_async_webrtc_offer("offer", "session", send)
+    send.assert_called_once_with("answer")
+    component.get_entity.return_value = replacement
+    camera._apply_native_template_value("source_entity", "camera.new")
+    camera.close_webrtc_session("session")
+    source.send("late")
+    assert send.call_count == 1
+    source.close_webrtc_session.assert_called_once_with("session")
+    replacement.close_webrtc_session.assert_not_called()
+    hass.data.pop("camera")
+
     catalog = GeoJSONCatalog(hass)
     catalog.refresh = AsyncMock()
     remove = catalog.subscribe(lambda: None)
@@ -2212,7 +2242,7 @@ async def test_media_geojson_latency_runtime():
     await hass.async_block_till_done()
     catalog.refresh.assert_not_awaited()
     await hass.async_stop()
-    print("Media/GeoJSON Docker passed: shared map cache, malformed-file isolation, late-image rejection, refresh cleanup (simulated HTTP)")
+    print("Media/GeoJSON Docker passed: shared map cache, malformed-file isolation, late-image rejection, WebRTC ownership, refresh cleanup (simulated sources)")
 
 
 asyncio.run(test_config_flow_create_modify_runtime())
