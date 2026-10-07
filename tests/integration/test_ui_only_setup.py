@@ -4197,6 +4197,87 @@ async def test_options_flow_can_delete_the_only_malformed_entity(hass):
     assert result["data"][ATTR_DEVICE_ATTRIBUTES] == {}
 
 
+@pytest.mark.parametrize("helper_policy", ["automatic", "keep_current", "force_helper"])
+async def test_light_command_policy_create_edit_reload_and_delete(hass, helper_policy):
+    for source in ("light.policy_source", "light.policy_replacement"):
+        hass.states.async_set(source, "on", {
+            "supported_color_modes": ["brightness"], "brightness": 100,
+        })
+    entry = MockConfigEntry(domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "Lamps"},
+                            options={ATTR_DEVICES: {}})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_ADD_ENTITY}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_REFERENCE_ENTITY_ID: ["light.policy_source"]}
+    )
+    result = await _choose_add_template_helper(hass, result, target_entity_type="light")
+    values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+    policies = {
+        "light_state_mode": "bounded_optimistic", "light_optimistic_window": 0.5,
+        "light_dispatch_timeout": 2, "light_feedback_timeout": 6,
+        "light_command_timeout": 12,
+    }
+    values.update({**policies, CONF_DEVICE_NAME: "Lamps", CONF_ENTITY_NAME: "Policy lamp",
+                   ATTR_ENTITY_ID: "light.policy_virtual",
+                   CONF_ATTRIBUTES_JSON: '{"vendor_option": "preserved"}'})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    stored = _first_stored_entity(result)
+    assert all(stored[key] == value for key, value in policies.items())
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_EDIT_ENTITY}
+    )
+    selection = json.dumps(["key", stored[ATTR_ENTITY_KEY]], separators=(",", ":"))
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_ENTITY_KEY: selection}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_REFERENCE_ENTITY_ID: ["light.policy_replacement"]}
+    )
+    if result["step_id"] == "edit_entity_type":
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {CONF_TARGET_ENTITY_TYPE: "light"}
+        )
+    assert result["step_id"] == "edit_entity_helper"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_HELPER_UPDATE_MODE: helper_policy}
+    )
+    values = _flatten_entity_form_sections(suggested_form_values(result["data_schema"]))
+    assert all(values[key] == value for key, value in policies.items())
+    assert "light_state_mode" not in _yaml_value(values[CONF_DOMAIN_OPTIONS_JSON])
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    edited = _first_stored_entity(result)
+    if helper_policy != "force_helper":
+        assert edited[CONF_ATTRIBUTES]["vendor_option"] == "preserved"
+    assert edited[ATTR_ENTITY_KEY] == stored[ATTR_ENTITY_KEY]
+    assert all(edited[key] == value for key, value in policies.items())
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    registry = er.async_get(hass)
+    primary = registry.async_get("light.policy_virtual")
+    assert primary is not None and primary.device_id is not None
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    state = hass.states.get("light.policy_virtual")
+    assert "command_status" not in state.attributes
+    assert state.attributes["source_configuration"]["light_command_timeout"] == 12
+    assert registry.async_get("light.policy_virtual").unique_id == primary.unique_id
+    assert registry.async_get("light.policy_virtual").device_id == primary.device_id
+    result = await hass.config_entries.options.async_init(
+        entry.entry_id, data={CONF_ACTION: ACTION_DELETE_ENTITY}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_ENTITY_KEYS: [selection]}
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    assert registry.async_get("light.policy_virtual") is None
+
+
 async def test_options_flow_can_edit_existing_entity(hass):
     hass.states.async_set("sensor.washer_power", "idle")
     hass.states.async_set("binary_sensor.washer_door", "off")
@@ -5414,6 +5495,11 @@ async def test_options_flow_can_prefill_new_entity_from_existing_entity(hass):
             "light_response_delay": 2,
             "light_response_retries": 2,
             "light_ignore_unresponsive": True,
+            "light_state_mode": "observed",
+            "light_optimistic_window": 1.0,
+            "light_dispatch_timeout": 10.0,
+            "light_feedback_timeout": 10.0,
+            "light_command_timeout": 30.0,
             CONF_NAME: "Kitchen Lamp",
             ATTR_ENTITY_ID: "light.virtual_kitchen_lamp",
             CONF_INITIAL_VALUE: "off",

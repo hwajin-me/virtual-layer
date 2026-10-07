@@ -8,11 +8,19 @@ import pytest
 from custom_components.virtual_layer.light import LIGHT_SCHEMA, VirtualLight
 
 
-def make_light(hass, sources):
+def make_light(hass, sources, action_style="implicit"):
+    target = sources[0] if action_style == "scalar" else sources
+    actions = {} if action_style == "implicit" else {
+        command: [{"action": f"light.{command}", "target": {"entity_id": target},
+                   "data": "{{ command_data }}"}]
+        for command in ("turn_on", "turn_off")
+    }
     entity = VirtualLight(LIGHT_SCHEMA({
         "name": "Responsive light", "entity_id": "light.responsive",
         "initial_value": "off", "source_entities": sources,
         "matter_light_type": "dimmable", "persistent": False,
+        "light_state_mode": "bounded_optimistic",
+        "command_actions": actions,
         "native_templates": {"is_on": "{{ is_state('light.slow', 'on') }}"},
     }), False)
     entity.hass = hass
@@ -55,8 +63,9 @@ async def test_slow_member_does_not_block_next_command_to_healthy_bulb(hass):
         await entity.async_will_remove_from_hass()
 
 
-async def test_busy_bulb_keeps_only_latest_pending_brightness(hass):
-    entity = make_light(hass, ["light.slow"])
+@pytest.mark.parametrize("action_style", ["implicit", "scalar", "list"])
+async def test_busy_bulb_keeps_only_latest_pending_brightness(hass, action_style):
+    entity = make_light(hass, ["light.slow"], action_style)
     release = asyncio.Event()
     calls = []
 

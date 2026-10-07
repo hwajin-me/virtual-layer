@@ -36,6 +36,57 @@ class RecordingBulb(LightEntity):
         self.async_write_ha_state()
 
 
+@pytest.mark.parametrize("source_count", [1, 2])
+@pytest.mark.parametrize("mode", ["observed", "bounded_optimistic"])
+async def test_unresponsive_off_uses_live_source_state_and_real_deadlines(hass, source_count, mode):
+    assert await async_setup_component(hass, "light", {})
+    component = hass.data[DATA_COMPONENT]
+
+    class UnresponsiveBulb(RecordingBulb):
+        _attr_is_on = True
+
+        async def async_turn_off(self, **kwargs):
+            pass  # Accepted by the transport, but the physical state stays on.
+
+        async def async_update(self):
+            pytest.fail("A push source must not be treated as a polling read-back")
+
+    bulbs = [UnresponsiveBulb(f"Silent bulb {index}", ColorMode.BRIGHTNESS)
+             for index in range(source_count)]
+    await component.async_add_entities(bulbs)
+    light = VirtualLight(LIGHT_SCHEMA({
+        "name": "Observed failure", "entity_id": "light.observed_failure",
+        "initial_value": "on", "matter_light_type": "dimmable",
+        "source_entities": [bulb.entity_id for bulb in bulbs], "persistent": False,
+        "light_state_mode": mode, "light_optimistic_window": 0.05,
+        "light_response_delay": 0, "light_feedback_timeout": 0.1,
+        "light_command_timeout": 0.5,
+    }), False)
+    await component.async_add_entities([light])
+    try:
+        await hass.services.async_call("light", "turn_off", {
+            "entity_id": light.entity_id,
+        }, blocking=True)
+        if mode == "observed":
+            assert hass.states.get(light.entity_id).state == "on"
+        async with asyncio.timeout(2):
+            while light.extra_state_attributes["command_status"] != "timed_out":
+                await asyncio.sleep(0.01)
+        await hass.async_block_till_done()
+        assert hass.states.get(light.entity_id).state == "on"
+        assert light.extra_state_attributes["command_target"]["power"] == "off"
+        assert light._command_deadline_cancel is None
+        # A late real report still updates state after the failed operation.
+        for bulb in bulbs:
+            bulb._attr_is_on = False
+            bulb.async_write_ha_state()
+        await hass.async_block_till_done()
+        assert hass.states.get(light.entity_id).state == "off"
+        assert light.extra_state_attributes["command_status"] == "timed_out"
+    finally:
+        await component.async_remove_entity(light.entity_id)
+
+
 async def test_slow_native_light_service_does_not_stall_virtual_controls(hass):
     assert await async_setup_component(hass, "light", {})
     component = hass.data[DATA_COMPONENT]
@@ -51,6 +102,7 @@ async def test_slow_native_light_service_does_not_stall_virtual_controls(hass):
     await component.async_add_entities([slow, fast])
     group = VirtualLight(LIGHT_SCHEMA({
         "name": "Responsive group", "entity_id": "light.responsive_group",
+        "light_state_mode": "bounded_optimistic",
         "initial_value": "off", "matter_light_type": "dimmable",
         "source_entities": [slow.entity_id, fast.entity_id], "persistent": False,
     }), False)
@@ -122,8 +174,8 @@ async def test_kelvin_group_converts_to_native_color_and_accepts_response(hass, 
     assert not group.is_on and not rgb.is_on and not cct.is_on
 
 
-async def test_single_source_ignores_stale_off_event_while_turning_on(hass):
-    """A source's pre-command state must not undo an optimistic turn-on."""
+async def test_single_source_displays_observation_while_turning_on(hass):
+    """A pending turn-on never turns an unchanged source into a confirmed on."""
     assert await async_setup_component(hass, "light", {})
     component = hass.data[DATA_COMPONENT]
 
@@ -150,7 +202,8 @@ async def test_single_source_ignores_stale_off_event_while_turning_on(hass):
     )
     await hass.async_block_till_done()
 
-    assert light.is_on
+    assert not light.is_on
+    assert light.extra_state_attributes["command_status"] == "awaiting_feedback"
 
 
 @pytest.mark.parametrize("synchronous", [False, True])
@@ -182,10 +235,7 @@ async def test_single_bulb_fast_reply_restores_live_source_tracking(hass, synchr
         await hass.async_block_till_done()
         assert light.is_on
         assert light._response_refresh_cancel is None
-        if synchronous:
-            later.assert_not_called()
-        else:
-            later.return_value.assert_called_once()
+        assert light._command_deadline_cancel is None
         bulb._attr_is_on = False
         bulb.async_write_ha_state()
         await hass.async_block_till_done()
@@ -211,6 +261,7 @@ async def test_single_slow_bulb_retries_then_resumes_source_state(hass, responds
     await component.async_add_entities([bulb])
     light = VirtualLight(LIGHT_SCHEMA({
         "name": "Retry light", "entity_id": "light.retry_virtual",
+        "light_state_mode": "bounded_optimistic",
         "initial_value": "off", "matter_light_type": "dimmable",
         "source_entities": [bulb.entity_id], "persistent": False,
         "command_actions": {"turn_off": {"sequence": [], "optimistic": False}} if custom_off else {},
@@ -224,7 +275,7 @@ async def test_single_slow_bulb_retries_then_resumes_source_state(hass, responds
     ):
         await light.async_turn_on(brightness=180, transition=5)
         assert light.is_on and light.brightness == 180
-        assert later.call_args.args[1] == 7
+        assert later.call_args.args[1] == pytest.approx(7, abs=0.05)
         if custom_off:
             revision = light._group_revision
             await light.async_turn_off()
@@ -234,12 +285,16 @@ async def test_single_slow_bulb_retries_then_resumes_source_state(hass, responds
             assert light._response_refresh_cancel is None
             return
         later.reset_mock()
+        for record in light._command_sources.values():
+            record["next_check"] = hass.loop.time() - 1
         await light._async_refresh_group(light._group_revision, 1)
         await hass.async_block_till_done()
         assert light.is_on  # Stale off reports cannot overwrite the request.
         assert len(bulb.calls) == 2
         if responds:
-            later.assert_not_called()  # Acknowledged retries need no extra transition wait.
+            assert light._response_refresh_cancel is None
+        for record in light._command_sources.values():
+            record["feedback_deadline"] = hass.loop.time() - 1
         await light._async_refresh_group(light._group_revision, 0)
         assert light.is_on == responds
         assert len(bulb.calls) == 2
@@ -274,7 +329,7 @@ async def test_transition_reaches_sources_through_ha_service(hass, command, sour
         }, blocking=True)
         for bulb in bulbs:
             getattr(bulb, f"async_{command}").assert_awaited_once_with(transition=5)
-        assert later.call_args.args[1] == 7
+        assert later.call_args.args[1] == pytest.approx(7, abs=0.05)
         light._cancel_group_refresh()
 
 
@@ -287,6 +342,7 @@ async def test_delayed_brightness_steps_and_late_on_report_after_off(hass):
     await component.async_add_entities([bulb])
     light = VirtualLight(LIGHT_SCHEMA({
         "name": "Delayed steps", "entity_id": "light.delayed_steps",
+        "light_state_mode": "bounded_optimistic",
         "initial_value": "off", "matter_light_type": "dimmable",
         "source_entities": [bulb.entity_id], "persistent": False,
         "native_templates": {
@@ -317,7 +373,10 @@ async def test_delayed_brightness_steps_and_late_on_report_after_off(hass):
         assert not light.is_on
         await light._async_refresh_group(revision, 2)
         assert bulb.async_turn_on.await_count == 3
+        for record in light._command_sources.values():
+            record["next_check"] = hass.loop.time() - 1
         await light._async_refresh_group(light._group_revision, 1)
+        await hass.async_block_till_done()
         assert bulb.async_turn_off.await_count == 2
         assert not light.is_on
         light._cancel_group_refresh()

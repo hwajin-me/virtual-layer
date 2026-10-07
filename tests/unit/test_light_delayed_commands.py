@@ -14,6 +14,7 @@ def make_light(hass, actions=None, delay=2):
         "initial_value": "off", "source_entities": ["light.slow"],
         "matter_light_type": "dimmable", "persistent": False,
         "command_actions": actions or {}, "light_response_delay": delay,
+        "light_state_mode": "bounded_optimistic",
         "native_templates": {"is_on": "{{ is_state('light.slow', 'on') }}"},
     }), False)
     entity.hass = hass
@@ -75,7 +76,7 @@ async def test_cancelled_custom_action_releases_source_hold(hass):
     await asyncio.wait_for(started.wait(), 1)
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
-    assert not entity._response_pending
+    assert not entity._group_authoritative
     hass.states.async_set("light.slow", "on")
     entity._apply_templates()
     assert entity.is_on
@@ -110,7 +111,7 @@ async def test_nonoptimistic_off_waits_for_inflight_stock_on(hass):
         await asyncio.wait_for(asyncio.gather(first, second), 1)
         assert calls == ["on", "off"]
         assert entity.is_on
-        assert entity._response_refresh_cancel is None
+        assert entity.extra_state_attributes["command_status"] == "awaiting_feedback"
 
 
 @pytest.mark.parametrize("reported,expected", [(359.5, True), (0.5, True), (180, False), (True, False)])
@@ -154,14 +155,15 @@ async def test_acknowledgement_resumes_source_without_timer(hass, synchronous, c
     with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()) as later:
         await getattr(entity, f"async_{command}")()
         if synchronous:
-            later.assert_not_called()
+            assert entity._response_refresh_cancel is None
+            assert entity._command_deadline_cancel is None
         else:
             assert entity._group_authoritative
             entity._apply_templates()  # Old reports still cannot undo the target.
             assert entity.is_on == (expected == "on")
             hass.states.async_set("light.slow", expected)
             entity._apply_templates()
-            later.return_value.assert_called_once()
+            assert entity._response_refresh_cancel is None
         assert not entity._group_authoritative
         assert entity._response_refresh_cancel is None
         # A physical switch changes again before the original retry deadline.
@@ -176,17 +178,18 @@ async def test_partial_brightness_response_keeps_retry_window(hass):
     hass.services.async_register("light", "turn_on", AsyncMock())
     with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()) as later:
         await entity.async_turn_on(brightness=180)
+        checks = later.call_count
         hass.states.async_set("light.slow", "on", {"brightness": 80})
         entity._apply_templates()
         assert entity._group_authoritative
-        later.return_value.assert_not_called()
+        assert later.call_count == checks
         hass.states.async_set("light.slow", "on", {"brightness": 180})
         entity._apply_templates()
         assert not entity._group_authoritative
-        later.return_value.assert_called_once()
+        assert entity._response_refresh_cancel is None
 
 
-async def test_group_waits_for_all_members_and_keeps_requested_target(hass):
+async def test_group_waits_for_all_members_then_resumes_source_state(hass):
     entity = make_light(hass)
     entity._source_entities = ["light.slow", "light.other"]
     for source in entity._source_entities:
@@ -194,13 +197,14 @@ async def test_group_waits_for_all_members_and_keeps_requested_target(hass):
     hass.services.async_register("light", "turn_on", AsyncMock())
     with patch("custom_components.virtual_layer.light.async_call_later", return_value=Mock()) as later:
         await entity.async_turn_on(brightness=180)
+        checks = later.call_count
         hass.states.async_set("light.slow", "on", {"brightness": 180})
         entity._apply_templates()
-        later.return_value.assert_not_called()
+        assert later.call_count == checks
         hass.states.async_set("light.other", "on", {"brightness": 180})
         entity._apply_templates()
-        later.return_value.assert_called_once()
         assert entity._response_refresh_cancel is None
         hass.states.async_set("light.slow", "off")
         entity._apply_templates()
-        assert entity.is_on and entity.brightness == 180
+        assert not entity.is_on
+    await entity.async_will_remove_from_hass()

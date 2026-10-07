@@ -49,6 +49,8 @@ RESERVED_VIRTUAL_ATTRIBUTE_NAMES = frozenset({
 # user attributes or Jinja templates produces stale secrets or invalid legacy
 # templates. Dedicated native properties such as entity_picture remain valid.
 TRANSIENT_SOURCE_ATTRIBUTE_NAMES = frozenset({
+    "command_status", "command_target", "command_sources", "command_sources_truncated",
+    "previous_command_status",
     ATTR_RESTORED,
     "access_token",
     "entity_picture",
@@ -150,6 +152,18 @@ CONF_MEDIA_PLAYER_SOURCE_PRIORITY = "media_player_source_priority"
 CONF_LIGHT_RESPONSE_DELAY = "light_response_delay"
 CONF_LIGHT_RESPONSE_RETRIES = "light_response_retries"
 CONF_LIGHT_IGNORE_UNRESPONSIVE = "light_ignore_unresponsive"
+CONF_LIGHT_STATE_MODE = "light_state_mode"
+CONF_LIGHT_OPTIMISTIC_WINDOW = "light_optimistic_window"
+CONF_LIGHT_DISPATCH_TIMEOUT = "light_dispatch_timeout"
+CONF_LIGHT_FEEDBACK_TIMEOUT = "light_feedback_timeout"
+CONF_LIGHT_COMMAND_TIMEOUT = "light_command_timeout"
+LIGHT_COMMAND_OPTIONS = {
+    CONF_LIGHT_STATE_MODE: "observed",
+    CONF_LIGHT_OPTIMISTIC_WINDOW: 1,
+    CONF_LIGHT_DISPATCH_TIMEOUT: 10,
+    CONF_LIGHT_FEEDBACK_TIMEOUT: 10,
+    CONF_LIGHT_COMMAND_TIMEOUT: 30,
+}
 CONF_TEMPLATE_SOURCES = "template_sources"
 CONF_NATIVE_TEMPLATES = "native_templates"
 CONF_AIR_QUALITY_LOGIC = "air_quality_logic"

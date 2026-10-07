@@ -256,28 +256,45 @@ store longer structured payloads in attributes.
   excluded. For existing sensors, regenerate the brightness conversion helper
   in the edit flow to apply this behavior to the saved template.
 - Light groups with two or more light sources dispatch default commands to
-  each bulb in parallel. After a group command, the virtual light retains its
-  requested power, brightness and color; delayed member reports update
-  diagnostics and availability without replacing that target. When both power
-  actions use default forwarding, commands use HA light services directly and
-  publish the virtual target immediately.
+  each bulb independently through HA light services. Source-backed lights now
+  default to **Observed source state**: requesting Off does not override the
+  configured source/template state. Existing entries receive this default;
+  configured state/native templates and their aggregation rules are preserved.
+  **Brief target display** optionally shows the requested power, brightness and
+  colour for at most the configured display duration (default one second).
+  That lease starts at command receipt and is never extended by queue waits,
+  transitions, service execution or retries. Both aliases and groups resume
+  live source state when the lease expires or the command completes.
   Slow service calls continue in the background after at most 50 ms of waiting
   by the control. Each bulb preserves dispatch order independently; a busy bulb
   keeps only the latest pending target instead of replaying an old command queue.
   Pending brightness changes retain unconfirmed colour changes. A slow member
   cannot hold up the next command to healthy members. Custom action sequences remain
   supported, including `optimistic: false` for source-authoritative behavior.
-  After default group actions finish, response-delay/retry settings trigger
-  device updates and bounded command retries for members that still differ
-  from the requested power, brightness or color. New commands cancel old
-  retries; successful members are not resent commands. When all members
-  report the requested state, the pending check is cancelled immediately,
-  including replies received before the service returns. A single-source light
-  then immediately resumes following physical state changes. Transitions receive
-  their requested duration before polling or retrying. The ignore-unresponsive option
-  skips command retries to unknown/unavailable members. A device update request
-  depends on the physical integration's polling support and does not guarantee
-  that an offline bulb can be reached.
+  Service timeout (default ten seconds), source feedback timeout (default ten
+  seconds plus the first dispatched transition), and total command timeout
+  (default thirty seconds from receipt, including queue time) are independent
+  of the display lease. Increase the total timeout for long transitions.
+  Each source can retry without waiting for another source's transport.
+  Retransmissions respect the check interval and retry count; they never reset
+  the feedback or total deadline. Zero check interval disables retransmissions.
+  Successful members are not resent commands. Custom scripts are never retried
+  and are bounded by the total command timeout. Expiry drops unsent targets;
+  cancelling HA tasks cannot undo commands already sent to hardware.
+  Poll-capable sources can be refreshed. Push sources such as MQTT are checked
+  through state events; a generic entity refresh is not a physical read-back.
+  Ignore unavailable bulbs keeps the composite available while at least one
+  source is known and stops retransmissions to missing/unknown/unavailable
+  sources. A known source that keeps reporting the wrong state instead reaches
+  its feedback deadline.
+  Runtime attributes expose `command_target`, `command_status`, and per-source
+  `command_sources` status, attempts and sanitized errors. A matching old state
+  is `already_at_target`; a later matching observation is `confirmed`. Both refer
+  to HA source state, not guaranteed physical arrival. MQTT optimistic sources
+  need real device state-topic feedback to distinguish a request from a physical
+  change. Command progress is not restored after restart/reload.
+  Per-source command diagnostics are limited to 64 sources; the
+  `command_sources_truncated` flag indicates omitted diagnostic records.
   Mixed RGB/colour-temperature groups expose the colour-temperature profile.
   HA converts Kelvin requests to HS/RGB/XY or calibrated RGBWW for each bulb;
   reconciliation checks the resulting native channels instead of requiring
@@ -287,15 +304,9 @@ store longer structured payloads in attributes.
   not full RGB colour reproduction. Matter cluster/unit conversion remains
   the responsibility of the installed bridge plugin.
 - Korean and English UI translations
-- Single-source lights with the default forwarding action also use the configured
-  response delay and bounded retries. The requested state appears immediately
-  while a slow bulb responds; transition duration is included before checking.
-  Only mismatched bulbs receive retries, and a new command cancels older retries.
-  After acknowledgement or retry exhaustion, the virtual light follows its
-  source again. A zero response delay disables retries. Single-source custom
-  actions retain their existing command ordering and are never retried;
-  `optimistic: false` still follows source reports. Cancelled custom actions
-  release the temporary state hold. Transitions are exposed when a light source
+- Single-source lights use the same observed-state, display lease and timeout
+  policies as groups. Custom actions retain serialized ordering;
+  `optimistic: false` always follows source reports. Transitions are exposed when a light source
   advertises support, forwarded through HA services, and included in the initial
   reconciliation delay. On/off-only members are checked for power alone;
   hue comparisons account for the 0°/360° boundary to avoid needless retries.

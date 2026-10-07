@@ -73,6 +73,7 @@ async def add_group(hass, suffix, mode, delay=0):
         "name": f"Group {suffix}", "entity_id": f"light.group_{suffix}",
         "initial_value": "off", "matter_light_type": "color_temperature",
         "source_entities": [rgb.entity_id, cct.entity_id],
+        "light_state_mode": "bounded_optimistic",
         "light_response_delay": delay, "light_response_retries": 2,
         "persistent": False,
     }), False)
@@ -134,7 +135,7 @@ async def main():
                 await slow.responded.wait()
             await asyncio.sleep(1.2)
             assert len(slow.calls) == 2 and len(fast.calls) == 1
-            assert slow.updates >= 1
+            assert slow.updates == 0  # Push bulbs are confirmed through state events.
             assert group.brightness == 150 and group.color_temp_kelvin == 4000
             await hass.data[DATA_COMPONENT].async_remove_entity(group.entity_id)
             assert group._response_refresh_cancel is None
@@ -144,6 +145,7 @@ async def main():
                 "name": "Slow single", "entity_id": "light.slow_single",
                 "initial_value": "off", "matter_light_type": "color_temperature",
                 "source_entities": [fast.entity_id], "persistent": False,
+                "light_state_mode": "bounded_optimistic",
                 "light_response_delay": 1, "light_response_retries": 1,
                 "native_templates": {
                     "is_on": "{{ is_state(" + repr(fast.entity_id) + ", 'on') }}",
@@ -215,6 +217,7 @@ async def main():
                 "name": "Responsive controls", "entity_id": "light.responsive_controls",
                 "initial_value": "off", "matter_light_type": "dimmable",
                 "source_entities": [blocked.entity_id, responsive.entity_id],
+                "light_state_mode": "bounded_optimistic",
                 "persistent": False,
             }), False)
             await component.async_add_entities([responsive_group])
@@ -235,6 +238,43 @@ async def main():
                 release.set()
                 await component.async_remove_entity(responsive_group.entity_id)
             assert not responsive_group._source_command_tasks
+
+            # Real HA timers must end a failed Off request for aliases and groups.
+            class SilentOffBulb(Bulb):
+                _attr_is_on = True
+
+                async def async_turn_off(self, **kwargs):
+                    self.off_calls.append(dict(kwargs))
+
+            for count in (1, 2):
+                for state_mode in ("observed", "bounded_optimistic"):
+                    bulbs = [SilentOffBulb(f"Silent {count} {state_mode} {index}", ColorMode.BRIGHTNESS)
+                             for index in range(count)]
+                    await component.async_add_entities(bulbs)
+                    virtual = VirtualLight(LIGHT_SCHEMA({
+                        "name": f"Silent group {count} {state_mode}",
+                        "entity_id": f"light.silent_{count}_{state_mode}",
+                        "initial_value": "on", "matter_light_type": "dimmable",
+                        "source_entities": [bulb.entity_id for bulb in bulbs],
+                        "light_state_mode": state_mode, "light_optimistic_window": 0.05,
+                        "light_response_delay": 0, "light_feedback_timeout": 0.1,
+                        "light_command_timeout": 0.5, "persistent": False,
+                    }), False)
+                    await component.async_add_entities([virtual])
+                    await hass.services.async_call("light", "turn_off", {
+                        "entity_id": virtual.entity_id,
+                    }, blocking=True)
+                    if state_mode == "observed":
+                        assert virtual.is_on
+                    async with asyncio.timeout(2):
+                        while virtual.extra_state_attributes["command_status"] != "timed_out":
+                            await asyncio.sleep(0.01)
+                    await hass.async_block_till_done()
+                    assert hass.states.get(virtual.entity_id).state == "on"
+                    assert all(len(bulb.off_calls) == 1 for bulb in bulbs)
+                    assert virtual._optimistic_cancel is None
+                    assert virtual._command_deadline_cancel is None
+                    await component.async_remove_entity(virtual.entity_id)
         finally:
             await hass.async_stop()
             logging.getLogger().removeHandler(errors)
@@ -247,6 +287,7 @@ async def main():
             "fast_reply_and_immediate_external_change": "passed",
             "service_transitions_and_brightness_steps": "passed",
             "slow_transport_does_not_block_controls": "passed",
+            "unconfirmed_off_recovers_source_state": "passed (1/2 sources, observed/brief target)",
             "control_return_latency_ms_with_blocked_source": dispatch_latency_ms,
             "source_devices": "simulated LightEntity instances",
         }, indent=2))

@@ -1705,6 +1705,45 @@ def test_light_form_persists_matter_device_type():
     assert entity[CONF_MATTER_LIGHT_TYPE] == "extended_color"
 
 
+def test_light_command_policies_round_trip_without_raw_json_duplicates():
+    policies = {
+        "light_state_mode": "bounded_optimistic", "light_optimistic_window": 0.5,
+        "light_dispatch_timeout": 3, "light_feedback_timeout": 8,
+        "light_command_timeout": 20,
+    }
+    _, entity = _build_entity_config(_entity_input({
+        CONF_PLATFORM: "light", CONF_DOMAIN_SETTINGS: policies,
+        CONF_ATTRIBUTES_JSON: '{"vendor_option": "preserved"}',
+        CONF_NATIVE_VALUE_TEMPLATES: {"is_on": "{{ false }}"},
+    }))
+    defaults = _entity_form_defaults("Lights", entity)
+    for key, value in policies.items():
+        assert defaults[key] == value
+        assert key in _section_validators(_entity_schema(defaults), CONF_DOMAIN_SETTINGS)
+        assert key not in defaults[CONF_DOMAIN_OPTIONS_JSON]
+    _, reopened = _build_entity_config(defaults)
+    assert reopened[CONF_ATTRIBUTES]["vendor_option"] == "preserved"
+    assert reopened[CONF_NATIVE_TEMPLATES]["is_on"] == "{{ false }}"
+    assert all(reopened[key] == value for key, value in policies.items())
+
+
+@pytest.mark.parametrize("key,value", [
+    ("light_state_mode", "forever"), ("light_optimistic_window", 6),
+    ("light_dispatch_timeout", True), ("light_feedback_timeout", float("nan")),
+    ("light_command_timeout", float("inf")),
+])
+def test_invalid_light_command_policies_are_rejected_and_legacy_values_repair(key, value):
+    with pytest.raises(InvalidDomainOptions):
+        _build_entity_config(_entity_input({CONF_PLATFORM: "light", key: value}))
+    defaults = _entity_form_defaults("Lights", {
+        CONF_PLATFORM: "light", CONF_NAME: "Legacy", key: value,
+    })
+    assert defaults[key] == ("observed" if key == "light_state_mode" else {
+        "light_optimistic_window": 1, "light_dispatch_timeout": 10,
+        "light_feedback_timeout": 10, "light_command_timeout": 30,
+    }[key])
+
+
 def test_air_quality_form_offers_and_persists_direct_matter_level():
     schema = _matter_air_quality_schema()
     selector_config = next(iter(schema.schema.values())).config

@@ -3687,6 +3687,23 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
                     CONF_LIGHT_IGNORE_UNRESPONSIVE,
                     default=defaults.get(CONF_LIGHT_IGNORE_UNRESPONSIVE, True),
                 ): cv.boolean,
+                vol.Optional(
+                    CONF_LIGHT_STATE_MODE,
+                    default=defaults.get(CONF_LIGHT_STATE_MODE, "observed"),
+                ): selector.SelectSelector(selector.SelectSelectorConfig(
+                    options=["observed", "bounded_optimistic"],
+                    translation_key="light_state_mode", mode="dropdown",
+                )),
+                **{
+                    vol.Optional(key, default=defaults.get(key, default)):
+                        selector.NumberSelector(selector.NumberSelectorConfig(
+                            min=0 if key == CONF_LIGHT_OPTIMISTIC_WINDOW else 0.05,
+                            max=5 if key == CONF_LIGHT_OPTIMISTIC_WINDOW else 300,
+                            step=0.05, mode="box", unit_of_measurement="s",
+                        ))
+                    for key, default in LIGHT_COMMAND_OPTIONS.items()
+                    if key != CONF_LIGHT_STATE_MODE
+                },
             }
         )
     elif platform == "climate":
@@ -5224,6 +5241,12 @@ def _build_entity_config(
         if matter_light_type not in MATTER_LIGHT_TYPES:
             raise InvalidDomainOptions
         domain_options[CONF_MATTER_LIGHT_TYPE] = matter_light_type
+        from .light import light_command_options
+
+        try:
+            domain_options.update(light_command_options(user_input))
+        except (vol.Invalid, TypeError, ValueError, OverflowError) as err:
+            raise InvalidDomainOptions from err
         for field_name, maximum in (
             (CONF_LIGHT_RESPONSE_DELAY, 30),
             (CONF_LIGHT_RESPONSE_RETRIES, 10),
@@ -11690,6 +11713,15 @@ def _entity_form_defaults(
             CONF_MATTER_LIGHT_TYPE,
             "dimmable",
         )
+        from .light import light_command_options
+
+        defaults.update(light_command_options(domain_options, repair=True))
+        for key in LIGHT_COMMAND_OPTIONS:
+            domain_options.pop(key, None)
+        for key in (CONF_LIGHT_RESPONSE_DELAY, CONF_LIGHT_RESPONSE_RETRIES,
+                    CONF_LIGHT_IGNORE_UNRESPONSIVE):
+            if key in domain_options:
+                defaults[key] = domain_options.pop(key)
     elif platform == "air_quality":
         # This is a pending step answer, not persisted configuration. Restoring
         # it here skips the dedicated editor and can overwrite a changed Jinja

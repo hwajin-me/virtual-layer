@@ -463,6 +463,10 @@ def _normalize_source_reference(source, default_attribute=None):
 def _normalize_common_entity_config(entity, device_name, index):
     """Normalize versioned UI fields before platform validation."""
     entity = _sanitize_stored_value(dict(entity))
+    if entity.get(CONF_PLATFORM) == "light":
+        from .light import light_command_options
+
+        entity.update(light_command_options(entity, repair=True))
     name = entity.get(CONF_NAME)
     if not isinstance(name, str) or not name.strip():
         entity.pop(CONF_NAME, None)
@@ -871,6 +875,11 @@ def _diagnostic_configuration(entity, platform):
         "attributes": copy.deepcopy(entity.get(CONF_ATTRIBUTES, {})),
         "event_hooks": copy.deepcopy(entity.get(CONF_EVENT_HOOKS, [])),
     }
+    if platform == "light":
+        configuration.update({
+            key: entity.get(key, default)
+            for key, default in LIGHT_COMMAND_OPTIONS.items()
+        })
     polygon = entity.get(CONF_POLYGONAL_ZONE)
     if isinstance(polygon, Mapping):
         configuration[CONF_POLYGONAL_ZONE] = {

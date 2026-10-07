@@ -84,6 +84,20 @@ DEFAULT_SUPPORT_EFFECT = False
 DEFAULT_INITIAL_EFFECT = "none"
 DEFAULT_INITIAL_EFFECT_LIST = ["rainbow", "none"]
 
+
+def _command_seconds(value):
+    """Reject non-finite values and booleans before scheduling deadlines."""
+    if isinstance(value, bool):
+        raise vol.Invalid("command duration must be a finite number")
+    try:
+        value = float(value)
+    except (TypeError, ValueError, OverflowError) as err:
+        raise vol.Invalid("command duration must be a finite number") from err
+    if not math.isfinite(value):
+        raise vol.Invalid("command duration must be a finite number")
+    return value
+
+
 BASE_SCHEMA = virtual_schema(DEFAULT_LIGHT_VALUE, {
     vol.Optional(CONF_SUPPORT_BRIGHTNESS, default=DEFAULT_SUPPORT_BRIGHTNESS): cv.boolean,
     vol.Optional(CONF_INITIAL_BRIGHTNESS, default=DEFAULT_INITIAL_BRIGHTNESS): cv.byte,
@@ -110,11 +124,38 @@ BASE_SCHEMA = virtual_schema(DEFAULT_LIGHT_VALUE, {
         vol.Coerce(int), vol.Range(min=0, max=10)
     ),
     vol.Optional(CONF_LIGHT_IGNORE_UNRESPONSIVE, default=True): cv.boolean,
+    vol.Optional(CONF_LIGHT_STATE_MODE, default="observed"): vol.In(
+        ("observed", "bounded_optimistic")
+    ),
+    vol.Optional(CONF_LIGHT_OPTIMISTIC_WINDOW, default=1): vol.All(
+        _command_seconds, vol.Range(min=0, max=5)
+    ),
+    **{
+        vol.Optional(key, default=LIGHT_COMMAND_OPTIONS[key]): vol.All(
+            _command_seconds, vol.Range(min=0.05, max=300)
+        )
+        for key in (CONF_LIGHT_DISPATCH_TIMEOUT, CONF_LIGHT_FEEDBACK_TIMEOUT,
+                    CONF_LIGHT_COMMAND_TIMEOUT)
+    },
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(BASE_SCHEMA)
 
 LIGHT_SCHEMA = vol.Schema(BASE_SCHEMA)
+
+
+def light_command_options(values, *, repair=False):
+    """Validate UI policy fields, or isolate damaged legacy policy values."""
+    validated = {}
+    for key, default in LIGHT_COMMAND_OPTIONS.items():
+        validator = next(value for marker, value in BASE_SCHEMA.items() if marker.schema == key)
+        try:
+            validated[key] = validator(values.get(key, default))
+        except (vol.Invalid, TypeError, ValueError, OverflowError):
+            if not repair:
+                raise
+            validated[key] = default
+    return validated
 
 
 def _as_color_temp_kelvin(
@@ -257,21 +298,28 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._response_retries = config.get(CONF_LIGHT_RESPONSE_RETRIES, 2)
         self._ignore_unresponsive = config.get(CONF_LIGHT_IGNORE_UNRESPONSIVE, True)
         self._response_refresh_cancel = None
-        self._response_pending = False
         self._group_command_lock = asyncio.Lock()
         self._group_authoritative = False
         self._group_revision = 0
         self._group_dispatching = False
         self._group_refresh_task = None
-        self._group_retry_sources = None
         self._group_target = None
         self._group_removed = False
         self._stock_revision = None
-        self._group_acknowledged_revision = None
         self._source_command_tasks = {}
         self._source_pending_commands = {}
         self._source_dispatch_revisions = {}
-        self._stock_dispatch_pending = set()
+        self._command_sources = {}
+        self._command_deadline = 0
+        self._command_deadline_cancel = None
+        self._optimistic_cancel = None
+        self._command_observed_snapshot = None
+        self._command_last_status = None
+        self._command_state_mode = config.get(CONF_LIGHT_STATE_MODE, "observed")
+        self._optimistic_window = config.get(CONF_LIGHT_OPTIMISTIC_WINDOW, 1)
+        self._dispatch_timeout = config.get(CONF_LIGHT_DISPATCH_TIMEOUT, 10)
+        self._feedback_timeout = config.get(CONF_LIGHT_FEEDBACK_TIMEOUT, 10)
+        self._command_timeout = config.get(CONF_LIGHT_COMMAND_TIMEOUT, 30)
         matter_type = config.get(CONF_MATTER_LIGHT_TYPE)
         if matter_type:
             self._matter_color_modes = set(MATTER_LIGHT_COLOR_MODES[matter_type])
@@ -519,6 +567,27 @@ class VirtualLight(VirtualEntity, LightEntity):
                 (ATTR_RGBWW_COLOR, self.rgbww_color),
             ) if value is not None
         })
+        if self._command_sources:
+            self._attr_extra_state_attributes.update({
+                "command_status": self._command_status(),
+                "command_target": {
+                    "power": "off" if self._group_target[0] == "turn_off"
+                    or self._group_target[2].get("brightness") == 0 else "on",
+                    **{key: copy.deepcopy(value)
+                       for key, value in self._group_target[2].items()
+                       if key in {"brightness", "color_temp_kelvin", "hs_color",
+                                  "xy_color", "rgb_color", "rgbw_color", "rgbww_color"}},
+                },
+                "command_sources": {
+                    source: {key: record[key] for key in
+                             ("status", "attempts", "error", "confirmation")
+                             if key in record}
+                    for source, record in list(self._command_sources.items())[:64]
+                },
+                "command_sources_truncated": len(self._command_sources) > 64,
+            })
+            if self._command_last_status:
+                self._attr_extra_state_attributes["previous_command_status"] = self._command_last_status
 
     def _select_color(self, color_mode, attribute_name, value) -> None:
         for current_attribute in self._COLOR_ATTRIBUTES:
@@ -552,7 +621,6 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._attr_is_on = True
         self._update_attributes()
         self.async_write_ha_state()
-        self._schedule_source_reconciliation(kwargs.get("transition", 0))
 
     def _apply_turn_on_values(self, kwargs: dict[str, Any]) -> None:
         """Validate and stage light service values before publishing state."""
@@ -614,7 +682,6 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._attr_is_on = False
         self._update_attributes()
         self.async_write_ha_state()
-        self._schedule_source_reconciliation(kwargs.get("transition", 0))
 
     @property
     def supported_features(self):
@@ -629,12 +696,8 @@ class VirtualLight(VirtualEntity, LightEntity):
         return LightEntityFeature(0)
 
     def _preserve_optimistic_command_state(self, command, args, kwargs) -> bool:
-        """Keep a command value visible until slow source bulbs can report it."""
-        return bool(
-            self._source_entities
-            and command in {"turn_on", "turn_off"}
-            and self._response_delay > 0
-        )
+        """Only preserve a requested value during its independent display lease."""
+        return self._group_authoritative
 
     def _group_sources(self):
         return list(dict.fromkeys(
@@ -651,26 +714,27 @@ class VirtualLight(VirtualEntity, LightEntity):
             return spec
         # Upgrade only the exact stock pass-through action. Independently
         # configured scripts (including optimistic:false) remain authoritative.
-        stock = [{"action": f"light.{command}",
-                  "target": {ATTR_ENTITY_ID: sources},
-                  "data": "{{ command_data }}"}]
-        if spec is not None and spec != (stock, True):
+        if not self._has_stock_group_action(command):
             return spec
         return ([{"parallel": [
             {"sequence": [{"action": f"light.{command}",
                            "target": {ATTR_ENTITY_ID: source},
                            "data": "{{ command_data }}",
                            "continue_on_error": True}]}
-            for source in (self._group_retry_sources if self._group_retry_sources is not None else sources)
+            for source in sources
         ]}], True)
 
     def _has_stock_group_action(self, command):
         spec = super()._command_action_spec(command)
-        return spec is None or spec == ([{
+        sources = self._group_sources()
+        # UI-generated single-source actions use a scalar target; old profiles
+        # and groups use lists. Both exact pass-through forms are stock actions.
+        targets = [sources, *([sources[0]] if len(sources) == 1 else [])]
+        return spec is None or any(spec == ([{
             "action": f"light.{command}",
-            "target": {ATTR_ENTITY_ID: self._group_sources()},
+            "target": {ATTR_ENTITY_ID: target},
             "data": "{{ command_data }}",
-        }], True)
+        }], True) for target in targets)
 
     def _command_service_data(self, command, method, args, kwargs):
         data = super()._command_service_data(command, method, args, kwargs)
@@ -699,30 +763,114 @@ class VirtualLight(VirtualEntity, LightEntity):
                 for name, value in snapshot.items():
                     setattr(self, name, value)
 
+    _ACTIVE_COMMAND_STATES = frozenset({"queued", "dispatching", "awaiting_feedback"})
+
+    def _command_status(self):
+        statuses = {record["status"] for record in self._command_sources.values()}
+        for status in ("queued", "dispatching", "awaiting_feedback"):
+            if status in statuses:
+                return status
+        if statuses <= {"confirmed", "already_at_target"}:
+            return "confirmed"
+        if statuses & {"confirmed", "already_at_target"}:
+            return "partial"
+        return "failed" if "failed" in statuses else "timed_out"
+
+    def _clear_command_display(self):
+        if self._group_authoritative and self._command_observed_snapshot is not None:
+            for name, value in self._command_observed_snapshot.items():
+                setattr(self, name, value)
+        self._group_authoritative = False
+        if self._optimistic_cancel is not None:
+            self._optimistic_cancel()
+            self._optimistic_cancel = None
+
+    def _release_command_display(self):
+        self._clear_command_display()
+        self._apply_templates()
+
+    def _finish_command_check(self):
+        if any(record["status"] in self._ACTIVE_COMMAND_STATES
+               for record in self._command_sources.values()):
+            return
+        if self._command_deadline_cancel is not None:
+            self._command_deadline_cancel()
+            self._command_deadline_cancel = None
+        if self._response_refresh_cancel is not None:
+            self._response_refresh_cancel()
+            self._response_refresh_cancel = None
+        self._release_command_display()
+
+    def _expire_command(self, revision):
+        """Bound queue, dispatch and feedback even if an integration stalls."""
+        if revision != self._group_revision or self._group_removed:
+            return
+        self._command_deadline_cancel = None
+        for record in self._command_sources.values():
+            if record["status"] in self._ACTIVE_COMMAND_STATES:
+                record["status"] = "timed_out"
+                record["error"] = "command_timeout"
+        self._source_pending_commands = {
+            source: pending for source, pending in self._source_pending_commands.items()
+            if pending[0] != revision
+        }
+        self._finish_command_check()
+
+    def _begin_command(self, command, method, data, sources, *, optimistic=True):
+        if self._group_authoritative:
+            self._release_command_display()
+        if self._command_sources:
+            self._command_last_status = (
+                "superseded" if any(record["status"] in self._ACTIVE_COMMAND_STATES
+                                    for record in self._command_sources.values())
+                else self._command_status()
+            )
+        self._group_revision += 1
+        revision = self._group_revision
+        self._cancel_group_refresh()
+        for name in ("_command_deadline_cancel", "_optimistic_cancel"):
+            cancel = getattr(self, name)
+            if cancel is not None:
+                cancel()
+                setattr(self, name, None)
+        self._group_target = (command, method, copy.deepcopy(data))
+        self._command_observed_snapshot = {
+            name: copy.deepcopy(getattr(self, name))
+            for name in ("_attr_is_on", "_attr_brightness", "_attr_color_mode",
+                         *self._COLOR_ATTRIBUTES)
+        }
+        self._command_sources = {
+            source: {"status": "queued", "attempts": 0} for source in sources
+        }
+        self._command_deadline = self.hass.loop.time() + self._command_timeout
+        @callback
+        def expire(_now):
+            self._expire_command(revision)
+
+        self._command_deadline_cancel = async_call_later(
+            self.hass, self._command_timeout, expire
+        )
+        self._group_authoritative = bool(
+            optimistic and self._command_state_mode == "bounded_optimistic"
+            and self._optimistic_window > 0
+        )
+        if self._group_authoritative:
+            @callback
+            def release(_now):
+                if revision == self._group_revision and not self._group_removed:
+                    self._optimistic_cancel = None
+                    self._release_command_display()
+
+            self._optimistic_cancel = async_call_later(
+                self.hass, self._optimistic_window, release
+            )
+        return revision
+
     async def _async_run_command_action(self, command, method, args, kwargs):
         sources = self._group_sources()
         if not sources or command not in {"turn_on", "turn_off"}:
-            # Cross-domain sources retain their proxy path. Hold stale source
-            # reports during optimistic actions, including cancellation cleanup.
-            spec = self._command_action_spec(command)
-            hold_source_state = bool(
-                self._source_entities
-                and command in {"turn_on", "turn_off"}
-                and (spec is None or spec[1])
-                and self._response_delay > 0
-            )
-            if hold_source_state:
-                self._response_pending = True
-            try:
-                return await super()._async_run_command_action(
-                    command, method, args, kwargs
-                )
-            except BaseException:
-                if hold_source_state:
-                    self._response_pending = False
-                raise
-        # A callback may invoke the opposite command on this same group. Do
-        # not wait for a lock already held by its own action chain.
+            # Non-light proxies keep HA's action semantics, without a state hold.
+            return await super()._async_run_command_action(command, method, args, kwargs)
         if self._group_removed or any(
             entity == id(self) for entity, _command in _COMMAND_ACTION_CHAIN.get()
         ):
@@ -730,112 +878,85 @@ class VirtualLight(VirtualEntity, LightEntity):
         self._validate_command_action(command, args, kwargs)
         if all(self._has_stock_group_action(name) for name in ("turn_on", "turn_off")):
             return await self._async_run_stock_command(command, method, args, kwargs)
-        self._group_revision += 1
-        revision = self._group_revision
-        self._cancel_group_refresh()
-        async with self._group_command_lock:
-            if self._group_removed:
-                return False
-            # The preceding command can install its timer while we wait for
-            # the lock, after the cancellation above has already happened.
-            self._cancel_group_refresh()
-            self._response_pending = False
-            self._group_target = None
-            spec = self._command_action_spec(command)
-            if spec is not None and not spec[1]:
-                self._group_authoritative = False
-                self._group_target = None
-                self._response_pending = False
-                return await super()._async_run_command_action(command, method, args, kwargs)
-            if len(sources) == 1 and (
-                self._response_delay <= 0 or not self._has_stock_group_action(command)
-            ):
-                # Serialize custom actions with stock commands as well. Keep
-                # their action-before-optimistic-state order and never retry a
-                # user script. Publish under the lock so an older completion
-                # cannot overwrite the next command's target.
-                self._group_authoritative = False
-                self._group_target = None
-                self._response_pending = self._response_delay > 0
-                try:
+
+        # Serialize explicitly customized actions, but never replay them.
+        spec = self._command_action_spec(command)
+        data = self._command_service_data(command, method, args, kwargs)
+        revision = self._begin_command(
+            command, method, data, sources, optimistic=spec is None or spec[1]
+        )
+        try:
+            async with asyncio.timeout(self._command_timeout):
+                async with self._group_command_lock:
+                    if (revision != self._group_revision or self._group_removed
+                            or self.hass.loop.time() >= self._command_deadline
+                            or not any(record["status"] in self._ACTIVE_COMMAND_STATES
+                                       for record in self._command_sources.values())):
+                        return False
+                    for source in sources:
+                        self._mark_source_dispatch(source, revision, data)
                     await super()._async_run_command_action(command, method, args, kwargs)
-                    await method(self, *args, **kwargs)
-                except BaseException:
-                    self._response_pending = False
+                    if revision != self._group_revision or self._group_removed:
+                        return False
+                    if self._group_authoritative:
+                        await method(self, *args, **kwargs)
+                    self._acknowledge_group_target()
+                    for record in self._command_sources.values():
+                        if record["status"] == "dispatching":
+                            record["status"] = "awaiting_feedback"
+                            now = self.hass.loop.time()
+                            record["next_check"] = now + float(data.get("transition", 0)) + self._response_delay
+                            record["feedback_deadline"] = min(
+                                self._command_deadline,
+                                now + float(data.get("transition", 0)) + self._feedback_timeout,
+                            )
+                    if not self._acknowledge_group_target():
+                        self._schedule_group_refresh(revision, 0)
                     self._apply_templates()
-                    raise
-                return False
-            # Validate and publish the virtual target before dispatch. Source
-            # reports arriving while actions run cannot replace this target.
-            self._group_dispatching = True
-            try:
-                await method(self, *args, **kwargs)
-                self._group_authoritative = True
-                if self._has_stock_group_action(command):
-                    try:
-                        async with asyncio.timeout(10):
-                            await super()._async_run_command_action(command, method, args, kwargs)
-                    except TimeoutError:
-                        _LOGGER.debug("Grouped light command timed out for %s", self.entity_id)
-                else:
-                    await super()._async_run_command_action(command, method, args, kwargs)
-            except BaseException:
-                if len(sources) == 1:
-                    self._group_authoritative = False
-                    self._group_target = None
-                    self._apply_templates()
-                raise
-            finally:
-                self._group_dispatching = False
-            if revision == self._group_revision and self._has_stock_group_action(command):
-                data = self._command_service_data(command, method, args, kwargs)
-                self._group_target = (command, method, copy.deepcopy(data))
-                # A device can report before its service call returns. Check
-                # the current state as well as subsequent source events.
-                if not self._acknowledge_group_target():
-                    self._schedule_group_refresh(revision, self._response_retries)
-            return False  # The native method has already published the target.
+        except BaseException as err:
+            if revision == self._group_revision:
+                for record in self._command_sources.values():
+                    if record["status"] in self._ACTIVE_COMMAND_STATES:
+                        record["status"] = "timed_out" if isinstance(err, TimeoutError) else "failed"
+                        record["error"] = "action_timeout" if isinstance(err, TimeoutError) else type(err).__name__
+                self._finish_command_check()
+            raise
+        return False
 
     async def _async_run_stock_command(self, command, method, args, kwargs):
-        """Publish immediately and let each bulb drain its own latest target."""
+        """Keep only the latest target; observed state never waits for dispatch."""
         previous = self._group_target if (
-            self._group_acknowledged_revision != self._group_revision
+            self._command_sources
+            and any(record["status"] in self._ACTIVE_COMMAND_STATES
+                    for record in self._command_sources.values())
         ) else None
-        self._group_revision += 1
-        revision = self._stock_revision = self._group_revision
-        self._cancel_group_refresh()
-        self._response_pending = False
-        self._group_dispatching = True
-        try:
-            await method(self, *args, **kwargs)
-        finally:
-            self._group_dispatching = False
-        self._group_authoritative = True
         data = self._command_service_data(command, method, args, kwargs)
         if previous is not None and previous[0] == command == "turn_on":
-            # A brightness drag must not discard an earlier unconfirmed colour
-            # change. A new colour descriptor replaces the old colour family.
             colors = {ATTR_HS_COLOR, ATTR_XY_COLOR, ATTR_RGB_COLOR, ATTR_RGBW_COLOR,
                       ATTR_RGBWW_COLOR, ATTR_COLOR_TEMP_KELVIN}
             keep = {ATTR_BRIGHTNESS} | (set() if colors & data.keys() else colors)
             data = {**{key: value for key, value in previous[2].items() if key in keep}, **data}
-        self._group_target = (command, method, copy.deepcopy(data))
         sources = self._group_sources()
-        self._stock_dispatch_pending = set(sources)
+        revision = self._stock_revision = self._begin_command(command, method, data, sources)
+        self._group_dispatching = True
+        try:
+            if self._group_authoritative:
+                await method(self, **data)
+        finally:
+            self._group_dispatching = False
         tasks = {
-            self._queue_source_command(source, revision, command, data, reconcile=True)
+            self._queue_source_command(source, revision, command, data)
             for source in sources
         }
-        # Fast services complete in the same turn. A slow network operation
-        # must not keep the HA control waiting for the old 10-second deadline.
-        # Waiting here never cancels the per-source worker or its latest target.
+        self._apply_templates()
+        # This waits only for fast dispatch, never for physical feedback.
         await asyncio.wait(tasks, timeout=0.05)
         return False
 
-    def _queue_source_command(self, source, revision, command, data, *, reconcile):
+    def _queue_source_command(self, source, revision, command, data):
         self._source_pending_commands[source] = (
             revision, command, copy.deepcopy(data), self._context or Context(),
-            _COMMAND_ACTION_CHAIN.get(), reconcile,
+            _COMMAND_ACTION_CHAIN.get(),
         )
         task = self._source_command_tasks.get(source)
         if task is None or task.done():
@@ -852,72 +973,108 @@ class VirtualLight(VirtualEntity, LightEntity):
             task.add_done_callback(finished)
         return task
 
+    def _mark_source_dispatch(self, source, revision, data):
+        record = self._command_sources[source]
+        now = self.hass.loop.time()
+        self._source_dispatch_revisions[source] = revision
+        record["status"] = "dispatching"
+        record["attempts"] += 1
+        record["before"] = self.hass.states.get(source)
+        # Transitions count once per actual dispatch, never once per poll.
+        record["next_check"] = now + float(data.get("transition", 0)) + self._response_delay
+        record.setdefault("feedback_deadline", min(
+            self._command_deadline,
+            now + float(data.get("transition", 0)) + self._feedback_timeout,
+        ))
+        self._update_attributes()
+        self._schedule_state_update()
+        if self._stock_revision == revision:
+            self._schedule_group_refresh(revision, self._response_retries)
+
     async def _async_drain_source_commands(self, source):
         while not self._group_removed:
             pending = self._source_pending_commands.pop(source, None)
             if pending is None:
                 return
-            revision, command, data, context, chain, reconcile = pending
-            if revision != self._group_revision:
+            revision, command, data, context, chain = pending
+            if (revision != self._group_revision
+                    or self._command_sources[source]["status"] not in self._ACTIVE_COMMAND_STATES):
                 continue
-            self._source_dispatch_revisions[source] = revision
+            if self.hass.loop.time() >= self._command_deadline:
+                self._expire_command(revision)
+                continue
+            record = self._command_sources[source]
+            self._mark_source_dispatch(source, revision, data)
             token = _COMMAND_ACTION_CHAIN.set(chain | {(id(self), command)})
             try:
-                # Use the native HA service so colour conversion and device
-                # validation stay intact, without compiling a forwarding script.
-                async with asyncio.timeout(10):
+                async with asyncio.timeout(min(
+                    self._dispatch_timeout, max(0, self._command_deadline - self.hass.loop.time())
+                )):
                     await self.hass.services.async_call(
                         PLATFORM_DOMAIN, command, {**data, ATTR_ENTITY_ID: [source]},
                         blocking=True, context=context,
                     )
-            except Exception:
-                _LOGGER.debug("Unable to dispatch light command to %s", source, exc_info=True)
+            except Exception as err:
+                if revision == self._group_revision and record["status"] in self._ACTIVE_COMMAND_STATES:
+                    record["status"] = "timed_out" if isinstance(err, TimeoutError) else "failed"
+                    # Never expose service payloads, credentials or exception messages.
+                    record["error"] = "dispatch_timeout" if isinstance(err, TimeoutError) else type(err).__name__
             finally:
                 _COMMAND_ACTION_CHAIN.reset(token)
-            if reconcile and revision == self._group_revision:
-                self._stock_dispatch_pending.discard(source)
-                if not self._stock_dispatch_pending:
-                    if self._group_acknowledged_revision != revision:
-                        if not self._acknowledge_group_target():
-                            self._schedule_group_refresh(revision, self._response_retries)
-                    if self._response_delay <= 0 and len(self._group_sources()) == 1:
-                        self._group_authoritative = False
-                    self._apply_templates()
+            if revision == self._group_revision:
+                if record["status"] == "dispatching":
+                    record["status"] = "awaiting_feedback"
+                if not self._acknowledge_group_target():
+                    self._schedule_group_refresh(revision, self._response_retries)
+                self._finish_command_check()
+                self._apply_templates()
 
     def _cancel_group_refresh(self):
         if self._response_refresh_cancel is not None:
             self._response_refresh_cancel()
             self._response_refresh_cancel = None
         if self._group_refresh_task is not None:
-            self._group_refresh_task.cancel()
+            if self._group_refresh_task is not asyncio.current_task():
+                self._group_refresh_task.cancel()
 
     def _acknowledge_group_target(self):
-        """Release confirmed single bulbs without waiting for the retry timer."""
+        """A matching source state is evidence about HA, not physical arrival."""
         if self._group_dispatching or self._group_target is None:
             return False
         command, _method, data = self._group_target
-        sources = self._group_sources()
-        # A matching old state cannot acknowledge a command still queued behind
-        # an earlier operation on that bulb. Reports during dispatch can.
-        if self._stock_revision == self._group_revision and any(
-            self._source_dispatch_revisions.get(source) != self._group_revision
-            for source in sources
+        for source, record in self._command_sources.items():
+            if (record["status"] not in self._ACTIVE_COMMAND_STATES
+                    or self._source_dispatch_revisions.get(source) != self._group_revision):
+                continue
+            if (self._stock_revision == self._group_revision
+                    and self.hass.loop.time() >= record["feedback_deadline"]):
+                record["status"] = "timed_out"
+                record["error"] = "feedback_timeout"
+                continue
+            if not self._group_source_matches(source, command, data):
+                continue
+            state = self.hass.states.get(source)
+            record["status"] = (
+                "already_at_target" if state is record.get("before") else "confirmed"
+            )
+            record["confirmation"] = "source_state"
+        if not self._command_sources or any(
+            record["status"] in self._ACTIVE_COMMAND_STATES
+            for record in self._command_sources.values()
         ):
             return False
-        if not sources or not all(
-            self._group_source_matches(source, command, data) for source in sources
-        ):
-            return False
+        successful = all(record["status"] in {"confirmed", "already_at_target"}
+                         for record in self._command_sources.values())
+        # Both groups and aliases resume live source templates on completion.
+        # Avoid recursive rendering here; callers render after checking.
+        self._clear_command_display()
+        if self._command_deadline_cancel is not None:
+            self._command_deadline_cancel()
+            self._command_deadline_cancel = None
         if self._response_refresh_cancel is not None:
             self._response_refresh_cancel()
             self._response_refresh_cancel = None
-        # Do not cancel a running refresh: it may be awaiting the very service
-        # which emitted this acknowledgement. It rechecks before retrying.
-        self._response_pending = False
-        self._group_acknowledged_revision = self._group_revision
-        if len(sources) == 1:
-            self._group_authoritative = False
-        return True
+        return successful
 
     def _group_source_matches(self, source, command, data):
         state = self.hass.states.get(source)
@@ -995,10 +1152,22 @@ class VirtualLight(VirtualEntity, LightEntity):
         return True
 
     def _schedule_group_refresh(self, revision, retries):
-        if self._response_delay <= 0 or self._group_removed:
+        if revision != self._group_revision or self._group_removed:
             return
-        transition = self._group_target[2].get("transition", 0)
-        delay = max(self._response_delay, float(transition) + self._response_delay)
+        records = [
+            record for record in self._command_sources.values()
+            if record["status"] in {"dispatching", "awaiting_feedback"}
+        ]
+        if not records:
+            return
+        now = self.hass.loop.time()
+        due = min(
+            (record["feedback_deadline"] if record["status"] == "dispatching"
+             else min(record["next_check"], record["feedback_deadline"]))
+            for record in records
+        )
+        if self._response_refresh_cancel is not None:
+            self._response_refresh_cancel()
 
         @callback
         def refresh(_now):
@@ -1008,104 +1177,124 @@ class VirtualLight(VirtualEntity, LightEntity):
                     self._async_refresh_group(revision, retries)
                 )
 
-        self._response_refresh_cancel = async_call_later(self.hass, delay, refresh)
-
-    async def _async_refresh_group(self, revision, retries):
-        async with self._group_command_lock:
-            if revision != self._group_revision or self._group_removed:
-                return
-            command, method, data = self._group_target
-            pending = [source for source in self._group_sources()
-                       if source not in self._stock_dispatch_pending
-                       and not self._group_source_matches(source, command, data)]
-            if not pending and self._stock_dispatch_pending:
-                return
-
-            async def refresh(source):
-                try:
-                    async with asyncio.timeout(10):
-                        await async_update_entity(self.hass, source)
-                except Exception:
-                    _LOGGER.debug("Unable to refresh grouped light %s", source)
-
-            await asyncio.gather(*(refresh(source) for source in pending))
-            if revision != self._group_revision or self._group_removed:
-                return
-            pending = [source for source in pending
-                       if not self._group_source_matches(source, command, data)]
-            if retries and pending:
-                self._group_retry_sources = [
-                    source for source in pending
-                    if not self._ignore_unresponsive
-                    or ((state := self.hass.states.get(source)) is not None
-                        and state.state not in {"unknown", "unavailable"})
-                ]
-                try:
-                    if self._group_retry_sources:
-                        if self._stock_revision == revision:
-                            tasks = [self._queue_source_command(
-                                source, revision, command, data, reconcile=False,
-                            ) for source in self._group_retry_sources]
-                            # A new user command cancels reconciliation, not a
-                            # bulb worker which may already own that new target.
-                            await asyncio.gather(*(asyncio.shield(task) for task in tasks))
-                        else:
-                            async with asyncio.timeout(10):
-                                await super()._async_run_command_action(command, method, (), data)
-                except TimeoutError:
-                    _LOGGER.debug("Grouped light retry timed out for %s", self.entity_id)
-                finally:
-                    self._group_retry_sources = None
-                if revision != self._group_revision or self._group_removed:
-                    return
-                # A retry may acknowledge synchronously. Do not keep a single
-                # bulb frozen for another full transition after it has replied.
-                pending = [source for source in pending
-                           if not self._group_source_matches(source, command, data)]
-            self._response_pending = False
-            # Single bulbs resume following their source after acknowledgement
-            # or the bounded retry window. Group targets retain their existing
-            # authoritative semantics even when individual members disagree.
-            if len(self._group_sources()) == 1 and (not pending or not retries):
-                self._group_authoritative = False
-            self._apply_templates()
-            if pending and retries and revision == self._group_revision:
-                self._schedule_group_refresh(revision, retries - 1)
-
-    def _schedule_source_reconciliation(self, transition=0) -> None:
-        """Refresh a composite light after slow or sleeping bulbs have replied."""
-        if self._group_dispatching or not self._source_entities or self._response_delay <= 0:
-            return
-        if self._response_refresh_cancel is not None:
-            self._response_refresh_cancel()
-        self._response_pending = True
-        attempts = 0
-
-        @callback
-        def _refresh(_now) -> None:
-            nonlocal attempts
-            self._response_pending = False
-            self._apply_templates()
-            attempts += 1
-            if attempts <= self._response_retries:
-                self._response_refresh_cancel = async_call_later(
-                    self.hass, self._response_delay, _refresh
-                )
-            else:
-                self._response_refresh_cancel = None
-
         self._response_refresh_cancel = async_call_later(
-            self.hass, transition + self._response_delay, _refresh
+            self.hass, max(0, due - now), refresh
         )
 
-    def _apply_templates(self):
-        """Defer source events as well as immediate post-command rendering."""
-        if self._group_authoritative:
-            self._acknowledge_group_target()
-        if self._response_pending:
+    async def _async_refresh_group(self, revision, retries):
+        if revision != self._group_revision or self._group_removed:
             return
+        if self.hass.loop.time() >= self._command_deadline:
+            self._expire_command(revision)
+            return
+        self._acknowledge_group_target()
+        command, _method, data = self._group_target
+        now = self.hass.loop.time()
+        records = self._command_sources
+        pending = [
+            source for source, record in records.items()
+            if record["status"] == "awaiting_feedback"
+            and now >= min(record["next_check"], record["feedback_deadline"])
+        ]
+
+        async def refresh(source):
+            # Push integrations (including MQTT) have no generic read-back API.
+            component = self.hass.data.get(LIGHT_COMPONENT)
+            physical = component.get_entity(source) if component is not None else None
+            if physical is None or not physical.should_poll:
+                return
+            try:
+                async with asyncio.timeout(min(
+                    self._dispatch_timeout,
+                    max(0, records[source]["feedback_deadline"] - self.hass.loop.time()),
+                )):
+                    await async_update_entity(self.hass, source)
+            except Exception:
+                if (revision == self._group_revision
+                        and records[source]["status"] in self._ACTIVE_COMMAND_STATES):
+                    records[source]["error"] = "refresh_failed"
+
+        await asyncio.gather(*(refresh(source) for source in pending))
+        if revision != self._group_revision or self._group_removed:
+            return
+        self._acknowledge_group_target()
+        for source in pending:
+            record = records[source]
+            if record["status"] != "awaiting_feedback":
+                continue
+            state = self.hass.states.get(source)
+            if self._ignore_unresponsive and (
+                state is None or state.state in {"unknown", "unavailable"}
+            ):
+                record["status"] = "failed"
+                record["error"] = "source_unavailable"
+            elif self.hass.loop.time() >= record["feedback_deadline"]:
+                record["status"] = "timed_out"
+                record["error"] = "feedback_timeout"
+            elif (retries and self._response_delay > 0 and self._stock_revision == revision
+                  and record["attempts"] <= self._response_retries):
+                record["status"] = "queued"
+                self._queue_source_command(source, revision, command, data)
+            else:
+                # Exhausted retransmissions still await source feedback until
+                # their fixed deadline. Polling never extends that deadline.
+                record["next_check"] = record["feedback_deadline"]
+        self._finish_command_check()
+        self._schedule_group_refresh(revision, retries)
+        self._apply_templates()
+
+    def _sync_untemplated_source_state(self):
+        """Keep legacy aliases without state helpers tied to known sources."""
+        sources = self._group_sources()
+        if not sources or self.hass is None:
+            return
+        states = [self.hass.states.get(source) for source in sources]
+        known = [state for state in states if state and state.state in {"on", "off"}]
+        if not self._availability_template:
+            self._attr_available = bool(known) and (
+                self._ignore_unresponsive or len(known) == len(states)
+            )
+        if not known or self._group_authoritative:
+            return
+        if not self._value_template and not ({"state", "is_on"} & self._native_templates.keys()):
+            self._attr_is_on = all(state.state == "on" for state in known)
+        active = [state for state in known if state.state == "on"]
+        if not active:
+            return
+        if "brightness" not in self._native_templates:
+            levels = [_as_brightness(state.attributes.get("brightness")) for state in active]
+            levels = [level for level in levels if level is not None]
+            if levels:
+                self._attr_brightness = round(sum(levels) / len(levels))
+        # Preserve custom helpers; use a valid native representation as a
+        # fallback only when no helper owns that colour property.
+        color_properties = {
+            "color_temp_kelvin": ColorMode.COLOR_TEMP, "hs_color": ColorMode.HS,
+            "xy_color": ColorMode.XY, "rgb_color": ColorMode.RGB,
+            "rgbw_color": ColorMode.RGBW, "rgbww_color": ColorMode.RGBWW,
+        }
+        if not (set(color_properties) | {"color_mode", "color_temp"}) & self._native_templates.keys():
+            for name, mode in color_properties.items():
+                if mode not in self._attr_supported_color_modes:
+                    continue
+                for state in active:
+                    if name not in state.attributes:
+                        continue
+                    try:
+                        self._apply_native_template_value(name, state.attributes[name])
+                    except (ValueError, TypeError, vol.Invalid):
+                        continue
+                    break
+        self._reconcile_color_capabilities()
+
+    def _apply_templates(self):
+        """Observe source feedback independently of the display lease."""
+        self._acknowledge_group_target()
+        self._sync_untemplated_source_state()
         if not self._group_authoritative:
             super()._apply_templates()
+            self._update_attributes()
+            self._schedule_state_update()
             return
         # Continue refreshing availability, capabilities and diagnostics while
         # retaining the group's requested power, level and color values.
@@ -1123,11 +1312,18 @@ class VirtualLight(VirtualEntity, LightEntity):
         finally:
             self._native_templates = native
             self._value_template = value
+        self._update_attributes()
+        self._schedule_state_update()
 
     async def async_will_remove_from_hass(self) -> None:
         self._group_removed = True
         self._group_revision += 1
         self._cancel_group_refresh()
+        for name in ("_command_deadline_cancel", "_optimistic_cancel"):
+            cancel = getattr(self, name)
+            if cancel is not None:
+                cancel()
+                setattr(self, name, None)
         self._source_pending_commands.clear()
         tasks = list(self._source_command_tasks.values())
         for task in tasks:
@@ -1135,10 +1331,8 @@ class VirtualLight(VirtualEntity, LightEntity):
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._source_command_tasks.clear()
-        self._stock_dispatch_pending.clear()
         if self._group_refresh_task is not None:
             await asyncio.gather(self._group_refresh_task, return_exceptions=True)
-        self._response_pending = False
         if self._response_refresh_cancel is not None:
             self._response_refresh_cancel()
             self._response_refresh_cancel = None
