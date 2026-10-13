@@ -6051,8 +6051,9 @@ async def test_options_flow_combines_fans_and_routes_matter_speed_to_stepped_sou
     actions = _yaml_value(defaults[CONF_COMMAND_ACTIONS_JSON])
     speed_action = actions["set_percentage"][-1]
     assert speed_action["target"] == {ATTR_ENTITY_ID: xiaomi_home}
-    assert actions["turn_on"][0]["default"][0]["target"] == {ATTR_ENTITY_ID: miot}
-    assert actions["set_preset_mode"][0]["default"][0]["target"] == {ATTR_ENTITY_ID: miot}
+    for command in ("turn_on", "set_preset_mode"):
+        source_action = actions[command][0]["default"][0]["choose"][0]["sequence"][0]
+        assert source_action["target"] == {ATTR_ENTITY_ID: miot}
     assert actions["oscillate"][0]["target"] == {ATTR_ENTITY_ID: miot}
     assert actions["set_direction"][0]["target"] == {ATTR_ENTITY_ID: miot}
     native = defaults[CONF_NATIVE_VALUE_TEMPLATES]

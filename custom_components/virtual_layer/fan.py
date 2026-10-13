@@ -37,6 +37,7 @@ from .fan_options import (
     manual_preset_mode,
     migrate_legacy_fan_attributes,
     normalize_preset_modes,
+    resolve_preset_mode,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -164,6 +165,11 @@ class VirtualFan(VirtualEntity, FanEntity):
         self._refresh_supported_features()
 
         _LOGGER.debug(f"VirtualFan: {self.name} created")
+
+    def _valid_preset_mode_or_raise(self, preset_mode: str) -> None:
+        """Allow a stale known wind name only when its counterpart is valid."""
+        if resolve_preset_mode(self.preset_modes, preset_mode) is None:
+            super()._valid_preset_mode_or_raise(preset_mode)
 
     def _refresh_supported_features(self) -> None:
         """Recalculate features after a capability template changes."""
@@ -316,6 +322,8 @@ class VirtualFan(VirtualEntity, FanEntity):
     def _command_service_data(self, command, method, args, kwargs) -> dict:
         """Expose fixed percentages to generated and customized command actions."""
         data = super()._command_service_data(command, method, args, kwargs)
+        if data.get("preset_mode") is not None:
+            data["preset_mode"] = resolve_preset_mode(self.preset_modes, data["preset_mode"])
         if command == "turn_on" and data.get("preset_mode"):
             data.pop("percentage", None)
         if command in {"set_percentage", "turn_on"} and "percentage" in data:
@@ -344,7 +352,7 @@ class VirtualFan(VirtualEntity, FanEntity):
             preset = kwargs.get("preset_mode", args[1] if len(args) > 1 else None)
         else:
             return
-        if (preset is not None or command == "set_preset_mode") and preset not in self.preset_modes:
+        if (preset is not None or command == "set_preset_mode") and resolve_preset_mode(self.preset_modes, preset) is None:
             raise ValueError(f"Invalid preset mode: {preset}")
 
     def _preserve_optimistic_command_state(self, command, args, kwargs) -> bool:
@@ -427,7 +435,7 @@ class VirtualFan(VirtualEntity, FanEntity):
             self._attr_percentage = 0
             self._attr_preset_mode = None
         if self._attr_preset_mode not in self._attr_preset_modes:
-            self._attr_preset_mode = None
+            self._attr_preset_mode = resolve_preset_mode(self._attr_preset_modes, self._attr_preset_mode)
         self._refresh_supported_features()
 
     def _set_percentage(self, percentage: int) -> None:
@@ -447,6 +455,7 @@ class VirtualFan(VirtualEntity, FanEntity):
         self._schedule_state_update()
 
     def _set_preset_mode(self, preset_mode: str) -> None:
+        preset_mode = resolve_preset_mode(self.preset_modes, preset_mode)
         if preset_mode in self.preset_modes:
             if self._reported_is_on is not None:
                 self._reported_is_on = True

@@ -332,7 +332,7 @@ class VirtualHumidifier(VirtualEntity, HumidifierEntity):
             if len(set(value)) != len(value):
                 raise ValueError("available_modes contains duplicate values")
         elif name == CONF_MODE:
-            value = str(value).strip()
+            value = None if value is None else str(value).strip() or None
         elif name == CONF_ACTION:
             rendered_value = value
             value = _as_action(value)

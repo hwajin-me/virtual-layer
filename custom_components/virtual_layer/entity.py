@@ -49,6 +49,10 @@ from .const import *
 from .air_quality_options import LEVELS as AIR_QUALITY_LEVELS
 from . import air_quality_options as aq_options
 from .device_metadata import configuration_url_or_none
+from .mode_commands import (
+    SOURCE_MODE_COMMANDS, MODE_VALUE_PROPERTIES, upgrade_mode_helpers, source_mode_data,
+    wrap_mode_template,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _VIRTUAL_ENTITY_COMMAND_NAMES = frozenset().union(
@@ -68,6 +72,29 @@ _COMMAND_ACTION_CHAIN: ContextVar[frozenset[tuple[int, str]]] = ContextVar(
     "virtual_layer_command_action_chain",
     default=frozenset(),
 )
+
+
+def event_hook_state_is_current(hass, hook, event) -> bool:
+    """Discard a delayed state trigger after its source has changed or vanished."""
+    if str(hook.get("trigger", "state")).lower() != "state":
+        return True
+    expected = event.data.get("new_state")
+    current = hass.states.get(event.data.get(ATTR_ENTITY_ID))
+    if expected is None or current is None:
+        return expected is current
+    # last_changed also detects an intervening off/on cycle. Diagnostic-only
+    # attribute updates must not invalidate an otherwise stable state trigger.
+    if current.state != expected.state or current.last_changed != expected.last_changed:
+        return False
+    attributes = hook.get(CONF_ATTRIBUTE, hook.get("attributes_changed", []))
+    if isinstance(attributes, str):
+        attributes = [attributes]
+    if not isinstance(attributes, (list, tuple, set)):
+        attributes = []
+    return all(
+        current.attributes.get(name) == expected.attributes.get(name)
+        for name in attributes if isinstance(name, str)
+    )
 
 
 def nearest_step_value(
@@ -393,6 +420,9 @@ class VirtualEntity(RestoreEntity):
         self._virtual_removing = False
         self._pull_interval = config.get(CONF_PULL_INTERVAL, 0)
         self._source_entities = config.get(CONF_SOURCE_ENTITIES, [])
+        self._command_actions = upgrade_mode_helpers(
+            self._command_actions, domain, self._source_entities, config.get(CONF_AUTO_HELPER)
+        )
         # A restored entity must not let a partially started source set replace
         # its last valid state with a temporary fallback during startup.
         self._restore_waiting_for_sources = False
@@ -922,6 +952,14 @@ class VirtualEntity(RestoreEntity):
 
         attributes = self._hook_attributes(hook)
         if not attributes:
+            if (
+                ("from" in hook or "to" in hook)
+                and old_state is not None and new_state is not None
+                and old_state.state == new_state.state
+            ):
+                # Match HA state triggers: attribute churn must not restart a
+                # debounce intended for a specific state transition.
+                return False
             return True
         for attribute in attributes:
             old_value = old_state.attributes.get(attribute) if old_state else None
@@ -938,6 +976,8 @@ class VirtualEntity(RestoreEntity):
 
     @callback
     def _schedule_event_hook(self, index: int, hook, event):
+        if self._virtual_removing:
+            return
         try:
             if isinstance(hook.get("debounce", 0), bool):
                 raise TypeError
@@ -946,19 +986,21 @@ class VirtualEntity(RestoreEntity):
             delay = 0
         if not math.isfinite(delay):
             delay = 0
+        if cancel := self._hook_debounce_cancelers.pop(index, None):
+            cancel()
         if delay <= 0:
             self._apply_event_hook(hook, event)
             return
 
-        if cancel := self._hook_debounce_cancelers.pop(index, None):
-            cancel()
-
         @callback
         def _async_apply_later(_now):
+            if self._virtual_removing or self._hook_debounce_cancelers.get(index) is not cancel_later:
+                return
             self._hook_debounce_cancelers.pop(index, None)
-            self._apply_event_hook(hook, event)
+            if event_hook_state_is_current(self.hass, hook, event):
+                self._apply_event_hook(hook, event)
 
-        self._hook_debounce_cancelers[index] = async_call_later(
+        cancel_later = self._hook_debounce_cancelers[index] = async_call_later(
             self.hass,
             delay,
             _async_apply_later,
@@ -1013,6 +1055,16 @@ class VirtualEntity(RestoreEntity):
 
     def _render_native_template(self, name, template):
         """Keep text output literal, including leading/trailing whitespace."""
+        if name in MODE_VALUE_PROPERTIES or (
+            self._platform_domain == "select" and name in {"state", "value"}
+        ):
+            source = template.template if isinstance(template, Template) else str(template)
+            rendered = self._render_template(wrap_mode_template(source), parse_result=True)
+            if isinstance(rendered, dict) and set(rendered) == {"virtual_layer_mode_value"}:
+                return rendered["virtual_layer_mode_value"]
+            # Literal and concatenated custom labels are strings. Native scalar
+            # parsing would turn valid names such as None/False/0 into values.
+            return self._render_template(template, parse_result=False)
         if self._platform_domain == "text" and name in {"native_value", "value", "state"}:
             source = template.template if isinstance(template, Template) else str(template)
             # HA strips the outer rendered string even with parse_result=False.
@@ -1429,6 +1481,14 @@ class VirtualEntity(RestoreEntity):
             )
 
         service_data = {} if cross_domain_power_proxy else dict(command_data)
+        if not cross_domain_power_proxy and key in SOURCE_MODE_COMMANDS:
+            for source in source_entities:
+                data = source_mode_data(domain, command, self.hass.states.get(source), service_data)
+                if data is not None:
+                    await self.hass.services.async_call(service_domain, service, {
+                        **data, ATTR_ENTITY_ID: [source],
+                    }, blocking=True, context=self._context or Context())
+            return
         service_data[ATTR_ENTITY_ID] = source_entities
         try:
             await self.hass.services.async_call(

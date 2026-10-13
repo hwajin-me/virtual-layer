@@ -3,6 +3,7 @@
 from unittest.mock import Mock
 
 import pytest
+from homeassistant.components.fan import NotValidPresetModeError
 from homeassistant.helpers.template import Template
 from homeassistant.core import State
 
@@ -22,8 +23,98 @@ from custom_components.virtual_layer.fan_options import manual_preset_mode
 from custom_components.virtual_layer.fan_options import (
     migrate_legacy_fan_attributes,
     normalize_preset_modes,
+    resolve_preset_mode,
+    source_preset_action,
 )
 from custom_components.virtual_layer.humidifier import HUMIDIFIER_SCHEMA, VirtualHumidifier
+
+
+@pytest.mark.parametrize("modes, requested, expected", [
+    (["Direct Mode", "Natural Mode", "Sleep Mode"], "Straight Wind", "Direct Mode"),
+    (["Straight Wind", "Natural Wind"], "Direct Mode", "Straight Wind"),
+    (["Natural Mode"], "natural_wind", "Natural Mode"),
+    (["Straight Wind", "Direct Mode"], "Straight Wind", "Straight Wind"),
+    (["Normal", "Manual", "Auto"], "Straight Wind", None),
+    ([None, 42, "Direct Mode"], "Straight Wind", "Direct Mode"),
+])
+def test_wind_presets_resolve_only_known_advertised_aliases(hass, modes, requested, expected):
+    assert resolve_preset_mode(modes, requested) == expected
+    hass.states.async_set("fan.alias", "on", {"preset_modes": modes})
+    action = source_preset_action({"action": "fan.set_preset_mode",
+        "target": {"entity_id": "fan.alias"}, "data": "{{ command_data }}"}, "fan.alias")
+    variables = {"command_data": {"preset_mode": requested}}
+    choice = action["choose"][0]
+    assert Template(choice["conditions"], hass).async_render(variables) == (expected is not None)
+    data = Template(choice["sequence"][0]["data"], hass).async_render(variables)
+    assert data["preset_mode"] == expected
+
+
+def test_wind_migration_preserves_custom_payload_and_repairs_static_alias():
+    custom = {"set_preset_mode": {"optimistic": False, "sequence": [{
+        "action": "fan.set_preset_mode", "target": {"entity_id": "fan.source"},
+        "data": {"preset_mode": "{{ preset_mode }}"},
+    }]}}
+    config = migrate_legacy_fan_attributes({"name": "Wind", "modes": ["Direct Mode"],
+        "preset_mode": "Straight Wind", "source_entities": ["fan.source"],
+        "command_actions": custom})
+    assert config["preset_mode"] == "Direct Mode"
+    assert migrate_legacy_fan_attributes(config) == config
+    entity = VirtualFan(FAN_SCHEMA(config), False)
+    assert entity._command_actions == custom
+
+
+@pytest.mark.parametrize("legacy", [False, True, "proxy"])
+@pytest.mark.parametrize("command", ["async_set_preset_mode", "async_turn_on"])
+@pytest.mark.parametrize("multiple", [False, True])
+async def test_wind_commands_use_each_sources_valid_name(hass, legacy, command, multiple):
+    sources = ["fan.direct"] + (["fan.straight", "fan.custom"] if multiple else [])
+    catalogs = [["Direct Mode", "Natural Mode", "Sleep Mode"],
+                ["Straight Wind", "Natural Wind"], ["Custom"]]
+    for source, modes in zip(sources, catalogs):
+        hass.states.async_set(source, "on", {"preset_modes": modes,
+            "preset_mode": modes[0], "supported_features": 57})
+    defaults = _reference_entity_defaults(hass, sources)
+    actions = _parse_command_actions(defaults[CONF_COMMAND_ACTIONS_JSON], "fan")
+    name = command.removeprefix("async_")
+    if legacy == "proxy":
+        actions = {}
+    elif legacy:
+        actions[name] = [{"action": f"fan.{name}",
+            "target": {"entity_id": sources}, "data": "{{ command_data }}"}]
+    entity = VirtualFan(FAN_SCHEMA({"name": "Wind", "modes": ["Straight Wind"],
+        "source_entities": sources, "command_actions": actions}), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._schedule_state_update = Mock()
+    calls = []
+
+    async def capture(call):
+        source = call.data["entity_id"][0]
+        mode = call.data["preset_mode"]
+        assert mode in hass.states.get(source).attributes["preset_modes"]
+        calls.append((source, mode))
+
+    hass.services.async_register("fan", name, capture)
+    await getattr(entity, command)(preset_mode="Straight Wind")
+    assert calls == [("fan.direct", "Direct Mode")] + (
+        [("fan.straight", "Straight Wind")] if multiple else [])
+    # The source may change its catalog after a helper was saved.
+    hass.states.async_set("fan.direct", "on", {"preset_modes": ["Straight Wind"],
+        "supported_features": 57})
+    calls.clear()
+    await getattr(entity, command)(preset_mode="Straight Wind")
+    assert calls[0] == ("fan.direct", "Straight Wind")
+
+
+async def test_single_fan_accepts_stale_wind_service_alias(hass):
+    entity = VirtualFan(FAN_SCHEMA({"name": "Wind", "modes": ["Direct Mode"]}), False)
+    entity.hass = hass
+    entity._create_state(entity._config)
+    entity._schedule_state_update = Mock()
+    await entity.async_handle_set_preset_mode_service("Straight Wind")
+    assert entity.preset_mode == "Direct Mode"
+    with pytest.raises(NotValidPresetModeError):
+        await entity.async_handle_set_preset_mode_service("Custom Wind")
 
 
 @pytest.mark.parametrize("paired", [False, True])
@@ -161,7 +252,7 @@ def test_humidity_step_survives_form_save_and_reopen():
 @pytest.mark.parametrize("manual", [
     "Manual", " MANUAL ", "manual_mode", "Manual-Mode", "manual\tmode",
     "Normal", "Normal mode", "수동", "수동 모드", "일반", "일반 모드",
-    "Favorite", "FAVOURITE", "즐겨찾기",
+    "Favorite", "FAVOURITE", "Fav", "즐겨찾기", "Manual Preset", "manual_preset",
 ])
 def test_manual_alias_catalog_matches_runtime_and_generated_helpers(hass, manual):
     modes = ["Auto", "Sleep", "Smart", "Nature", "Eco", "Pet", "Turbo", manual]

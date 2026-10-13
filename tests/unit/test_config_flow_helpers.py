@@ -182,6 +182,7 @@ from custom_components.virtual_layer.config_flow import (
     _without_template_helpers,
 )
 from custom_components.virtual_layer.fan import FAN_SCHEMA, VirtualFan
+from custom_components.virtual_layer.mode_commands import SOURCE_MODE_COMMANDS
 from custom_components.virtual_layer.const import (
     ATTR_DEVICE_ATTRIBUTES,
     ATTR_DEVICE_ID,
@@ -1369,8 +1370,9 @@ def test_fan_power_actions_do_not_depend_on_delayed_xiaomi_feature_bits(hass):
     assert actions["turn_off"] == [
         {"action": "fan.turn_off", "target": {ATTR_ENTITY_ID: source}, "data": "{{ command_data }}"}
     ]
-    assert actions["turn_on"][-1]["action"] == "fan.turn_on"
-    assert actions["turn_on"][-1]["target"] == {ATTR_ENTITY_ID: source}
+    power_action = actions["turn_on"][-1]["choose"][0]["sequence"][0]
+    assert power_action["action"] == "fan.turn_on"
+    assert power_action["target"] == {ATTR_ENTITY_ID: source}
 
 
 def test_edit_type_schema_preserves_an_existing_nonconversion_domain(hass):
@@ -1512,7 +1514,10 @@ def test_source_command_helpers_cover_every_proxiable_domain_command(hass, platf
             (platform, command),
             command,
         )
-        assert sequence[0]["action"] == f"{platform}.{service}"
+        first = sequence[0]
+        if (platform, command) in SOURCE_MODE_COMMANDS:
+            first = first["choose"][0]["sequence"][0]
+        assert first["action"] == f"{platform}.{service}"
 
 
 def test_alarmo_source_helpers_omit_unadvertised_custom_bypass(hass):
@@ -2267,6 +2272,39 @@ def test_multi_source_missing_native_values_use_safe_defaults(
         Template(templates[property_name], hass).async_render(parse_result=True)
         == expected
     )
+
+
+@pytest.mark.parametrize("platform, mode, modes", [
+    ("climate", "preset_mode", "preset_modes"),
+    ("climate", "fan_mode", "fan_modes"),
+    ("climate", "swing_mode", "swing_modes"),
+    ("climate", "swing_horizontal_mode", "swing_horizontal_modes"),
+    ("fan", "preset_mode", "preset_modes"),
+    ("humidifier", "mode", "available_modes"),
+    ("vacuum", "fan_speed", "fan_speed_list"),
+])
+def test_mode_helpers_follow_late_attributes_and_skip_offline_sources(hass, platform, mode, modes):
+    sources = [f"{platform}.first", f"{platform}.second"]
+    for source in sources:
+        hass.states.async_set(source, "off")
+    templates = _native_reference_templates(platform, sources, [hass.states.get(s) for s in sources])
+    render = lambda key: Template(templates[key], hass).async_render(parse_result=True)
+    assert render(mode) is None
+    assert render(modes) == []
+    hass.states.async_set(sources[1], "on", {mode: "none", modes: ["none", "Custom"]})
+    assert render(mode) == "none"
+    assert render(modes) == ["none", "Custom"]
+    hass.states.async_set(sources[0], "unavailable", {mode: "Stale", modes: ["Stale"]})
+    assert render(mode) == "none"
+    assert render(modes) == ["none", "Custom"]
+    hass.states.async_set(sources[0], "on", {mode: "Custom", modes: ["Custom", "Other"]})
+    assert render(mode) == "Custom"
+    assert render(modes) == ["Custom", "Other", "none"]
+    hass.states.async_set(sources[0], "on", {mode: "", modes: []})
+    assert render(mode) == "none"
+    hass.states.async_set(sources[1], "unknown", {mode: "none", modes: ["none", "Custom"]})
+    assert render(mode) is None
+    assert render(modes) == []
 
 
 def test_sparse_native_attribute_tracks_all_selected_sources(hass):
@@ -4396,17 +4434,17 @@ def test_reference_climate_promotes_native_modes_and_temperature_options(hass):
         "turn_off",
         "turn_on",
     }
-    assert command_actions["set_fan_mode"] == [
+    assert command_actions["set_fan_mode"][0]["choose"][0]["sequence"] == [
         {
             "action": "climate.set_fan_mode",
-            "data": "{{ command_data }}",
+            "data": "{{ dict(command_data) }}",
             "target": {ATTR_ENTITY_ID: "climate.living_room"},
         }
     ]
-    assert command_actions["set_hvac_mode"] == [
+    assert command_actions["set_hvac_mode"][0]["choose"][0]["sequence"] == [
         {
             "action": "climate.set_hvac_mode",
-            "data": {"hvac_mode": "{{ hvac_mode }}"},
+            "data": "{{ dict(command_data) }}",
             "target": {ATTR_ENTITY_ID: "climate.living_room"},
         }
     ]
@@ -9185,6 +9223,7 @@ async def test_fan_source_roles_route_each_command_to_its_selected_source(hass):
         "on",
         {
             "preset_mode": "auto",
+            "preset_modes": ["auto"],
             "oscillating": False,
             "current_direction": "forward",
         },

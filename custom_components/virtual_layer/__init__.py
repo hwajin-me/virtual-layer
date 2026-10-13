@@ -52,7 +52,11 @@ from .device_metadata import (
     configuration_url_or_none,
     valid_parent_device,
 )
-from .entity import STARTUP_SOURCE_GRACE_ALLOWED, repair_legacy_enum_template
+from .entity import (
+    STARTUP_SOURCE_GRACE_ALLOWED,
+    event_hook_state_is_current,
+    repair_legacy_enum_template,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _MISSING = object()
@@ -1554,6 +1558,12 @@ def _state_only_hook_matches(hook, event) -> bool:
 
     attributes = _state_only_hook_attributes(hook)
     if not attributes:
+        if (
+            ("from" in hook or "to" in hook)
+            and old_state is not None and new_state is not None
+            and old_state.state == new_state.state
+        ):
+            return False
         return True
     return any(
         (old_state.attributes.get(attribute) if old_state else None)
@@ -1929,9 +1939,12 @@ def _async_setup_state_only_event_hooks(hass, entity, listeners) -> None:
         return
 
     debounce_cancelers = {}
+    active = True
 
     @callback
     def _cancel_debounce_callbacks():
+        nonlocal active
+        active = False
         for cancel in debounce_cancelers.values():
             cancel()
         debounce_cancelers.clear()
@@ -1940,6 +1953,8 @@ def _async_setup_state_only_event_hooks(hass, entity, listeners) -> None:
 
     @callback
     def _schedule(index, hook, event):
+        if not active:
+            return
         try:
             if isinstance(hook.get("debounce", 0), bool):
                 raise TypeError
@@ -1956,10 +1971,13 @@ def _async_setup_state_only_event_hooks(hass, entity, listeners) -> None:
 
         @callback
         def _async_apply_later(_now):
+            if debounce_cancelers.get(index) is not cancel_later:
+                return
             debounce_cancelers.pop(index, None)
-            _async_apply_state_only_event_hook(hass, entity, hook, event)
+            if event_hook_state_is_current(hass, hook, event):
+                _async_apply_state_only_event_hook(hass, entity, hook, event)
 
-        debounce_cancelers[index] = async_call_later(
+        cancel_later = debounce_cancelers[index] = async_call_later(
             hass,
             delay,
             _async_apply_later,

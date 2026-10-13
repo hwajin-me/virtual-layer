@@ -304,7 +304,7 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
         self._write_state()
 
     async def async_set_fan_speed(self, fan_speed: str, **kwargs) -> None:
-        if self._attr_fan_speed_list and fan_speed not in self._attr_fan_speed_list:
+        if self._fan_speed_list_known and fan_speed not in self._attr_fan_speed_list:
             raise ValueError(f"Unsupported vacuum fan speed: {fan_speed}")
         self._attr_fan_speed = fan_speed
         self._write_state()
@@ -312,7 +312,7 @@ class VirtualVacuum(VirtualEntity, StateVacuumEntity):
     def _validate_command_action(self, command, args, kwargs) -> None:
         if command == "set_fan_speed":
             speed = args[0] if args else kwargs.get("fan_speed")
-            if self._attr_fan_speed_list and speed not in self._attr_fan_speed_list:
+            if self._fan_speed_list_known and speed not in self._attr_fan_speed_list:
                 raise ValueError(f"Unsupported vacuum fan speed: {speed}")
 
     async def async_send_command(

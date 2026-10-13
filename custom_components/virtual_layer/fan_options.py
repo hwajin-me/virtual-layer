@@ -17,14 +17,73 @@ FAN_MODE_LIST_FIELD = "modes"
 # eco/pet/turbo/boost and named speed presets have device-specific behavior.
 # VeSync uses normal; Xiaomi uses favorite. Keep vendor spelling for writes.
 MANUAL_PRESET_PRIORITY = {
-    "manual": 0, "manual mode": 0, "수동": 0, "수동 모드": 0,
+    "manual": 0, "manual mode": 0, "manual preset": 0, "수동": 0, "수동 모드": 0,
     "normal": 1, "normal mode": 1, "일반": 1, "일반 모드": 1,
-    "favorite": 2, "favourite": 2, "즐겨찾기": 2,
+    "favorite": 2, "favourite": 2, "fav": 2, "즐겨찾기": 2,
 }
 
 
 def _preset_key(mode: str) -> str:
     return re.sub(r"[\s_-]+", " ", mode.strip().lower())
+
+
+# These wind names are used by different Xiaomi fan integrations. Do not
+# conflate generic Normal/Manual/Auto presets with vendor wind modes.
+WIND_PRESET_FAMILIES = (
+    ("direct mode", "straight wind"),
+    ("natural mode", "natural wind"),
+)
+
+
+def resolve_preset_mode(modes, requested):
+    """Resolve a known wind alias to an advertised command, exact match first."""
+    if not isinstance(modes, (list, tuple)) or not isinstance(requested, str):
+        return None
+    if requested in modes:
+        return requested
+    family = next((values for values in WIND_PRESET_FAMILIES
+                   if _preset_key(requested) in values), ())
+    return next((mode for mode in modes if isinstance(mode, str)
+                 and _preset_key(mode) in family), None)
+
+
+def source_preset_action(action: dict, entity_id: str) -> dict:
+    """Guard a generated fan action and resolve wind names at execution time."""
+    prefix = (
+        "{% set requested = command_data.get('preset_mode') %}"
+        f"{{% set modes = state_attr({entity_id!r}, 'preset_modes') %}}"
+        f"{{% set features = state_attr({entity_id!r}, 'supported_features') %}}"
+        "{% if features is not none and (features is boolean or features | int(0) "
+        f"| bitwise_and({int(FanEntityFeature.PRESET_MODE)}) == 0) %}}"
+        "{% set modes = none %}{% endif %}"
+        "{% set selection = namespace(mode=none) %}"
+        "{% if modes is sequence and modes is not string and modes is not mapping %}"
+        "{% if requested in modes %}{% set selection.mode = requested %}"
+        "{% elif requested is string %}"
+        "{% set key = requested | trim | lower | regex_replace('[\\\\s_-]+', ' ') %}"
+        f"{{% for family in {WIND_PRESET_FAMILIES!r} if key in family %}}"
+        "{% for candidate in modes if candidate is string %}"
+        "{% if selection.mode is none and "
+        "candidate | trim | lower | regex_replace('[\\\\s_-]+', ' ') in family %}"
+        "{% set selection.mode = candidate %}"
+        "{% endif %}{% endfor %}{% endfor %}{% endif %}{% endif %}"
+    )
+    resolved = dict(action)
+    # The supplied payload is a generated whole-data template. Retain its
+    # percentage rounding while substituting the source-specific preset.
+    resolved["data"] = (
+        prefix
+        + "{% set fan_command_data = dict(command_data, preset_mode=selection.mode) "
+        "if requested is not none else command_data %}"
+        + action["data"].replace("command_data", "fan_command_data")
+    )
+    optional = action.get("action", action.get("service")) == "fan.turn_on"
+    return {"choose": [{
+        "conditions": prefix + f"{{{{ states({entity_id!r}) not in ['unknown', 'unavailable'] "
+        + "and (selection.mode is not none"
+        + (" or requested is none" if optional else "") + ") }}",
+        "sequence": [resolved],
+    }]}
 
 
 def normalize_preset_modes(modes) -> list[str]:
@@ -152,6 +211,9 @@ def migrate_legacy_fan_attributes(config: Mapping) -> dict[str, Any]:
         migrated[FAN_MODE_LIST_FIELD] = normalize_preset_modes(
             migrated[FAN_MODE_LIST_FIELD]
         )
+        resolved = resolve_preset_mode(migrated[FAN_MODE_LIST_FIELD], migrated.get("preset_mode"))
+        if resolved is not None:
+            migrated["preset_mode"] = resolved
     attributes = migrated.get(CONF_ATTRIBUTES)
     if not isinstance(attributes, Mapping):
         return migrated

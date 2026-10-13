@@ -227,6 +227,21 @@ def test_power_and_auto_labels_cover_source_casing(domain, attribute):
                 assert states[source_value] == label
 
 
+@pytest.mark.parametrize("domain, attribute", [
+    ("climate", "preset_mode"), ("climate", "fan_mode"),
+    ("fan", "preset_mode"), ("humidifier", "mode"),
+])
+def test_vendor_mode_spellings_have_matching_translations(domain, attribute):
+    for language in ("en", "ko"):
+        catalog = json.loads((TRANSLATIONS / f"{language}.json").read_text())
+        states = catalog["entity"][domain]["virtual"]["state_attributes"][attribute]["state"]
+        for value in ("manual mode", "normal mode", "favourite", "quiet", "turbo",
+                      "super", "sleep mode", "direct mode", "natural mode",
+                      "straight wind", "constant humidity"):
+            variants = (value, value.title(), value.upper(), value.replace(" ", "_"), value.replace(" ", "-"))
+            assert len({states[key] for key in variants}) == 1
+
+
 def test_native_template_sections_are_translated_for_add_and_edit():
     for translation_file in (TRANSLATIONS / "en.json", TRANSLATIONS / "ko.json"):
         catalog = json.loads(translation_file.read_text(encoding="utf-8"))

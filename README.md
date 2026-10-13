@@ -648,6 +648,33 @@ After 180 seconds, templates are reevaluated even if no source event arrives,
 and their normal unknown/unavailable handling resumes. Source retries do not
 extend this deadline, and editing entities does not start a new recovery window.
 
+### Delayed or missing source feedback
+
+Source state is Home Assistant's latest report; completing a service call does
+not prove physical completion. Light commands already have separate dispatch,
+feedback, and total time limits and isolate slow group members. Camera/image
+aliases bound media requests and retain their last usable image on failure.
+General command scripts retain Home Assistant's action semantics, including
+intentional delays and waits; they do not gain the light-specific feedback
+confirmation or deadlines.
+
+An unchanged source state alone does not prove a communication failure. Use
+availability templates or the domain's explicit source-age rules where needed.
+The pull interval re-renders templates from current HA states; it does not
+request fresh measurements from hardware. Motion helpers keep an active state
+until every source reports off for the configured hold time, so a missing source
+does not silently count as off.
+
+Event-hook `debounce` is in seconds and keeps the latest matching trigger per
+hook, shared across its sources. Before a delayed state hook runs, the source
+must still have the captured state and watched attribute values. Source removal,
+unknown/unavailable transitions, and an intervening state cycle discard the old
+trigger. Unwatched attribute changes alone do not invalidate it. State hooks
+with `from`/`to` state filters and no watched attributes ignore attribute-only
+updates, so telemetry churn cannot keep restarting their debounce. Event-bus hooks
+coalesce matching events; events rejected by `event_data` do not cancel them.
+Cancelled callbacks cannot apply updates after replacement or unload.
+
 ## Composite Entities
 
 ### Water-quality sensors
@@ -1638,6 +1665,28 @@ also cover power and direction values. Lowercase, title-case, and uppercase
 source values (such as `off`, `Off`, and `OFF`) retain their original command
 values while displaying translated labels. Unrecognized custom mode names
 remain as supplied by the source.
+
+Combined mode/preset helpers select the first available source value and merge
+option lists in source order. They follow attributes that appear after setup,
+exclude stale values from unknown/unavailable sources, and preserve the literal
+`none` preset. Manual speed selection also recognizes advertised `Manual Preset`
+and `Fav` names without changing their service values.
+
+Fan preset commands resolve `Straight Wind`/`Direct Mode` and
+`Natural Wind`/`Natural Mode` to each source's currently advertised value.
+Exact names take priority; sources without a matching preset are skipped.
+This also repairs older generated fan actions when the integration reloads.
+Custom action payloads retain their configured behavior.
+
+Generated climate, humidifier, media-player, vacuum, water-heater and select
+choice commands use each source's live catalog. A choice belonging to one
+source is not broadcast to incompatible sources. This also applies to optional
+HVAC/operation modes sent with a temperature request. Catalogs can appear or
+change after setup; unavailable sources and cleared choices are skipped.
+Opaque choice names such as `None`, `False` and `0` remain strings, while an
+actual Jinja `none` clears the current choice. Media players expose native
+source and sound-mode controls when the source advertises the matching catalog
+and feature, alongside the existing Matterbridge command controls.
 
 Current translation files:
 

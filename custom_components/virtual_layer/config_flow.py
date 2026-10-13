@@ -99,7 +99,9 @@ from .fan_options import (
     manual_preset_mode,
     MANUAL_PRESET_PRIORITY,
     migrate_legacy_fan_attributes,
+    source_preset_action,
 )
+from .mode_commands import MODE_COMMANDS, SOURCE_MODE_COMMANDS, source_mode_action
 from .humidifier_options import (
     HUMIDIFIER_CURRENT_MODE_FIELD,
     HUMIDIFIER_FORM_FIELDS,
@@ -815,6 +817,15 @@ NATIVE_TEMPLATE_BOOLEAN_STATE_VALUES = {
     "is_streaming": {"streaming"},
     "is_unlocking": {"unlocking"},
 }
+NATIVE_TEMPLATE_MODE_PROPERTIES = frozenset({
+    ("climate", "preset_mode"), ("climate", "fan_mode"),
+    ("climate", "swing_mode"), ("climate", "swing_horizontal_mode"),
+    ("fan", "preset_mode"), ("humidifier", "mode"), ("vacuum", "fan_speed"),
+})
+NATIVE_TEMPLATE_MODE_LIST_PROPERTIES = frozenset({
+    "preset_modes", "fan_modes", "swing_modes", "swing_horizontal_modes",
+    "available_modes", "fan_speed_list",
+})
 NATIVE_TEMPLATE_SUPPORTED_FEATURE_MASKS = {
     ("lock", "support_open"): 1,
     ("siren", "support_volume"): 8,
@@ -7334,6 +7345,18 @@ def _native_source_template(
     attributes = state.attributes
     source_platform = entity_id.split(".", 1)[0]
     platform = platform or source_platform
+    if (
+        (platform, property_name) in NATIVE_TEMPLATE_MODE_PROPERTIES
+        or property_name in NATIVE_TEMPLATE_MODE_LIST_PROPERTIES
+    ):
+        # Mode names are opaque service values, including the valid preset
+        # "none". Offline sources may retain stale mode attributes.
+        value = f"state_attr({entity_id!r}, {property_name!r})"
+        fallback = "[]" if property_name in NATIVE_TEMPLATE_MODE_LIST_PROPERTIES else "none"
+        return (
+            "{{ " + value + f" if states({entity_id!r}) not in ['unknown', 'unavailable'] "
+            + "and " + value + " is not none else " + fallback + " }}"
+        )
     if platform == "media_player" and property_name not in {
         "supported_features", "source_list", "sound_mode_list", "group_members",
     }:
@@ -7361,12 +7384,21 @@ def _native_source_template(
             f"state_attr({entity_id!r}, 'supported_features') | int("
             f"{MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK})"
         )
+        choice_mask = str(MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK)
+        for catalog, feature in (
+            ("source_list", MediaPlayerEntityFeature.SELECT_SOURCE),
+            ("sound_mode_list", MediaPlayerEntityFeature.SELECT_SOUND_MODE),
+        ):
+            modes = f"state_attr({entity_id!r}, {catalog!r})"
+            choice_mask = (
+                f"({choice_mask} | bitwise_or({int(feature)} if "
+                f"{modes} is sequence and {modes} is not string and {modes} is not mapping "
+                f"and {modes} else 0))"
+            )
         return (
             "{{ ("
             + features
-            + ") | bitwise_and("
-            + str(MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK)
-            + ") }}"
+            + ") | bitwise_and(" + choice_mask + ") }}"
         )
     if platform == "air_quality" and property_name == "unit_of_measurement":
         # Overall quality is categorical; never copy a source concentration
@@ -7665,9 +7697,14 @@ def _native_reference_templates(
             values,
         )
         fallback = _native_source_helper_default(platform, property_name)
-        if any(source_has_values) or (
-            platform in {"climate", "humidifier"}
-            and property_name in {"current_humidity", "hvac_action", "action"}
+        if (
+            (platform, property_name) in NATIVE_TEMPLATE_MODE_PROPERTIES
+            or property_name in NATIVE_TEMPLATE_MODE_LIST_PROPERTIES
+            or any(source_has_values)
+            or (
+                platform in {"climate", "humidifier"}
+                and property_name in {"current_humidity", "hvac_action", "action"}
+            )
         ):
             templates[property_name] = merged_template
         else:
@@ -7686,6 +7723,12 @@ def _merged_native_template(
         template.removeprefix("{{").removesuffix("}}").strip()
         for template in source_templates
     ]
+    if (platform, property_name) in NATIVE_TEMPLATE_MODE_PROPERTIES:
+        return (
+            "{% set values = [" + ", ".join(expressions)
+            + "] | select('string') | reject('in', ['unknown', 'unavailable', '']) | list %}"
+            "{{ values[0] if values else none }}"
+        )
     if property_name in NATIVE_TEMPLATE_BOOLEAN_ANY_PROPERTIES:
         return (
             "{% set values = ["
@@ -7707,9 +7750,12 @@ def _merged_native_template(
         for expression in expressions[1:]:
             bitmask = f"({bitmask} | bitwise_or({expression} | int(0)))"
         if platform == "media_player" and property_name == "supported_features":
+            allowed = int(MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK
+                          | MediaPlayerEntityFeature.SELECT_SOURCE
+                          | MediaPlayerEntityFeature.SELECT_SOUND_MODE)
             bitmask = (
                 f"({bitmask} | bitwise_and("
-                f"{MATTERBRIDGE_MEDIA_PLAYER_FEATURE_MASK}))"
+                f"{allowed}))"
             )
         return f"{{{{ {bitmask} }}}}"
     if property_name in NATIVE_TEMPLATE_MINIMUM_PROPERTIES:
@@ -8975,6 +9021,28 @@ def _fan_manual_actions(sequence) -> list[dict[str, Any]]:
             and step.get("alias") == "Virtual Layer: select manual fan preset"]
 
 
+def _fan_service_actions(sequence, service):
+    """Visit service steps inside generated fan preset guards."""
+    for step in sequence if isinstance(sequence, list) else []:
+        if not isinstance(step, dict):
+            continue
+        if step.get("action", step.get("service")) == service:
+            yield step
+        for choice in step.get("choose", []):
+            if isinstance(choice, dict):
+                yield from _fan_service_actions(choice.get("sequence"), service)
+        yield from _fan_service_actions(step.get("default"), service)
+
+
+def _set_fan_source_action_data(action, data):
+    """Retain preset resolution when a Matter helper changes speed payloads."""
+    current = action.get("data")
+    if isinstance(current, str) and "{% set fan_command_data =" in current:
+        source = action["target"][ATTR_ENTITY_ID]
+        data = source_preset_action({**action, "data": data}, source)["choose"][0]["sequence"][0]["data"]
+    action["data"] = data
+
+
 def _xiaomi_fan_availability_template(
     fan_entity_id: str,
     number_entity_id: str,
@@ -9381,6 +9449,13 @@ def _source_command_actions(
             continue
         required_features = _SOURCE_COMMAND_FEATURES.get(key)
         capability_attributes = _SOURCE_COMMAND_CAPABILITY_ATTRIBUTES.get(key, ())
+        choice_command = key in MODE_COMMANDS and (
+            required_features is None or any(
+                entity_id.startswith(f"{platform}.") and _source_supports_command(
+                    state, required_features, capability_attributes
+                ) for entity_id, state in zip(entity_ids, states, strict=True)
+            )
+        )
         # A fan's power services are usable independently of its optional
         # speed/preset capabilities.  Some Xiaomi Home devices publish those
         # optional feature bits while their TURN_ON/TURN_OFF bits are absent
@@ -9396,6 +9471,7 @@ def _source_command_actions(
                 if entity_id.startswith(f"{platform}.")
                 and (
                     power_command
+                    or choice_command
                     or
                     required_features is None
                     or _source_supports_command(
@@ -9413,6 +9489,21 @@ def _source_command_actions(
             entity_id: _source_command_data_template(platform, command, entity_id)
             for entity_id in source_entities
         }
+        if key in MODE_COMMANDS and platform != "fan":
+            field, _attributes = MODE_COMMANDS[key]
+            actions[command] = [source_mode_action(platform, command, {
+                "action": f"{platform}.{service}",
+                "target": {ATTR_ENTITY_ID: entity_id},
+                "data": {field: "{{ " + field + " }}"},
+            }, entity_id) for entity_id in source_entities]
+            continue
+        if platform == "fan" and command == "set_preset_mode":
+            actions[command] = [source_preset_action({
+                "action": "fan.set_preset_mode",
+                "target": {ATTR_ENTITY_ID: entity_id},
+                "data": "{{ command_data }}",
+            }, entity_id) for entity_id in source_entities]
+            continue
         if any(fixed_data.values()):
             actions[command] = [
                 {
@@ -9422,6 +9513,16 @@ def _source_command_actions(
                 }
                 for entity_id in source_entities
             ]
+            if platform == "fan" and command == "turn_on":
+                actions[command] = [
+                    source_preset_action(action, entity_id)
+                    for entity_id, action in zip(source_entities, actions[command], strict=True)
+                ]
+            elif key in SOURCE_MODE_COMMANDS:
+                actions[command] = [
+                    source_mode_action(platform, command, action, entity_id)
+                    for entity_id, action in zip(source_entities, actions[command], strict=True)
+                ]
             if platform == "fan" and command in {"set_percentage", "turn_on"}:
                 actions[command] = [
                     step
@@ -9817,7 +9918,8 @@ def _apply_matter_fan_onoff_helper(
     actions = _parse_command_actions(result.get(CONF_COMMAND_ACTIONS_JSON), "fan")
     turn_on = {"action": "fan.turn_on", "target": {ATTR_ENTITY_ID: entity_id}}
     turn_off = {"action": "fan.turn_off", "target": {ATTR_ENTITY_ID: entity_id}}
-    actions["turn_on"] = [turn_on]
+    if not result.get("modes") or not actions.get("turn_on"):
+        actions["turn_on"] = [turn_on]
     actions["turn_off"] = [turn_off]
     actions["set_percentage"] = [
         {
@@ -9861,16 +9963,15 @@ def _apply_matter_fan_percentage_helper(
     turn_on = actions.get("turn_on")
     if isinstance(turn_on, list):
         if any(_action_targets_entity(action, entity_id) for action in turn_on):
-            for action in turn_on:
-                if isinstance(action, dict) and "action" in action and _action_targets_entity(
+            for action in _fan_service_actions(turn_on, "fan.turn_on"):
+                if _action_targets_entity(
                     action, entity_id
                 ):
-                    action["data"] = "{{ command_data }}"
+                    _set_fan_source_action_data(action, "{{ command_data }}")
         else:
             no_percentage = _matter_fan_turn_on_without_percentage_template()
-            for action in turn_on:
-                if isinstance(action, dict) and "action" in action:
-                    action["data"] = no_percentage
+            for action in _fan_service_actions(turn_on, "fan.turn_on"):
+                _set_fan_source_action_data(action, no_percentage)
             turn_on.append(
                 {
                     "choose": [
@@ -9958,21 +10059,20 @@ def _apply_matter_fan_level_helper(
             _action_targets_entity(action, entity_id) for action in turn_on
         )
         if targets_speed_source:
-            for action in turn_on:
+            for action in _fan_service_actions(turn_on, "fan.turn_on"):
                 if (
                     isinstance(action, dict)
                     and action.get("action") == "fan.turn_on"
                     and _action_targets_entity(action, entity_id)
                 ):
-                    action["data"] = turn_on_data
+                    _set_fan_source_action_data(action, turn_on_data)
         else:
             # A combined fan may use a MIOT entity for power and a Xiaomi Home
             # entity for speed. Turn the main source on without its unsupported
             # percentage argument, then conditionally set the selected speed.
             no_percentage = _matter_fan_turn_on_without_percentage_template()
-            for action in turn_on:
-                if isinstance(action, dict) and "action" in action:
-                    action["data"] = no_percentage
+            for action in _fan_service_actions(turn_on, "fan.turn_on"):
+                _set_fan_source_action_data(action, no_percentage)
             turn_on.append(
                 {
                     "choose": [
@@ -9993,8 +10093,7 @@ def _apply_matter_fan_level_helper(
         ]
     power_actions = [
         {**step, "data": {}}
-        for step in existing_actions.get("turn_on", [])
-        if isinstance(step, dict) and step.get("action") == "fan.turn_on"
+        for step in _fan_service_actions(existing_actions.get("turn_on", []), "fan.turn_on")
     ]
     existing_actions["turn_on"] = [{
         "choose": [{

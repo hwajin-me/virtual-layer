@@ -1276,6 +1276,61 @@ async def test_audit_regressions(hass, entry):
     print("Audit Docker passed: script branches/variables, unload cancellation, alarm features, calendar boundaries, attribute edits, scoped parent validation")
 
 
+async def test_debounced_source_feedback(hass):
+    """Use real HA listeners/timers for both native and state-only hooks."""
+    from custom_components.virtual_layer import _async_setup_state_only_event_hooks
+
+    for domain in ("sensor", "tag"):
+        target = f"{domain}.docker_debounce"
+        source = "sensor.docker_debounce_source"
+        config = {
+            "name": "Docker debounce", "entity_id": target,
+            "initial_value": "waiting", "persistent": False,
+            "event_hooks": [{
+                "trigger": "state", "entity_id": [source], "to": "on",
+                "debounce": 0.02, "value_template": "received",
+            }],
+        }
+        listeners = []
+        if domain == "sensor":
+            entity = VirtualSensor(SENSOR_SCHEMA(config), False)
+            entity.hass = hass
+            entity._create_state(entity._config)
+            entity._schedule_state_update = Mock()
+            entity._setup_event_hooks()
+            def value():
+                return entity._attr_state
+        else:
+            hass.states.async_set(target, "waiting")
+            _async_setup_state_only_event_hooks(hass, config, listeners)
+            def value():
+                return hass.states.get(target).state
+        try:
+            hass.states.async_set(source, "on")
+            # Queue the invalidating state before yielding: slow container
+            # scheduling must not let the debounce expire between these writes.
+            hass.states.async_set(source, "unavailable")
+            await hass.async_block_till_done()
+            await asyncio.sleep(0.05)
+            assert value() == "waiting", (domain, value())
+            hass.states.async_set(source, "on")
+            await hass.async_block_till_done()
+            for signal in range(5):
+                hass.states.async_set(source, "on", {"signal": signal})
+                await hass.async_block_till_done()
+                await asyncio.sleep(0.01)
+            assert value() == "received", (domain, value())
+        finally:
+            if domain == "sensor":
+                await entity.async_will_remove_from_hass()
+            else:
+                for remove in listeners:
+                    remove()
+                hass.states.async_remove(target)
+            hass.states.async_remove(source)
+    print("Debounce Docker passed: stale unavailable feedback discarded, attribute churn cannot starve state trigger (sensor/tag)")
+
+
 async def test_config_flow_create_modify_runtime():
     """Create, load, edit, reload, and live-update through real HA flows."""
     config_dir = Path(tempfile.mkdtemp())
@@ -1296,6 +1351,7 @@ async def test_config_flow_create_modify_runtime():
         assert "recorder" in hass.config.components
         assert await async_setup_component(hass, COMPONENT_DOMAIN, {})
         await hass.async_start()
+        await test_debounced_source_feedback(hass)
         from custom_components.virtual_layer.humidifier import (
             HUMIDIFIER_SCHEMA, VirtualHumidifier, validate_domain_options,
         )
@@ -1341,6 +1397,60 @@ async def test_config_flow_create_modify_runtime():
         from custom_components.virtual_layer.fan import FAN_SCHEMA, VirtualFan
         from homeassistant.helpers.template import Template
         from homeassistant.helpers import config_validation as cv
+        from custom_components.virtual_layer.fan_options import resolve_preset_mode, source_preset_action
+        wind_modes = ["Direct Mode", "Natural Mode", "Sleep Mode"]
+        assert resolve_preset_mode(wind_modes, "Straight Wind") == "Direct Mode"
+        hass.states.async_set("fan.docker_wind", "on", {"preset_modes": wind_modes})
+        wind_action = source_preset_action({
+            "action": "fan.set_preset_mode", "target": {"entity_id": "fan.docker_wind"},
+            "data": "{{ command_data }}",
+        }, "fan.docker_wind")
+        cv.SCRIPT_SCHEMA([wind_action])
+        wind_data = Template(wind_action["choose"][0]["sequence"][0]["data"], hass).async_render(
+            {"command_data": {"preset_mode": "Straight Wind"}}, parse_result=True)
+        assert wind_data == {"preset_mode": "Direct Mode"}
+        print("Fan wind preset smoke passed: advertised alias resolution and guarded action schema")
+        from custom_components.virtual_layer.config_flow import _native_reference_templates
+        for domain, mode, modes in (
+            ("fan", "preset_mode", "preset_modes"),
+            ("humidifier", "mode", "available_modes"),
+            ("climate", "preset_mode", "preset_modes"),
+            ("vacuum", "fan_speed", "fan_speed_list"),
+        ):
+            sources = [f"{domain}.docker_late_first", f"{domain}.docker_late_second"]
+            for source in sources:
+                hass.states.async_set(source, "off")
+            helpers = _native_reference_templates(domain, sources, [hass.states.get(s) for s in sources])
+            hass.states.async_set(sources[0], "unavailable", {mode: "Stale", modes: ["Stale"]})
+            hass.states.async_set(sources[1], "on", {mode: "none", modes: ["none", "Custom"]})
+            assert Template(helpers[mode], hass).async_render() == "none"
+            assert Template(helpers[modes], hass).async_render() == ["none", "Custom"]
+        print("Mode helper smoke passed: late catalogs, offline filtering, literal none presets")
+        from custom_components.virtual_layer.mode_commands import (
+            MODE_COMMANDS, source_mode_action, source_mode_data,
+        )
+        from custom_components.virtual_layer.entity import VirtualEntity
+        for (domain, command), (field, catalogs) in MODE_COMMANDS.items():
+            source = f"{domain}.docker_mode_contract"
+            attrs = {catalogs[0]: ["None", "0"], "supported_features": (1 << 31) - 1}
+            hass.states.async_set(source, "on", attrs)
+            action = source_mode_action(domain, command, {
+                "action": f"{domain}.{command}", "target": {"entity_id": source},
+                "data": "{{ command_data }}",
+            }, source)
+            cv.SCRIPT_SCHEMA([action])
+            variables = {"command_data": {field: "None"}}
+            assert Template(action["choose"][0]["conditions"], hass).async_render(variables) is True
+            assert Template(action["choose"][0]["sequence"][0]["data"], hass).async_render(variables)[field] == "None"
+            assert source_mode_data(domain, command, hass.states.get(source), variables["command_data"]) == {field: "None"}
+            hass.states.async_set(source, "unavailable", attrs)
+            assert Template(action["choose"][0]["conditions"], hass).async_render(variables) is False
+        mode_entity = VirtualEntity({"name": "Opaque modes"}, "select", False)
+        mode_entity.hass = hass
+        mode_entity.entity_id = "select.docker_opaque_modes"
+        assert mode_entity._render_native_template("current_option", "{{ 'None' }}") == "None"
+        assert mode_entity._render_native_template("current_option", "{{ none }}") is None
+        print("Mode command Docker passed: all choice domains, source catalogs, offline filtering, opaque strings, action schemas")
         hass.states.async_set("fan.docker_preset", "on", {
             "preset_modes": ["Auto", "Normal", "Favourite"], "preset_mode": "Auto",
             "motor_speed": 2200,

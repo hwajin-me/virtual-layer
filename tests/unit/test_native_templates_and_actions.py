@@ -282,6 +282,7 @@ from custom_components.virtual_layer.alarm_control_panel import (
     VirtualAlarmControlPanel,
 )
 from custom_components.virtual_layer.climate import CLIMATE_SCHEMA, VirtualClimate
+from custom_components.virtual_layer.mode_commands import MODE_COMMANDS
 from custom_components.virtual_layer.const import (
     ATTR_UNIQUE_ID,
     CONF_ATTRIBUTE_TEMPLATES,
@@ -444,12 +445,19 @@ async def test_runtime_fallback_proxies_every_service_command(hass):
             entity._source_entities = [f"{domain}.source"]
             entity._context = None
 
-            await entity._async_proxy_source_command(command, {"marker": command})
+            data = {"marker": command}
+            if (domain, command) in MODE_COMMANDS:
+                field, catalogs = MODE_COMMANDS[(domain, command)]
+                data[field] = "supported"
+                hass.states.async_set(f"{domain}.source", "on", {
+                    catalogs[0]: ["supported"], "supported_features": (1 << 31) - 1,
+                })
+            await entity._async_proxy_source_command(command, data)
             expected.append((
                 domain,
                 service,
                 {
-                    "marker": command,
+                    **data,
                     ATTR_ENTITY_ID: [f"{domain}.source"],
                 },
             ))
@@ -1698,6 +1706,12 @@ async def test_command_data_fixer_template_renders_per_invocation(hass):
 
 async def _exercise_source_proxy(hass, domain, entity, commands):
     calls = []
+    attributes = {"supported_features": (1 << 31) - 1}
+    for command, _, data in commands:
+        if (domain, command) in MODE_COMMANDS:
+            field, catalogs = MODE_COMMANDS[(domain, command)]
+            attributes[catalogs[0]] = [data[field]]
+    hass.states.async_set(f"{domain}.source", "on", attributes)
 
     def _register(service):
         async def _capture(call):
@@ -1771,6 +1785,7 @@ async def test_climate_commands_proxy_to_source_entity(hass):
 
 
 async def test_fan_and_humidifier_commands_proxy_to_source_entities(hass):
+    hass.states.async_set("fan.source", "on", {"preset_modes": ["auto", "sleep"]})
     fan = VirtualFan(
         FAN_SCHEMA(
             _base(

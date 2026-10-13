@@ -975,7 +975,7 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
             CONF_SWING_MODE,
             CONF_SWING_HORIZONTAL_MODE,
         }:
-            value = str(value).strip()
+            value = None if value is None else str(value).strip() or None
         elif name in {
             CONF_CURRENT_TEMPERATURE,
             CONF_TARGET_TEMPERATURE,
@@ -1229,6 +1229,10 @@ class VirtualClimate(VirtualEntity, ClimateEntity):
 
     def _validate_command_action(self, command, args, kwargs) -> None:
         """Reject invalid mode-selection commands before touching a source."""
+        if command == "set_temperature" and ATTR_HVAC_MODE in kwargs:
+            mode = _as_hvac_mode(kwargs[ATTR_HVAC_MODE])
+            if mode not in self._attr_hvac_modes:
+                raise ValueError(f"Unsupported HVAC mode: {mode}")
         if command == "set_humidity":
             self._validate_humidity(args[0] if args else kwargs.get("humidity"))
             return

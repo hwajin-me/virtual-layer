@@ -621,7 +621,7 @@ class VirtualSelect(_NativeGenericMixin, VirtualEntity, SelectEntity):
         )
 
     def set_state(self, value) -> None:
-        if not _has_value(value):
+        if value is None or (not _has_value(value) and str(value) not in self._attr_options):
             self._attr_current_option = None
             return
         option = str(value)
@@ -646,7 +646,7 @@ class VirtualSelect(_NativeGenericMixin, VirtualEntity, SelectEntity):
             value = _template_string_list(value, name)
         elif name in {"state", "value", "current_option"}:
             name = "current_option"
-            if not _has_value(value):
+            if value is None or (not _has_value(value) and str(value) not in self._attr_options):
                 value = None
             else:
                 value = str(value)
@@ -1455,12 +1455,16 @@ class VirtualMediaPlayer(_NativeGenericMixin, VirtualEntity, MediaPlayerEntity):
                 self._known_choice_lists.add(name)
                 return super()._apply_native_template_value(name, value) or not was_known
         elif name == "source":
-            value = None if not _has_value(value) else str(value).strip()
+            value = str(value).strip() if value is not None and (
+                _has_value(value) or str(value).strip() in self._attr_source_list
+            ) else None
             if value is not None and self._attr_source_list and value not in self._attr_source_list:
                 raise ValueError(f"Invalid media source: {value}")
         elif name == "sound_mode":
-            value = None if not _has_value(value) else str(value).strip()
             sound_modes = getattr(self, "_attr_sound_mode_list", None) or []
+            value = str(value).strip() if value is not None and (
+                _has_value(value) or str(value).strip() in sound_modes
+            ) else None
             if value is not None and sound_modes and value not in sound_modes:
                 raise ValueError(f"Invalid media sound mode: {value}")
         elif name == "repeat":
@@ -1628,6 +1632,8 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
 
     def _normalize_operation(self, value):
         """Preserve advertised mode values, including their original case."""
+        if value is None:
+            return None
         operation = str(value)
         # Retain the old uppercase-to-lowercase fallback for legacy callers
         # only when it does not replace an exact advertised mode.
@@ -1703,6 +1709,10 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
     def _validate_command_action(self, command, args, kwargs) -> None:
         if command == "set_temperature":
             self._validate_target_temperature(kwargs.get(ATTR_TEMPERATURE))
+            if "operation_mode" in kwargs:
+                mode = self._normalize_operation(kwargs["operation_mode"])
+                if mode not in self._attr_operation_list:
+                    raise ValueError(f"Invalid water heater operation mode: {mode}")
         elif command == "set_operation_mode":
             mode = args[0] if args else kwargs.get("operation_mode")
             if mode not in self._attr_operation_list:
@@ -1710,12 +1720,18 @@ class VirtualWaterHeater(_NativeGenericMixin, VirtualEntity, WaterHeaterEntity):
 
     async def async_set_temperature(self, **kwargs) -> None:
         temperature = self._validate_target_temperature(kwargs[ATTR_TEMPERATURE])
+        operation = self._attr_current_operation
+        if "operation_mode" in kwargs:
+            operation = self._normalize_operation(kwargs["operation_mode"])
+            if operation not in self._attr_operation_list:
+                raise ValueError(f"Invalid water heater operation mode: {operation}")
         self._attr_target_temperature = nearest_step_value(
             temperature,
             self._attr_min_temp,
             self._attr_max_temp,
             self._attr_target_temperature_step,
         )
+        self._attr_current_operation = operation
         self.async_write_ha_state()
 
     async def async_set_operation_mode(self, operation_mode: str) -> None:
