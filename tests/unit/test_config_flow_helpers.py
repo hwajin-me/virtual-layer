@@ -40,6 +40,7 @@ from voluptuous_serialize import convert
 
 from custom_components.virtual_layer import boiler_control as bc
 from custom_components.virtual_layer.config_flow import (
+    InvalidFieldValue,
     CLIMATE_NATIVE_TEMPLATE_PROPERTIES,
     DEFAULT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
     LEGACY_DIRECT_BOILER_TEMPERATURE_CALIBRATION_TEMPLATE,
@@ -497,7 +498,8 @@ def test_structured_advanced_fields_use_visible_yaml_textareas():
     advanced = _section_validators(schema, CONF_ADVANCED_SETTINGS)
 
     assert all(
-        isinstance(validator, selector.TextSelector) for validator in advanced.values()
+        isinstance(validator, selector.TextSelector)
+        for field, validator in advanced.items() if field.endswith("_json")
     )
     defaults = schema({})
     assert defaults[CONF_ADVANCED_SETTINGS][CONF_ATTRIBUTES_JSON] == (
@@ -6877,6 +6879,35 @@ def test_build_entity_config_supports_attribute_sources_and_pull_interval():
     }
 
 
+@pytest.mark.parametrize("interval", [0, 60, 3600])
+def test_attribute_retention_settings_roundtrip_in_advanced_form(interval):
+    values = _entity_input({
+        "diagnostic_interval": interval,
+        "attribute_cleanup_interval": interval,
+        "diagnostic_details": False,
+        "diagnostic_attributes": "trace, service_debug\ntrace",
+    })
+    _, entity = _build_entity_config(values)
+    for field in ("diagnostic_interval", "attribute_cleanup_interval"):
+        assert entity.get(field, 0 if field == "attribute_cleanup_interval" else 300) == interval
+    assert entity["diagnostic_details"] is False
+    defaults = _entity_form_defaults("Laundry", entity)
+    schema_defaults = _flatten_entity_form_sections(_entity_schema(defaults)({}))
+    assert schema_defaults["diagnostic_interval"] == interval
+    assert schema_defaults["attribute_cleanup_interval"] == interval
+    assert schema_defaults["diagnostic_details"] is False
+    assert entity["diagnostic_attributes"] == ["trace", "service_debug"]
+    assert schema_defaults["diagnostic_attributes"] == "trace\nservice_debug"
+
+
+@pytest.mark.parametrize("field", ["diagnostic_interval", "attribute_cleanup_interval"])
+@pytest.mark.parametrize("value", [-1, True, 1.5, float("nan"), float("inf"), 2**63, "invalid"])
+def test_attribute_retention_rejects_unschedulable_intervals(field, value):
+    with pytest.raises(InvalidFieldValue) as error:
+        _build_entity_config(_entity_input({field: value}))
+    assert error.value.field_name == field
+
+
 def test_build_entity_config_supports_template_sources_for_composite_values():
     _, entity = _build_entity_config(
         _entity_input(
@@ -8714,7 +8745,7 @@ def test_every_entity_domain_exposes_advanced_logic_as_yaml_editors(platform):
     assert advanced_fields
     assert all(
         isinstance(validator, selector.TextSelector)
-        for validator in advanced_fields.values()
+        for field, validator in advanced_fields.items() if field.endswith("_json")
     )
 
 

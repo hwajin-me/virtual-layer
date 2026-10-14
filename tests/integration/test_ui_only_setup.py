@@ -3667,7 +3667,8 @@ async def test_config_entry_setup_loads_entities_from_options_only(hass):
     assert group_data[ATTR_ENTITIES]["sensor"][0][ATTR_DEVICE_ID] == "laundry-device-1"
     assert group_data[ATTR_ENTITIES]["sensor"][0][CONF_MANUFACTURER] == "Acme"
     assert group_data[ATTR_ENTITIES]["sensor"][0]["initial_value"] == "idle"
-    forward_setups.assert_awaited_once_with(entry, ["sensor"])
+    assert forward_setups.await_count == 2
+    assert {tuple(call.args[1]) for call in forward_setups.await_args_list} == {("sensor",), ("button",)}
 
 
 async def test_config_entry_setup_skips_forwarding_empty_platforms(hass):
@@ -7346,6 +7347,7 @@ async def test_source_diagnostics_are_attributes_and_legacy_entities_are_removed
         ATTR_ENTITY_ID: "sensor.virtual_washer", CONF_INITIAL_VALUE: "idle",
         CONF_AVAILABILITY_TEMPLATE: "{{ true }}", CONF_PERSISTENT: False,
         CONF_SOURCE_ENTITIES: ["sensor.washer_power", "binary_sensor.washer_door"],
+        "diagnostic_interval": 0,
     }
     entry = MockConfigEntry(
         domain=COMPONENT_DOMAIN, data={ATTR_GROUP_NAME: "laundry"},
@@ -9429,6 +9431,7 @@ async def test_state_only_entity_supports_state_and_event_hooks(
                         CONF_PLATFORM: "tag",
                         CONF_NAME: "Hook Tag",
                         ATTR_ENTITY_ID: "tag.hook_tag",
+                        "diagnostic_interval": 0,
                         CONF_INITIAL_VALUE: "waiting",
                         CONF_INITIAL_AVAILABILITY: True,
                         CONF_PERSISTENT: False,

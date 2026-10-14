@@ -730,15 +730,30 @@ def _normalize_common_entity_config(entity, device_name, index):
     if isinstance(polygon, Mapping):
         entity[CONF_POLYGONAL_ZONE] = repair_legacy_template_data(dict(polygon))
 
-    if CONF_PULL_INTERVAL in entity:
+    for key, default in (
+        (CONF_PULL_INTERVAL, 0),
+        (CONF_DIAGNOSTIC_INTERVAL, DEFAULT_DIAGNOSTIC_INTERVAL),
+        (CONF_ATTRIBUTE_CLEANUP_INTERVAL, 0),
+    ):
+        if key not in entity:
+            continue
         try:
-            entity[CONF_PULL_INTERVAL] = pull_interval_seconds(entity[CONF_PULL_INTERVAL])
+            entity[key] = pull_interval_seconds(entity[key])
         except vol.Invalid:
-            entity[CONF_PULL_INTERVAL] = 0
+            entity[key] = default
+
+    if CONF_DIAGNOSTIC_ATTRIBUTES in entity:
+        from .attribute_retention import diagnostic_names
+
+        try:
+            entity[CONF_DIAGNOSTIC_ATTRIBUTES] = diagnostic_names(entity[CONF_DIAGNOSTIC_ATTRIBUTES])
+        except vol.Invalid:
+            entity[CONF_DIAGNOSTIC_ATTRIBUTES] = []
 
     for key, default in (
         (CONF_INITIAL_AVAILABILITY, DEFAULT_AVAILABILITY),
         (CONF_PERSISTENT, DEFAULT_PERSISTENT),
+        (CONF_DIAGNOSTIC_DETAILS, True),
     ):
         if key not in entity:
             continue
@@ -1753,6 +1768,25 @@ class BlendedCfg:
         for entity, platform in diagnostic_parents:
             entity[CONF_SOURCE_DIAGNOSTICS] = _diagnostic_configuration(entity, platform)
             self._append_companion_entities(entity, platform)
+
+        # Snapshot targets before adding buttons: generated controls never
+        # recursively receive another Debug button. Reserve user IDs first.
+        if self._config_entry is not None:
+            targets = [entity for records in self._entities.values() for entity in records]
+            for entity in targets:
+                target_id = entity[ATTR_ENTITY_ID]
+                uid = f"{entity[ATTR_UNIQUE_ID]}{DIAGNOSTIC_UNIQUE_ID_MARKER}debug_button"
+                self._entities.setdefault("button", []).append({
+                    CONF_NAME: f"Debug - {entity[CONF_NAME]}",
+                    ATTR_ENTITY_ID: self._reserve_entity_id(
+                        "button", f"button.debug_{target_id.replace('.', '_')}", uid,
+                    ),
+                    ATTR_UNIQUE_ID: uid,
+                    ATTR_DEVICE_ID: entity[ATTR_DEVICE_ID],
+                    CONF_ICON: "mdi:bug-check",
+                    CONF_DEBUG_TARGET: entity[ATTR_UNIQUE_ID],
+                    CONF_ATTRIBUTES: {"virtual_entity_id": target_id},
+                })
 
         # Create orphaned list. If we have anything here we need to update
         # the saved meta data.

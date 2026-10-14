@@ -404,6 +404,18 @@ async def test_real_config_entry_loads_every_supported_domain(
         registered_device_ids.add(entity_entry.device_id)
         assert device_registry.async_get(entity_entry.device_id) is not None
     assert len(registered_device_ids) == 1
+    from custom_components.virtual_layer.debug import DEBUG_SUFFIX
+
+    for domain in VIRTUAL_ENTITY_DOMAINS:
+        target_id = f"{domain}.{domain}_entity"
+        target = entity_registry.async_get(target_id)
+        control_id = entity_registry.async_get_entity_id(
+            "button", COMPONENT_DOMAIN, target.unique_id + DEBUG_SUFFIX,
+        )
+        assert control_id is not None
+        assert entity_registry.async_get(control_id).device_id == target.device_id
+        target_name = target.name or target.original_name or hass.states.get(target_id).name
+        assert hass.states.get(control_id).name == f"Debug - {target_name}"
     battery_state = hass.states.get("sensor.vacuum_entity_battery")
     assert battery_state is not None
     assert battery_state.state == str(hass.states.get("vacuum.vacuum_entity").attributes["battery_level"])

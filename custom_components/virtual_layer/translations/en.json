@@ -17,6 +17,8 @@
       "fusion_mapping": "Use distinct Home and Away values. Do not include unknown or unavailable. For room names, enter source=display name on each line.",
       "fusion_invalid_config": "Check connected devices and signals, Home boundaries and detection thresholds before saving. Repair or remove any invalid entries.",
       "invalid_icon": "Enter an icon in prefix:name format, or leave it empty.",
+      "invalid_attribute_interval": "Enter non-negative whole seconds within the supported date range. The field description explains the behavior of 0.",
+      "invalid_diagnostic_attributes": "Enter up to 32 attribute names, each at most 128 characters. Integration metadata names cannot be selected.",
       "invalid_pull_interval": "Enter non-negative whole seconds within the supported date range. Use 0 to disable periodic updates.",
       "invalid_parent_device": "Select an existing parent device without a circular relationship, or clear the selection.",
       "group_name_used": "That device name is already in use, try another.",
@@ -366,6 +368,10 @@
             "name": "Advanced settings",
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
+              "diagnostic_interval": "Diagnostic refresh interval",
+              "diagnostic_details": "Keep detailed diagnostics for 7 days",
+              "attribute_cleanup_interval": "Additional diagnostic cleanup interval",
+              "diagnostic_attributes": "Diagnostic-only service attributes",
               "template_sources_json": "Template sources Jinja template",
               "event_hooks_json": "Event hooks Jinja template",
               "attributes_json": "Attributes Jinja template",
@@ -376,6 +382,10 @@
               "domain_options_json": "Domain options Jinja template"
             },
             "data_description": {
+              "diagnostic_interval": "Seconds between diagnostic snapshots (default 300). Use 0 for every source change. State and native properties still update normally.",
+              "diagnostic_details": "Include source attributes, timestamps and configuration details for seven days from first setup. Reloads and restarts do not renew this period. After expiry only a compact summary remains. Disable and save, then enable and save to start another seven-day period. Recorder history follows Home Assistant retention.",
+              "attribute_cleanup_interval": "Optionally clear only diagnostic-only service attributes on this interval (seconds), before their 7-day expiry. Default 0 disables the extra sweep; the 7-day maximum still applies. Ordinary service attributes and functional data are retained.",
+              "diagnostic_attributes": "Extra attributes added by virtual_layer.set_attributes used only for debugging; one name per line or comma-separated (up to 32). Other service attributes are retained. Configured attributes, templates, event-hook outputs and native properties are protected. Selected diagnostics expire within 7 days of first publication even when updated/reloaded. Nested lists/maps: 32 items; strings: 1024 characters; selected payload plus retention metadata: 3000 bytes.",
               "template_sources_json": "Maps Jinja variable names to source states or attributes. YAML example:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nUse variables named source and battery in editable templates.\nMultiple sources:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nThen reference the variables from value_template.",
               "event_hooks_json": "Runs editable helpers after a state or event trigger. YAML example:\n- trigger: state\n  entity_id: [sensor.source]\n  value_template: trigger.to_state.state  # wrap in Jinja delimiters\nHooks may also set availability_template, attributes, and attribute_templates. debounce (seconds) keeps the latest matching trigger per hook. Delayed state triggers are discarded if the source state or watched attributes have changed; unrelated events do not cancel a matching event trigger. State hooks with from/to and no watched attributes ignore attribute-only changes.",
               "attributes_json": "Static extra attributes published by the virtual entity. YAML example:\nsource_type: composite\npriority: 1",
@@ -1515,6 +1525,8 @@
       "patrol_invalid_points": "Choose a named position. Save needs 2–32 points including two different coordinates in the same coordinate space.",
       "unit_history_failed": "Confirm the statistics change. If it fails, reopen this step to refresh metadata, or keep existing history. No raw history is rewritten.",
       "invalid_icon": "Enter an icon in prefix:name format, or leave it empty.",
+      "invalid_attribute_interval": "Enter non-negative whole seconds within the supported date range. The field description explains the behavior of 0.",
+      "invalid_diagnostic_attributes": "Enter up to 32 attribute names, each at most 128 characters. Integration metadata names cannot be selected.",
       "invalid_pull_interval": "Enter non-negative whole seconds within the supported date range. Use 0 to disable periodic updates.",
       "invalid_parent_device": "Select an existing parent device without a circular relationship, or clear the selection.",
       "invalid_json": "Enter a valid YAML object.",
@@ -1990,6 +2002,10 @@
             "name": "Advanced settings",
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
+              "diagnostic_interval": "Diagnostic refresh interval",
+              "diagnostic_details": "Keep detailed diagnostics for 7 days",
+              "attribute_cleanup_interval": "Additional diagnostic cleanup interval",
+              "diagnostic_attributes": "Diagnostic-only service attributes",
               "template_sources_json": "Template sources Jinja template",
               "event_hooks_json": "Event hooks Jinja template",
               "attributes_json": "Attributes Jinja template",
@@ -2000,6 +2016,10 @@
               "domain_options_json": "Domain options Jinja template"
             },
             "data_description": {
+              "diagnostic_interval": "Seconds between diagnostic snapshots (default 300). Use 0 for every source change. State and native properties still update normally.",
+              "diagnostic_details": "Include source attributes, timestamps and configuration details for seven days from first setup. Reloads and restarts do not renew this period. After expiry only a compact summary remains. Disable and save, then enable and save to start another seven-day period. Recorder history follows Home Assistant retention.",
+              "attribute_cleanup_interval": "Optionally clear only diagnostic-only service attributes on this interval (seconds), before their 7-day expiry. Default 0 disables the extra sweep; the 7-day maximum still applies. Ordinary service attributes and functional data are retained.",
+              "diagnostic_attributes": "Extra attributes added by virtual_layer.set_attributes used only for debugging; one name per line or comma-separated (up to 32). Other service attributes are retained. Configured attributes, templates, event-hook outputs and native properties are protected. Selected diagnostics expire within 7 days of first publication even when updated/reloaded. Nested lists/maps: 32 items; strings: 1024 characters; selected payload plus retention metadata: 3000 bytes.",
               "template_sources_json": "Maps Jinja variable names to source states or attributes. YAML example:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nUse variables named source and battery in editable templates.\nMultiple sources:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nThen reference the variables from value_template.",
               "event_hooks_json": "Runs editable helpers after a state or event trigger. YAML example:\n- trigger: state\n  entity_id: [sensor.source]\n  value_template: trigger.to_state.state  # wrap in Jinja delimiters\nHooks may also set availability_template, attributes, and attribute_templates. debounce (seconds) keeps the latest matching trigger per hook. Delayed state triggers are discarded if the source state or watched attributes have changed; unrelated events do not cancel a matching event trigger. State hooks with from/to and no watched attributes ignore attribute-only changes.",
               "attributes_json": "Static extra attributes published by the virtual entity. YAML example:\nsource_type: composite\npriority: 1",
@@ -2794,6 +2814,10 @@
             "name": "Advanced settings",
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
+              "diagnostic_interval": "Diagnostic refresh interval",
+              "diagnostic_details": "Keep detailed diagnostics for 7 days",
+              "attribute_cleanup_interval": "Additional diagnostic cleanup interval",
+              "diagnostic_attributes": "Diagnostic-only service attributes",
               "template_sources_json": "Template sources Jinja template",
               "event_hooks_json": "Event hooks Jinja template",
               "attributes_json": "Attributes Jinja template",
@@ -2804,6 +2828,10 @@
               "domain_options_json": "Domain options Jinja template"
             },
             "data_description": {
+              "diagnostic_interval": "Seconds between diagnostic snapshots (default 300). Use 0 for every source change. State and native properties still update normally.",
+              "diagnostic_details": "Include source attributes, timestamps and configuration details for seven days from first setup. Reloads and restarts do not renew this period. After expiry only a compact summary remains. Disable and save, then enable and save to start another seven-day period. Recorder history follows Home Assistant retention.",
+              "attribute_cleanup_interval": "Optionally clear only diagnostic-only service attributes on this interval (seconds), before their 7-day expiry. Default 0 disables the extra sweep; the 7-day maximum still applies. Ordinary service attributes and functional data are retained.",
+              "diagnostic_attributes": "Extra attributes added by virtual_layer.set_attributes used only for debugging; one name per line or comma-separated (up to 32). Other service attributes are retained. Configured attributes, templates, event-hook outputs and native properties are protected. Selected diagnostics expire within 7 days of first publication even when updated/reloaded. Nested lists/maps: 32 items; strings: 1024 characters; selected payload plus retention metadata: 3000 bytes.",
               "template_sources_json": "Maps Jinja variable names to source states or attributes. YAML example:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nUse variables named source and battery in editable templates.\nMultiple sources:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nThen reference the variables from value_template.",
               "event_hooks_json": "Runs editable helpers after a state or event trigger. YAML example:\n- trigger: state\n  entity_id: [sensor.source]\n  value_template: trigger.to_state.state  # wrap in Jinja delimiters\nHooks may also set availability_template, attributes, and attribute_templates. debounce (seconds) keeps the latest matching trigger per hook. Delayed state triggers are discarded if the source state or watched attributes have changed; unrelated events do not cancel a matching event trigger. State hooks with from/to and no watched attributes ignore attribute-only changes.",
               "attributes_json": "Static extra attributes published by the virtual entity. YAML example:\nsource_type: composite\npriority: 1",
@@ -4677,6 +4705,16 @@
     }
   },
   "entity": {
+    "button": {
+      "debug": {
+        "name": "Debug - {entity_name}",
+        "state_attributes": {
+          "debug_result": {"name": "Latest debug result"},
+          "debug_expires_at": {"name": "Debug result expiry"},
+          "virtual_entity_id": {"name": "Virtual entity"}
+        }
+      }
+    },
     "select": {
       "frigate_mode": {
         "name": "{camera_name} - Frigate mode",

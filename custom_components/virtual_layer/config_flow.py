@@ -1308,6 +1308,12 @@ _DOMAIN_OPTION_RESERVED_KEYS = {
     CONF_SOURCE_ENTITIES,
     CONF_TEMPLATE_SOURCES,
     CONF_PULL_INTERVAL,
+    CONF_DIAGNOSTIC_INTERVAL,
+    CONF_DIAGNOSTIC_DETAILS,
+    CONF_DIAGNOSTIC_DETAILS_UNTIL,
+    CONF_ATTRIBUTE_CLEANUP_INTERVAL,
+    CONF_DIAGNOSTIC_ATTRIBUTES,
+    CONF_DEBUG_TARGET,
     CONF_VALUE_TEMPLATE,
     CONF_AVAILABILITY_TEMPLATE,
     CONF_ATTRIBUTES,
@@ -3507,6 +3513,21 @@ def _entity_schema(defaults: dict[str, Any] | None = None, *, hass=None, include
         }
     )
     advanced_schema = {
+        vol.Optional(
+            CONF_DIAGNOSTIC_ATTRIBUTES,
+            default=_multiline_list_default(defaults.get(CONF_DIAGNOSTIC_ATTRIBUTES, [])),
+        ): MULTILINE_TEXT_SELECTOR,
+        vol.Optional(
+            CONF_DIAGNOSTIC_INTERVAL,
+            default=defaults.get(CONF_DIAGNOSTIC_INTERVAL, DEFAULT_DIAGNOSTIC_INTERVAL),
+        ): PULL_INTERVAL_SELECTOR,
+        vol.Optional(
+            CONF_DIAGNOSTIC_DETAILS, default=defaults.get(CONF_DIAGNOSTIC_DETAILS, True),
+        ): cv.boolean,
+        vol.Optional(
+            CONF_ATTRIBUTE_CLEANUP_INTERVAL,
+            default=defaults.get(CONF_ATTRIBUTE_CLEANUP_INTERVAL, 0),
+        ): PULL_INTERVAL_SELECTOR,
         _editable_optional(
             CONF_TEMPLATE_SOURCES_JSON,
             _yaml_text_editor_default(defaults.get(CONF_TEMPLATE_SOURCES_JSON)),
@@ -5053,6 +5074,27 @@ def _build_entity_config(
         raise InvalidFieldValue(CONF_PULL_INTERVAL) from err
     if pull_interval:
         entity[CONF_PULL_INTERVAL] = pull_interval
+
+    for key, default in (
+        (CONF_DIAGNOSTIC_INTERVAL, DEFAULT_DIAGNOSTIC_INTERVAL),
+        (CONF_ATTRIBUTE_CLEANUP_INTERVAL, 0),
+    ):
+        try:
+            value = pull_interval_seconds(user_input.get(key, default))
+        except vol.Invalid as err:
+            raise InvalidFieldValue(key) from err
+        if value != default:
+            entity[key] = value
+    if not _boolean_default(user_input.get(CONF_DIAGNOSTIC_DETAILS, True), True):
+        entity[CONF_DIAGNOSTIC_DETAILS] = False
+    from .attribute_retention import diagnostic_names
+
+    try:
+        names = diagnostic_names(user_input.get(CONF_DIAGNOSTIC_ATTRIBUTES, []))
+    except vol.Invalid as err:
+        raise InvalidFieldValue(CONF_DIAGNOSTIC_ATTRIBUTES) from err
+    if names:
+        entity[CONF_DIAGNOSTIC_ATTRIBUTES] = names
 
     value_template = repair_legacy_enum_template(
         _text_default(user_input.get(CONF_VALUE_TEMPLATE)).strip()
@@ -11604,6 +11646,12 @@ def _entity_form_defaults(
         ),
         CONF_TEMPLATE_SOURCES_JSON: _json_default(entity.get(CONF_TEMPLATE_SOURCES)),
         CONF_PULL_INTERVAL: _nonnegative_int_default(entity.get(CONF_PULL_INTERVAL)),
+        CONF_DIAGNOSTIC_INTERVAL: _nonnegative_int_default(
+            entity.get(CONF_DIAGNOSTIC_INTERVAL, DEFAULT_DIAGNOSTIC_INTERVAL)
+        ),
+        CONF_DIAGNOSTIC_DETAILS: _boolean_default(entity.get(CONF_DIAGNOSTIC_DETAILS, True), True),
+        CONF_ATTRIBUTE_CLEANUP_INTERVAL: _nonnegative_int_default(entity.get(CONF_ATTRIBUTE_CLEANUP_INTERVAL)),
+        CONF_DIAGNOSTIC_ATTRIBUTES: _multiline_list_default(entity.get(CONF_DIAGNOSTIC_ATTRIBUTES, [])),
         CONF_VALUE_TEMPLATE: repair_legacy_enum_template(
             _text_default(entity.get(CONF_VALUE_TEMPLATE))
         ),
@@ -15153,6 +15201,9 @@ class InvalidFieldValue(exceptions.HomeAssistantError):
         self.error_code = error_code or {
             CONF_ICON: "invalid_icon",
             CONF_PULL_INTERVAL: "invalid_pull_interval",
+            CONF_DIAGNOSTIC_INTERVAL: "invalid_attribute_interval",
+            CONF_ATTRIBUTE_CLEANUP_INTERVAL: "invalid_attribute_interval",
+            CONF_DIAGNOSTIC_ATTRIBUTES: "invalid_diagnostic_attributes",
             CONF_DEVICE_VIA_DEVICE_ID: "invalid_parent_device",
         }[field_name]
 

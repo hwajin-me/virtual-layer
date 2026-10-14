@@ -2145,8 +2145,97 @@ async def test_config_flow_create_modify_runtime():
         await test_audit_regressions(hass, entry)
         await test_media_control_labels(hass, entry)
         await test_text_alias_runtime(hass, entry)
+        await test_diagnostic_retention_runtime(hass, entry)
+        await test_background_cleanup_runtime(hass, entry)
     finally:
         await hass.async_stop()
+
+
+async def test_background_cleanup_runtime(hass, entry):
+    """Exercise actual background tasks, interval callbacks and cancellation."""
+    from custom_components.virtual_layer import cleanup
+
+    with patch.object(cleanup, "CLEANUP_INTERVAL", timedelta(seconds=1)), \
+            patch.object(cleanup, "cleanse", wraps=cleanup.cleanse) as cleanse:
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        initial = cleanse.call_count
+        assert initial > 0, "Startup background sweep did not run"
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            await hass.async_block_till_done(wait_background_tasks=True)
+            if cleanse.call_count > initial:
+                break
+        assert cleanse.call_count > initial, "Periodic background sweep did not run"
+        assert all(call.kwargs == {} for call in cleanse.call_args_list)
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        stopped = cleanse.call_count
+        await asyncio.sleep(1.1)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert cleanse.call_count == stopped, "Cleanup continued after unload"
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    print("Background cleanup Docker passed: startup, real interval, default retention, unload cancellation")
+
+
+async def test_diagnostic_retention_runtime(hass, entry):
+    """Real HA timers must expire diagnostics while retaining functional data."""
+    original = copy.deepcopy(dict(entry.options))
+    options = copy.deepcopy(original)
+    targets = [f"{domain}.docker_retention" for domain in ("sensor", "tag")]
+    for target in targets:
+        next(iter(options["devices"].values())).append({
+            "platform": target.split(".")[0], "name": target.split(".")[1],
+            "entity_id": target, "initial_value": "ready", "persistent": True,
+            "attributes": {"configured": "initial"},
+            "diagnostic_attributes": ["trace", "configured"],
+        })
+    # Shorten only the diagnostic age so the actual HA expiry callbacks can
+    # run in this container without a simulated clock or mocked event loop.
+    with patch("custom_components.virtual_layer.attribute_retention.MAX_DIAGNOSTIC_AGE", timedelta(seconds=3)):
+        try:
+            hass.config_entries.async_update_entry(entry, options=options)
+            await hass.async_block_till_done()
+            for target in targets:
+                await hass.services.async_call("virtual_layer", "set_attributes", {
+                    "entity_id": target, "attributes": {
+                        "trace": list(range(100)), "operational_history": list(range(100)),
+                        "configured": "override",
+                    },
+                }, blocking=True)
+            await hass.async_block_till_done()
+            for target in targets:
+                state = hass.states.get(target)
+                assert state.attributes["trace"] == list(range(68, 100))
+                assert "diagnostic_attribute_retention" in state.attributes
+                from custom_components.virtual_layer.debug import DEBUG_SUFFIX
+                registry = er.async_get(hass)
+                control_id = registry.async_get_entity_id(
+                    "button", COMPONENT_DOMAIN, registry.async_get(target).unique_id + DEBUG_SUFFIX,
+                )
+                assert control_id is not None
+                assert registry.async_get(control_id).device_id == registry.async_get(target).device_id
+                target_row = registry.async_get(target)
+                expected_name = f"Debug - {target_row.name or target_row.original_name or state.name}"
+                assert hass.states.get(control_id).name == expected_name, (
+                    target, hass.states.get(control_id).name, expected_name,
+                    registry.async_get(control_id).original_name,
+                )
+                await hass.services.async_call("button", "press", {"entity_id": control_id}, blocking=True)
+                await hass.async_block_till_done()
+                assert hass.states.get(control_id).attributes["debug_result"]["virtual_entity_id"] == target
+            await asyncio.sleep(3.1)
+            await hass.async_block_till_done()
+            for target in targets:
+                state = hass.states.get(target)
+                assert "trace" not in state.attributes
+                assert "diagnostic_attribute_retention" not in state.attributes
+                assert state.attributes["operational_history"] == list(range(100))
+                assert state.attributes["configured"] == "override"
+        finally:
+            hass.config_entries.async_update_entry(entry, options=original)
+            await hass.async_block_till_done()
+    print("Diagnostic retention Docker passed: sensor/tag real expiry timers, bounded traces, retained functional values, removal")
 
 
 async def test_text_alias_runtime(hass, entry):

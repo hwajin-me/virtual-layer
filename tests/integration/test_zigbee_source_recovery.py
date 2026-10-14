@@ -20,6 +20,7 @@ async def test_source_recovery_reload_and_unload(hass, broker, domain):
     entity = {
         "platform": domain, "name": "Zigbee virtual", "entity_id": target,
         "source_entities": [broker.source],
+        "diagnostic_interval": 0,
         "value_template": "{{ states('" + broker.source + "') }}",
         "availability_template": "{{ has_value('" + broker.source + "') }}",
     }

@@ -11,7 +11,7 @@ from ..device_metadata import async_get_virtual_device
 from .adapters import number
 from .coordinator import KEY, FusionCoordinator, FusionRuntime
 
-PLATFORMS = ["sensor", "binary_sensor", "device_tracker", "image"]
+PLATFORMS = ["sensor", "binary_sensor", "device_tracker", "image", "button"]
 
 
 async def setup(hass, entry):
@@ -47,7 +47,8 @@ async def setup(hass, entry):
                     f"{entry.entry_id}:presence_fusion:map",
                 }:
                     entity_registry.async_remove(row.entity_id)
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS[:-1])
+        await hass.config_entries.async_forward_entry_setups(entry, ["button"])
         device = async_get_virtual_device(
             registry, metadata.get("device_id") or entry.entry_id, entry.entry_id
         )
@@ -62,6 +63,9 @@ async def setup(hass, entry):
         await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
         raise
     entry.async_on_unload(entry.add_update_listener(reload))
+    from ..cleanup import async_setup as async_setup_cleanup
+
+    async_setup_cleanup(hass, entry)
     register_services(hass)
     return True
 

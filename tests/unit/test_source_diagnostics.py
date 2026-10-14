@@ -1,9 +1,13 @@
 """Diagnostics remain bounded and do not recursively mirror virtual sources."""
 
 import json
+from datetime import timedelta
 from types import SimpleNamespace
 
-from custom_components.virtual_layer.source_diagnostics import attributes, meaningful_change
+import pytest
+from custom_components.virtual_layer.source_diagnostics import attributes, meaningful_change, prepare_retention
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
 def test_snapshot_filters_transient_and_recursive_data_and_keeps_unknown_sources(hass):
@@ -43,3 +47,42 @@ def test_diagnostic_only_updates_do_not_feed_back_but_real_attributes_do(hass):
 
 def test_diagnostics_require_runtime_configuration(hass):
     assert attributes(hass, {}, {}) == {}
+
+
+def test_expired_snapshot_removes_payload_and_timestamps(hass):
+    hass.states.async_set("sensor.original", "4", {"payload": "large detail"})
+    config = {
+        "_source_diagnostics": {
+            "platform": "sensor", "persistent": True,
+            "source_entities": ["sensor.original"],
+            "command_actions": {"turn_on": "detail"},
+        },
+        "_diagnostic_details_until": (dt_util.utcnow() - timedelta(seconds=1)).isoformat(),
+    }
+    result = attributes(hass, config, {})
+    assert result["source_diagnostics"]["sensor.original"] == {
+        "source_entity_id": "sensor.original", "source_entity_name": "original",
+        "source_state": "4",
+    }
+    assert "command_actions" not in result["source_configuration"]
+    assert "large detail" not in json.dumps(result)
+
+
+def test_no_diagnostics_when_regular_attributes_use_up_recorder_budget(hass):
+    config = {"_source_diagnostics": {"source_entities": ["sensor.original"]}}
+    assert attributes(hass, config, {"payload": "x" * 12000}) == {}
+
+
+@pytest.mark.parametrize("stored", [[], {"parent": "2026-02-31T00:00:00Z"}, {"parent": {}}, {"parent": "not a date"}])
+def test_malformed_retention_storage_is_repaired_once(hass, stored):
+    entry = MockConfigEntry(domain="virtual_layer", data={
+        "group_name": "Retention", "_diagnostic_details_until": stored,
+    })
+    entry.add_to_hass(hass)
+    entities = {"sensor": [{"unique_id": "parent", "_source_diagnostics": {}}]}
+    prepare_retention(hass, entry, entities)
+    deadline = dict(entry.data["_diagnostic_details_until"])
+    parsed = dt_util.parse_datetime(deadline["parent"])
+    assert timedelta(days=6) < parsed - dt_util.utcnow() <= timedelta(days=7)
+    prepare_retention(hass, entry, entities)
+    assert entry.data["_diagnostic_details_until"] == deadline

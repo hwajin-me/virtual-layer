@@ -10,6 +10,7 @@ import logging
 import math
 import re
 from contextvars import ContextVar
+from collections.abc import Mapping
 from datetime import timedelta
 from enum import Enum
 from functools import wraps
@@ -229,6 +230,8 @@ def allowed_local_path(hass, file_name: str) -> str | None:
 
 
 def virtual_schema(default_initial_value: str, extra_attrs):
+    from .attribute_retention import diagnostic_names
+
     schema = {
         vol.Required(CONF_NAME): cv.string,
         vol.Optional(CONF_INITIAL_VALUE, default=default_initial_value): cv.string,
@@ -248,6 +251,11 @@ def virtual_schema(default_initial_value: str, extra_attrs):
         vol.Optional(CONF_EVENT_HOOKS, default=list): vol.All(cv.ensure_list, [dict]),
         vol.Optional(CONF_PERSISTENT, default=DEFAULT_PERSISTENT): cv.boolean,
         vol.Optional(CONF_PULL_INTERVAL, default=0): pull_interval_seconds,
+        vol.Optional(CONF_DIAGNOSTIC_INTERVAL): pull_interval_seconds,
+        vol.Optional(CONF_DIAGNOSTIC_DETAILS): cv.boolean,
+        vol.Optional(CONF_DIAGNOSTIC_DETAILS_UNTIL): cv.string,
+        vol.Optional(CONF_ATTRIBUTE_CLEANUP_INTERVAL): pull_interval_seconds,
+        vol.Optional(CONF_DIAGNOSTIC_ATTRIBUTES): diagnostic_names,
         vol.Optional(CONF_SOURCE_ENTITIES, default=list): vol.All(
             cv.ensure_list, [cv.entity_id]
         ),
@@ -449,6 +457,11 @@ class VirtualEntity(RestoreEntity):
             *self._attribute_sources,
             *self._attribute_templates,
         }
+        self._runtime_attribute_names = set()
+        self._diagnostic_attribute_metadata = {}
+        self._diagnostic_snapshot = None
+        self._diagnostic_snapshot_at = None
+        self._diagnostic_snapshot_detailed = None
 
         if old_style:
             # Build name, entity id and unique id. We do this because historically
@@ -550,13 +563,34 @@ class VirtualEntity(RestoreEntity):
             if name not in previous_configured_names
             or name in self._configured_virtual_attribute_names
         }
+        runtime_names = state.attributes.get(ATTR_RUNTIME_VIRTUAL_ATTRIBUTES, [])
+        if isinstance(runtime_names, (list, tuple)):
+            self._runtime_attribute_names = {
+                name for name in runtime_names
+                if isinstance(name, str) and name in self._virtual_attributes
+                and name not in self._configured_virtual_attribute_names
+            }
+        metadata = state.attributes.get(ATTR_DIAGNOSTIC_ATTRIBUTE_RETENTION, {})
+        self._diagnostic_attribute_metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
 
     def _update_attributes(self):
+        from .attribute_retention import prune
+
         self._attr_extra_state_attributes = {
             ATTR_PERSISTENT: self._persistent,
             ATTR_AVAILABLE: self._attr_available,
         }
         self._attr_extra_state_attributes.update(self._virtual_attributes)
+        self._attr_extra_state_attributes[ATTR_RUNTIME_VIRTUAL_ATTRIBUTES] = sorted(self._runtime_attribute_names)
+        self._attr_extra_state_attributes[ATTR_DIAGNOSTIC_ATTRIBUTE_RETENTION] = self._diagnostic_attribute_metadata
+        prune(self._config, self._attr_extra_state_attributes, self._configured_virtual_attribute_names)
+        self._diagnostic_attribute_metadata = self._attr_extra_state_attributes.get(ATTR_DIAGNOSTIC_ATTRIBUTE_RETENTION, {})
+        self._runtime_attribute_names = set(self._attr_extra_state_attributes.get(ATTR_RUNTIME_VIRTUAL_ATTRIBUTES, []))
+        for name in list(self._virtual_attributes):
+            if name not in self._attr_extra_state_attributes:
+                self._virtual_attributes.pop(name)
+            else:
+                self._virtual_attributes[name] = self._attr_extra_state_attributes[name]
         self._attr_extra_state_attributes[CONF_SOURCE_ENTITIES] = list(
             self._source_entities
         )
@@ -567,13 +601,33 @@ class VirtualEntity(RestoreEntity):
         self._attr_extra_state_attributes[ATTR_CONFIGURED_VIRTUAL_ATTRIBUTES] = sorted(
             self._configured_virtual_attribute_names
         )
+        if self._runtime_attribute_names:
+            self._attr_extra_state_attributes[ATTR_RUNTIME_VIRTUAL_ATTRIBUTES] = sorted(
+                self._runtime_attribute_names
+            )
         if self.hass is not None and CONF_SOURCE_DIAGNOSTICS in self._config:
-            from .source_diagnostics import attributes
+            from .source_diagnostics import attributes, details_enabled, _size
 
-            self._attr_extra_state_attributes.update(attributes(
-                self.hass, self._config, self._attr_extra_state_attributes,
-            ))
-        if _LOGGER.isEnabledFor(logging.DEBUG):
+            now = dt_util.utcnow()
+            detailed = details_enabled(self._config)
+            interval = self._config.get(CONF_DIAGNOSTIC_INTERVAL, DEFAULT_DIAGNOSTIC_INTERVAL)
+            if (
+                self._diagnostic_snapshot is None
+                or detailed != self._diagnostic_snapshot_detailed
+                or (now - self._diagnostic_snapshot_at).total_seconds() >= interval
+                or (self._diagnostic_snapshot and _size({
+                    **self._attr_extra_state_attributes, **self._diagnostic_snapshot,
+                }) > 12000)
+            ):
+                self._diagnostic_snapshot = attributes(
+                    self.hass, self._config, self._attr_extra_state_attributes,
+                )
+                self._diagnostic_snapshot_at = now
+                self._diagnostic_snapshot_detailed = detailed
+            self._attr_extra_state_attributes.update(self._diagnostic_snapshot)
+        from .source_diagnostics import details_enabled
+
+        if _LOGGER.isEnabledFor(logging.DEBUG) and details_enabled(self._config):
             self._attr_extra_state_attributes.update(
                 {
                     ATTR_ENTITY_ID: self.entity_id,
@@ -588,8 +642,10 @@ class VirtualEntity(RestoreEntity):
         @callback
         def refresh_source_diagnostics():
             if not self._virtual_removing:
+                previous = self._attr_extra_state_attributes
                 self._update_attributes()
-                self.async_write_ha_state()
+                if previous != self._attr_extra_state_attributes:
+                    self.async_write_ha_state()
 
         self.async_on_remove(async_setup(self.hass, self._config, refresh_source_diagnostics))
         state = await self.async_get_last_state()
@@ -634,6 +690,35 @@ class VirtualEntity(RestoreEntity):
                 self.hass, STARTUP_SOURCE_GRACE_SECONDS, _expire_source_grace,
             ))
         self._apply_templates()
+
+        from .attribute_retention import async_setup as setup_retention, prune
+
+        @callback
+        def cleanup_runtime_attributes(*, clear=False):
+            if self._virtual_removing:
+                return
+            previous = self._attr_extra_state_attributes
+            if clear:
+                attributes = dict(previous)
+                prune(self._config, attributes, self._configured_virtual_attribute_names, clear=True)
+                for name in self._runtime_attribute_names:
+                    if name not in attributes:
+                        self._virtual_attributes.pop(name, None)
+                self._diagnostic_attribute_metadata = attributes.get(ATTR_DIAGNOSTIC_ATTRIBUTE_RETENTION, {})
+            self._update_attributes()
+            if previous != self._attr_extra_state_attributes:
+                self.async_write_ha_state()
+
+        self.async_on_remove(setup_retention(self.hass, self._config, cleanup_runtime_attributes))
+        cleanup_interval = self._config.get(CONF_ATTRIBUTE_CLEANUP_INTERVAL, 0)
+        if cleanup_interval:
+            @callback
+            def sweep_runtime_attributes(_now):
+                cleanup_runtime_attributes(clear=True)
+
+            self.async_on_remove(async_track_time_interval(
+                self.hass, sweep_runtime_attributes, timedelta(seconds=cleanup_interval),
+            ))
 
     def _sources_pending_startup(self) -> bool:
         """Return whether a restored source-backed entity lacks source state."""
@@ -698,6 +783,32 @@ class VirtualEntity(RestoreEntity):
         self._update_attributes()
         self._schedule_state_update()
 
+    @callback
+    def debug_cleanup(self, *, max_age=timedelta(days=1)):
+        """Prune expired diagnostics and refresh the live snapshot."""
+        from .attribute_retention import prune
+
+        previous = self._attr_extra_state_attributes or {}
+        attributes = dict(previous)
+        before = set(attributes)
+        prune(self._config, attributes, self._configured_virtual_attribute_names,
+              max_age=max_age)
+        if max_age is None and attributes == previous:
+            from .source_diagnostics import details_enabled
+
+            if self._diagnostic_snapshot_detailed == details_enabled(self._config):
+                return 0
+        for name in self._runtime_attribute_names:
+            if name not in attributes:
+                self._virtual_attributes.pop(name, None)
+        self._runtime_attribute_names = set(attributes.get(ATTR_RUNTIME_VIRTUAL_ATTRIBUTES, []))
+        self._diagnostic_attribute_metadata = attributes.get(ATTR_DIAGNOSTIC_ATTRIBUTE_RETENTION, {})
+        self._diagnostic_snapshot = None
+        self._update_attributes()
+        if previous != self._attr_extra_state_attributes:
+            self.async_write_ha_state()
+        return len(before - set(attributes) - EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES)
+
     def _schedule_state_update(self, force_refresh: bool = False) -> None:
         """Schedule a state update safely from loop or executor contexts."""
         if self._aq_rendering:
@@ -709,12 +820,21 @@ class VirtualEntity(RestoreEntity):
             self.schedule_update_ha_state(force_refresh=force_refresh)
 
     def set_attributes(self, attributes):
+        runtime_names = {
+            name for name in attributes
+            if name not in self._virtual_attributes or name in self._runtime_attribute_names
+        }
         self._virtual_attributes.update(
             {
                 name: value
                 for name, value in attributes.items()
                 if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
             }
+        )
+        self._runtime_attribute_names.update(
+            name for name in runtime_names
+            if name not in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
+            and name not in self._configured_virtual_attribute_names
         )
         self._update_attributes()
         self._schedule_state_update()
@@ -725,8 +845,10 @@ class VirtualEntity(RestoreEntity):
                 if attribute in EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES:
                     continue
                 self._virtual_attributes.pop(attribute, None)
+                self._runtime_attribute_names.discard(attribute)
         else:
             self._virtual_attributes.clear()
+            self._runtime_attribute_names.clear()
         self._update_attributes()
         self._schedule_state_update()
 

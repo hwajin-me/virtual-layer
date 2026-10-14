@@ -11,6 +11,7 @@ import math
 from collections.abc import Mapping
 from contextvars import ContextVar
 from datetime import timedelta
+from homeassistant.util import dt as dt_util
 
 import homeassistant.helpers.area_registry as ar
 import homeassistant.helpers.config_validation as cv
@@ -452,6 +453,10 @@ async def async_setup_entry(
     vcfg = BlendedCfg(hass, entry.data, entry.options, entry)
     await vcfg.async_load()
 
+    from .source_diagnostics import prepare_retention
+
+    prepare_retention(hass, entry, vcfg.entities)
+
     from .source_usage import async_append_source_usage_sensors
 
     async_append_source_usage_sensors(hass, entry, vcfg.entities)
@@ -603,6 +608,9 @@ async def async_setup_entry(
 
     if not incremental:
         entry.async_on_unload(entry.add_update_listener(_async_update_options))
+        from .cleanup import async_setup as async_setup_cleanup
+
+        async_setup_cleanup(hass, entry)
 
     return True
 
@@ -709,6 +717,8 @@ def _async_update_generated_entity_name(
 @callback
 def _generated_name_prefix(entity) -> str:
     """Return the label preceding a generated entity's parent display name."""
+    if entity.get(CONF_DEBUG_TARGET):
+        return "Debug - "
     attributes = entity.get(CONF_ATTRIBUTES)
     if (
         isinstance(attributes, Mapping)
@@ -1375,6 +1385,9 @@ def _state_only_initial_state(hass, entity) -> tuple[object, dict]:
     )
     attributes.update(generic_entity_options(entity))
     attributes[CONF_SOURCE_ENTITIES] = list(entity.get(CONF_SOURCE_ENTITIES, []))
+    from .attribute_retention import prune
+
+    prune(entity, attributes, current_managed)
     return value, attributes
 
 
@@ -2038,20 +2051,56 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
         _STATE_ONLY_TEMPLATE_LISTENERS_DATA, {}
     ).setdefault(entry.entry_id, {}).setdefault(entity_id, [])
 
-    from .source_diagnostics import async_setup, attributes as diagnostic_attributes
+    from .source_diagnostics import async_setup, attributes as diagnostic_attributes, details_enabled
+
+    diagnostic_at = None
+    diagnostic_detailed = None
 
     @callback
     def refresh_source_diagnostics():
+        nonlocal diagnostic_at, diagnostic_detailed
+        now = dt_util.utcnow()
+        detailed = details_enabled(entity)
+        interval = entity.get(CONF_DIAGNOSTIC_INTERVAL, DEFAULT_DIAGNOSTIC_INTERVAL)
+        if (diagnostic_at is not None and detailed == diagnostic_detailed
+                and (now - diagnostic_at).total_seconds() < interval):
+            return
         state = hass.states.get(entity_id)
         if state is not None:
             attributes = dict(state.attributes)
             for key in ("source_configuration", "source_diagnostics", "source_diagnostics_truncated"):
                 attributes.pop(key, None)
             attributes.update(diagnostic_attributes(hass, entity, attributes))
-            hass.states.async_set(entity_id, state.state, attributes)
+            diagnostic_at, diagnostic_detailed = now, detailed
+            if attributes != state.attributes:
+                hass.states.async_set(entity_id, state.state, attributes)
 
     listeners.append(async_setup(hass, entity, refresh_source_diagnostics))
     refresh_source_diagnostics()
+
+    from .attribute_retention import async_setup as setup_retention, prune
+
+    @callback
+    def cleanup_runtime_attributes(*, clear=False):
+        state = hass.states.get(entity_id)
+        if state is None:
+            return
+        attributes = dict(state.attributes)
+        prune(entity, attributes, _state_only_managed_attribute_names(entity), clear=clear)
+        if attributes != state.attributes:
+            hass.states.async_set(entity_id, state.state, attributes)
+
+    cleanup_runtime_attributes()
+    listeners.append(setup_retention(hass, entity, cleanup_runtime_attributes))
+    cleanup_interval = entity.get(CONF_ATTRIBUTE_CLEANUP_INTERVAL, 0)
+    if cleanup_interval:
+        @callback
+        def sweep_runtime_attributes(_now):
+            cleanup_runtime_attributes(clear=True)
+
+        listeners.append(async_track_time_interval(
+            hass, sweep_runtime_attributes, timedelta(seconds=cleanup_interval),
+        ))
 
     if entity_id in hass.data.get(_STATE_ONLY_SOURCE_GRACE_DATA, set()):
         @callback
@@ -2203,6 +2252,8 @@ def _assert_managed_virtual_entity(hass, entity_id) -> None:
         raise HomeAssistantError(f"{entity_id} is not managed by virtual_layer")
     if f"{DIAGNOSTIC_UNIQUE_ID_MARKER}source_usage:" in entity_entry.unique_id:
         raise HomeAssistantError(f"{entity_id} is a read-only source usage sensor")
+    if entity_entry.unique_id.endswith(f"{DIAGNOSTIC_UNIQUE_ID_MARKER}debug_button"):
+        raise HomeAssistantError(f"{entity_id} is a diagnostic button; use button.press")
 
 
 def _assert_managed_virtual_entities(hass, entity_ids) -> None:
@@ -2322,7 +2373,22 @@ def _async_set_state_only_entity(hass, entity_id, value=None, attributes=None):
             for name, item in attributes.items()
             if name not in direct_options
         })
+        config = _get_state_only_entity_config(hass, entity_id) or {}
+        protected = _state_only_managed_attribute_names(config) | EXCLUDED_VIRTUAL_ATTRIBUTE_NAMES
+        names = next_attributes.get(ATTR_RUNTIME_VIRTUAL_ATTRIBUTES, [])
+        names = {name for name in names if isinstance(name, str)} if isinstance(names, (list, tuple)) else set()
+        names.update(name for name in attributes if name not in protected
+                     and (name not in state.attributes or name in names))
+        if names:
+            next_attributes[ATTR_RUNTIME_VIRTUAL_ATTRIBUTES] = sorted(names)
     next_attributes.update(direct_options)
+    from .attribute_retention import prune
+
+    config = _get_state_only_entity_config(hass, entity_id) or {}
+    prune(config, next_attributes, _state_only_managed_attribute_names(config))
+    from .source_diagnostics import fit_snapshot
+
+    fit_snapshot(hass, config, next_attributes)
     hass.states.async_set(
         entity_id,
         state.state if value is None else value,
@@ -2337,14 +2403,26 @@ def _async_clear_state_only_attributes(hass, entity_id, attributes):
     direct_options = _state_only_direct_options(hass, entity_id)
     if attributes:
         for attribute in attributes:
-            if attribute in (ATTR_PERSISTENT, ATTR_AVAILABLE) or attribute in direct_options:
+            if attribute in (
+                ATTR_PERSISTENT, ATTR_AVAILABLE, ATTR_DIAGNOSTIC_ATTRIBUTE_RETENTION,
+                ATTR_RUNTIME_VIRTUAL_ATTRIBUTES,
+            ) or attribute in direct_options:
                 continue
             next_attributes.pop(attribute, None)
     else:
         for attribute in list(next_attributes):
             if attribute not in (ATTR_PERSISTENT, ATTR_AVAILABLE) and attribute not in direct_options:
                 next_attributes.pop(attribute, None)
+    names = next_attributes.pop(ATTR_RUNTIME_VIRTUAL_ATTRIBUTES, [])
+    if isinstance(names, (list, tuple)):
+        names = [name for name in names if isinstance(name, str) and name in next_attributes]
+        if names:
+            next_attributes[ATTR_RUNTIME_VIRTUAL_ATTRIBUTES] = names
     next_attributes.update(direct_options)
+    from .attribute_retention import prune
+
+    config = _get_state_only_entity_config(hass, entity_id) or {}
+    prune(config, next_attributes, _state_only_managed_attribute_names(config))
     hass.states.async_set(entity_id, state.state, next_attributes)
 
 

@@ -25,6 +25,35 @@ class FakeClock:
         self.mono += seconds
 
 
+async def test_debug_buttons_cover_profile_outputs_and_preserve_tracking_state(hass):
+    from custom_components.virtual_layer.debug import DEBUG_SUFFIX
+
+    entry, coordinator = await setup(hass)
+    await gps(hass, coordinator)
+    registry = er.async_get(hass)
+    rows = er.async_entries_for_config_entry(registry, entry.entry_id)
+    targets = [row for row in rows if not row.unique_id.endswith(DEBUG_SUFFIX)]
+    controls = [row for row in rows if row.unique_id.endswith(DEBUG_SUFFIX)]
+    assert len(targets) == len(controls) == 9
+    for target in targets:
+        control_id = registry.async_get_entity_id("button", "virtual_layer", target.unique_id + DEBUG_SUFFIX)
+        control = registry.async_get(control_id)
+        assert control.device_id == target.device_id
+        assert hass.states.get(control_id).name == f"Debug - {hass.states.get(target.entity_id).name}"
+    target = next(row for row in targets if row.unique_id.endswith(":presence"))
+    control_id = registry.async_get_entity_id("button", "virtual_layer", target.unique_id + DEBUG_SUFFIX)
+    state = hass.states.get(target.entity_id).state
+    paths = coordinator.engine.paths
+    coordinator.engine.history.extend(["undated old reason", "another undated reason"])
+    await hass.services.async_call("button", "press", {"entity_id": control_id}, blocking=True)
+    await hass.async_block_till_done()
+    assert coordinator.engine.paths is paths
+    assert hass.states.get(target.entity_id).state == state
+    assert list(coordinator.engine.history) == [coordinator.engine.reason]
+    assert "profile_diagnostics" in hass.states.get(control_id).attributes["debug_result"]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 def configuration(prefix="test", count=1):
     return {
         "devices": [
@@ -415,7 +444,7 @@ async def test_T38_config_options_wizard(hass):
     assert entry.options["presence_fusion"]["devices"][0]["id"] == uid
     assert entry.options["presence_fusion"]["devices"][0]["name"] == "Renamed"
     assert (
-        len(er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)) == 9
+        len(er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)) == 18
     )
     assert await hass.config_entries.async_unload(entry.entry_id)
 

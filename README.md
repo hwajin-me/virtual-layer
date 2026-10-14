@@ -185,6 +185,54 @@ store longer structured payloads in attributes.
   no longer created; their integration-owned registry entries are removed on
   setup/reload, including renamed or disabled entries. Ordinary user entities
   with similar names are preserved.
+  Diagnostic snapshots refresh at most once every five minutes by default;
+  actual entity state and native templates keep their normal update behavior.
+  In the entity's **Advanced settings**, set **Diagnostic refresh interval**
+  to another number of seconds (0 follows every source event).
+  **Keep detailed diagnostics for 7 days** is enabled by default. After seven
+  days, source attribute copies, timestamps and detailed configuration are
+  removed from the current state; only source identity/state and basic
+  communication health remain. The deadline survives reloads, restarts and
+  renames. Disable and save, then enable and save to begin a new seven-day window.
+  This does not delete past Recorder rows; Home Assistant controls their retention.
+  Ordinary service attributes and functional state are retained, including
+  restore data needed by location tracking, meters and boiler control.
+  In **Diagnostic-only service attributes**, explicitly list only extra
+  `virtual_layer.set_attributes` values used for debugging. Names are never
+  classified by guessing from words such as `debug` or `history`.
+  Selected diagnostics expire at most seven days after first publication;
+  updates and restarts do not extend their window. A later explicit service
+  write can start a new window after expiry. Configured attributes, templates,
+  event-hook outputs and native properties are protected even if selected.
+  Diagnostic lists/maps retain up to 32 items (lists keep the newest end),
+  strings up to 1024 characters, and selected payloads plus retention metadata
+  share a 3000-byte budget. Limits do not trim ordinary functional attributes.
+  **Additional diagnostic cleanup interval** optionally clears only those
+  selected service attributes sooner (seconds, default 0/off). The seven-day
+  expiry remains active with 0. Persistent entities retain expiry deadlines
+  across reloads. Legacy untracked attributes can still be removed with
+  `virtual_layer.clear_attributes`, then rewritten through `set_attributes`.
+  A background sweep also runs after Home Assistant finishes starting and once
+  every 24 hours. It uses the normal seven-day retention limit, cleans disabled
+  targets' restore snapshots too, and processes entities in small batches.
+  It creates no new Debug reports; unloading the entry cancels its scheduled
+  and running work. Manual Debug cleanup alone applies the shorter one-day limit.
+  Every configured virtual entity and functional companion automatically gets
+  a **Debug - {virtual entity name}** button on the same Device, including
+  existing entities after reload/update. Presence Fusion outputs receive these
+  controls too. Buttons follow target renames and disappear with deleted targets;
+  they are runtime companions, never separate saved configuration.
+  Press a Debug button to refresh the current HA source diagnostics immediately,
+  bypassing the five-minute diagnostic interval, and keep only the last day of
+  explicitly selected diagnostic attributes. Recent diagnostic deadlines are
+  shortened to one day from their original publication; updates/restarts cannot
+  extend them. Functional attributes and control/restore data are preserved.
+  The button's bounded `debug_result` snapshot is replaced on each press and
+  expires after 24 hours, including across restart. Manual diagnosis works even
+  after automatic detailed diagnostics have expired or the target is unavailable.
+  No commands or active network scans are sent to physical devices. Undated
+  legacy Presence Fusion reason history is cleared, retaining its current reason.
+  This cleanup affects current diagnostic attributes, not historical Recorder rows.
   For a Zigbee2MQTT source, the same record contains Zigbee communication details.
   Device registry identity and MQTT discovery identify the source automatically;
   ordinary MQTT entities are not assumed to be Zigbee devices. Shared passive

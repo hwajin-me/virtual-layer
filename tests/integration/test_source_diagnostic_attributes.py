@@ -13,9 +13,9 @@ async def test_virtual_source_cycles_settle_and_never_nest_diagnostics(hass, dom
     entry = MockConfigEntry(domain="virtual_layer", data={"group_name": "Cycle"}, options={
         "devices": {"Cycle": [
             {"platform": domain, "name": "First", "entity_id": first,
-             "initial_value": "ready", "source_entities": [second]},
+             "initial_value": "ready", "source_entities": [second], "diagnostic_interval": 0},
             {"platform": "sensor", "name": "Second", "entity_id": second,
-             "initial_value": "ready", "source_entities": [first]},
+             "initial_value": "ready", "source_entities": [first], "diagnostic_interval": 0},
         ]},
     })
     entry.add_to_hass(hass)

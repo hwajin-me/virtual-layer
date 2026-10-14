@@ -163,7 +163,7 @@ async def test_fusion_shared_live_geometry_map_and_unload(hass):
     assert output(hass, entry, "presence").state == "home"
     assert output(hass, entry, "gps").attributes["longitude"] > 0
     rows = er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
-    assert len(rows) == 11
+    assert len(rows) == 22
     assert len({row.device_id for row in rows}) == 1
     from custom_components.virtual_layer.presence_fusion.entities import FusionMap
 
@@ -221,7 +221,7 @@ async def test_geojson_flow_add_edit_delete_and_select_home(hass):
     await hass.async_block_till_done()
     assert entry.options["presence_fusion"]["zones"]["home"] == key
     assert (
-        len(er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)) == 11
+        len(er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)) == 22
     )
     result = await manager.async_init(entry.entry_id)
     for data in [
@@ -232,7 +232,7 @@ async def test_geojson_flow_add_edit_delete_and_select_home(hass):
         result = await manager.async_configure(result["flow_id"], data)
     await hass.async_block_till_done()
     assert (
-        len(er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)) == 9
+        len(er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)) == 18
     )
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert await hass.config_entries.async_unload(group.entry_id)
