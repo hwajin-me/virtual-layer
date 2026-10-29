@@ -5530,9 +5530,35 @@ def _build_entity_config(
                         raise InvalidFieldValue("utility_meter_current_value", "invalid_domain_options")
                     entity["utility_meter_correction"] = str(value)
                     entity["utility_meter_correction_id"] = uuid.uuid4().hex
+                previous = user_input.get("utility_meter_previous_period_value", "")
+                if previous != "":
+                    try:
+                        value = meter.number(previous)
+                    except vol.Invalid as err:
+                        raise InvalidFieldValue(
+                            "utility_meter_previous_period_value",
+                            "invalid_domain_options",
+                        ) from err
+                    if value < 0 and not settings["net_consumption"]:
+                        raise InvalidFieldValue(
+                            "utility_meter_previous_period_value",
+                            "invalid_domain_options",
+                        )
+                    if settings["cycle"] == "none":
+                        raise InvalidFieldValue(
+                            "utility_meter_previous_period_value",
+                            "invalid_domain_options",
+                        )
+                    entity["utility_meter_previous_period_correction"] = str(value)
+                    entity["utility_meter_previous_period_correction_id"] = uuid.uuid4().hex
+                if settings["cycle"] == "none":
+                    entity.pop("utility_meter_previous_period_correction", None)
+                    entity.pop("utility_meter_previous_period_correction_id", None)
             else:
                 entity.pop("utility_meter_correction", None)
                 entity.pop("utility_meter_correction_id", None)
+                entity.pop("utility_meter_previous_period_correction", None)
+                entity.pop("utility_meter_previous_period_correction_id", None)
         except (ValueError, TypeError, vol.Invalid) as err:
             if isinstance(err, vol.Invalid) and err.path:
                 raise InvalidFieldValue(str(err.path[0]), "invalid_domain_options") from err

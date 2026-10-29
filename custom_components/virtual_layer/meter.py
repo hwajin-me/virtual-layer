@@ -17,7 +17,8 @@ DEFAULTS = {
     "net_consumption": False, "periodically_resetting": True,
     "always_available": True, "tariff_entity": "", "tariff": "",
     "rate": 0, "base_charge": 0, "currency": "KRW", "tiers": [],
-    "compare_previous_month": False,
+    "compare_previous_month": False, "compare_previous_period": False,
+    "rolling_window_days": 0,
 }
 
 
@@ -48,7 +49,10 @@ def options(config):
         except vol.Invalid as err:
             raise invalid(key, str(err)) from err
 
-    for key in ("enabled", "delta_values", "net_consumption", "periodically_resetting", "always_available", "compare_previous_month"):
+    for key in (
+        "enabled", "delta_values", "net_consumption", "periodically_resetting",
+        "always_available", "compare_previous_month", "compare_previous_period",
+    ):
         if not isinstance(result[key], bool):
             raise invalid(key, key + " must be a boolean")
     if result["cycle"] not in CYCLES:
@@ -68,6 +72,14 @@ def options(config):
             next(CronSim(result["cron"], dt_util.now()))
         except (CronSimError, ValueError, TypeError, AttributeError, StopIteration) as err:
             raise invalid("cron", "Invalid or impossible cron schedule") from err
+    rolling_days = field_number("rolling_window_days", result["rolling_window_days"])
+    if rolling_days != int(rolling_days) or not 0 <= rolling_days <= 36600:
+        raise invalid("rolling_window_days", "Invalid rolling window")
+    result["rolling_window_days"] = int(rolling_days)
+    if result["compare_previous_period"] and result["cycle"] == "none":
+        raise invalid("compare_previous_period", "Previous-period comparison needs a reset cycle")
+    if result["rolling_window_days"] and result["cycle"] != "none":
+        raise invalid("rolling_window_days", "Rolling windows require a no-reset meter")
     for key in ("rate", "base_charge"):
         if field_number(key, result[key]) < 0:
             raise invalid(key, key + " cannot be negative")
@@ -144,6 +156,85 @@ def previous_month_same_time(now):
     return dt_util.as_local(dt_util.as_utc(candidate))
 
 
+def previous_reset(settings, before):
+    """Return the most recent schedule boundary at or before an instant."""
+    cycle = settings["cycle"]
+    if cycle == "none":
+        return None
+    local = dt_util.as_local(before)
+    if cycle == "cron":
+        return next(CronSim(settings["cron"], local, reverse=True))
+    anchor = dt_util.parse_datetime(settings["start"]) if settings["start"] else None
+    if anchor is None:
+        anchor = datetime(1970, 1, 1, tzinfo=local.tzinfo)
+        if cycle == "weekly":
+            anchor += timedelta(days=4)
+    elif anchor.tzinfo is None:
+        anchor = anchor.replace(tzinfo=local.tzinfo)
+    else:
+        # An explicit offset/timezone owns the calendar recurrence. Converting
+        # it to HA local time before month arithmetic can shift a billing day
+        # across DST (for example a +09:00 day-22 anchor on a US HA host).
+        local = dt_util.as_utc(before).astimezone(anchor.tzinfo)
+    anchor += timedelta(minutes=settings["offset"])
+    if dt_util.as_utc(anchor) > dt_util.as_utc(before):
+        return None
+    if cycle in ("quarter-hourly", "hourly"):
+        step = timedelta(minutes=15 if cycle == "quarter-hourly" else 60)
+        origin = dt_util.as_utc(anchor)
+        count = max(0, (dt_util.as_utc(before) - origin) // step)
+        return dt_util.as_local(origin + count * step)
+    if cycle in ("daily", "weekly", "days"):
+        step = timedelta(days={
+            "daily": 1, "weekly": 7, "days": settings["days"],
+        }[cycle])
+        count = max(0, (local - anchor) // step)
+        candidate = dt_util.as_local(dt_util.as_utc(anchor + count * step))
+        while count and dt_util.as_utc(candidate) > dt_util.as_utc(before):
+            count -= 1
+            candidate = dt_util.as_local(dt_util.as_utc(anchor + count * step))
+        return candidate
+    months = {"monthly": 1, "bimonthly": 2, "quarterly": 3, "yearly": 12}[cycle]
+    count = max(0, ((local.year - anchor.year) * 12 + local.month - anchor.month) // months)
+    while count >= 0:
+        year, month = divmod(anchor.year * 12 + anchor.month - 1 + count * months, 12)
+        month += 1
+        candidate = anchor.replace(
+            year=year,
+            month=month,
+            day=min(anchor.day, monthrange(year, month)[1]),
+        )
+        candidate = dt_util.as_local(dt_util.as_utc(candidate))
+        if dt_util.as_utc(candidate) <= dt_util.as_utc(before):
+            return candidate
+        count -= 1
+    return None
+
+
+def previous_period_same_time(settings, now):
+    """Return the same elapsed point in the immediately preceding cycle."""
+    current_start = previous_reset(settings, now)
+    if current_start is None:
+        return None
+    previous_start = previous_reset(
+        settings,
+        dt_util.as_utc(current_start) - timedelta(microseconds=1),
+    )
+    if previous_start is None:
+        return None
+    elapsed = dt_util.as_utc(now) - dt_util.as_utc(current_start)
+    target = dt_util.as_utc(previous_start) + elapsed
+    return dt_util.as_local(
+        min(target, dt_util.as_utc(current_start) - timedelta(microseconds=1))
+    )
+
+
+def rolling_target(now, days):
+    """Shift by local calendar days so rolling comparisons respect DST."""
+    local = dt_util.as_local(now)
+    return dt_util.as_local(dt_util.as_utc(local - timedelta(days=days)))
+
+
 def next_reset(settings, after):
     """Next local-calendar boundary, anchored without month-end drift.
 
@@ -165,7 +256,7 @@ def next_reset(settings, after):
     elif anchor.tzinfo is None:
         anchor = anchor.replace(tzinfo=local.tzinfo)
     else:
-        anchor = dt_util.as_local(anchor)
+        local = dt_util.as_utc(after).astimezone(anchor.tzinfo)
     anchor += timedelta(minutes=settings["offset"])
     if cycle in ("quarter-hourly", "hourly"):
         # Fixed sub-day intervals must include the repeated hour at DST fall

@@ -15,6 +15,7 @@ import voluptuous as vol
 from custom_components.virtual_layer.const import COMPONENT_DOMAIN
 from custom_components.virtual_layer.config_flow import _entity_form_defaults, _build_entity_config
 from custom_components.virtual_layer.config_flow import InvalidFieldValue
+from custom_components.virtual_layer import meter
 
 
 async def setup_meter(hass, **options):
@@ -224,11 +225,31 @@ def test_ui_correction_revisions_and_edit_roundtrip():
     assert corrected["utility_meter_correction"] == "42"
     assert corrected["utility_meter_correction_id"] != saved["utility_meter_correction_id"]
 
+    previous_values = _entity_form_defaults("Billing", corrected)
+    previous_values["utility_meter_previous_period_value"] = 168
+    _, with_previous = _build_entity_config(previous_values)
+    assert with_previous["utility_meter_previous_period_correction"] == "168"
+    previous_id = with_previous["utility_meter_previous_period_correction_id"]
+    _, unchanged_previous = _build_entity_config(
+        _entity_form_defaults("Billing", with_previous)
+    )
+    assert unchanged_previous["utility_meter_previous_period_correction_id"] == previous_id
+
 
 @pytest.mark.parametrize("extra", [
     {"source_entities": None}, {"source_entities": [3]},
     {"source_entities": ["sensor.bad id"]},
     {"utility_meter_correction": "NaN"}, {"utility_meter_correction": -1},
+    {
+        "utility_meter_previous_period_correction": "NaN",
+        "utility_meter_previous_period_correction_id": "revision",
+        "utility_meter_compare_previous_period": True,
+    },
+    {
+        "utility_meter_previous_period_correction": 10,
+        "utility_meter_previous_period_correction_id": "revision",
+        "utility_meter_cycle": "none",
+    },
 ])
 def test_corrupt_meter_configuration_is_rejected(extra):
     from custom_components.virtual_layer.sensor import validate_domain_options
@@ -345,6 +366,7 @@ async def test_edit_interval_within_same_cycle(hass, cycle, old, new):
     ("utility_meter_rate", "nan"), ("utility_meter_tiers", [{}]),
     ("utility_meter_tariff_entity", "sensor.energy"),
     ("utility_meter_current_value", "nan"), ("utility_meter_current_value", -1),
+    ("utility_meter_previous_period_value", "nan"),
 ])
 def test_invalid_meter_settings_identify_the_visible_field(field, value):
     defaults = _entity_form_defaults("Billing", {
@@ -365,12 +387,15 @@ def test_disable_broken_meter_preserves_settings_and_removes_old_correction():
         "utility_meter_enabled": True, "utility_meter_cycle": "days",
         "utility_meter_start": "", "utility_meter_days": 17,
         "utility_meter_correction": "42", "utility_meter_correction_id": "old",
+        "utility_meter_previous_period_correction": "168",
+        "utility_meter_previous_period_correction_id": "old-previous",
     })
     defaults["utility_meter_enabled"] = False
     _, saved = _build_entity_config(defaults)
     assert saved["utility_meter_enabled"] is False
     assert saved["utility_meter_days"] == 17
     assert "utility_meter_correction_id" not in saved
+    assert "utility_meter_previous_period_correction_id" not in saved
     defaults = _entity_form_defaults("Billing", saved)
     defaults["utility_meter_enabled"] = True
     defaults["utility_meter_start"] = "2026-01-01T00:00:00"
@@ -504,6 +529,344 @@ async def test_previous_month_same_time_companion_reads_recorder(recorder_mock, 
         assert len(calls) >= 2
         assert calls[-1][0] == calls[0][0] + timedelta(minutes=1)
         assert await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def test_new_meter_aligns_last_reset_to_active_schedule_boundary(hass):
+    with freeze_time("2026-10-29T11:00:00Z"):
+        await setup_meter(
+            hass,
+            utility_meter_cycle="monthly",
+            utility_meter_start="2026-01-22T00:00:00+09:00",
+            utility_meter_correction="173.63",
+            utility_meter_correction_id="migration",
+        )
+        state = hass.states.get("sensor.billing")
+        assert Decimal(state.state) == Decimal("173.63")
+        assert dt_util.as_utc(
+            dt_util.parse_datetime(state.attributes["last_reset"])
+        ) == dt_util.as_utc(dt_util.parse_datetime("2026-10-22T00:00:00+09:00"))
+        assert dt_util.as_utc(
+            dt_util.parse_datetime(state.attributes["next_reset"])
+        ) == dt_util.as_utc(dt_util.parse_datetime("2026-11-22T00:00:00+09:00"))
+
+
+async def test_previous_week_same_time_and_last_period_companions(
+    recorder_mock,
+    hass,
+    monkeypatch,
+):
+    from custom_components.virtual_layer import sensor as sensor_module
+
+    calls = []
+
+    def history_at_same_time(_hass, start, end, entity_ids, **_kwargs):
+        calls.append((start, end, entity_ids))
+        return {
+            "sensor.billing": [
+                State(
+                    "sensor.billing",
+                    "17.5",
+                    {"unit_of_measurement": "kWh"},
+                    last_updated=start,
+                )
+            ]
+        }
+
+    monkeypatch.setattr(
+        sensor_module.recorder_history,
+        "get_significant_states",
+        history_at_same_time,
+    )
+    with freeze_time("2026-10-29T08:15:00Z"):
+        await setup_meter(
+            hass,
+            utility_meter_cycle="weekly",
+            utility_meter_compare_previous_period=True,
+            utility_meter_previous_period_correction="168",
+            utility_meter_previous_period_correction_id="weekly-migration",
+        )
+        await hass.async_block_till_done()
+        state = hass.states.get("sensor.billing")
+        assert state.attributes["previous_period_same_time_usage"] == "17.5"
+        assert dt_util.parse_datetime(
+            state.attributes["previous_period_same_time"]
+        ).weekday() == 3
+        assert Decimal(hass.states.get("sensor.billing_last_period").state) == 168
+        assert Decimal(
+            hass.states.get("sensor.billing_previous_period_same_time").state
+        ) == Decimal("17.5")
+        assert calls and calls[0][2] == ["sensor.billing"]
+        assert dt_util.utcnow() - calls[0][0] == timedelta(days=7)
+
+
+async def test_previous_period_is_unknown_until_seeded_or_really_completed(hass):
+    await setup_meter(
+        hass,
+        utility_meter_cycle="weekly",
+        utility_meter_compare_previous_period=True,
+    )
+    assert hass.states.get("sensor.billing").attributes["last_period"] is None
+    assert hass.states.get("sensor.billing_last_period").state == "unknown"
+    await hass.services.async_call(
+        COMPONENT_DOMAIN,
+        "calibrate_utility_meter",
+        {"entity_id": "sensor.billing", "value": 20},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        COMPONENT_DOMAIN,
+        "reset_utility_meter",
+        {"entity_id": "sensor.billing"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert Decimal(hass.states.get("sensor.billing_last_period").state) == 20
+
+
+async def test_five_minute_meter_seeds_then_replaces_last_period(hass):
+    """A migration seed bridges the first boundary without enabling comparisons."""
+    with freeze_time("2026-10-29T10:02:00Z") as clock:
+        entry = await setup_meter(
+            hass,
+            utility_meter_cycle="cron",
+            utility_meter_cron="*/5 * * * *",
+            utility_meter_correction="0.5",
+            utility_meter_correction_id="current-five-minute",
+            utility_meter_previous_period_correction="1.25",
+            utility_meter_previous_period_correction_id="previous-five-minute",
+        )
+        state = hass.states.get("sensor.billing")
+        assert state.attributes["last_period"] == "1.25"
+        assert dt_util.as_utc(
+            dt_util.parse_datetime(state.attributes["next_reset"])
+        ) == dt_util.parse_datetime("2026-10-29T10:05:00Z")
+
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.billing").attributes["last_period"] == "1.25"
+
+        clock.move_to("2026-10-29T10:05:01Z")
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+        state = hass.states.get("sensor.billing")
+        assert Decimal(state.state) == 0
+        assert state.attributes["last_period"] == "0.5"
+
+
+async def test_no_reset_meter_exposes_current_and_previous_rolling_windows(
+    recorder_mock,
+    hass,
+    monkeypatch,
+):
+    from custom_components.virtual_layer import sensor as sensor_module
+
+    historical_values = iter((Decimal("150"), Decimal("100")))
+
+    def rolling_history(_hass, start, end, entity_ids, **_kwargs):
+        return {
+            "sensor.billing": [
+                State(
+                    "sensor.billing",
+                    str(next(historical_values)),
+                    {"unit_of_measurement": "kWh"},
+                    last_updated=start,
+                )
+            ]
+        }
+
+    monkeypatch.setattr(
+        sensor_module.recorder_history,
+        "get_significant_states",
+        rolling_history,
+    )
+    await setup_meter(
+        hass,
+        utility_meter_cycle="none",
+        utility_meter_rolling_window_days=7,
+        utility_meter_correction="200",
+        utility_meter_correction_id="rolling-migration",
+    )
+    await hass.async_block_till_done()
+    state = hass.states.get("sensor.billing")
+    assert state.attributes["rolling_window_days"] == 7
+    assert state.attributes["rolling_window_usage"] == "50"
+    assert state.attributes["previous_rolling_window_usage"] == "50"
+    assert Decimal(hass.states.get("sensor.billing_rolling_window").state) == 50
+    assert Decimal(
+        hass.states.get("sensor.billing_previous_rolling_window").state
+    ) == 50
+
+
+async def test_previous_week_uses_existing_source_statistics_when_meter_is_new(
+    recorder_mock,
+    hass,
+    monkeypatch,
+):
+    """Migration immediately reuses reset-aware sums from the physical source."""
+    from custom_components.virtual_layer import sensor as sensor_module
+
+    monkeypatch.setattr(
+        sensor_module.recorder_history,
+        "get_significant_states",
+        lambda *_args, **_kwargs: {},
+    )
+
+    def source_statistics(_hass, start, end, statistic_ids, period, *_args):
+        assert statistic_ids == {"sensor.physical_energy"}
+        assert period == "5minute"
+        period_start = start + timedelta(hours=2)
+        return {
+            "sensor.physical_energy": [
+                {"start": period_start - timedelta(minutes=5), "sum": 100},
+                {"start": end - timedelta(minutes=5), "sum": 117.5},
+            ]
+        }
+
+    monkeypatch.setattr(
+        sensor_module.recorder_statistics,
+        "statistics_during_period",
+        source_statistics,
+    )
+    with freeze_time("2026-10-29T08:15:00Z"):
+        await setup_meter(
+            hass,
+            utility_meter_cycle="weekly",
+            utility_meter_compare_previous_period=True,
+        )
+        await hass.async_block_till_done()
+        assert (
+            hass.states.get("sensor.billing").attributes[
+                "previous_period_same_time_usage"
+            ]
+            == "17.5"
+        )
+
+
+async def test_rolling_windows_use_existing_source_long_term_statistics(
+    recorder_mock,
+    hass,
+    monkeypatch,
+):
+    """Hourly long-term sums fill both 7-day windows without backfilling VL."""
+    from custom_components.virtual_layer import sensor as sensor_module
+
+    monkeypatch.setattr(
+        sensor_module.recorder_history,
+        "get_significant_states",
+        lambda *_args, **_kwargs: {},
+    )
+    windows = iter(((100, 150), (50, 100)))
+
+    def source_statistics(_hass, start, end, statistic_ids, period, *_args):
+        assert statistic_ids == {"sensor.physical_energy"}
+        if period == "5minute":
+            return {}
+        first, last = next(windows)
+        window_start = start + timedelta(hours=2)
+        return {
+            "sensor.physical_energy": [
+                {"start": window_start - timedelta(hours=1), "sum": first},
+                {"start": end - timedelta(hours=1), "sum": last},
+            ]
+        }
+
+    monkeypatch.setattr(
+        sensor_module.recorder_statistics,
+        "statistics_during_period",
+        source_statistics,
+    )
+    with freeze_time("2026-10-29T08:15:00Z"):
+        await setup_meter(
+            hass,
+            utility_meter_cycle="none",
+            utility_meter_rolling_window_days=7,
+            utility_meter_correction="2728.76",
+            utility_meter_correction_id="rolling-migration",
+        )
+        await hass.async_block_till_done()
+        state = hass.states.get("sensor.billing")
+        assert state.attributes["rolling_window_usage"] == "50"
+        assert state.attributes["previous_rolling_window_usage"] == "50"
+
+
+async def test_source_statistics_fallback_with_real_recorder_api(
+    recorder_mock,
+    hass,
+    monkeypatch,
+):
+    """Use HA's real long-term statistics API, not a private SQL query."""
+    from custom_components.virtual_layer import sensor as sensor_module
+    from homeassistant.components.recorder.statistics import async_import_statistics
+    from pytest_homeassistant_custom_component.components.recorder.common import (
+        async_recorder_block_till_done,
+    )
+
+    monkeypatch.setattr(
+        sensor_module.recorder_history,
+        "get_significant_states",
+        lambda *_args, **_kwargs: {},
+    )
+    async_import_statistics(
+        hass,
+        {
+            "source": "recorder",
+            "statistic_id": "sensor.physical_energy",
+            "name": "Physical energy",
+            "unit_class": "energy",
+            "unit_of_measurement": "kWh",
+            "mean_type": 0,
+            "has_sum": True,
+        },
+        [
+            {
+                "start": dt_util.parse_datetime("2026-10-19T06:00:00Z"),
+                "state": 2100,
+                "sum": 100,
+            },
+            {
+                "start": dt_util.parse_datetime("2026-10-22T07:00:00Z"),
+                "state": 2117,
+                "sum": 117,
+            },
+        ],
+    )
+    await async_recorder_block_till_done(hass)
+    with freeze_time("2026-10-29T08:15:00Z"):
+        await setup_meter(
+            hass,
+            utility_meter_cycle="weekly",
+            utility_meter_compare_previous_period=True,
+        )
+        await hass.async_block_till_done()
+        assert (
+            hass.states.get("sensor.billing").attributes[
+                "previous_period_same_time_usage"
+            ]
+            == "17.0"
+        )
+
+
+@pytest.mark.parametrize(
+    "options,field",
+    [
+        (
+            {"utility_meter_cycle": "none", "utility_meter_compare_previous_period": True},
+            "utility_meter_compare_previous_period",
+        ),
+        (
+            {"utility_meter_cycle": "weekly", "utility_meter_rolling_window_days": 7},
+            "utility_meter_rolling_window_days",
+        ),
+        (
+            {"utility_meter_cycle": "none", "utility_meter_rolling_window_days": -1},
+            "utility_meter_rolling_window_days",
+        ),
+    ],
+)
+def test_period_and_rolling_comparison_validation(options, field):
+    with pytest.raises(vol.Invalid) as error:
+        meter.options({"utility_meter_enabled": True, **options})
+    assert error.value.path == [field]
 
 
 async def test_disable_comparison_removes_companion(hass):

@@ -25,9 +25,19 @@ def meter_schema(defaults):
         elif isinstance(default, int):
             control = selector.NumberSelector(selector.NumberSelectorConfig(
                 min=1 if key == "days" else 0,
-                max=36600 if key == "days" else 40319 if key == "offset" else 1e12,
+                max=(
+                    36600
+                    if key in {"days", "rolling_window_days"}
+                    else 40319
+                    if key == "offset"
+                    else 1e12
+                ),
                 mode=selector.NumberSelectorMode.BOX,
-                step=1 if key in {"days", "offset"} else "any"))
+                step=(
+                    1
+                    if key in {"days", "offset", "rolling_window_days"}
+                    else "any"
+                )))
         elif key in {"start", "tariff_entity"}:
             # Suggestions, not defaults: omission must clear a stored value.
             marker = vol.Optional(field, description={"suggested_value": value})
@@ -37,6 +47,10 @@ def meter_schema(defaults):
             control = selector.TextSelector()
         fields[marker] = control
     fields[vol.Optional("utility_meter_current_value", default=defaults.get("utility_meter_current_value", ""))] = selector.TextSelector()
+    fields[vol.Optional(
+        "utility_meter_previous_period_value",
+        default=defaults.get("utility_meter_previous_period_value", ""),
+    )] = selector.TextSelector()
     fields[vol.Optional("back", default=False)] = selector.BooleanSelector()
     return vol.Schema(fields)
 
@@ -94,6 +108,21 @@ class MeterFlow:
                                 raise vol.Invalid("Negative total requires net mode")
                         except vol.Invalid as err:
                             raise vol.Invalid(str(err), path=["utility_meter_current_value"]) from err
+                    previous = draft.get("utility_meter_previous_period_value", "")
+                    if previous != "":
+                        try:
+                            value = meter.number(previous)
+                            if value < 0 and not draft.get("utility_meter_net_consumption"):
+                                raise vol.Invalid("Negative total requires net mode")
+                            if draft.get("utility_meter_cycle", "monthly") == "none":
+                                raise vol.Invalid(
+                                    "Previous-period total requires a reset cycle"
+                                )
+                        except vol.Invalid as err:
+                            raise vol.Invalid(
+                                str(err),
+                                path=["utility_meter_previous_period_value"],
+                            ) from err
                 self._meter_pending = draft
                 self._entity_defaults = deepcopy(draft)
                 self._meter_reviewed = {key: value for key, value in draft.items()

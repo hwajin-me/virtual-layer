@@ -1190,20 +1190,37 @@ class BlendedCfg:
                 CONF_VALUE_TEMPLATE: "{{ state_attr(" + repr(entity_id) + ", 'cost') | float(none) }}",
                 CONF_NATIVE_TEMPLATES: {"last_reset": "{{ state_attr(" + repr(entity_id) + ", 'last_reset') }}"},
             })
-            if entity.get("utility_meter_compare_previous_month"):
-                comparison_uid = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}last_month_same_time"
+            comparison_sources = entity.get(CONF_SOURCE_ENTITIES, [])
+            comparison_source = (
+                comparison_sources[0]
+                if isinstance(comparison_sources, list) and comparison_sources
+                else ""
+            )
+            source_state = self._hass.states.get(comparison_source)
+            comparison_class = entity.get(CONF_CLASS) or (
+                source_state.attributes.get("device_class") if source_state else None
+            )
+            comparison_unit = entity.get(CONF_UNIT_OF_MEASUREMENT) or (
+                source_state.attributes.get("unit_of_measurement") if source_state else None
+            )
+
+            def append_meter_companion(suffix, name, attribute, reference):
+                comparison_uid = f"{unique_id}{DIAGNOSTIC_UNIQUE_ID_MARKER}{suffix}"
                 comparison_id = self._reserve_entity_id(
-                    "sensor", f"{entity_id}_last_month_same_time", comparison_uid
+                    "sensor", f"{entity_id}_{suffix}", comparison_uid
                 )
                 comparison = {
-                    CONF_NAME: f"{entity[CONF_NAME]} Last Month Same Time",
+                    CONF_NAME: f"{entity[CONF_NAME]} {name}",
                     ATTR_ENTITY_ID: comparison_id, ATTR_UNIQUE_ID: comparison_uid,
                     ATTR_DEVICE_ID: device_id,
                     CONF_INITIAL_VALUE: "unknown", CONF_INITIAL_AVAILABILITY: True,
                     CONF_PERSISTENT: False,
                     CONF_SOURCE_ENTITIES: [entity_id],
-                    CONF_VALUE_TEMPLATE: "{{ state_attr(" + repr(entity_id) + ", 'last_month_same_time_usage') | float(none) }}",
-                    CONF_ATTRIBUTES: {"comparison_reference": "last_month_same_local_time"},
+                    CONF_VALUE_TEMPLATE: (
+                        "{{ state_attr(" + repr(entity_id) + ", "
+                        + repr(attribute) + ") | float(none) }}"
+                    ),
+                    CONF_ATTRIBUTES: {"comparison_reference": reference},
                     CONF_NATIVE_TEMPLATES: {
                         "native_unit_of_measurement": "{{ state_attr(" + repr(entity_id) + ", 'unit_of_measurement') }}",
                         "device_class": "{{ state_attr(" + repr(entity_id) + ", 'device_class') }}",
@@ -1212,20 +1229,45 @@ class BlendedCfg:
                 # Legacy records may have neither class nor unit. Never pass a
                 # null through the sensor schema; the parent still exposes its
                 # live unit in the comparison reference attributes.
-                comparison_sources = entity.get(CONF_SOURCE_ENTITIES, [])
-                comparison_source = comparison_sources[0] if isinstance(comparison_sources, list) and comparison_sources else ""
-                source_state = self._hass.states.get(comparison_source)
-                comparison_class = entity.get(CONF_CLASS) or (
-                    source_state.attributes.get("device_class") if source_state else None
-                )
-                comparison_unit = entity.get(CONF_UNIT_OF_MEASUREMENT) or (
-                    source_state.attributes.get("unit_of_measurement") if source_state else None
-                )
                 if isinstance(comparison_class, str) and comparison_class:
                     comparison[CONF_CLASS] = comparison_class
                 if isinstance(comparison_unit, str) and comparison_unit:
                     comparison[CONF_UNIT_OF_MEASUREMENT] = comparison_unit
                 sensor_entities.append(comparison)
+
+            if entity.get("utility_meter_compare_previous_month"):
+                append_meter_companion(
+                    "last_month_same_time",
+                    "Last Month Same Time",
+                    "last_month_same_time_usage",
+                    "last_month_same_local_time",
+                )
+            if entity.get("utility_meter_compare_previous_period"):
+                append_meter_companion(
+                    "last_period",
+                    "Last Period",
+                    "last_period",
+                    "last_completed_period",
+                )
+                append_meter_companion(
+                    "previous_period_same_time",
+                    "Previous Period Same Time",
+                    "previous_period_same_time_usage",
+                    "previous_period_same_elapsed_time",
+                )
+            if entity.get("utility_meter_rolling_window_days"):
+                append_meter_companion(
+                    "rolling_window",
+                    "Rolling Window",
+                    "rolling_window_usage",
+                    "rolling_calendar_days",
+                )
+                append_meter_companion(
+                    "previous_rolling_window",
+                    "Previous Rolling Window",
+                    "previous_rolling_window_usage",
+                    "previous_rolling_calendar_days",
+                )
         if platform in ("sensor", "binary_sensor"):
             # Build from configuration, not startup ordering or a restored state.
             # Existing UI entries receive the same companion on their next load.

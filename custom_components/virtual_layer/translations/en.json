@@ -1408,7 +1408,10 @@
           "utility_meter_currency": "Currency",
           "utility_meter_tiers": "Progressive tiers",
           "utility_meter_current_value": "Correct current-period total",
-          "utility_meter_compare_previous_month": "Create last-month comparison sensor"
+          "utility_meter_previous_period_value": "Seed previous-period total",
+          "utility_meter_compare_previous_month": "Create last-month comparison sensor",
+          "utility_meter_compare_previous_period": "Create previous-period comparison sensors",
+          "utility_meter_rolling_window_days": "Rolling window (days; 0 disables)"
         },
         "data_description": {
           "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
@@ -1429,7 +1432,10 @@
           "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
           "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
           "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline.",
-          "utility_meter_compare_previous_month": "Reads the same local date and time one month earlier, refreshed every minute. Requires a month of Recorder state history (35-day retention recommended). Missing history or a changed unit reports unknown."
+          "utility_meter_previous_period_value": "Optional audited total for the completed previous period, applied once during migration. This is available for any reset cycle, even when comparison sensors are disabled. Leave blank when no trustworthy historical value exists.",
+          "utility_meter_compare_previous_month": "Reads the same local date and time one month earlier, refreshed every minute. Requires a month of Recorder state history (35-day retention recommended). Missing history or a changed unit reports unknown.",
+          "utility_meter_compare_previous_period": "Creates last-period and previous-period-same-time sensors for a resetting meter. Recorder history covering the preceding period is required for same-time comparison.",
+          "utility_meter_rolling_window_days": "For a no-reset meter, create current and previous rolling-window sensors from Recorder history. For example, 7 produces recent-7-day and preceding-7-day usage."
         }
       },
       "geojson": {
@@ -3958,7 +3964,10 @@
           "utility_meter_currency": "Currency",
           "utility_meter_tiers": "Progressive tiers",
           "utility_meter_current_value": "Correct current-period total",
-          "utility_meter_compare_previous_month": "Create last-month comparison sensor"
+          "utility_meter_previous_period_value": "Seed previous-period total",
+          "utility_meter_compare_previous_month": "Create last-month comparison sensor",
+          "utility_meter_compare_previous_period": "Create previous-period comparison sensors",
+          "utility_meter_rolling_window_days": "Rolling window (days; 0 disables)"
         },
         "data_description": {
           "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
@@ -3979,7 +3988,10 @@
           "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
           "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
           "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline.",
-          "utility_meter_compare_previous_month": "Reads the same local date and time one month earlier, refreshed every minute. Requires a month of Recorder state history (35-day retention recommended). Missing history or a changed unit reports unknown."
+          "utility_meter_previous_period_value": "Optional audited total for the completed previous period, applied once during migration. This is available for any reset cycle, even when comparison sensors are disabled. Leave blank when no trustworthy historical value exists.",
+          "utility_meter_compare_previous_month": "Reads the same local date and time one month earlier, refreshed every minute. Requires a month of Recorder state history (35-day retention recommended). Missing history or a changed unit reports unknown.",
+          "utility_meter_compare_previous_period": "Creates last-period and previous-period-same-time sensors for a resetting meter. Recorder history covering the preceding period is required for same-time comparison.",
+          "utility_meter_rolling_window_days": "For a no-reset meter, create current and previous rolling-window sensors from Recorder history. For example, 7 produces recent-7-day and preceding-7-day usage."
         }
       },
       "edit_utility_meter": {
@@ -4004,7 +4016,10 @@
           "utility_meter_currency": "Currency",
           "utility_meter_tiers": "Progressive tiers",
           "utility_meter_current_value": "Correct current-period total",
-          "utility_meter_compare_previous_month": "Create last-month comparison sensor"
+          "utility_meter_previous_period_value": "Seed previous-period total",
+          "utility_meter_compare_previous_month": "Create last-month comparison sensor",
+          "utility_meter_compare_previous_period": "Create previous-period comparison sensors",
+          "utility_meter_rolling_window_days": "Rolling window (days; 0 disables)"
         },
         "data_description": {
           "utility_meter_enabled": "Accumulate one source sensor as a Utility Meter. This creates a period total and follows source increases; source resets are ignored.",
@@ -4025,7 +4040,10 @@
           "utility_meter_currency": "Three-letter currency code such as KRW or USD.",
           "utility_meter_tiers": "List of objects with up_to and rate keys and increasing cumulative limits. Empty uses the unit price.",
           "utility_meter_current_value": "Audited absolute total, applied once on save with a new source baseline. Leave blank to retain the total, including when changing the schedule. If offline, the first recovered reading becomes the baseline.",
-          "utility_meter_compare_previous_month": "Reads the same local date and time one month earlier, refreshed every minute. Requires a month of Recorder state history (35-day retention recommended). Missing history or a changed unit reports unknown."
+          "utility_meter_previous_period_value": "Optional audited total for the completed previous period, applied once during migration. This is available for any reset cycle, even when comparison sensors are disabled. Leave blank when no trustworthy historical value exists.",
+          "utility_meter_compare_previous_month": "Reads the same local date and time one month earlier, refreshed every minute. Requires a month of Recorder state history (35-day retention recommended). Missing history or a changed unit reports unknown.",
+          "utility_meter_compare_previous_period": "Creates last-period and previous-period-same-time sensors for a resetting meter. Recorder history covering the preceding period is required for same-time comparison.",
+          "utility_meter_rolling_window_days": "For a no-reset meter, create current and previous rolling-window sensors from Recorder history. For example, 7 produces recent-7-day and preceding-7-day usage."
         }
       },
       "geojson": {

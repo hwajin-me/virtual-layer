@@ -1408,7 +1408,10 @@
           "utility_meter_currency": "통화",
           "utility_meter_tiers": "누진 구간",
           "utility_meter_current_value": "현재 기간 사용량 보정",
-          "utility_meter_compare_previous_month": "지난달 동시간 비교 센서 생성"
+          "utility_meter_previous_period_value": "직전 기간 사용량 이관",
+          "utility_meter_compare_previous_month": "지난달 동시간 비교 센서 생성",
+          "utility_meter_compare_previous_period": "직전 주기 비교 센서 생성",
+          "utility_meter_rolling_window_days": "이동 집계 기간(일, 0은 사용 안 함)"
         },
         "data_description": {
           "utility_meter_enabled": "하나의 소스 센서를 유틸리티 미터처럼 누적합니다. 기간별 합계를 만들고 소스 증가분을 반영하며, 소스 자체의 초기화는 무시합니다.",
@@ -1429,7 +1432,10 @@
           "utility_meter_currency": "KRW, USD 등 세 글자 통화 코드입니다.",
           "utility_meter_tiers": "누적 상한 up_to와 단가 rate 객체의 목록입니다. 상한은 오름차순이며 비우면 단일단가를 사용합니다.",
           "utility_meter_current_value": "검침한 현재 기간 절대 합계를 저장 시 한 번 적용하고 소스 기준값도 갱신합니다. 일정만 바꾸고 합계를 유지하려면 비우세요. 소스 단절 시 복구 후 첫 측정값을 기준으로 삼습니다.",
-          "utility_meter_compare_previous_month": "한 달 전 같은 현지 일자·시간의 값을 매분 갱신합니다. Recorder 상태 이력이 한 달 이상 필요합니다(35일 보관 권장). 이력이 없거나 단위가 달라지면 unknown을 표시합니다."
+          "utility_meter_previous_period_value": "이관 시 확인된 직전 완료 기간 합계를 한 번 적용합니다. 비교 센서를 사용하지 않아도 모든 재설정 주기에서 사용할 수 있습니다. 신뢰할 수 있는 과거 값이 없으면 비워 두세요.",
+          "utility_meter_compare_previous_month": "한 달 전 같은 현지 일자·시간의 값을 매분 갱신합니다. Recorder 상태 이력이 한 달 이상 필요합니다(35일 보관 권장). 이력이 없거나 단위가 달라지면 unknown을 표시합니다.",
+          "utility_meter_compare_previous_period": "초기화되는 미터에 직전 완료 주기와 직전 주기 동시간 센서를 생성합니다. 동시간 비교에는 직전 주기를 포함하는 Recorder 이력이 필요합니다.",
+          "utility_meter_rolling_window_days": "초기화하지 않는 미터에서 Recorder 이력으로 현재·직전 이동 기간 센서를 생성합니다. 예를 들어 7은 최근 7일과 그 이전 7일 사용량입니다."
         }
       },
       "geojson": {
@@ -3958,7 +3964,10 @@
           "utility_meter_currency": "통화",
           "utility_meter_tiers": "누진 구간",
           "utility_meter_current_value": "현재 기간 사용량 보정",
-          "utility_meter_compare_previous_month": "지난달 동시간 비교 센서 생성"
+          "utility_meter_previous_period_value": "직전 기간 사용량 이관",
+          "utility_meter_compare_previous_month": "지난달 동시간 비교 센서 생성",
+          "utility_meter_compare_previous_period": "직전 주기 비교 센서 생성",
+          "utility_meter_rolling_window_days": "이동 집계 기간(일, 0은 사용 안 함)"
         },
         "data_description": {
           "utility_meter_enabled": "하나의 소스 센서를 유틸리티 미터처럼 누적합니다. 기간별 합계를 만들고 소스 증가분을 반영하며, 소스 자체의 초기화는 무시합니다.",
@@ -3979,7 +3988,10 @@
           "utility_meter_currency": "KRW, USD 등 세 글자 통화 코드입니다.",
           "utility_meter_tiers": "누적 상한 up_to와 단가 rate 객체의 목록입니다. 상한은 오름차순이며 비우면 단일단가를 사용합니다.",
           "utility_meter_current_value": "검침한 현재 기간 절대 합계를 저장 시 한 번 적용하고 소스 기준값도 갱신합니다. 일정만 바꾸고 합계를 유지하려면 비우세요. 소스 단절 시 복구 후 첫 측정값을 기준으로 삼습니다.",
-          "utility_meter_compare_previous_month": "한 달 전 같은 현지 일자·시간의 값을 매분 갱신합니다. Recorder 상태 이력이 한 달 이상 필요합니다(35일 보관 권장). 이력이 없거나 단위가 달라지면 unknown을 표시합니다."
+          "utility_meter_previous_period_value": "이관 시 확인된 직전 완료 기간 합계를 한 번 적용합니다. 비교 센서를 사용하지 않아도 모든 재설정 주기에서 사용할 수 있습니다. 신뢰할 수 있는 과거 값이 없으면 비워 두세요.",
+          "utility_meter_compare_previous_month": "한 달 전 같은 현지 일자·시간의 값을 매분 갱신합니다. Recorder 상태 이력이 한 달 이상 필요합니다(35일 보관 권장). 이력이 없거나 단위가 달라지면 unknown을 표시합니다.",
+          "utility_meter_compare_previous_period": "초기화되는 미터에 직전 완료 주기와 직전 주기 동시간 센서를 생성합니다. 동시간 비교에는 직전 주기를 포함하는 Recorder 이력이 필요합니다.",
+          "utility_meter_rolling_window_days": "초기화하지 않는 미터에서 Recorder 이력으로 현재·직전 이동 기간 센서를 생성합니다. 예를 들어 7은 최근 7일과 그 이전 7일 사용량입니다."
         }
       },
       "edit_utility_meter": {
@@ -4004,7 +4016,10 @@
           "utility_meter_currency": "통화",
           "utility_meter_tiers": "누진 구간",
           "utility_meter_current_value": "현재 기간 사용량 보정",
-          "utility_meter_compare_previous_month": "지난달 동시간 비교 센서 생성"
+          "utility_meter_previous_period_value": "직전 기간 사용량 이관",
+          "utility_meter_compare_previous_month": "지난달 동시간 비교 센서 생성",
+          "utility_meter_compare_previous_period": "직전 주기 비교 센서 생성",
+          "utility_meter_rolling_window_days": "이동 집계 기간(일, 0은 사용 안 함)"
         },
         "data_description": {
           "utility_meter_enabled": "하나의 소스 센서를 유틸리티 미터처럼 누적합니다. 기간별 합계를 만들고 소스 증가분을 반영하며, 소스 자체의 초기화는 무시합니다.",
@@ -4025,7 +4040,10 @@
           "utility_meter_currency": "KRW, USD 등 세 글자 통화 코드입니다.",
           "utility_meter_tiers": "누적 상한 up_to와 단가 rate 객체의 목록입니다. 상한은 오름차순이며 비우면 단일단가를 사용합니다.",
           "utility_meter_current_value": "검침한 현재 기간 절대 합계를 저장 시 한 번 적용하고 소스 기준값도 갱신합니다. 일정만 바꾸고 합계를 유지하려면 비우세요. 소스 단절 시 복구 후 첫 측정값을 기준으로 삼습니다.",
-          "utility_meter_compare_previous_month": "한 달 전 같은 현지 일자·시간의 값을 매분 갱신합니다. Recorder 상태 이력이 한 달 이상 필요합니다(35일 보관 권장). 이력이 없거나 단위가 달라지면 unknown을 표시합니다."
+          "utility_meter_previous_period_value": "이관 시 확인된 직전 완료 기간 합계를 한 번 적용합니다. 비교 센서를 사용하지 않아도 모든 재설정 주기에서 사용할 수 있습니다. 신뢰할 수 있는 과거 값이 없으면 비워 두세요.",
+          "utility_meter_compare_previous_month": "한 달 전 같은 현지 일자·시간의 값을 매분 갱신합니다. Recorder 상태 이력이 한 달 이상 필요합니다(35일 보관 권장). 이력이 없거나 단위가 달라지면 unknown을 표시합니다.",
+          "utility_meter_compare_previous_period": "초기화되는 미터에 직전 완료 주기와 직전 주기 동시간 센서를 생성합니다. 동시간 비교에는 직전 주기를 포함하는 Recorder 이력이 필요합니다.",
+          "utility_meter_rolling_window_days": "초기화하지 않는 미터에서 Recorder 이력으로 현재·직전 이동 기간 센서를 생성합니다. 예를 들어 7은 최근 7일과 그 이전 7일 사용량입니다."
         }
       },
       "geojson": {

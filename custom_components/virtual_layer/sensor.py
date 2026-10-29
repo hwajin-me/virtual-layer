@@ -43,6 +43,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import dt as dt_util
 from homeassistant.components.recorder import history as recorder_history
 from homeassistant.components.recorder import get_instance as get_recorder_instance
+from homeassistant.components.recorder import statistics as recorder_statistics
 
 from . import (
     _assert_managed_virtual_entities,
@@ -122,6 +123,14 @@ def validate_domain_options(config):
             correction = meter.number(config.get("utility_meter_correction"))
             if correction < 0 and not settings["net_consumption"]:
                 raise vol.Invalid("Negative correction requires net consumption")
+        if config.get("utility_meter_previous_period_correction_id"):
+            correction = meter.number(
+                config.get("utility_meter_previous_period_correction")
+            )
+            if correction < 0 and not settings["net_consumption"]:
+                raise vol.Invalid("Negative correction requires net consumption")
+            if settings["cycle"] == "none":
+                raise vol.Invalid("Previous-period correction needs a reset cycle")
 
 
 def _as_state_class(value) -> SensorStateClass | None:
@@ -325,17 +334,23 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         self._utility_meter_enabled = bool(config.get("utility_meter_enabled", False))
         self._utility_meter_cycle = config.get("utility_meter_cycle", "monthly")
         self._utility_meter_last_source: Decimal | None = None
-        self._utility_meter_last_period = Decimal("0")
+        self._utility_meter_last_period: Decimal | None = None
         self._utility_meter_last_reset: datetime | None = None
         self._meter_settings = meter.options(config) if self._utility_meter_enabled else None
         self._meter_cancel_reset = None
         self._meter_next_reset = None
         self._meter_restored_source = None
         self._meter_correction_id = None
+        self._meter_previous_period_correction_id = None
         self._meter_schedule_profile = None
         self._meter_schedule_since = None
         self._meter_previous_month_value: Decimal | None = None
         self._meter_previous_month_at: datetime | None = None
+        self._meter_previous_period_value: Decimal | None = None
+        self._meter_previous_period_at: datetime | None = None
+        self._meter_rolling_window_value: Decimal | None = None
+        self._meter_previous_rolling_window_value: Decimal | None = None
+        self._meter_rolling_window_at: datetime | None = None
         self._meter_compare_cancel = None
         self._meter_compare_task = None
         if self._utility_meter_enabled:
@@ -407,7 +422,10 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         await super().async_added_to_hass()
         if self._utility_meter_enabled:
             if self._utility_meter_last_reset is None:
-                self._utility_meter_last_reset = dt_util.utcnow()
+                self._utility_meter_last_reset = (
+                    meter.previous_reset(self._meter_settings, dt_util.utcnow())
+                    or dt_util.utcnow()
+                )
             profile = meter.schedule_profile(self._meter_settings)
             if self._meter_schedule_profile is not None and self._meter_schedule_profile != profile:
                 # Editing a schedule must not invent historical resets.
@@ -422,8 +440,24 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             if correction_id and correction_id != self._meter_correction_id:
                 self.calibrate_utility_meter(meter.number(self._config["utility_meter_correction"]))
                 self._meter_correction_id = correction_id
+            previous_correction_id = self._config.get(
+                "utility_meter_previous_period_correction_id"
+            )
+            if (
+                previous_correction_id
+                and previous_correction_id
+                != self._meter_previous_period_correction_id
+            ):
+                self._utility_meter_last_period = meter.number(
+                    self._config["utility_meter_previous_period_correction"]
+                )
+                self._meter_previous_period_correction_id = previous_correction_id
             self._setup_utility_meter_reset()
-            if self._meter_settings["compare_previous_month"]:
+            if (
+                self._meter_settings["compare_previous_month"]
+                or self._meter_settings["compare_previous_period"]
+                or self._meter_settings["rolling_window_days"]
+            ):
                 self._start_previous_month_refresh()
                 self._setup_previous_month_refresh()
             @callback
@@ -594,9 +628,10 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                 self._async_refresh_previous_month_comparison()
             )
 
-    async def _async_refresh_previous_month_comparison(self) -> None:
-        """Read the meter's recorded state at the same local instant last month."""
-        target = meter.previous_month_same_time(dt_util.utcnow())
+    async def _async_meter_history_value(self, target) -> Decimal | None:
+        """Read one exact historical meter value without fabricating gaps."""
+        if target is None:
+            return None
         try:
             states = {}
             if "recorder" in self.hass.config.components:
@@ -615,11 +650,178 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             if state is not None and state.attributes.get("unit_of_measurement") != self.native_unit_of_measurement:
                 value = None
         except Exception:  # Recorder may be disabled or temporarily unavailable.
-            _LOGGER.debug("Unable to read last-month comparison for %s", self.entity_id, exc_info=True)
+            _LOGGER.debug(
+                "Unable to read utility-meter history for %s",
+                self.entity_id,
+                exc_info=True,
+            )
             value = None
-        if self._meter_previous_month_at != target or self._meter_previous_month_value != value:
-            self._meter_previous_month_at = target
-            self._meter_previous_month_value = value
+        return value
+
+    async def _async_meter_source_statistics_usage(
+        self,
+        start: datetime | None,
+        end: datetime | None,
+    ) -> Decimal | None:
+        """Return a reset-aware source usage delta from existing Recorder sums.
+
+        A newly migrated virtual meter has no history of its own. Home
+        Assistant's cumulative source commonly does, and its statistics sum is
+        already reset-aware. Prefer completed five-minute buckets, then fall
+        back to durable hourly long-term statistics. Missing or stale endpoints
+        remain unknown instead of being extrapolated.
+        """
+        if (
+            start is None
+            or end is None
+            or dt_util.as_utc(start) >= dt_util.as_utc(end)
+            or "recorder" not in self.hass.config.components
+            or not self._source_entities
+        ):
+            return None
+        source_id = self._source_entities[0]
+        source = self.hass.states.get(source_id)
+        if (
+            source is not None
+            and source.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+            != self.native_unit_of_measurement
+        ):
+            return None
+        start_utc = dt_util.as_utc(start)
+        end_utc = dt_util.as_utc(end)
+
+        def row_time(row):
+            raw = row.get("start")
+            if isinstance(raw, datetime):
+                return dt_util.as_utc(raw)
+            if isinstance(raw, (int, float)):
+                return dt_util.utc_from_timestamp(raw)
+            return None
+
+        try:
+            for period, duration in (
+                ("5minute", timedelta(minutes=5)),
+                ("hour", timedelta(hours=1)),
+            ):
+                result = await get_recorder_instance(
+                    self.hass
+                ).async_add_executor_job(
+                    partial(
+                        recorder_statistics.statistics_during_period,
+                        self.hass,
+                        start_utc - timedelta(hours=2),
+                        end_utc,
+                        {source_id},
+                        period,
+                        None,
+                        {"sum"},
+                    )
+                )
+                rows = result.get(source_id, ())
+
+                def endpoint(target):
+                    candidates = []
+                    for row in rows:
+                        timestamp = row_time(row)
+                        value = self._utility_decimal(row.get("sum"))
+                        if timestamp is None or value is None:
+                            continue
+                        completed = timestamp + duration
+                        if completed <= target:
+                            candidates.append((completed, value))
+                    if not candidates:
+                        return None
+                    completed, value = max(candidates, key=lambda item: item[0])
+                    if target - completed > timedelta(hours=2):
+                        return None
+                    return value
+
+                first = endpoint(start_utc)
+                last = endpoint(end_utc)
+                if first is None or last is None:
+                    continue
+                usage = last - first
+                if usage < 0 and not self._meter_settings["net_consumption"]:
+                    continue
+                return usage
+        except Exception:  # Recorder/statistics may be disabled or unavailable.
+            _LOGGER.debug(
+                "Unable to read utility-meter source statistics for %s",
+                self.entity_id,
+                exc_info=True,
+            )
+        return None
+
+    async def _async_previous_cycle_usage(
+        self,
+        target: datetime | None,
+    ) -> Decimal | None:
+        """Prefer this meter's history, then its source's existing statistics."""
+        value = await self._async_meter_history_value(target)
+        if value is not None or target is None:
+            return value
+        period_start = meter.previous_reset(self._meter_settings, target)
+        return await self._async_meter_source_statistics_usage(period_start, target)
+
+    async def _async_refresh_previous_month_comparison(self) -> None:
+        """Refresh configured previous-period and rolling Recorder comparisons."""
+        now = dt_util.utcnow()
+        changed = False
+        if self._meter_settings["compare_previous_month"]:
+            target = meter.previous_month_same_time(now)
+            value = await self._async_previous_cycle_usage(target)
+            if self._meter_previous_month_at != target or self._meter_previous_month_value != value:
+                self._meter_previous_month_at = target
+                self._meter_previous_month_value = value
+                changed = True
+        if self._meter_settings["compare_previous_period"]:
+            target = meter.previous_period_same_time(self._meter_settings, now)
+            value = await self._async_previous_cycle_usage(target)
+            if self._meter_previous_period_at != target or self._meter_previous_period_value != value:
+                self._meter_previous_period_at = target
+                self._meter_previous_period_value = value
+                changed = True
+        days = self._meter_settings["rolling_window_days"]
+        if days:
+            current = self._utility_decimal(self._attr_native_value)
+            target = meter.rolling_target(now, days)
+            previous_target = meter.rolling_target(now, days * 2)
+            at_target = await self._async_meter_history_value(target)
+            at_previous_target = await self._async_meter_history_value(previous_target)
+            rolling = (
+                current - at_target
+                if current is not None
+                and at_target is not None
+                and (current >= at_target or self._meter_settings["net_consumption"])
+                else None
+            )
+            previous = (
+                at_target - at_previous_target
+                if at_target is not None
+                and at_previous_target is not None
+                and (
+                    at_target >= at_previous_target
+                    or self._meter_settings["net_consumption"]
+                )
+                else None
+            )
+            if rolling is None:
+                rolling = await self._async_meter_source_statistics_usage(target, now)
+            if previous is None:
+                previous = await self._async_meter_source_statistics_usage(
+                    previous_target,
+                    target,
+                )
+            if (
+                self._meter_rolling_window_at != target
+                or self._meter_rolling_window_value != rolling
+                or self._meter_previous_rolling_window_value != previous
+            ):
+                self._meter_rolling_window_at = target
+                self._meter_rolling_window_value = rolling
+                self._meter_previous_rolling_window_value = previous
+                changed = True
+        if changed:
             self._update_attributes()
             self._schedule_state_update()
 
@@ -677,6 +879,9 @@ class VirtualSensor(VirtualEntity, SensorEntity):
         if self._utility_meter_enabled:
             self._meter_restored_source = state.attributes.get("meter_source")
             self._meter_correction_id = state.attributes.get("meter_correction_id")
+            self._meter_previous_period_correction_id = state.attributes.get(
+                "meter_previous_period_correction_id"
+            )
             total = self._utility_decimal(state.attributes.get("meter_total"))
             if total is not None:
                 self._attr_native_value = total
@@ -684,9 +889,8 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             self._utility_meter_last_source = self._utility_decimal(
                 state.attributes.get("last_valid_state")
             )
-            self._utility_meter_last_period = (
-                self._utility_decimal(state.attributes.get("last_period"))
-                or Decimal("0")
+            self._utility_meter_last_period = self._utility_decimal(
+                state.attributes.get("last_period")
             )
             raw_reset = state.attributes.get("last_reset")
             self._utility_meter_last_reset = dt_util.parse_datetime(raw_reset) if isinstance(raw_reset, str) else None
@@ -826,6 +1030,9 @@ class VirtualSensor(VirtualEntity, SensorEntity):
             meter_attributes = {
                 "meter_source": self._source_entities[0] if self._source_entities else None,
                 "meter_correction_id": self._meter_correction_id,
+                "meter_previous_period_correction_id": (
+                    self._meter_previous_period_correction_id
+                ),
                 "meter_schedule": self._meter_schedule_profile,
                 "meter_schedule_since": self._meter_schedule_since.isoformat() if self._meter_schedule_since else None,
                 "meter_total": str(self._attr_native_value or 0),
@@ -834,7 +1041,10 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                 "currency": self._meter_settings["currency"].upper(),
                 "utility_meter": True,
                 "utility_meter_cycle": self._utility_meter_cycle,
-                "last_period": str(self._utility_meter_last_period),
+                "last_period": (
+                    str(self._utility_meter_last_period)
+                    if self._utility_meter_last_period is not None else None
+                ),
                 "last_reset": self._utility_meter_last_reset.isoformat() if self._utility_meter_last_reset else None,
                 "last_valid_state": str(self._utility_meter_last_source) if self._utility_meter_last_source is not None else None,
             }
@@ -847,6 +1057,33 @@ class VirtualSensor(VirtualEntity, SensorEntity):
                     "last_month_same_time": (
                         self._meter_previous_month_at.isoformat()
                         if self._meter_previous_month_at is not None else None
+                    ),
+                })
+            if self._meter_settings["compare_previous_period"]:
+                meter_attributes.update({
+                    "previous_period_same_time_usage": (
+                        str(self._meter_previous_period_value)
+                        if self._meter_previous_period_value is not None else None
+                    ),
+                    "previous_period_same_time": (
+                        self._meter_previous_period_at.isoformat()
+                        if self._meter_previous_period_at is not None else None
+                    ),
+                })
+            if self._meter_settings["rolling_window_days"]:
+                meter_attributes.update({
+                    "rolling_window_days": self._meter_settings["rolling_window_days"],
+                    "rolling_window_usage": (
+                        str(self._meter_rolling_window_value)
+                        if self._meter_rolling_window_value is not None else None
+                    ),
+                    "previous_rolling_window_usage": (
+                        str(self._meter_previous_rolling_window_value)
+                        if self._meter_previous_rolling_window_value is not None else None
+                    ),
+                    "rolling_window_start": (
+                        self._meter_rolling_window_at.isoformat()
+                        if self._meter_rolling_window_at is not None else None
                     ),
                 })
             self._attr_extra_state_attributes.update(meter_attributes)

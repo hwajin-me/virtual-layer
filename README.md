@@ -1833,10 +1833,36 @@ clears the old one-time correction so re-enabling cannot replay that correction.
   `<entity_id>_last_month_same_time`. It reads this meter's Recorder history at
   the same local calendar date and time one month earlier (month ends clamp to
   the last day), refreshed every minute even when the source is idle.
-  Recorder must retain at least one month of state history (35 days is a safe
-  retention setting; its default retention is insufficient). Missing history,
-  an unavailable historical reading, or a changed unit produces `unknown`,
-  never an estimate from a full-month total. No Recorder settings are changed.
+  It prefers this meter's exact Recorder state. For a newly migrated meter it
+  can instead use the cumulative source's reset-aware five-minute or hourly
+  statistics sums, so existing source history is useful immediately without
+  backfilling synthetic VL states. Missing history, an unavailable historical
+  reading, or a changed unit produces `unknown`. No Recorder settings are changed.
+- Enable **Create previous-period comparison sensors** on a resetting meter to
+  add `<entity_id>_last_period` and
+  `<entity_id>_previous_period_same_time`. Weekly meters therefore expose the
+  completed previous week and the previous week at the same elapsed point;
+  monthly meters use their configured billing-cycle anchor. Same-time values
+  use this meter's history when available and otherwise derive the interval
+  from the cumulative source's existing reset-aware statistics sums.
+- Set **Rolling window days** on a no-reset meter to add
+  `<entity_id>_rolling_window` and `<entity_id>_previous_rolling_window`.
+  A value of 7 provides recent-seven-day and preceding-seven-day usage without
+  a separate SQL/command-line collector. New VL meters automatically reuse the
+  source sensor's existing statistics sums. Missing or stale endpoints, a
+  changed unit, or an invalid decrease produces `unknown`; VL does not create
+  fake historical states.
+
+On first creation, `last_reset` is aligned to the active schedule boundary
+(for example Monday 00:00 for a weekly meter or the configured day 22 for a
+monthly billing meter). This makes elapsed-period averages and forecasts valid
+when a current-period correction is applied during an in-place migration.
+When a trustworthy legacy value exists, **Seed previous-period total** applies
+that completed-period value once as part of the same UI migration. It works for
+any resetting cycle even when comparison companions are disabled, including a
+`*/5 * * * *` cron meter used to replace an external five-minute collector.
+Leave it blank when history is unavailable; `last_period` remains `unknown`
+until the first real reset rather than inventing a zero.
 
 **Current usage correction** replaces the current period's total when saved and
 is applied once, not again on every reload. In automation actions, use
