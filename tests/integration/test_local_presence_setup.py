@@ -81,12 +81,19 @@ async def test_ab_gateway_wifi_ui_reload_and_absence(hass, freezer):
         await hass.async_block_till_done()
         assert hass.states.get("device_tracker.local_phone").state == "not_home"
         # This is the same HA scanner API used by component-ab-gateway.
+        advertisement_time = bluetooth.MONOTONIC_TIME()
         scanner._async_on_advertisement(
-            MAC.lower(), -65, "Phone", [], {}, {}, None, {}, bluetooth.MONOTONIC_TIME()
+            MAC.lower(), -65, "Phone", [], {}, {}, None, {}, advertisement_time
         )
         freezer.tick(timedelta(seconds=5))
-        async_fire_time_changed(hass, dt_util.utcnow())
-        await hass.async_block_till_done()
+        # Freezegun's monotonic behavior differs between supported Python
+        # versions. Advance HA Bluetooth's measurement clock explicitly so
+        # this remains a timeout test instead of depending on wall-clock speed.
+        with patch.object(
+            bluetooth, "MONOTONIC_TIME", return_value=advertisement_time + 5
+        ):
+            async_fire_time_changed(hass, dt_util.utcnow())
+            await hass.async_block_till_done()
         state = hass.states.get("device_tracker.local_phone")
         assert state.state == "home"
         assert state.attributes["latitude"] == 37.5
@@ -95,8 +102,11 @@ async def test_ab_gateway_wifi_ui_reload_and_absence(hass, freezer):
         assert registry.async_get("sensor.src_local_phone_debug1") is None
         assert "binary_sensor.phone_wifi" in state.attributes["source_diagnostics"]
         freezer.tick(timedelta(seconds=31))
-        async_fire_time_changed(hass, dt_util.utcnow())
-        await hass.async_block_till_done()
+        with patch.object(
+            bluetooth, "MONOTONIC_TIME", return_value=advertisement_time + 36
+        ):
+            async_fire_time_changed(hass, dt_util.utcnow())
+            await hass.async_block_till_done()
         assert hass.states.get("device_tracker.local_phone").state == "not_home"
         hass.states.async_set("binary_sensor.phone_wifi", "on")
         await hass.async_block_till_done()
