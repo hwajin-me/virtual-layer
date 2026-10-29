@@ -107,16 +107,16 @@ async def test_ab_gateway_wifi_ui_reload_and_absence(hass, freezer):
         ):
             async_fire_time_changed(hass, dt_util.utcnow())
             await hass.async_block_till_done()
-        assert hass.states.get("device_tracker.local_phone").state == "not_home"
-        hass.states.async_set("binary_sensor.phone_wifi", "on")
-        await hass.async_block_till_done()
-        assert hass.states.get("device_tracker.local_phone").state == "home"
-        assert await hass.config_entries.async_reload(entry.entry_id)
-        await hass.async_block_till_done()
-        assert hass.states.get("device_tracker.local_phone").state == "home"
-        hass.states.async_set("binary_sensor.phone_wifi", "off")
-        await hass.async_block_till_done()
-        assert hass.states.get("device_tracker.local_phone").state == "not_home"
+            assert hass.states.get("device_tracker.local_phone").state == "not_home"
+            hass.states.async_set("binary_sensor.phone_wifi", "on")
+            await hass.async_block_till_done()
+            assert hass.states.get("device_tracker.local_phone").state == "home"
+            assert await hass.config_entries.async_reload(entry.entry_id)
+            await hass.async_block_till_done()
+            assert hass.states.get("device_tracker.local_phone").state == "home"
+            hass.states.async_set("binary_sensor.phone_wifi", "off")
+            await hass.async_block_till_done()
+            assert hass.states.get("device_tracker.local_phone").state == "not_home"
         device_name, configured_entities = next(
             iter(entry.options[ATTR_DEVICES].items())
         )
