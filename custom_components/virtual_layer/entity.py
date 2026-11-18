@@ -50,6 +50,7 @@ from .const import *
 from .air_quality_options import LEVELS as AIR_QUALITY_LEVELS
 from . import air_quality_options as aq_options
 from .device_metadata import configuration_url_or_none
+from .restore_state_compat import get_stored_state
 from .mode_commands import (
     SOURCE_MODE_COMMANDS, MODE_VALUE_PROPERTIES, upgrade_mode_helpers, source_mode_data,
     wrap_mode_template,
@@ -652,7 +653,7 @@ class VirtualEntity(RestoreEntity):
         if state is None and self._config.get("_aq_previous_entity_id"):
             from homeassistant.helpers.restore_state import async_get
             previous_id = self._config["_aq_previous_entity_id"]
-            stored = async_get(self.hass).last_states.get(previous_id)
+            stored = get_stored_state(async_get(self.hass), previous_id)
             state = stored.state if stored else self.hass.states.get(previous_id)
         if self._is_air_quality and state and state.state in AIR_QUALITY_LEVELS:
             self._aq_last_valid = state.state

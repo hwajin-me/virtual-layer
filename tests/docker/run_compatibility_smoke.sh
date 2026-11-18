@@ -2217,9 +2217,19 @@ async def test_diagnostic_retention_runtime(hass, entry):
                 assert registry.async_get(control_id).device_id == registry.async_get(target).device_id
                 target_row = registry.async_get(target)
                 expected_name = f"Debug - {target_row.name or target_row.original_name or state.name}"
-                assert hass.states.get(control_id).name == expected_name, (
-                    target, hass.states.get(control_id).name, expected_name,
-                    registry.async_get(control_id).original_name,
+                control_row = registry.async_get(control_id)
+                assert control_row.original_name == expected_name
+                # Current HA includes the Device in legacy friendly names.
+                # Keep the component's exact generated name while checking
+                # the full display name against HA's public naming policy.
+                friendly_name = getattr(er, "async_get_legacy_friendly_name", None)
+                expected_friendly_name = (
+                    friendly_name(hass, control_row) if friendly_name is not None
+                    else control_row.name or expected_name
+                )
+                assert hass.states.get(control_id).name == expected_friendly_name, (
+                    target, hass.states.get(control_id).name, expected_friendly_name,
+                    control_row.original_name,
                 )
                 await hass.services.async_call("button", "press", {"entity_id": control_id}, blocking=True)
                 await hass.async_block_till_done()

@@ -894,7 +894,9 @@ class VirtualCamera(VirtualEntity, Camera):
             self._attr_supported_features &= ~CameraEntityFeature.STREAM
         self._supports_native_async_webrtc = supports_native_webrtc
         self.__dict__.pop("supported_features", None)
-        self._invalidate_camera_capabilities_cache()
+        invalidate_capabilities = getattr(self, "_invalidate_camera_capabilities_cache", None)
+        if invalidate_capabilities is not None:
+            invalidate_capabilities()
 
     async def async_turn_on(self) -> None:
         self._attr_is_on = True

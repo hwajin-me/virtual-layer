@@ -21,6 +21,7 @@ from .const import (
     STATE_ONLY_ENTITY_DOMAINS,
 )
 from .source_diagnostics import _KEYS, _parse_deadline, _preview, _size, attributes
+from .restore_state_compat import get_stored_state
 
 DEBUG_SUFFIX = f"{DIAGNOSTIC_UNIQUE_ID_MARKER}debug_button"
 DEBUG_AGE = timedelta(days=1)
@@ -65,7 +66,7 @@ def cleanse(hass, entry, target, *, max_age=None):
                     hass.states.async_set(target_id, state.state, current)
         # Disabled/unloaded entities can still have an old restore snapshot.
         # Clean it too, so enabling them later cannot resurrect expired traces.
-        stored = async_get_restore_state(hass).last_states.get(target_id)
+        stored = get_stored_state(async_get_restore_state(hass), target_id)
         if stored is not None:
             restored = dict(stored.state.attributes)
             before = set(restored)

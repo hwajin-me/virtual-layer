@@ -58,6 +58,7 @@ from .entity import (
     event_hook_state_is_current,
     repair_legacy_enum_template,
 )
+from .restore_state_compat import discard_stored_state, get_stored_state
 
 _LOGGER = logging.getLogger(__name__)
 _MISSING = object()
@@ -80,7 +81,9 @@ async def _async_update_options(hass, entry):
     """Serialize incremental updates without unloading unrelated entities."""
     async with entry.setup_lock:
         if entry.state is ConfigEntryState.LOADED:
-            await async_setup_entry(hass, entry, incremental=True)
+            await async_setup_entry(
+                hass, entry, incremental=True, _setup_lock_held=True
+            )
 
 
 @callback
@@ -100,7 +103,7 @@ def _async_update_restored_attributes(hass, previous, current) -> None:
     }
     if not edited:
         return
-    stored = async_get_restore_state(hass).last_states.get(current.get(ATTR_ENTITY_ID))
+    stored = get_stored_state(async_get_restore_state(hass), current.get(ATTR_ENTITY_ID))
     if stored is None:
         return
     attributes = dict(stored.state.attributes)
@@ -270,8 +273,13 @@ _STATE_ONLY_BOOLEAN_NATIVE_PROPERTIES = frozenset({"supports_streaming"})
 class _StateOnlyRestoreProxy:
     """Expose a state-only entity to Home Assistant's restore-state helper."""
 
-    def __init__(self, entity_id: str) -> None:
+    def __init__(self, hass: HomeAssistant, entity_id: str) -> None:
+        self.hass = hass
         self.entity_id = entity_id
+
+    @property
+    def registry_entry(self):
+        return er.async_get(self.hass).async_get(self.entity_id)
 
     @property
     def extra_restore_state_data(self):
@@ -408,7 +416,7 @@ async def async_setup(hass, config):
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, *, incremental=False
+    hass: HomeAssistant, entry: ConfigEntry, *, incremental=False, _setup_lock_held=False
 ) -> bool:
     if entry.data.get("geojson_group"):
         from .geojson_group import setup
@@ -587,7 +595,17 @@ async def async_setup_entry(
                         for entities, update in pending:
                             await platform.async_add_entities(entities, update)
                     else:
-                        await hass.config_entries.async_forward_entry_setups(entry, [domain])
+                        forward = hass.config_entries.async_forward_entry_setups
+                        if _setup_lock_held:
+                            # Platforms were preloaded above. HA 2026.11's public
+                            # wrapper reacquires a loaded entry's non-reentrant
+                            # lock; use its locked implementation while we own it.
+                            forward = getattr(
+                                hass.config_entries,
+                                "_async_forward_entry_setups_locked",
+                                forward,
+                            )
+                        await forward(entry, [domain])
             finally:
                 STARTUP_SOURCE_GRACE_ALLOWED.reset(grace_token)
                 _ENTITY_SETUP_CONFIGS.reset(token)
@@ -1298,7 +1316,7 @@ def _async_setup_state_only_entities(hass, entry, entities, *, partial=False) ->
             entity_id = _async_register_state_only_entity(hass, entry, entity)
             if entity_id is None:
                 continue
-            stored = async_get_restore_state(hass).last_states.get(entity_id)
+            stored = get_stored_state(async_get_restore_state(hass), entity_id)
             restored = (
                 entity.get(CONF_PERSISTENT, DEFAULT_PERSISTENT)
                 and stored is not None
@@ -1357,10 +1375,10 @@ def _state_only_initial_state(hass, entity) -> tuple[object, dict]:
 
     if not entity.get(CONF_PERSISTENT, DEFAULT_PERSISTENT):
         if entity_id:
-            restore_data.last_states.pop(entity_id, None)
+            discard_stored_state(hass, restore_data, entity_id)
         return value, attributes
 
-    stored = restore_data.last_states.get(entity_id) if entity_id else None
+    stored = get_stored_state(restore_data, entity_id)
     if stored is None:
         return value, attributes
 
@@ -1400,7 +1418,7 @@ def _async_register_state_only_restore_proxy(hass, entry_id, entity) -> None:
         or not entity.get(CONF_PERSISTENT, DEFAULT_PERSISTENT)
     ):
         return
-    proxy = _StateOnlyRestoreProxy(entity_id)
+    proxy = _StateOnlyRestoreProxy(hass, entity_id)
     proxies = hass.data.setdefault(
         _STATE_ONLY_RESTORE_PROXIES_DATA,
         {},
@@ -1422,8 +1440,15 @@ def _async_remove_state_only_restore_proxies(hass, entry_id, entity_ids=None) ->
     for entity_id, proxy in proxies.items():
         if restore_data.entities.get(entity_id) is proxy:
             remove = restore_data.async_restore_entity_removed
-            if "state" in inspect.signature(remove).parameters:
-                remove(entity_id, hass.states.get(entity_id), None)
+            parameters = inspect.signature(remove).parameters
+            if "state" in parameters:
+                kwargs = {}
+                if "entity_registry_id" in parameters:
+                    registry_entry = proxy.registry_entry
+                    kwargs["entity_registry_id"] = (
+                        registry_entry.id if registry_entry is not None else None
+                    )
+                remove(entity_id, hass.states.get(entity_id), None, **kwargs)
             else:
                 remove(entity_id, None)
     if entry_proxies == {}:
