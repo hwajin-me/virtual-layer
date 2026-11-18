@@ -4265,7 +4265,9 @@ async def test_light_command_policy_create_edit_reload_and_delete(hass, helper_p
     await hass.async_block_till_done()
     state = hass.states.get("light.policy_virtual")
     assert "command_status" not in state.attributes
-    assert state.attributes["source_configuration"]["light_command_timeout"] == 12
+    assert "light_command_timeout" not in state.attributes["source_configuration"]
+    from custom_components.virtual_layer.debug import diagnose
+    assert diagnose(hass, entry, primary)["source_configuration"]["light_command_timeout"] == 12
     assert registry.async_get("light.policy_virtual").unique_id == primary.unique_id
     assert registry.async_get("light.policy_virtual").device_id == primary.device_id
     result = await hass.config_entries.options.async_init(
@@ -7375,10 +7377,13 @@ async def test_source_diagnostics_are_attributes_and_legacy_entities_are_removed
     assert state.attributes["source_configuration"]["source_entities"] == record[CONF_SOURCE_ENTITIES]
     sources = state.attributes["source_diagnostics"]
     assert list(sources) == record[CONF_SOURCE_ENTITIES]
-    assert sources["sensor.washer_power"]["source_state"] == "150"
-    assert sources["sensor.washer_power"]["source_attributes"] == {"unit": "W"}
-    assert sources["binary_sensor.washer_door"]["source_attributes"] == {"battery": 95}
-    assert sources["sensor.washer_power"]["source_last_updated"] == hass.states.get("sensor.washer_power").last_updated.isoformat()
+    assert sources["sensor.washer_power"]["source_available"] is True
+    assert "source_attributes" not in sources["sensor.washer_power"]
+    assert "source_last_updated" not in sources["sensor.washer_power"]
+    from custom_components.virtual_layer.debug import diagnose
+    report = diagnose(hass, entry, registry.async_get("sensor.virtual_washer"))
+    assert report["source_diagnostics"]["sensor.washer_power"]["source_attributes"] == {"unit": "W"}
+    assert report["source_diagnostics"]["binary_sensor.washer_door"]["source_attributes"] == {"battery": 95}
     for suffix in ("info", "debug1", "debug2"):
         assert registry.async_get(f"sensor.src_virtual_washer_{suffix}") is None
         assert hass.states.get(f"sensor.src_virtual_washer_{suffix}") is None
@@ -7387,10 +7392,10 @@ async def test_source_diagnostics_are_attributes_and_legacy_entities_are_removed
 
     hass.states.async_set("sensor.washer_power", "160", {"unit": "W"})
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.virtual_washer").attributes["source_diagnostics"]["sensor.washer_power"]["source_state"] == "160"
+    assert hass.states.get("sensor.virtual_washer").attributes["source_diagnostics"]["sensor.washer_power"]["source_available"] is True
     hass.states.async_remove("binary_sensor.washer_door")
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.virtual_washer").attributes["source_diagnostics"]["binary_sensor.washer_door"]["source_state"] is None
+    assert hass.states.get("sensor.virtual_washer").attributes["source_diagnostics"]["binary_sensor.washer_door"]["source_available"] is False
 
     # Editing sources preserves identity and drops obsolete diagnostics.
     primary = registry.async_get("sensor.virtual_washer")
@@ -9499,12 +9504,16 @@ async def test_state_only_entity_supports_state_and_event_hooks(
     assert info.attributes["source_configuration"]["source_entities"] == [
         "sensor.tag_hook_source",
     ]
+    assert "event_hooks" not in info.attributes["source_configuration"]
+    from custom_components.virtual_layer.debug import diagnose
+    report = diagnose(hass, entry, er.async_get(hass).async_get("tag.hook_tag"))
     assert (
-        info.attributes["source_configuration"]["event_hooks"]
+        report["source_configuration"]["event_hooks"]
         == (entry.options[ATTR_DEVICES]["Virtual Tag"][0][CONF_EVENT_HOOKS])
     )
     assert debug["source_entity_id"] == "sensor.tag_hook_source"
-    assert debug["source_state"] == "on"
+    assert debug["source_available"] is True
+    assert report["source_diagnostics"]["sensor.tag_hook_source"]["source_state"] == "on"
 
     assert await async_unload_entry(hass, entry) is True
     hass.bus.async_fire(

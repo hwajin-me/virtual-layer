@@ -23,13 +23,15 @@ async def test_virtual_source_cycles_settle_and_never_nest_diagnostics(hass, dom
     await asyncio.wait_for(hass.async_block_till_done(), 5)
     for target, source in ((first, second), (second, first)):
         record = hass.states.get(target).attributes["source_diagnostics"][source]
-        assert record["source_state"] == "ready"
-        assert "source_diagnostics" not in record["source_attributes"]
-        assert "source_configuration" not in record["source_attributes"]
+        assert record["source_available"] is True
+        assert "source_state" not in record
+        assert "source_attributes" not in record
+        assert "source_last_updated" not in record
     await hass.services.async_call("virtual_layer", "set_state",
                                   {"entity_id": second, "value": "changed"}, blocking=True)
     await asyncio.wait_for(hass.async_block_till_done(), 5)
-    assert hass.states.get(first).attributes["source_diagnostics"][second]["source_state"] == "changed"
+    assert hass.states.get(second).state == "changed"
+    assert hass.states.get(first).attributes["source_diagnostics"][second]["source_available"] is True
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert "virtual_layer_zigbee_refresh" not in hass.data

@@ -54,6 +54,11 @@ from . import (
 from .const import *
 from .const import generic_entity_options
 from .entity import VirtualEntity, virtual_schema
+from .recorder_policy import (
+    DIAGNOSTIC_SENSOR_CLOCK_ATTRIBUTES,
+    DIAGNOSTIC_SENSOR_EXCLUDED_ATTRIBUTES,
+    diagnostic_refresh_needed,
+)
 from .source_usage import SOURCE_USAGE, SourceUsageSensor
 from .air_quality_options import default_air_quality_icon, normalize_unit
 from . import unit_history
@@ -1198,6 +1203,8 @@ class VirtualSensor(VirtualEntity, SensorEntity):
 class VirtualDiagnosticSensor(VirtualSensor):
     """Expose a source entity's current state and attributes for diagnostics."""
 
+    _unrecorded_attributes = DIAGNOSTIC_SENSOR_EXCLUDED_ATTRIBUTES
+
     def __init__(self, config, old_style: bool):
         self._diagnostic_source_entity = config[CONF_DIAGNOSTIC_SOURCE_ENTITY]
         super().__init__(config, old_style)
@@ -1210,8 +1217,13 @@ class VirtualDiagnosticSensor(VirtualSensor):
         @callback
         def refresh_diagnostics():
             if not self._virtual_removing:
+                previous = self._attr_extra_state_attributes
                 self._update_attributes()
-                self.async_write_ha_state()
+                if diagnostic_refresh_needed(
+                    previous, self._attr_extra_state_attributes,
+                    ignored_attributes=DIAGNOSTIC_SENSOR_CLOCK_ATTRIBUTES,
+                ):
+                    self.async_write_ha_state()
 
         self.async_on_remove(async_dispatcher_connect(
             self.hass, DIAGNOSTICS_UPDATED, refresh_diagnostics,

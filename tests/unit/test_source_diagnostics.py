@@ -16,7 +16,7 @@ def test_snapshot_filters_transient_and_recursive_data_and_keeps_unknown_sources
         "source_configuration": {"nested": "secret"}, "voltage": 3, "nonfinite": float("nan"),
     })
     config = {"_source_diagnostics": {"platform": "sensor", "source_entities": ["sensor.original", "sensor.missing"]}}
-    result = attributes(hass, config, {})
+    result = attributes(hass, config, {}, include_details=True)
     record = result["source_diagnostics"]["sensor.original"]
     assert record["source_state"] == "4"
     assert record["source_attributes"] == {"voltage": 3, "nonfinite": None}
@@ -29,7 +29,7 @@ def test_large_diagnostics_share_a_single_parent_budget(hass):
     for source in sources:
         hass.states.async_set(source, "5", {"payload": ["x" * 10000] * 100})
     config = {"_source_diagnostics": {"source_entities": sources, "command_actions": {"payload": "x" * 30000}}}
-    result = attributes(hass, config, {"existing": "x" * 6000})
+    result = attributes(hass, config, {"existing": "x" * 6000}, include_details=True)
     assert result["source_diagnostics_truncated"] is True
     assert len(json.dumps(result).encode()) < 6200
     assert sources[0] in result["source_diagnostics"]
@@ -62,7 +62,7 @@ def test_expired_snapshot_removes_payload_and_timestamps(hass):
     result = attributes(hass, config, {})
     assert result["source_diagnostics"]["sensor.original"] == {
         "source_entity_id": "sensor.original", "source_entity_name": "original",
-        "source_state": "4",
+        "source_available": True,
     }
     assert "command_actions" not in result["source_configuration"]
     assert "large detail" not in json.dumps(result)

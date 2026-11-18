@@ -28,8 +28,9 @@ _EXCLUDED = _KEYS | TRANSIENT_SOURCE_ATTRIBUTE_NAMES | {
 }
 _COMPACT_COMMUNICATION_KEYS = {
     "source_integration", "zigbee_device_availability", "zigbee_bridge_availability",
-    "zigbee_mqtt_connected", "zigbee_linkquality", "zigbee_battery", "zigbee_last_seen",
+    "zigbee_mqtt_connected",
 }
+COMPACT_DIAGNOSTIC_BYTES = 2048
 
 
 def _parse_deadline(value):
@@ -86,10 +87,30 @@ def meaningful_change(event):
     } == {key: value for key, value in after.attributes.items() if key not in _KEYS})
 
 
-def _preview(value, depth=0):
-    if depth >= 5:
+def _bounded_items(value, remaining, truncated):
+    """Charge every examined key, even excluded or rejected diagnostic copies."""
+    examined = 0
+    for key in value:
+        if examined >= 32 or remaining[0] <= 0:
+            truncated[0] = True
+            break
+        examined += 1
+        remaining[0] -= 1
+        yield key, value[key]
+
+
+def _preview(value, depth=0, remaining=None, truncated=None):
+    if remaining is None:
+        remaining = [128]
+    if truncated is None:
+        truncated = [False]
+    remaining[0] -= 1
+    if depth >= 5 or remaining[0] < 0:
+        truncated[0] = True
         return "…"
     if isinstance(value, str):
+        if len(value) > 1024:
+            truncated[0] = True
         return value[:1024] + ("…" if len(value) > 1024 else "")
     if value is None or isinstance(value, bool):
         return value
@@ -99,10 +120,19 @@ def _preview(value, depth=0):
         except OverflowError:
             return None
     if isinstance(value, Mapping):
-        return {str(key): _preview(item, depth + 1)
-                for key, item in list(value.items())[:32] if key not in _EXCLUDED}
+        return {
+            str(key)[:128]: _preview(item, depth + 1, remaining, truncated)
+            for key, item in _bounded_items(value, remaining, truncated)
+            if key not in _EXCLUDED
+        }
     if isinstance(value, (list, tuple)):
-        return [_preview(item, depth + 1) for item in value[:32]]
+        result = []
+        for index, item in enumerate(value):
+            if index >= 32 or remaining[0] <= 0:
+                truncated[0] = True
+                break
+            result.append(_preview(item, depth + 1, remaining, truncated))
+        return result
     return str(value)[:1024]
 
 
@@ -118,60 +148,75 @@ def fit_snapshot(hass, config, current):
         current.update(attributes(hass, config, current))
 
 
-def attributes(hass, config, current):
-    """Keep combined diagnostics within the parent's remaining recorder budget."""
+def attributes(hass, config, current, *, include_details=False):
+    """Publish stable compact metadata; detailed copies require an explicit request."""
     configuration = config.get(CONF_SOURCE_DIAGNOSTICS)
     if not isinstance(configuration, Mapping):
         return {}
-    budget = max(0, 12000 - _size({key: value for key, value in current.items() if key not in _KEYS}))
+    detailed = include_details and details_enabled(config)
+    budget = min(
+        12000 if detailed else COMPACT_DIAGNOSTIC_BYTES,
+        max(0, 12000 - _size({key: value for key, value in current.items() if key not in _KEYS})),
+    )
     if budget < 80:
         return {}
     result = {"source_configuration": {}, "source_diagnostics": {}}
     sources = configuration.get("source_entities", [])
-    detailed = details_enabled(config)
+    remaining, truncated = [128], [False]
     # Reserve most of the budget for live sources. Summaries never recurse into
     # another virtual entity's diagnostics or copy transient camera credentials.
-    for key, value in configuration.items():
+    for key, value in _bounded_items(configuration, remaining, truncated):
         if not detailed and key not in {"platform", "source_entities", "persistent"}:
             continue
-        candidate = {**result["source_configuration"], key: _preview(value)}
+        candidate = {**result["source_configuration"], key: _preview(value, remaining=remaining, truncated=truncated)}
         if _size(candidate) <= min(3000, budget // 3):
             result["source_configuration"] = candidate
         else:
             result["source_diagnostics_truncated"] = True
-    for source in sources:
+    for index, source in enumerate(sources):
+        if index >= 32 or remaining[0] <= 0:
+            truncated[0] = True
+            break
+        remaining[0] -= 1
         state = hass.states.get(source)
+        communication = diagnostic_attributes(hass, source)
+        if not detailed:
+            communication = {key: communication[key] for key in _COMPACT_COMMUNICATION_KEYS if key in communication}
         record = {
             "source_entity_id": source,
             "source_entity_name": state.name if state else source,
-            "source_state": state.state if state else None,
+            "source_available": state is not None and state.state not in {"unknown", "unavailable"},
             **{
-                key: value for key, value in diagnostic_attributes(hass, source).items()
+                key: _preview(value, remaining=remaining, truncated=truncated)
+                for key, value in _bounded_items(communication, remaining, truncated)
                 if detailed or key in _COMPACT_COMMUNICATION_KEYS
             },
         }
         if detailed:
             record.update({
+                "source_state": state.state if state else None,
                 "source_last_updated": state.last_updated.isoformat() if state else None,
                 "source_last_changed": state.last_changed.isoformat() if state else None,
             })
         # Only add a source if its useful identity/state/communication data fit.
         result["source_diagnostics"][source] = record
-        if _size(result) > budget:
+        if _size(result) > budget - 48:
             del result["source_diagnostics"][source]
             result["source_diagnostics_truncated"] = True
             continue
         if not detailed:
             continue
         record["source_attributes"] = {}
-        for key, value in (state.attributes.items() if state else []):
+        for key, value in _bounded_items(state.attributes if state else {}, remaining, truncated):
             if key in _EXCLUDED:
                 continue
-            record["source_attributes"][key] = _preview(value)
+            record["source_attributes"][key] = _preview(value, remaining=remaining, truncated=truncated)
             # Bound each source too, so a noisy first source cannot hide others.
-            if _size(record["source_attributes"]) > min(1500, budget // max(1, len(sources) * 2)) or _size(result) > budget:
+            if _size(record["source_attributes"]) > min(1500, budget // max(1, len(sources) * 2)) or _size(result) > budget - 48:
                 del record["source_attributes"][key]
                 result["source_diagnostics_truncated"] = True
+    if truncated[0]:
+        result["source_diagnostics_truncated"] = True
     return result
 
 

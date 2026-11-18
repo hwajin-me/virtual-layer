@@ -369,7 +369,7 @@
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
               "diagnostic_interval": "Diagnostic refresh interval",
-              "diagnostic_details": "Keep detailed diagnostics for 7 days",
+              "diagnostic_details": "Allow detailed Debug reports",
               "attribute_cleanup_interval": "Additional diagnostic cleanup interval",
               "diagnostic_attributes": "Diagnostic-only service attributes",
               "template_sources_json": "Template sources Jinja template",
@@ -382,8 +382,8 @@
               "domain_options_json": "Domain options Jinja template"
             },
             "data_description": {
-              "diagnostic_interval": "Seconds between diagnostic snapshots (default 300). Use 0 for every source change. State and native properties still update normally.",
-              "diagnostic_details": "Include source attributes, timestamps and configuration details for seven days from first setup. Reloads and restarts do not renew this period. After expiry only a compact summary remains. Disable and save, then enable and save to start another seven-day period. Recorder history follows Home Assistant retention.",
+              "diagnostic_interval": "Seconds between compact source diagnostic refreshes (default 300). Use 0 for every source change. Detailed snapshots are generated only by the Debug button. State and native properties still update normally.",
+              "diagnostic_details": "Show source attribute copies, timestamps and detailed configuration only when the Debug button is pressed. Reports expire after one day. Primary state attributes always contain a compact summary and reports are excluded from Recorder. Disable to keep Debug reports compact too.",
               "attribute_cleanup_interval": "Optionally clear only diagnostic-only service attributes on this interval (seconds), before their 7-day expiry. Default 0 disables the extra sweep; the 7-day maximum still applies. Ordinary service attributes and functional data are retained.",
               "diagnostic_attributes": "Extra attributes added by virtual_layer.set_attributes used only for debugging; one name per line or comma-separated (up to 32). Other service attributes are retained. Configured attributes, templates, event-hook outputs and native properties are protected. Selected diagnostics expire within 7 days of first publication even when updated/reloaded. Nested lists/maps: 32 items; strings: 1024 characters; selected payload plus retention metadata: 3000 bytes.",
               "template_sources_json": "Maps Jinja variable names to source states or attributes. YAML example:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nUse variables named source and battery in editable templates.\nMultiple sources:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nThen reference the variables from value_template.",
@@ -2009,7 +2009,7 @@
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
               "diagnostic_interval": "Diagnostic refresh interval",
-              "diagnostic_details": "Keep detailed diagnostics for 7 days",
+              "diagnostic_details": "Allow detailed Debug reports",
               "attribute_cleanup_interval": "Additional diagnostic cleanup interval",
               "diagnostic_attributes": "Diagnostic-only service attributes",
               "template_sources_json": "Template sources Jinja template",
@@ -2022,8 +2022,8 @@
               "domain_options_json": "Domain options Jinja template"
             },
             "data_description": {
-              "diagnostic_interval": "Seconds between diagnostic snapshots (default 300). Use 0 for every source change. State and native properties still update normally.",
-              "diagnostic_details": "Include source attributes, timestamps and configuration details for seven days from first setup. Reloads and restarts do not renew this period. After expiry only a compact summary remains. Disable and save, then enable and save to start another seven-day period. Recorder history follows Home Assistant retention.",
+              "diagnostic_interval": "Seconds between compact source diagnostic refreshes (default 300). Use 0 for every source change. Detailed snapshots are generated only by the Debug button. State and native properties still update normally.",
+              "diagnostic_details": "Show source attribute copies, timestamps and detailed configuration only when the Debug button is pressed. Reports expire after one day. Primary state attributes always contain a compact summary and reports are excluded from Recorder. Disable to keep Debug reports compact too.",
               "attribute_cleanup_interval": "Optionally clear only diagnostic-only service attributes on this interval (seconds), before their 7-day expiry. Default 0 disables the extra sweep; the 7-day maximum still applies. Ordinary service attributes and functional data are retained.",
               "diagnostic_attributes": "Extra attributes added by virtual_layer.set_attributes used only for debugging; one name per line or comma-separated (up to 32). Other service attributes are retained. Configured attributes, templates, event-hook outputs and native properties are protected. Selected diagnostics expire within 7 days of first publication even when updated/reloaded. Nested lists/maps: 32 items; strings: 1024 characters; selected payload plus retention metadata: 3000 bytes.",
               "template_sources_json": "Maps Jinja variable names to source states or attributes. YAML example:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nUse variables named source and battery in editable templates.\nMultiple sources:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nThen reference the variables from value_template.",
@@ -2821,7 +2821,7 @@
             "description": "Optional source mappings, attributes, event hooks, command actions, and integration-specific settings.",
             "data": {
               "diagnostic_interval": "Diagnostic refresh interval",
-              "diagnostic_details": "Keep detailed diagnostics for 7 days",
+              "diagnostic_details": "Allow detailed Debug reports",
               "attribute_cleanup_interval": "Additional diagnostic cleanup interval",
               "diagnostic_attributes": "Diagnostic-only service attributes",
               "template_sources_json": "Template sources Jinja template",
@@ -2834,8 +2834,8 @@
               "domain_options_json": "Domain options Jinja template"
             },
             "data_description": {
-              "diagnostic_interval": "Seconds between diagnostic snapshots (default 300). Use 0 for every source change. State and native properties still update normally.",
-              "diagnostic_details": "Include source attributes, timestamps and configuration details for seven days from first setup. Reloads and restarts do not renew this period. After expiry only a compact summary remains. Disable and save, then enable and save to start another seven-day period. Recorder history follows Home Assistant retention.",
+              "diagnostic_interval": "Seconds between compact source diagnostic refreshes (default 300). Use 0 for every source change. Detailed snapshots are generated only by the Debug button. State and native properties still update normally.",
+              "diagnostic_details": "Show source attribute copies, timestamps and detailed configuration only when the Debug button is pressed. Reports expire after one day. Primary state attributes always contain a compact summary and reports are excluded from Recorder. Disable to keep Debug reports compact too.",
               "attribute_cleanup_interval": "Optionally clear only diagnostic-only service attributes on this interval (seconds), before their 7-day expiry. Default 0 disables the extra sweep; the 7-day maximum still applies. Ordinary service attributes and functional data are retained.",
               "diagnostic_attributes": "Extra attributes added by virtual_layer.set_attributes used only for debugging; one name per line or comma-separated (up to 32). Other service attributes are retained. Configured attributes, templates, event-hook outputs and native properties are protected. Selected diagnostics expire within 7 days of first publication even when updated/reloaded. Nested lists/maps: 32 items; strings: 1024 characters; selected payload plus retention metadata: 3000 bytes.",
               "template_sources_json": "Maps Jinja variable names to source states or attributes. YAML example:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nUse variables named source and battery in editable templates.\nMultiple sources:\nsource: sensor.room_temperature\nbattery: sensor.remote.battery_level\nThen reference the variables from value_template.",

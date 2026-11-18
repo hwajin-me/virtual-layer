@@ -37,15 +37,16 @@ async def test_diagnostics_throttle_while_native_state_updates_and_expire_withou
         hass, domain, value_template="{{ states('sensor.original') }}",
     )
     deadline = dict(entry.data["_diagnostic_details_until"])
-    assert hass.states.get(target).attributes["source_diagnostics"]["sensor.original"]["source_attributes"] == {"payload": "first"}
+    assert "source_attributes" not in hass.states.get(target).attributes["source_diagnostics"]["sensor.original"]
 
     hass.states.async_set("sensor.original", "2", {"payload": "second"})
     await hass.async_block_till_done()
     state = hass.states.get(target)
     assert state.state == "2"
-    assert state.attributes["source_diagnostics"]["sensor.original"]["source_state"] == "1"
+    assert state.attributes["source_diagnostics"]["sensor.original"]["source_available"] is True
+    assert "source_state" not in state.attributes["source_diagnostics"]["sensor.original"]
     await advance(hass, freezer, seconds=301)
-    assert hass.states.get(target).attributes["source_diagnostics"]["sensor.original"]["source_state"] == "2"
+    assert hass.states.get(target).attributes["source_diagnostics"]["sensor.original"]["source_available"] is True
 
     await advance(hass, freezer, days=6)
     assert await hass.config_entries.async_reload(entry.entry_id)
@@ -110,7 +111,7 @@ async def test_expiry_without_sources_and_renew_only_after_saved_disable(hass, f
     record = {**record, "diagnostic_details": True}
     hass.config_entries.async_update_entry(entry, options={"devices": {"Retention": [dict(record)]}})
     await hass.async_block_till_done()
-    assert "initial_value" in hass.states.get(target).attributes["source_configuration"]
+    assert "initial_value" not in hass.states.get(target).attributes["source_configuration"]
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

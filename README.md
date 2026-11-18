@@ -189,12 +189,16 @@ store longer structured payloads in attributes.
   actual entity state and native templates keep their normal update behavior.
   In the entity's **Advanced settings**, set **Diagnostic refresh interval**
   to another number of seconds (0 follows every source event).
-  **Keep detailed diagnostics for 7 days** is enabled by default. After seven
-  days, source attribute copies, timestamps and detailed configuration are
-  removed from the current state; only source identity/state and basic
-  communication health remain. The deadline survives reloads, restarts and
-  renames. Disable and save, then enable and save to begin a new seven-day window.
-  This does not delete past Recorder rows; Home Assistant controls their retention.
+  Primary diagnostics are always a compact summary, with a shared 2 KiB budget
+  for source identity, availability, connection health and configuration identity.
+  They omit raw source values, linkquality/battery, source attribute copies, detailed actions/templates and refresh
+  timestamps, so clock ticks alone do not create new history samples.
+  **Allow detailed Debug reports** is enabled by default. Details are collected
+  only when a Debug button is pressed and expire after one day; disabling the
+  option keeps those reports compact too. Integration-owned diagnostics and Debug
+  payloads are excluded from Recorder while functional state and user attributes
+  retain their normal history. Existing Recorder rows still follow Home
+  Assistant's retention; updating does not automatically erase past history.
   Ordinary service attributes and functional state are retained, including
   restore data needed by location tracking, meters and boiler control.
   In **Diagnostic-only service attributes**, explicitly list only extra
@@ -228,12 +232,15 @@ store longer structured payloads in attributes.
   shortened to one day from their original publication; updates/restarts cannot
   extend them. Functional attributes and control/restore data are preserved.
   The button's bounded `debug_result` snapshot is replaced on each press and
-  expires after 24 hours, including across restart. Manual diagnosis works even
-  after automatic detailed diagnostics have expired or the target is unavailable.
+  expires after 24 hours, including across restart. Manual diagnosis also works
+  when the target is unavailable, using Home Assistant's latest source reports.
   No commands or active network scans are sent to physical devices. Undated
   legacy Presence Fusion reason history is cleared, retaining its current reason.
   This cleanup affects current diagnostic attributes, not historical Recorder rows.
-  For a Zigbee2MQTT source, the same record contains Zigbee communication details.
+  For a Zigbee2MQTT source, primary diagnostics retain compact availability
+  and connection reports. The Debug report adds raw source values, linkquality,
+  battery, and the full Zigbee communication details described below, including
+  timestamps and maps.
   Device registry identity and MQTT discovery identify the source automatically;
   ordinary MQTT entities are not assumed to be Zigbee devices. Shared passive
   subscriptions collect only that device's diagnostic fields, including when

@@ -9,6 +9,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.virtual_layer import zigbee_refresh as refresh
+from custom_components.virtual_layer.debug import diagnose
 from tests.unit import test_zigbee_refresh
 
 broker = test_zigbee_refresh.broker
@@ -47,7 +48,8 @@ async def test_source_recovery_reload_and_unload(hass, broker, domain):
 
     debug = diagnostics()
     assert debug["source_integration"] == "zigbee2mqtt"
-    assert debug["zigbee_linkquality"] is None
+    assert "zigbee_linkquality" not in debug
+    assert debug["source_available"] is False
     registry = er.async_get(hass)
     assert registry.async_get(debug_id) is None
     assert hass.states.get(debug_id) is None
@@ -58,9 +60,13 @@ async def test_source_recovery_reload_and_unload(hass, broker, domain):
     })))
     await hass.async_block_till_done()
     debug = diagnostics()
-    assert debug["zigbee_linkquality"] == 144
-    assert debug["zigbee_battery"] == 81
-    assert debug["zigbee_last_seen"] == "2026-01-01T00:00:00+00:00"
+    assert "zigbee_linkquality" not in debug
+    assert "zigbee_battery" not in debug
+    assert "zigbee_last_seen" not in debug
+    report = diagnose(hass, entry, registry.async_get(target))
+    assert report["source_diagnostics"][broker.source]["zigbee_linkquality"] == 144
+    assert report["source_diagnostics"][broker.source]["zigbee_battery"] == 81
+    assert report["source_diagnostics"][broker.source]["zigbee_last_seen"] == "2026-01-01T00:00:00+00:00"
     # Diagnostics update even though the original HA source has not changed.
     assert hass.states.get(broker.source).state == "unavailable"
 
@@ -75,7 +81,9 @@ async def test_source_recovery_reload_and_unload(hass, broker, domain):
         hass, f"{test_zigbee_refresh.BASE}/bridge/request/networkmap",
         '{"type":"raw","routes":false}', qos=0, retain=False,
     )
-    assert hass.states.get(target).attributes["source_diagnostics"][broker.source]["zigbee_networkmap_status"] == "pending"
+    assert "zigbee_networkmap_status" not in diagnostics()
+    report = diagnose(hass, entry, registry.async_get(target))
+    assert report["source_diagnostics"][broker.source]["zigbee_networkmap_status"] == "pending"
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     assert hass.states.get(target).state == "good"

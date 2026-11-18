@@ -361,8 +361,11 @@ async def test_polygon_tracker_triangulates_espresense_anchors_into_geojson_zone
     assert state.attributes["espresense_accuracy"] >= 1
     info = hass.states.get("device_tracker.room_position")
     assert info.attributes["source_configuration"]["source_entities"] == list(anchors)
+    assert "polygonal_zone" not in info.attributes["source_configuration"]
+    from custom_components.virtual_layer.debug import diagnose
+    report = diagnose(hass, entry, er.async_get(hass).async_get("device_tracker.room_position"))
     assert (
-        info.attributes["source_configuration"]["polygonal_zone"][
+        report["source_configuration"]["polygonal_zone"][
             CONF_POLYGON_ESPRESENSE_ANCHORS
         ]
         == anchors
@@ -488,7 +491,9 @@ async def test_polygon_tracker_zone_sensor_and_map_image_share_one_virtual_devic
     assert b"<circle " in rendered
 
     info_state = hass.states.get("device_tracker.family_polygon")
-    polygon_summary = info_state.attributes["source_configuration"]["polygonal_zone"]
+    assert "polygonal_zone" not in info_state.attributes["source_configuration"]
+    from custom_components.virtual_layer.debug import diagnose
+    polygon_summary = diagnose(hass, entry, registry.async_get("device_tracker.family_polygon"))["source_configuration"]["polygonal_zone"]
     assert polygon_summary["inline_geojson"] is True
     assert polygon_summary["person_entity_id"] == "person.family"
     assert "geojson" not in polygon_summary

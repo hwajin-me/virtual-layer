@@ -59,6 +59,7 @@ from .entity import (
     repair_legacy_enum_template,
 )
 from .restore_state_compat import discard_stored_state, get_stored_state
+from .recorder_policy import async_publish_state, diagnostic_refresh_needed
 
 _LOGGER = logging.getLogger(__name__)
 _MISSING = object()
@@ -1322,7 +1323,8 @@ def _async_setup_state_only_entities(hass, entry, entities, *, partial=False) ->
                 and stored is not None
             )
             state_value, attributes = _state_only_initial_state(hass, entity)
-            hass.states.async_set(
+            async_publish_state(
+                hass,
                 entity_id,
                 state_value,
                 attributes,
@@ -1860,7 +1862,7 @@ def _async_apply_state_only_templates(hass, entity) -> None:
         changed = value != "unknown" or changed
         value = "unknown"
     if changed:
-        hass.states.async_set(entity_id, value, attributes)
+        async_publish_state(hass, entity_id, value, attributes)
 
 
 @callback
@@ -1960,12 +1962,12 @@ def _async_apply_state_only_event_hook(hass, entity, hook, event) -> None:
     )
     if should_refresh:
         if changed:
-            hass.states.async_set(entity_id, value, attributes)
+            async_publish_state(hass, entity_id, value, attributes)
         _async_apply_state_only_templates(hass, entity)
         return
 
     if changed:
-        hass.states.async_set(entity_id, value, attributes)
+        async_publish_state(hass, entity_id, value, attributes)
 
 
 @callback
@@ -2097,8 +2099,8 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
                 attributes.pop(key, None)
             attributes.update(diagnostic_attributes(hass, entity, attributes))
             diagnostic_at, diagnostic_detailed = now, detailed
-            if attributes != state.attributes:
-                hass.states.async_set(entity_id, state.state, attributes)
+            if diagnostic_refresh_needed(state.attributes, attributes):
+                async_publish_state(hass, entity_id, state.state, attributes)
 
     listeners.append(async_setup(hass, entity, refresh_source_diagnostics))
     refresh_source_diagnostics()
@@ -2113,7 +2115,7 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
         attributes = dict(state.attributes)
         prune(entity, attributes, _state_only_managed_attribute_names(entity), clear=clear)
         if attributes != state.attributes:
-            hass.states.async_set(entity_id, state.state, attributes)
+            async_publish_state(hass, entity_id, state.state, attributes)
 
     cleanup_runtime_attributes()
     listeners.append(setup_retention(hass, entity, cleanup_runtime_attributes))
@@ -2146,7 +2148,7 @@ def _async_setup_state_only_templates(hass, entry, entity) -> None:
                 and _state_only_restore_sources_pending(hass, entity)
                 and not state.attributes.get(ATTR_AVAILABLE, True)
             ):
-                hass.states.async_set(entity_id, "unknown", dict(state.attributes))
+                async_publish_state(hass, entity_id, "unknown", dict(state.attributes))
 
         listeners.append(async_call_later(
             hass, STARTUP_SOURCE_GRACE_SECONDS, _expire_source_grace,
@@ -2414,7 +2416,8 @@ def _async_set_state_only_entity(hass, entity_id, value=None, attributes=None):
     from .source_diagnostics import fit_snapshot
 
     fit_snapshot(hass, config, next_attributes)
-    hass.states.async_set(
+    async_publish_state(
+        hass,
         entity_id,
         state.state if value is None else value,
         next_attributes,
@@ -2448,7 +2451,7 @@ def _async_clear_state_only_attributes(hass, entity_id, attributes):
 
     config = _get_state_only_entity_config(hass, entity_id) or {}
     prune(config, next_attributes, _state_only_managed_attribute_names(config))
-    hass.states.async_set(entity_id, state.state, next_attributes)
+    async_publish_state(hass, entity_id, state.state, next_attributes)
 
 
 async def async_virtual_set_availability_service(hass, call):

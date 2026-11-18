@@ -22,6 +22,7 @@ from .const import (
 )
 from .source_diagnostics import _KEYS, _parse_deadline, _preview, _size, attributes
 from .restore_state_compat import get_stored_state
+from .recorder_policy import DEBUG_RECORDER_EXCLUDED_ATTRIBUTES, async_publish_state
 
 DEBUG_SUFFIX = f"{DIAGNOSTIC_UNIQUE_ID_MARKER}debug_button"
 DEBUG_AGE = timedelta(days=1)
@@ -63,7 +64,7 @@ def cleanse(hass, entry, target, *, max_age=None):
                     current.pop(key, None)
                 current.update(attributes(hass, config, current))
                 if current != state.attributes:
-                    hass.states.async_set(target_id, state.state, current)
+                    async_publish_state(hass, target_id, state.state, current)
         # Disabled/unloaded entities can still have an old restore snapshot.
         # Clean it too, so enabling them later cannot resurrect expired traces.
         stored = get_stored_state(async_get_restore_state(hass), target_id)
@@ -100,33 +101,34 @@ def diagnose(hass, entry, target):
     cleansed = cleanse(hass, entry, target, max_age=DEBUG_AGE)
     target_id = target.entity_id
     domain = target_id.split(".")[0]
+    state = hass.states.get(target_id)
+    context = {
+        "virtual_entity_id": target_id,
+        "target_state": state.state if state else None,
+        "target_loaded": state is not None,
+        "cleansed_attributes": cleansed,
+    }
     config = _target_config(hass, entry, target.unique_id)
     if config is not None:
         snapshot_config = {
-            **config, CONF_DIAGNOSTIC_DETAILS: True,
+            **config, CONF_DIAGNOSTIC_DETAILS: config.get(CONF_DIAGNOSTIC_DETAILS, True),
             CONF_DIAGNOSTIC_DETAILS_UNTIL: (dt_util.utcnow() + DEBUG_AGE).isoformat(),
             CONF_SOURCE_DIAGNOSTICS: _diagnostic_configuration(config, domain),
         }
-        report = attributes(hass, snapshot_config, {})
+        report = attributes(hass, snapshot_config, context, include_details=True)
     elif entry.data.get("presence_fusion"):
         coordinator = entry.runtime_data.coordinator
         profile = {}
         for key, value in _preview(coordinator.diagnostics()).items():
             if isinstance(value, list):
-                while value and _size({**profile, key: value}) > 12000:
+                while value and _size({**context, "profile_diagnostics": {**profile, key: value}}) > 12000:
                     value.pop()
-            if _size({**profile, key: value}) <= 12000:
+            if _size({**context, "profile_diagnostics": {**profile, key: value}}) <= 12000:
                 profile[key] = value
         report = {"profile_diagnostics": profile}
     else:
         raise HomeAssistantError("The virtual target is no longer configured")
-    state = hass.states.get(target_id)
-    report.update({
-        "virtual_entity_id": target_id,
-        "target_state": state.state if state else None,
-        "target_loaded": state is not None,
-        "cleansed_attributes": cleansed,
-    })
+    report.update(context)
     return report
 
 
@@ -134,6 +136,7 @@ class DebugButton(ButtonEntity):
     """One diagnostic control per virtual target; never recursively generated."""
 
     _attr_should_poll = False
+    _unrecorded_attributes = DEBUG_RECORDER_EXCLUDED_ATTRIBUTES
     _attr_has_entity_name = False
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:bug-check"

@@ -51,6 +51,7 @@ from .air_quality_options import LEVELS as AIR_QUALITY_LEVELS
 from . import air_quality_options as aq_options
 from .device_metadata import configuration_url_or_none
 from .restore_state_compat import get_stored_state
+from .recorder_policy import RECORDER_EXCLUDED_ATTRIBUTES, diagnostic_refresh_needed
 from .mode_commands import (
     SOURCE_MODE_COMMANDS, MODE_VALUE_PROPERTIES, upgrade_mode_helpers, source_mode_data,
     wrap_mode_template,
@@ -280,6 +281,8 @@ def virtual_schema(default_initial_value: str, extra_attrs):
 
 class VirtualEntity(RestoreEntity):
     """A base class to add state restoring."""
+
+    _unrecorded_attributes = RECORDER_EXCLUDED_ATTRIBUTES
 
     # Are we saving/restoring this entity
     _persistent: bool = True
@@ -645,7 +648,7 @@ class VirtualEntity(RestoreEntity):
             if not self._virtual_removing:
                 previous = self._attr_extra_state_attributes
                 self._update_attributes()
-                if previous != self._attr_extra_state_attributes:
+                if diagnostic_refresh_needed(previous, self._attr_extra_state_attributes):
                     self.async_write_ha_state()
 
         self.async_on_remove(async_setup(self.hass, self._config, refresh_source_diagnostics))

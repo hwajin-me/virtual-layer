@@ -2326,6 +2326,16 @@ async def test_zigbee_refresh_runtime():
             assert diagnostics["zigbee_battery"] == 90
             assert diagnostics["zigbee_last_seen"] == "2026-01-01T00:00:00+00:00"
             assert diagnostics["zigbee_bridge_availability"] == "online"
+            from custom_components.virtual_layer.source_diagnostics import attributes as source_snapshot
+            snapshot_config = {"_source_diagnostics": {"source_entities": [source]}}
+            compact = source_snapshot(hass, snapshot_config, {})["source_diagnostics"][source]
+            assert compact["source_available"] is False
+            assert compact["zigbee_bridge_availability"] == "online"
+            assert not compact.keys() & {"source_state", "zigbee_linkquality", "zigbee_battery", "zigbee_last_seen"}
+            detailed = source_snapshot(hass, snapshot_config, {}, include_details=True)["source_diagnostics"][source]
+            assert detailed["source_state"] == "unavailable"
+            assert detailed["zigbee_linkquality"] == 101
+            assert detailed["zigbee_battery"] == 90
             await refresh.async_request_networkmap(hass, [source, source])
             topic = "custom/zigbee/bridge/info"
             callbacks[topic](SimpleNamespace(topic=topic, payload=json.dumps({
